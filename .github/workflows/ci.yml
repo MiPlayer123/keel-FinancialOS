@@ -1,0 +1,94 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    name: typecheck + lint + unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - name: ledger coverage gate (100%)
+        run: pnpm --filter @keel/ledger test
+
+  database:
+    name: migrations + pgTAP + double-reset convergence
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: start stack
+        run: supabase start
+      - name: reset (migrations + seed)
+        run: supabase db reset
+      - name: pgTAP suites
+        run: supabase test db
+      - name: double-reset schema convergence (PLAN 3.6.13)
+        run: |
+          supabase db dump --local -f /tmp/schema-a.sql
+          supabase db reset
+          supabase db dump --local -f /tmp/schema-b.sql
+          diff /tmp/schema-a.sql /tmp/schema-b.sql
+
+  integration:
+    name: edge functions + replay integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm provision:local
+      - run: pnpm build:functions
+      - run: supabase start
+      - run: supabase db reset
+      - name: serve functions
+        run: |
+          supabase functions serve --env-file supabase/functions/.env &
+          for i in $(seq 1 30); do
+            curl -sf "http://127.0.0.1:55321/functions/v1/webhook-provider/health" && break
+            sleep 2
+          done
+      - run: pnpm test:integration
+
+  secrets:
+    name: secret scan (tracked files + built bundle)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: build web bundle and scan output (TASK-000 test 12 "bundled")
+        run: |
+          pnpm --filter @keel/web build || exit 1
+          ! grep -rE "sb_secret_[A-Za-z0-9]|PLAID_SECRET|service_role" apps/web/.next/static 2>/dev/null

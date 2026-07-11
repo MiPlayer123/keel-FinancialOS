@@ -1,0 +1,21 @@
+{
+  "name": "@keel/ingest",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@keel/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@keel/test-fixtures": "workspace:*",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
