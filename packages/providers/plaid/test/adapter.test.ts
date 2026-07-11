@@ -67,21 +67,20 @@ describe('PlaidBankProvider', () => {
       kind: 'transaction_added',
       transaction: { providerTransactionId: 'txn-pending-meal', pending: true },
     });
-    expect(second.events).toEqual([
-      expect.objectContaining({
-        kind: 'transaction_added',
-        transaction: expect.objectContaining({
-          providerTransactionId: 'txn-posted-meal',
-          pending: false,
-          pendingTransactionId: 'txn-pending-meal',
-        }),
-      }),
-      {
-        kind: 'transaction_removed',
-        eventId: 'plaid:req-promotion-2:removed:txn-pending-meal',
-        providerTransactionId: 'txn-pending-meal',
+    expect(second.events).toHaveLength(2);
+    expect(second.events[0]).toMatchObject({
+      kind: 'transaction_added',
+      transaction: {
+        providerTransactionId: 'txn-posted-meal',
+        pending: false,
+        pendingTransactionId: 'txn-pending-meal',
       },
-    ]);
+    });
+    expect(second.events[1]).toEqual({
+      kind: 'transaction_removed',
+      eventId: 'plaid:req-promotion-2:removed:txn-pending-meal',
+      providerTransactionId: 'txn-pending-meal',
+    });
     expect(second.hasMore).toBe(false);
   });
 

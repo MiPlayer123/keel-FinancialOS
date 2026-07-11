@@ -17,6 +17,7 @@ const normalizedDecimal = (lexeme: string): string => {
   const negative = lexeme.startsWith('-');
   const unsigned = negative ? lexeme.slice(1) : lexeme;
   const [whole, fraction = ''] = unsigned.split('.');
+  if (whole === undefined) throw new Error('generated decimal must have a whole part');
   const normalized = `${whole}.${fraction.padEnd(2, '0')}`;
   return negative ? `-${normalized}` : normalized;
 };

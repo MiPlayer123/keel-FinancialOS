@@ -7,12 +7,12 @@ const invalidMoney = (lexeme: string): KeelError =>
   new KeelError('invalid_money', 'Plaid amount is not an exact USD decimal', { lexeme });
 
 /** Convert an exact USD decimal source lexeme to signed minor units without floats. */
-export const decimalToMinor = (lexeme: string, currency: 'USD'): bigint => {
+export const decimalToMinor = (lexeme: string, currency: string): bigint => {
   const negative = lexeme.startsWith('-');
   const unsigned = negative ? lexeme.slice(1) : lexeme;
   const match = USD_DECIMAL_PATTERN.exec(unsigned);
 
-  if (match === null || currency !== 'USD') {
+  if (currency !== 'USD' || match === null || match[1] === undefined) {
     throw invalidMoney(lexeme);
   }
 
