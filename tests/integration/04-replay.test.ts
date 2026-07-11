@@ -7,7 +7,14 @@ import { describe, expect, it } from 'vitest';
 import { SCENARIOS, SimulatorBankProvider } from '@keel/test-fixtures';
 import { drainQueue, serviceClient, SEED } from './helpers.js';
 
-const feedScenario = async (scenarioName: keyof typeof SCENARIOS): Promise<void> => {
+const feedScenario = async (
+  scenarioName: keyof typeof SCENARIOS,
+  // A distinct prefix produces FRESH provider_event_ids, so raw-event dedup
+  // does NOT absorb the redelivery — the planner itself must dedupe by
+  // provider_transaction_id (stage-exit Finding 5: prove planner idempotency
+  // through the DB, not just ingestion idempotency).
+  eventIdPrefix = '',
+): Promise<void> => {
   const scenario = SCENARIOS[scenarioName];
   const provider = new SimulatorBankProvider(scenario);
   const svc = serviceClient();
@@ -19,7 +26,7 @@ const feedScenario = async (scenarioName: keyof typeof SCENARIOS): Promise<void>
       const { error } = await svc.rpc('keel_worker_record_raw_event', {
         p_provider: 'simulator',
         p_connection_external_ref: scenario.connectionExternalRef,
-        p_provider_event_id: `${scenarioName}:${event.eventId}`,
+        p_provider_event_id: `${scenarioName}:${eventIdPrefix}${event.eventId}`,
         p_account_external_ref:
           event.kind === 'transaction_removed'
             ? 'unknown'
@@ -73,8 +80,13 @@ describe('hostile scenario replay (test 8)', () => {
       const stateAfterFirst = await canonicalState();
       const balanceAfterFirst = await trialBalance();
 
-      // Replay the ENTIRE stream again — every event redelivered.
+      // Replay 1: identical event ids — ingestion dedup absorbs it.
       await feedScenario(name);
+      expect(await canonicalState()).toEqual(stateAfterFirst);
+
+      // Replay 2: FRESH event ids — the planner (not raw dedup) must produce
+      // the identical canonical state and balances.
+      await feedScenario(name, 'replay2:');
       const stateAfterReplay = await canonicalState();
       const balanceAfterReplay = await trialBalance();
 

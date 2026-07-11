@@ -62,3 +62,18 @@ Record every decision, deviation, failed approach, command run, test result, mig
 - **D-018** Named secret keys must be platform-issued (the admin client authenticates with the matched key). Local provisioner aliases the stack's own secret key as `automations`; cloud needs a real named key (⚑ still open).
 - **D-019 Founder provided a Supabase PAT via chat.** Used for: `supabase login` (token stored in CLI's own store, outside repo), `supabase link` to `yrbteeownwjhcushwaga` ("FinancialOS", separate org — D-004/D-006 resolved: project is real and reachable), publishable key fetched and committed to `.env.example` (public by design per INFRA §11.1), and a local-scope `supabase-keel` MCP server (token lives in ~/.claude.json, not the repo). ⚠ Recommend rotating the PAT after setup since chat is not a secret manager. Token never committed; referenced only by env-var name.
 - Cloud deploy (db push needs the database password) and Plaid Sandbox remain ⚑.
+
+### 2026-07-11 — Stage-exit dual review (D-002) + fixes
+
+Both reviewers ran against the live stack. Codex (gpt-5.6, --yolo direct) got cut off by an OpenAI content filter before writing conclusions, but its probe scripts named the vectors; I reproduced each against the DB. Claude's review completed with 8 findings. Union dispositioned:
+
+- **F1 (MAJOR, fixed)** `keel_cmd_post_batch` accepted a `canonical_transaction_id` from another household → batch in A linked to B's txn, and B's worker revise/void would reverse it against A's ledger accounts. Now validates household ownership (P0006). pgTAP + probe confirm.
+- **F2 (MAJOR, fixed)** audit_log/domain_events actor was caller-supplied `p_actor`, verbatim → an authenticated user could forge provenance (kind:system/agent, any userId). Now every user proc overwrites the actor with `keel_actor_from_jwt()` (derived from the verified JWT). pgTAP asserts stored actor = JWT subject.
+- **F3 (MINOR, fixed)** `keel_worker_record_raw_event` connection lookup had no household scope and non-STRICT SELECT INTO → ambiguous external_ref across households routed arbitrarily. Now `SELECT INTO STRICT` (too_many_rows ⇒ P0006). Public webhook transport, so closed before 1C.
+- **F4 (MINOR, fixed)** `canonical_transactions.economic_event_key` was globally UNIQUE; inconsistent with household-scoped command_executions and squattable. Now `unique (household_id, economic_event_key)`.
+- **F5 (MINOR, fixed)** test 8 replay re-feed was absorbed by raw-event dedup, never re-exercising the planner. Added a fresh-event-id replay variant; this exposed a real bug — `keel_worker_lookup_state` returned the queried provider id with the latest status (a hybrid), re-triggering spurious revisions on replay. Fixed: view now carries the latest source record's identity while the map keys by the queried id (matches the pure planner's supersession model). Currency-mismatch also found here (see F7).
+- **F6 (NIT, fixed)** test 12 was CI-only; added an in-repo `secret-scan.test.ts` scanning all tracked files for secret VALUE patterns (not names) + asserting ignored env files are untracked.
+- **F7 (NIT, fixed)** `keel_insert_postings` didn't check posting currency against the ledger account's currency → foreign-currency postings net to zero under the per-currency balance trigger. Now enforced (P0010, currency_mismatch).
+- **F8 (NIT, fixed)** reversing a reversal batch was allowed, re-applying the original economics. Now refused (P0001).
+
+All 8 fixed in this session (not deferred). Post-fix gate: 159 unit + 31 pgTAP + 41 integration green.

@@ -35,7 +35,7 @@
 - [x] `supabase test db` green (25 pgTAP tests)
 - [x] Integration suite green: 41/41 via `scripts/dev/itest.sh` (reset → serve → test; order load-bearing)
 - [x] Red-team ingestion test green (14 payloads inert, verbatim, exactly-one-txn)
-- [ ] Stage-exit reviews: Claude + Codex audit the full stage diff; dispositions in NOTES
+- [x] Stage-exit reviews (Claude + Codex): 8 findings, ALL fixed (F1-F8); dispositions in NOTES
 - [ ] Clean-checkout proof + tag `stage-1a`
 
 ## Human checkpoint queue (⚑)

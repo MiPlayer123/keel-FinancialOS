@@ -110,12 +110,20 @@ const processPromoteJob = async (
 
   const byProviderTxnId = new Map<string, CanonicalTxnView>();
   for (const row of (stateRows ?? []) as Array<
-    Omit<CanonicalTxnView, 'amountMinor'> & { amountMinor: string }
+    Omit<CanonicalTxnView, 'amountMinor'> & { amountMinor: string; lookupKey: string }
   >) {
-    byProviderTxnId.set(row.providerTransactionId, {
-      ...row,
+    // Key by the QUERIED id; the view carries the current canonical identity
+    // (providerTransactionId = latest source record) so supersession resolves
+    // exactly as the pure planner does.
+    byProviderTxnId.set(row.lookupKey, {
+      economicKey: row.economicKey,
+      providerTransactionId: row.providerTransactionId,
+      accountExternalRef: row.accountExternalRef,
       amountMinor: BigInt(row.amountMinor),
-    } as CanonicalTxnView);
+      status: row.status,
+      description: row.description,
+      effectiveDate: row.effectiveDate,
+    });
   }
   const state: IngestState = { byProviderTxnId };
 

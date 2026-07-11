@@ -26,14 +26,23 @@ declare
   v_raw_id uuid;
   v_duplicate boolean := false;
 begin
-  select * into v_conn
-    from public.connections c
-   where c.provider = p_provider::public.bank_provider
-     and c.external_ref = p_connection_external_ref;
-  if not found then
-    raise exception 'KEEL_SCOPE_VIOLATION: unknown connection %', p_connection_external_ref
-      using errcode = 'P0006';
-  end if;
+  -- STRICT: connections are unique per household but an external_ref MAY repeat
+  -- across households, so an ambiguous match must ERROR, never silently route
+  -- a raw event to an arbitrary tenant (stage-exit Finding 3). The webhook is
+  -- public transport; deterministic routing is a security property.
+  begin
+    select * into strict v_conn
+      from public.connections c
+     where c.provider = p_provider::public.bank_provider
+       and c.external_ref = p_connection_external_ref;
+  exception
+    when no_data_found then
+      raise exception 'KEEL_SCOPE_VIOLATION: unknown connection %', p_connection_external_ref
+        using errcode = 'P0006';
+    when too_many_rows then
+      raise exception 'KEEL_SCOPE_VIOLATION: ambiguous connection ref %', p_connection_external_ref
+        using errcode = 'P0006';
+  end;
 
   select r.id into v_raw_id
     from public.raw_provider_events r
@@ -320,9 +329,17 @@ security definer
 set search_path = public
 stable
 as $$
+  -- lookupKey is the QUERIED provider id (the worker maps state by it), but the
+  -- view's providerTransactionId/amount/status reflect the CURRENT canonical
+  -- identity — the LATEST source record. After a pending→posted supersession
+  -- both the pending id P and the posted id Q resolve to the same posted view
+  -- (view.providerTransactionId = Q), matching the pure planner's in-memory
+  -- model exactly (stage-exit Finding 5 regression: without this, a replayed
+  -- 'modified' on P re-triggered a spurious revision).
   select coalesce(jsonb_agg(entry), '[]'::jsonb) from (
     select distinct on (nsr.provider_transaction_id) jsonb_build_object(
-      'providerTransactionId', nsr.provider_transaction_id,
+      'lookupKey', nsr.provider_transaction_id,
+      'providerTransactionId', nsr_latest.provider_transaction_id,
       'economicKey', ct.economic_event_key,
       'accountExternalRef', a.external_ref,
       'amountMinor', nsr_latest.amount_minor::text,
@@ -335,7 +352,7 @@ as $$
     join public.canonical_transactions ct on ct.id = tsl.canonical_transaction_id
     join public.accounts a on a.id = nsr.account_id
     join lateral (
-      select n2.amount_minor, n2.description, n2.effective_date
+      select n2.provider_transaction_id, n2.amount_minor, n2.description, n2.effective_date
         from public.transaction_source_links t2
         join public.normalized_source_records n2 on n2.id = t2.normalized_source_record_id
        where t2.canonical_transaction_id = ct.id

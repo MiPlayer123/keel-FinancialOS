@@ -32,6 +32,7 @@ const SQLSTATE_MAP: Record<string, WireError> = {
   },
   P0008: { status: 422, code: 'invalid_money', message: 'Invalid monetary value.' },
   P0009: { status: 400, code: 'invalid_command', message: 'Invalid command.' },
+  P0010: { status: 422, code: 'currency_mismatch', message: 'Posting currency does not match the account.' },
 };
 
 /** Map a supabase-js/PostgREST error to a KEEL wire error response. */

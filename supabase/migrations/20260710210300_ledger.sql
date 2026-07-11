@@ -12,9 +12,13 @@ create table public.canonical_transactions (
   description text not null check (length(description) <= 500),
   effective_date date not null,
   -- Idempotent economics (Law 9): one economic event, one canonical row.
-  economic_event_key text not null unique check (length(economic_event_key) between 8 and 256),
+  -- Household-scoped (stage-exit Finding 4) to match the command_executions
+  -- idempotency posture — a global unique would let one tenant squat on or
+  -- pre-empt another tenant's derived keys.
+  economic_event_key text not null check (length(economic_event_key) between 8 and 256),
   created_at timestamptz not null default now(),
-  voided_at timestamptz
+  voided_at timestamptz,
+  unique (household_id, economic_event_key)
 );
 
 create table public.transaction_source_links (

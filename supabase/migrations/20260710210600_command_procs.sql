@@ -11,6 +11,28 @@
 -- Shared helpers
 -- ---------------------------------------------------------------------------
 
+-- The TRUSTED actor identity, derived from the verified JWT — never from
+-- caller input (stage-exit finding: p_actor was written to audit_log verbatim,
+-- letting an authenticated user forge the actor recorded against a command).
+-- Law 2 requires the audit trail to record who really acted.
+create function public.keel_actor_from_jwt() returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := coalesce(
+    nullif(pg_catalog.current_setting('request.jwt.claim.sub', true), ''),
+    nullif(pg_catalog.current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'
+  )::uuid;
+begin
+  if v_uid is null then
+    raise exception 'KEEL_NOT_AUTHENTICATED' using errcode = 'P0004';
+  end if;
+  return jsonb_build_object('kind', 'user', 'userId', v_uid::text);
+end;
+$$;
+
 -- Who is calling, with the write-role check mirrored from packages/authz
 -- (viewer/professional are read-only; DB re-checks what TS already checked).
 create function public.keel_assert_member_write(p_household_id uuid) returns public.household_role
@@ -154,6 +176,16 @@ begin
         using errcode = 'P0006';
     end if;
 
+    -- Posting currency MUST equal the ledger account's own currency
+    -- (Law 4; stage-exit finding). Otherwise foreign-currency postings net to
+    -- zero under the per-currency balance trigger while sitting on an account
+    -- of a different denomination.
+    if v_posting->>'currency' <> v_ledger_account.currency then
+      raise exception 'KEEL_CURRENCY_MISMATCH: posting % on % account %',
+        v_posting->>'currency', v_ledger_account.currency, v_ledger_account.id
+        using errcode = 'P0010';
+    end if;
+
     insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency)
     values (
       p_batch_id,
@@ -200,6 +232,7 @@ declare
   v_result jsonb;
 begin
   perform public.keel_assert_member_write(p_household_id);
+  p_actor := public.keel_actor_from_jwt();  -- ignore caller-supplied actor (forgery guard)
   v_replay := public.keel_idempotency_check(p_household_id, p_economic_event_key, v_hash);
   if v_replay is not null then
     return v_replay;
@@ -209,6 +242,18 @@ begin
     select 1 from public.entities e where e.id = v_entity_id and e.household_id = p_household_id
   ) then
     raise exception 'KEEL_SCOPE_VIOLATION: entity % not in household', v_entity_id
+      using errcode = 'P0006';
+  end if;
+
+  -- A supplied connection must belong to THIS household (stage-exit finding:
+  -- an account could otherwise be linked to another tenant's connection).
+  if nullif(p_payload->>'connection_id', '') is not null
+     and not exists (
+       select 1 from public.connections c
+        where c.id = (p_payload->>'connection_id')::uuid
+          and c.household_id = p_household_id
+     ) then
+    raise exception 'KEEL_SCOPE_VIOLATION: connection not in household'
       using errcode = 'P0006';
   end if;
 
@@ -281,6 +326,7 @@ declare
   v_result jsonb;
 begin
   perform public.keel_assert_member_write(p_household_id);
+  p_actor := public.keel_actor_from_jwt();  -- ignore caller-supplied actor (forgery guard)
   v_replay := public.keel_idempotency_check(p_household_id, p_economic_event_key, v_hash);
   if v_replay is not null then
     return v_replay;
@@ -366,9 +412,24 @@ declare
   v_result jsonb;
 begin
   perform public.keel_assert_member_write(p_household_id);
+  p_actor := public.keel_actor_from_jwt();  -- ignore caller-supplied actor (forgery guard)
   v_replay := public.keel_idempotency_check(p_household_id, p_economic_event_key, v_hash);
   if v_replay is not null then
     return v_replay;
+  end if;
+
+  -- A supplied canonical_transaction_id MUST belong to this household
+  -- (stage-exit Finding 1: otherwise a batch in household A could be linked to
+  -- household B's transaction, and B's worker revise/void path would later
+  -- reverse it against A's ledger accounts).
+  if nullif(p_payload->>'canonical_transaction_id', '') is not null
+     and not exists (
+       select 1 from public.canonical_transactions ct
+        where ct.id = (p_payload->>'canonical_transaction_id')::uuid
+          and ct.household_id = p_household_id
+     ) then
+    raise exception 'KEEL_SCOPE_VIOLATION: canonical transaction not in household'
+      using errcode = 'P0006';
   end if;
 
   insert into public.journal_batches
@@ -433,6 +494,7 @@ declare
   v_result jsonb;
 begin
   perform public.keel_assert_member_write(p_household_id);
+  p_actor := public.keel_actor_from_jwt();  -- ignore caller-supplied actor (forgery guard)
   v_replay := public.keel_idempotency_check(p_household_id, p_economic_event_key, v_hash);
   if v_replay is not null then
     return v_replay;
@@ -445,6 +507,22 @@ begin
   if not found then
     raise exception 'KEEL_SCOPE_VIOLATION: raw event not found in household'
       using errcode = 'P0006';
+  end if;
+
+  -- entity_id and account_id must belong to THIS household (stage-exit
+  -- finding: a promotion could otherwise stamp another tenant's entity/account
+  -- onto a canonical transaction).
+  if not exists (
+    select 1 from public.entities e
+     where e.id = (p_payload->>'entity_id')::uuid and e.household_id = p_household_id
+  ) then
+    raise exception 'KEEL_SCOPE_VIOLATION: entity not in household' using errcode = 'P0006';
+  end if;
+  if not exists (
+    select 1 from public.accounts a
+     where a.id = (p_payload->>'account_id')::uuid and a.household_id = p_household_id
+  ) then
+    raise exception 'KEEL_SCOPE_VIOLATION: account not in household' using errcode = 'P0006';
   end if;
 
   insert into public.canonical_transactions
@@ -521,6 +599,7 @@ declare
   v_result jsonb;
 begin
   perform public.keel_assert_member_write(p_household_id);
+  p_actor := public.keel_actor_from_jwt();  -- ignore caller-supplied actor (forgery guard)
   v_replay := public.keel_idempotency_check(p_household_id, p_economic_event_key, v_hash);
   if v_replay is not null then
     return v_replay;
@@ -539,6 +618,13 @@ begin
      where r.original_batch_id = v_original.id
   ) then
     raise exception 'KEEL_IMMUTABLE: batch % is already reversed', v_original.id
+      using errcode = 'P0001';
+  end if;
+
+  -- A reversal batch is itself final: reversing it would re-apply the original
+  -- economics (stage-exit Finding 8). Corrections layer forward, not undo-undo.
+  if v_original.reverses_batch_id is not null then
+    raise exception 'KEEL_IMMUTABLE: batch % is a reversal and cannot be reversed', v_original.id
       using errcode = 'P0001';
   end if;
 

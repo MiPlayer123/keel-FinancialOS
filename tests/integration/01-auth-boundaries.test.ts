@@ -64,7 +64,7 @@ describe.each(['worker', 'scheduled'])('%s (auth: secret:automations) — test 1
   it('rejects a malformed/wrong secret', async () => {
     const res = await callFunction(health, {
       method: 'GET',
-      headers: { apikey: 'sb_secret_local_automations_wrongwrongwrong' },
+      headers: { apikey: 'not-a-valid-secret-key' },
     });
     expect(res.status).toBe(401);
   });
