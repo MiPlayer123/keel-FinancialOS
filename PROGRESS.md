@@ -3,7 +3,7 @@
 > Context-recovery file. Picking this up cold: read `CLAUDE.md`, then `PLAN.md` (incl. §3.5/§3.6 audit amendments), then this file, then the last ~60 lines of `NOTES.md`. The "Resume" section is the exact next action.
 
 **Last updated:** 2026-07-11 ~01:30 (session 1)
-**Current stage:** Stage 1A (TASK-000) — A6–A9 in flight, A1–A5 committed
+**Current stage:** Stage 1A COMPLETE (tagged `stage-1a`). Next: cloud deploy (needs DB password ⚑) then Stage 1C Plaid Sandbox.
 **Path decision:** Path A (personal instrument) working default — NOTES D-001.
 
 ## Environment facts
@@ -36,7 +36,7 @@
 - [x] Integration suite green: 41/41 via `scripts/dev/itest.sh` (reset → serve → test; order load-bearing)
 - [x] Red-team ingestion test green (14 payloads inert, verbatim, exactly-one-txn)
 - [x] Stage-exit reviews (Claude + Codex): 8 findings, ALL fixed (F1-F8); dispositions in NOTES
-- [ ] Clean-checkout proof + tag `stage-1a`
+- [x] Clean-checkout proof (fresh clone: install/typecheck/lint/159 unit/bundle/web build) + tag `stage-1a` (8e63d3c)
 
 ## Human checkpoint queue (⚑)
 
