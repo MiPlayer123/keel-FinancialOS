@@ -99,6 +99,25 @@ Next.js shell: sign-in (email OTP against local Auth), authenticated "call api/h
 
 **Stage 1A exit:** clean checkout → `pnpm install && supabase start && supabase db reset && pnpm test` all green; NOTES.md updated; ⚑ list surfaced. **Then: Claude + Codex stage audits before declaring done.**
 
+## 3.5 Amendments from plan audit v1 (Claude adversarial review, 2026-07-10)
+
+Dispositions of all 14 findings; full audit text in NOTES.md session log.
+
+1. **Write path (blocker) — DECIDED: SECURITY DEFINER command procs.** TS packages compute typed command effects (postings, lineage, keys); persistence is one `keel.cmd_*(...)` SECURITY DEFINER procedure per command, owned by a dedicated non-BYPASSRLS definer role with minimal grants. Procs re-enforce invariants (balance per currency, idempotency key uniqueness, period locks, append-only) and write canonical rows + audit + domain event + pgmq enqueue in their single transaction — INFRA §5 steps 4–11 satisfied atomically; `authenticated` gets zero direct DML on canonical tables (test 6); test 7 atomicity is structural. Shared `keel.begin_command()` helper handles idempotency/audit preamble. No new runtime secrets; PostgREST `.rpc()` compatible; identical local/cloud.
+2. **`@supabase/server`** — adopted as the auth wrapper per INFRA §4/docs 17; `_shared/withAuth` becomes a thin adapter over it. If the package turns out unavailable in the Edge runtime, fall back to supabase-js + manual JWT validation and record the deviation (verify during A7).
+3. **config.toml** — done (project_id `keel`, per-function `verify_jwt=false` merged).
+4. **Exit commands corrected**: clean checkout = `pnpm install && supabase start && supabase db reset && pnpm test:unit`, then `pnpm test:integration` (globalSetup orchestrates `supabase functions serve --env-file supabase/functions/.env`). A7 adds: `.env` provisioning script that also generates a **local-only random named secret** for `secret:automations` (legitimate local provisioning; the cloud named secret remains ⚑).
+5. **Stage 1A command vocabulary (locked)**: `accounts.create`, `ingest.record_raw_event`, `ingest.promote_event` (raw → canonical transaction + balanced batch), `journal.post_batch`, `journal.reverse_batch`, plus read surfaces `ledger.trial_balance`, `transactions.list`. Tests 3/7/8 run against `ingest.*` + `journal.*`.
+6. **bigint read path**: every read surface returns `amount_minor::text` (views + RPC json build); integration test asserts JSON string typing end-to-end. Contracts DTOs already string-typed.
+7. **Simulator placement**: `BankProviderAdapter` interface in `packages/contracts`; `SimulatorBankProvider` in `packages/test-fixtures`. **Deno interop**: Edge functions consume shared packages via an esbuild bundling step (`pnpm build:functions` → `supabase/functions/_shared/vendor/keel.mjs`); no npm publishing, no sloppy-imports flag dependence.
+8. **pgmq queue names**: underscores (`sync_events`, `import_batches`) — deviation from INFRA §8's hyphenated labels recorded (pgmq identifier rules).
+9. **Test 2 restated**: boundary rejection (zod string-integer) + pgTAP catalog assertion that no money column is float/numeric; drop the vacuous CHECK claim.
+10. **Test 12**: CI also scans built web bundle output for secret patterns, not just tracked files.
+11. **pgTAP RLS mechanics**: tests set `role authenticated` + `request.jwt.claims` explicitly; plus one supabase-js publishable-client write-denial integration test.
+12. **Role model**: `keel_api`/`keel_worker` are NOLOGIN grant-bundles assumed via the definer procs' ownership chain; no new LOGIN roles, no pooler password secret. Verified against finding 1 decision.
+13. **Cron transport** noted for 1B (pg_cron → `net.http_post` to `scheduled`); stub only in 1A.
+14. **`professional_access_grants`** deferred from A6 (satisfies TASK-000 via `resource_permissions`); explicit deferral, lands with support/professional surface in 1D.
+
 ## 4. After Stage 1A (forward view, gated)
 
 - **1B** local integration hardening (already mostly covered above; whatever pgTAP/RLS surface remains).
