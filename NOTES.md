@@ -114,3 +114,22 @@ Both round-2 audits (Claude 1 blocker+6 major; Codex 6 blocker+4 major) converge
 - **Export belongs to 1D per INFRA §16** and its manifest was still incomplete (omitted ~8 deployed tables, auth.users identity, Storage bytes, portability-vs-DR restore). → DEFER export to 1D; 1C must not make data unexportable.
 - Lifecycle = durable saga (link-attempt/removal-attempt records, disconnecting/cleanup_required, shred-after-remove-success).
 - **Split ruling (D-022): 1C = server-only Plaid Sandbox READ PATH.** Viewer UI → 1E. Export → 1D. Proof of "end-to-end" uses the existing `keel_trial_balance`/`transactions.list` queries against a real Sandbox item — no new UI needed to prove correctness. This resolves the "too big" verdict and the INFRA §16 stage-placement deviation.
+
+### 2026-07-11 — PLAN-1C round 3 → v4 (architecture cleared; mechanical closes)
+
+Round-3 dual audit: both cleared the ARCHITECTURE (crypto D-B, decimal D-E, pending→posted D-D planner, stage-split all RESOLVED; Codex web-verified Plaid's positive=outflow sign and the removed-pending+added-posted co-occurrence, resolving Claude NF-2). Remaining were precise mechanics, all closed in v4:
+- Composite tenant FK extended to canonical_transactions(household_id,account_id/entity_id) + transaction_source_links (add household_id, FK both sides) — Codex #6.
+- Page-id collision: key raw archive by (attempt_id, page_ordinal), NOT sha256(base_cursor||ordinal) which collides across re-pulls; abandoned attempts' rows retained-but-excluded; no-double-archive gate scoped within-attempt — Codex #2.
+- Promotion barrier: cursor advances only after this attempt's promotion is durably complete; a new attempt can't plan ahead of an un-promoted prior attempt (per-connection ordered promotion) — Codex #2.
+- Bounded pages per invocation (150s Edge limit / INFRA §9); lease renewed per page = fencing token — Codex.
+- Normalized removal tombstones (nullable cols when kind=removed) + apply_promotion derives/validates from the normalized row, not caller payload — Codex #3.
+- Account bootstrap: /accounts/get before finalize_link — Codex new blocker.
+- Orphan reaper: persist ciphertext on link_attempt immediately post-exchange; finalize adopts it — Codex new blocker.
+- Verbatim raw: body_text + body_sha256 (jsonb derived) — Codex major; also enables lossless decimal.
+- AES-GCM fresh 96-bit IV + AAD(credential_id||household_id||provider||kek_version) — Codex.
+- Lossless numeric-lexeme JSON parse + distinct decimalToMinor (not integer-only parseMinorUnits) — both.
+- Canary sweep covers access+link+public tokens; no RAISE of decrypted material — Claude NF-3.
+- Update-mode needs interactive Link → 1C tests server-state transitions only (sandbox reset_login); live update-mode gate → 1E — Codex new blocker.
+- C5 split: C5a (reconcileSyncBatch + normalized schema + apply_promotion amendment, fixture-proven) before C5b (durable orchestration) — Claude NF-6.
+- **D-023:** export & viewer UI are separate stages (1D/1E); 1C is server-only read path.
+One final targeted Codex verification pass, then build.
