@@ -3,7 +3,7 @@
 > Context-recovery file. Picking this up cold: read `CLAUDE.md`, then `PLAN.md` (incl. §3.5/§3.6 audit amendments), then this file, then the last ~60 lines of `NOTES.md`. The "Resume" section is the exact next action.
 
 **Last updated:** 2026-07-11 ~01:30 (session 1)
-**Current stage:** Stage 1A COMPLETE + DEPLOYED to cloud (FinancialOS). Next: Stage 1C plan (Plaid Sandbox + ingestion depth), being audited.
+**Current stage:** Stage 1C building (server-only Plaid read path). PLAN-1C cleared by 4 audit rounds (tag plan-1c-ready). Done: C1 adapter, C2a schema retrofit, C5a-core reconcile (all green). Next: C5a-SQL+C5b worker, C2b crypto(⚑ KEK), C3 saga, C4 webhook, C6 cron. Live Sandbox gate needs Plaid ⚑.
 **Path decision:** Path A (personal instrument) working default — NOTES D-001.
 
 ## Environment facts
