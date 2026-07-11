@@ -172,3 +172,9 @@ Verdict: posting derivation SOUND (deterministic SQL, Σ=0, sign-routed, no call
 - **M6 (fix, internal):** acquire fences completed-unpromoted but not orphaned OPEN attempts from a lost lease → concurrent open attempts possible (mitigated by idempotency; no double economic effect, but orphaned attempts accumulate). acquire should abandon/refuse a pre-existing open attempt.
 - **m8/m9 (fix, internal):** complete_attempt add `state='open'` predicate + `where sync_committed_generation < generation` guard (defense-in-depth).
 Apply as one "C5b review-hardening" pass with the worker, re-run full gate.
+
+### 2026-07-11 — C5b GREEN + hardened; review dispositions
+
+C5b Plaid sync path fully green (205 unit + 41 pgTAP + 42 integration). Applied safe review fixes to apply_action: B1 (revise offset null-check), M3 (removed-tombstone guard in create/revise), M5 (deterministic posted_at,id desc batch tiebreak). Deferred to stage-exit hardening (non-blocking; reviewer confirmed happy path sound, no double-apply/unbalance): M4 (pending-status fidelity — apply_action hardcodes 'posted'; carry v_nsr.pending; needs create_normalized pending param + worker), B2 (normalized raw_event provenance links to attempt page :0 not the exact page — works since page 0 always archived first, but imprecise), M6 (acquire fences completed-unpromoted but not orphaned OPEN attempts from a lost lease — mitigated by idempotency + fencing, no double economic effect), m8/m9 (complete_attempt state='open' + generation-monotonic guards). All tracked for the 1C stage-exit review pass.
+
+### Stage 1C: 5 of 9 steps GREEN (C1 adapter, C2a schema, C5a reconcile, C2b crypto, C5b sync spine). Plaid Sandbox live-verified. Remaining: C3 saga, C4 webhook, C6 cron, stage-exit dual audit + tag.

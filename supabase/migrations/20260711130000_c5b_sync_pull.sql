@@ -294,6 +294,13 @@ begin
     return v_result;
   end if;
 
+  -- Defense in depth (review M3): a removed tombstone must never reach create/
+  -- revise (the reconciler routes it to void); its economic fields are null.
+  if p_action_kind in ('create', 'revise') and v_nsr.kind = 'removed' then
+    raise exception 'KEEL_INVALID_COMMAND: removed record cannot be % ', p_action_kind
+      using errcode = 'P0009';
+  end if;
+
   -- CREATE: brand-new canonical from an added normalized row.
   if p_action_kind = 'create' then
     select * into v_account from public.accounts where id = v_nsr.account_id;
@@ -348,7 +355,7 @@ begin
     from public.journal_batches b
    where b.canonical_transaction_id = v_txn_id and b.reverses_batch_id is null
      and not exists (select 1 from public.journal_revisions r where r.original_batch_id = b.id)
-   order by b.posted_at desc limit 1;
+   order by b.posted_at desc, b.id desc limit 1;  -- deterministic tiebreak (review M5)
   if v_prev_batch.id is null then
     raise exception 'KEEL_IMMUTABLE: no live batch to correct' using errcode = 'P0001';
   end if;
@@ -369,6 +376,9 @@ begin
       where la.entity_id = v_account.entity_id
         and la.name = case when v_nsr.amount_minor < 0 then 'Uncategorized Expense'
                            else 'Uncategorized Income' end;
+    if v_offset_id is null then  -- review B1: mirror the create-branch guard
+      raise exception 'KEEL_INVALID_COMMAND: offset category missing' using errcode = 'P0009';
+    end if;
 
     insert into public.transaction_source_links (canonical_transaction_id, normalized_source_record_id)
     values (v_txn_id, v_nsr.id);
