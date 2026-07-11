@@ -81,6 +81,7 @@ export const SEED = {
   connections: {
     simAlpha: { id: '00000000-0000-4000-8000-00000000a201', ref: 'sim-conn-alpha' },
     plaidAlpha: { id: '00000000-0000-4000-8000-00000000a202', ref: 'plaid-item-alpha' },
+    plaidC5b: { id: '00000000-0000-4000-8000-00000000a203', ref: 'plaid-item-c5b' },
   },
 } as const;
 

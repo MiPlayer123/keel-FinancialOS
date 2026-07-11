@@ -473,6 +473,22 @@ begin
 end;
 $$;
 
+-- The SECURITY DEFINER sync procs run as keel_worker and touch the C2a
+-- sync-lifecycle tables/columns, which were granted to service_role but not to
+-- keel_worker. Grant exactly what the procs need.
+grant update (sync_lease_owner, sync_leased_until, sync_desired_generation,
+              sync_committed_generation, last_successful_sync_at)
+  on public.connections to keel_worker;
+grant select, insert, update on public.sync_attempts to keel_worker;
+-- service_role reads sync_attempts for diagnostics/tests (it bypasses RLS but
+-- the C2a table postdates the historical blanket service_role select grant).
+grant select on public.sync_attempts to service_role;
+-- RLS applies to keel_worker (non-superuser); the SECURITY DEFINER procs need a
+-- permissive policy (matches the 1A *_definer_all pattern). Authorization is
+-- enforced above this layer by the lease/fencing logic, not RLS.
+create policy sync_attempts_worker_all on public.sync_attempts
+  for all to keel_worker using (true) with check (true);
+
 -- Ownership + grants: service_role only (Edge worker path). keel_worker needs
 -- CREATE on public to own functions there; grant temporarily, revoke after
 -- (matches the deployed 210800 pattern).

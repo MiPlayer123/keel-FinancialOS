@@ -79,7 +79,11 @@ insert into public.connections (id, household_id, provider, external_ref, status
   -- Plaid item stub so verified webhook fixtures route to a household
   -- (real Plaid linking is stage 1C ⚑; this is a local routing target only).
   ('00000000-0000-4000-8000-00000000a202', '00000000-0000-4000-8000-00000000a001',
-   'plaid', 'plaid-item-alpha', 'active', now());
+   'plaid', 'plaid-item-alpha', 'active', now()),
+  -- Dedicated Plaid item for the C5b sync-pull test so it is isolated from the
+  -- webhook suite (which enqueues notifications on plaid-item-alpha).
+  ('00000000-0000-4000-8000-00000000a203', '00000000-0000-4000-8000-00000000a001',
+   'plaid', 'plaid-item-c5b', 'active', now());
 
 -- ---------------------------------------------------------------------------
 -- Chart of accounts. Real accounts get backing asset/liability ledger
