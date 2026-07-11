@@ -58,8 +58,11 @@ begin
       null, jsonb_build_object('providerEventId', p_provider_event_id)
     );
 
+    -- Simulator events carry the economic payload and promote directly;
+    -- provider NOTIFICATIONS (plaid) trigger a sync pull instead (stage 1C).
     perform public.keel_enqueue('sync_events', jsonb_build_object(
-      'jobType', 'promote_raw_event',
+      'jobType',
+      case when p_provider = 'simulator' then 'promote_raw_event' else 'sync_notification' end,
       'economicEventKey', format('evt:%s:%s:%s:promote', p_provider, p_connection_external_ref, p_provider_event_id),
       'refs', jsonb_build_object('rawEventId', v_raw_id::text)
     ));
@@ -157,7 +160,7 @@ begin
     values
       (v_raw.household_id, v_account.entity_id, v_account.id,
        (p_action->'txn'->>'status')::public.transaction_status, 'sync',
-       p_action->'txn'->>'description',
+       left(p_action->'txn'->>'description', 500),
        (p_action->'txn'->>'effective_date')::date, v_key)
     returning id into v_txn_id;
 
@@ -167,11 +170,11 @@ begin
     insert into public.journal_batches
       (household_id, canonical_transaction_id, description, effective_date, command_id)
     values
-      (v_raw.household_id, v_txn_id, p_action->'txn'->>'description',
+      (v_raw.household_id, v_txn_id, left(p_action->'txn'->>'description', 500),
        (p_action->'txn'->>'effective_date')::date, v_command_id)
     returning id into v_batch_id;
 
-    v_postings := public.keel_insert_postings(v_batch_id, p_action->'postings');
+    v_postings := public.keel_insert_postings(v_raw.household_id, v_batch_id, p_action->'postings');
 
     v_result := jsonb_build_object(
       'commandId', v_command_id, 'economicEventKey', p_apply_key,
@@ -245,17 +248,19 @@ begin
     insert into public.journal_batches
       (household_id, canonical_transaction_id, description, effective_date, command_id)
     values
-      (v_raw.household_id, v_txn_id, p_action->'txn'->>'description',
+      (v_raw.household_id, v_txn_id, left(p_action->'txn'->>'description', 500),
        (p_action->'txn'->>'effective_date')::date, v_command_id)
     returning id into v_batch_id;
 
-    v_postings := public.keel_insert_postings(v_batch_id, p_action->'postings');
+    v_postings := public.keel_insert_postings(v_raw.household_id, v_batch_id, p_action->'postings');
 
     insert into public.journal_revisions (original_batch_id, reversal_batch_id, replacement_batch_id, reason)
     values (v_prev_batch.id, v_reversal_id, v_batch_id, p_action->>'reason');
 
     update public.canonical_transactions
        set status = (p_action->'txn'->>'status')::public.transaction_status,
+           description = left(p_action->'txn'->>'description', 500),
+           effective_date = (p_action->'txn'->>'effective_date')::date,
            voided_at = null
      where id = v_txn_id;
 
@@ -386,3 +391,41 @@ end
 $$;
 
 revoke create on schema public from keel_worker;
+
+-- keel_worker_apply_promotion runs as keel_worker and calls shared helpers
+-- owned by keel_api; the definer chain needs explicit EXECUTE.
+grant execute on function public.keel_idempotency_check(uuid, text, text) to keel_worker;
+grant execute on function public.keel_finish_command(uuid, text, text, uuid, jsonb, text, text, text, uuid, jsonb, jsonb) to keel_worker;
+grant execute on function public.keel_insert_postings(uuid, uuid, jsonb) to keel_worker;
+grant execute on function public.keel_payload_hash(jsonb) to keel_worker;
+grant execute on function public.keel_enqueue(text, jsonb) to keel_worker;
+-- The period-lock trigger (SECURITY INVOKER) reads period_locks whenever a
+-- posting is inserted; the worker's reversal path inserts postings directly.
+grant select on public.period_locks to keel_worker;
+-- Revisions update the canonical header to the corrected values (the full
+-- history lives in journal batches + normalized records, which stay
+-- append-only).
+grant update (description, effective_date) on public.canonical_transactions to keel_worker;
+
+-- Accurate queue-emptiness probe: visibility timeouts hide retrying messages
+-- from read(), so drain loops need real depth.
+create function public.keel_worker_queue_depth(p_queue text) returns bigint
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_depth bigint;
+begin
+  if p_queue !~ '^[a-z][a-z0-9_]*$' then
+    raise exception 'KEEL_INVALID_COMMAND: bad queue name' using errcode = 'P0009';
+  end if;
+  execute format('select count(*) from pgmq.%I', 'q_' || p_queue) into v_depth;
+  return v_depth;
+end;
+$$;
+grant create on schema public to keel_worker;
+alter function public.keel_worker_queue_depth(text) owner to keel_worker;
+revoke create on schema public from keel_worker;
+revoke all on function public.keel_worker_queue_depth(text) from public, anon, authenticated;
+grant execute on function public.keel_worker_queue_depth(text) to service_role;

@@ -199,3 +199,9 @@ begin
   end loop;
 end
 $$;
+
+-- This CLI/stack version's default ACL gives service_role NO DML on tables
+-- created by migrations (only TRUNCATE/REFERENCES/TRIGGER). The server-side
+-- admin client (worker/webhook/scheduled, BYPASSRLS) needs reads everywhere
+-- and exactly one direct write surface; canonical writes stay proc-only.
+grant select on all tables in schema public to service_role;

@@ -28,6 +28,8 @@
     "vitest": "catalog:",
     "esbuild": "^0.25.0",
     "@supabase/supabase-js": "^2.110.0",
-    "jose": "^6.0.0"
+    "jose": "^6.0.0",
+    "@keel/test-fixtures": "workspace:*",
+    "@keel/contracts": "workspace:*"
   }
 }

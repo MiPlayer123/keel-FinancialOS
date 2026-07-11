@@ -31,6 +31,9 @@ const webhookBody = (code: string): string =>
     webhook_code: code,
     item_id: SEED.connections.plaidAlpha.ref,
     environment: 'sandbox',
+    // Per-run nonce: the function derives its event id from the body hash,
+    // so the suite stays correct without a db reset between runs.
+    nonce: crypto.randomUUID(),
   });
 
 const rawEventCount = async (): Promise<number> => {

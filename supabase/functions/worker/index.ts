@@ -8,6 +8,7 @@
  * success. Poison messages (read_ct > MAX_ATTEMPTS) are archived with a
  * failure marker — at-least-once delivery + idempotent handlers (PLAN §3.6.6).
  */
+import { keelSecretKeys } from '../_shared/bootstrap.ts';
 import { withSupabase } from 'npm:@supabase/server@1.3.0';
 import {
   ProviderSyncEventSchema,
@@ -19,7 +20,7 @@ import {
 import { json, mapDbError } from '../_shared/http.ts';
 
 const MAX_ATTEMPTS = 5;
-const VISIBILITY_TIMEOUT_S = 30;
+const VISIBILITY_TIMEOUT_S = 8;
 
 // deno-lint-ignore no-explicit-any
 type AdminClient = any;
@@ -169,7 +170,7 @@ const processPromoteJob = async (
 };
 
 export default {
-  fetch: withSupabase({ auth: 'secret:automations' }, async (req, ctx) => {
+  fetch: withSupabase({ auth: 'secret:automations', env: keelSecretKeys() }, async (req, ctx) => {
     const url = new URL(req.url);
     const path = url.pathname.replace(/^\/worker/, '');
 
@@ -206,6 +207,10 @@ export default {
       ) {
         // Enrichment is a Stage 1D concern; acknowledge so queues stay clean.
         outcome = { ok: true, detail: 'enrichment deferred (stage 1D)' };
+      } else if (msg.message.jobType === 'sync_notification') {
+        // Verified provider notification; the /transactions/sync pull it
+        // triggers is the Plaid adapter's job (stage 1C).
+        outcome = { ok: true, detail: 'sync pull deferred (stage 1C)' };
       } else {
         outcome = { ok: false, detail: `unknown jobType ${msg.message.jobType}` };
       }
@@ -224,6 +229,7 @@ export default {
       }
     }
 
-    return json(200, { queue, processed: results });
+    const { data: depth } = await admin.rpc('keel_worker_queue_depth', { p_queue: queue });
+    return json(200, { queue, processed: results, depth: Number(depth ?? 0) });
   }),
 };

@@ -35,6 +35,12 @@ importers:
 
   .:
     devDependencies:
+      '@keel/contracts':
+        specifier: workspace:*
+        version: link:packages/contracts
+      '@keel/test-fixtures':
+        specifier: workspace:*
+        version: link:packages/test-fixtures
       '@supabase/supabase-js':
         specifier: ^2.110.0
         version: 2.110.2

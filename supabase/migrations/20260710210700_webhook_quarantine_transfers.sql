@@ -52,3 +52,11 @@ create policy transfer_links_member_read on public.transfer_links
   for select to authenticated using (public.keel_is_household_member(household_id));
 create policy transfer_links_definer_all on public.transfer_links
   for all to keel_api, keel_worker using (true) with check (true);
+
+-- Quarantine inserts come from the webhook function's admin client directly
+-- (rejected payloads never reach a proc by design, D-013).
+grant insert on public.webhook_rejections to service_role;
+-- These two tables are created after 210500's catch-all service_role SELECT
+-- grant; re-grant here so the admin client (and integration assertions) can
+-- read them.
+grant select on public.webhook_rejections, public.transfer_links to service_role;

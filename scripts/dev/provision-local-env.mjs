@@ -11,7 +11,8 @@
  * provisioning; cloud secrets remain human checkpoints (⚑). Never writes
  * tracked files; never prints secret values.
  */
-import { generateKeyPairSync, randomBytes } from 'node:crypto';
+import { execSync } from 'node:child_process';
+import { generateKeyPairSync } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,18 +33,26 @@ const upsertLine = (content, key, value) => {
 };
 
 // 1. Named automations secret (worker/scheduled `secret:automations`).
+// Named secret keys must be PLATFORM-ISSUED keys (the admin client
+// authenticates with the matched key), so locally we alias the running
+// stack's own secret key under the 'automations' name. Cloud gets a real
+// named key via the human checkpoint.
 let automationsSecret;
-const existingSecret = functionsEnv.match(/^SUPABASE_SECRET_KEYS=\{"automations":"([^"]+)"\}$/m);
-if (existingSecret) {
-  automationsSecret = existingSecret[1];
-} else {
-  automationsSecret = `sb_secret_local_automations_${randomBytes(24).toString('hex')}`;
-  functionsEnv = upsertLine(
-    functionsEnv,
-    'SUPABASE_SECRET_KEYS',
-    `{"automations":"${automationsSecret}"}`,
-  );
+try {
+  const status = execSync('supabase status -o env', { cwd: root, encoding: 'utf8' });
+  automationsSecret = status.match(/^SECRET_KEY="?(sb_secret_[^"\n]+)"?$/m)?.[1];
+} catch {
+  automationsSecret = undefined;
 }
+if (!automationsSecret) {
+  console.error('supabase stack not running - run `supabase start` before provisioning.');
+  process.exit(1);
+}
+functionsEnv = upsertLine(
+  functionsEnv,
+  'KEEL_SUPABASE_SECRET_KEYS',
+  `{"automations":"${automationsSecret}"}`,
+);
 
 // 2. Webhook-verification ES256 keypair: PUBLIC JWK to the functions env
 //    (verifier), PRIVATE JWK to the test reference file (signer).

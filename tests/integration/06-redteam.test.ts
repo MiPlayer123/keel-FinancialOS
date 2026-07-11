@@ -51,9 +51,17 @@ describe('prompt-injection payloads through ingestion (Law 5)', () => {
         .eq('economic_event_key', key)
         .single();
       expect(data).not.toBeNull();
-      // Verbatim storage — the injection did not execute, escape, or mutate.
-      expect(data!.description).toBe(injection.slice(0, 1000));
+      // Canonical header carries a deterministic 500-char cut; the FULL text
+      // is preserved verbatim in the normalized source record below.
+      expect(data!.description).toBe(injection.slice(0, 1000).slice(0, 500));
       expect(data!.status).toBe('posted');
+
+      const { data: nsr } = await svc
+        .from('normalized_source_records')
+        .select('description')
+        .eq('provider_transaction_id', `redteam-${i}`)
+        .single();
+      expect(nsr!.description).toBe(injection.slice(0, 1000));
     }
   });
 

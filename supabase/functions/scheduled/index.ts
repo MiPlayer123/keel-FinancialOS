@@ -6,11 +6,12 @@
  * Stage 1A: a stub that enqueues nothing and reports what it WOULD schedule;
  * real sync scheduling arrives with the Plaid adapter (Stage 1C).
  */
+import { keelSecretKeys } from '../_shared/bootstrap.ts';
 import { withSupabase } from 'npm:@supabase/server@1.3.0';
 import { json } from '../_shared/http.ts';
 
 export default {
-  fetch: withSupabase({ auth: 'secret:automations' }, async (req, ctx) => {
+  fetch: withSupabase({ auth: 'secret:automations', env: keelSecretKeys() }, async (req, ctx) => {
     const url = new URL(req.url);
     const path = url.pathname.replace(/^\/scheduled/, '');
 

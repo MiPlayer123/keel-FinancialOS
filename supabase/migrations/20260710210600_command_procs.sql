@@ -117,8 +117,11 @@ end;
 $$;
 
 -- Insert a batch's postings and return them as wire-safe jsonb (amounts as
--- text — bigint never rides a JSON number; PLAN §3.5.6).
-create function public.keel_insert_postings(p_batch_id uuid, p_postings jsonb) returns jsonb
+-- text — bigint never rides a JSON number; PLAN §3.5.6). The ledger account
+-- must belong to the commanding household (cross-tenant reference smuggling
+-- fails closed) and each posting's entity is DERIVED from the ledger account
+-- — one source of truth, no drift.
+create function public.keel_insert_postings(p_household_id uuid, p_batch_id uuid, p_postings jsonb) returns jsonb
 language plpgsql
 security definer
 set search_path = public
@@ -127,6 +130,7 @@ declare
   v_posting jsonb;
   v_out jsonb := '[]'::jsonb;
   v_id uuid;
+  v_ledger_account public.ledger_accounts%rowtype;
 begin
   if jsonb_typeof(p_postings) <> 'array' or jsonb_array_length(p_postings) < 2 then
     raise exception 'KEEL_UNBALANCED: a batch needs at least two postings'
@@ -141,11 +145,20 @@ begin
         using errcode = 'P0008';
     end if;
 
+    select * into v_ledger_account
+      from public.ledger_accounts la
+     where la.id = (v_posting->>'ledger_account_id')::uuid
+       and la.household_id = p_household_id;
+    if not found then
+      raise exception 'KEEL_SCOPE_VIOLATION: ledger account not in household'
+        using errcode = 'P0006';
+    end if;
+
     insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency)
     values (
       p_batch_id,
-      (v_posting->>'ledger_account_id')::uuid,
-      (v_posting->>'entity_id')::uuid,
+      v_ledger_account.id,
+      v_ledger_account.entity_id,
       (v_posting->>'amount_minor')::bigint,
       v_posting->>'currency'
     )
@@ -153,8 +166,8 @@ begin
 
     v_out := v_out || jsonb_build_object(
       'postingId', v_id,
-      'ledgerAccountId', v_posting->>'ledger_account_id',
-      'entityId', v_posting->>'entity_id',
+      'ledgerAccountId', v_ledger_account.id,
+      'entityId', v_ledger_account.entity_id,
       'amountMinor', v_posting->>'amount_minor',
       'currency', v_posting->>'currency'
     );
@@ -369,7 +382,7 @@ begin
   )
   returning id into v_batch_id;
 
-  v_postings := public.keel_insert_postings(v_batch_id, p_payload->'postings');
+  v_postings := public.keel_insert_postings(p_household_id, v_batch_id, p_payload->'postings');
 
   v_result := jsonb_build_object(
     'commandId', p_command_id,
@@ -457,7 +470,7 @@ begin
   )
   returning id into v_batch_id;
 
-  v_postings := public.keel_insert_postings(v_batch_id, p_payload->'postings');
+  v_postings := public.keel_insert_postings(p_household_id, v_batch_id, p_payload->'postings');
 
   v_result := jsonb_build_object(
     'commandId', p_command_id,
@@ -683,7 +696,7 @@ begin
     'public.keel_assert_member_write(uuid)',
     'public.keel_idempotency_check(uuid, text, text)',
     'public.keel_finish_command(uuid, text, text, uuid, jsonb, text, text, text, uuid, jsonb, jsonb)',
-    'public.keel_insert_postings(uuid, jsonb)',
+    'public.keel_insert_postings(uuid, uuid, jsonb)',
     'public.keel_cmd_create_account(uuid, text, jsonb, uuid, jsonb)',
     'public.keel_cmd_record_raw_event(uuid, text, jsonb, uuid, jsonb)',
     'public.keel_cmd_post_batch(uuid, text, jsonb, uuid, jsonb)',
@@ -704,7 +717,7 @@ revoke create on schema public from keel_api;
 revoke all on function public.keel_assert_member_write(uuid) from authenticated;
 revoke all on function public.keel_idempotency_check(uuid, text, text) from authenticated;
 revoke all on function public.keel_finish_command(uuid, text, text, uuid, jsonb, text, text, text, uuid, jsonb, jsonb) from authenticated;
-revoke all on function public.keel_insert_postings(uuid, jsonb) from authenticated;
+revoke all on function public.keel_insert_postings(uuid, uuid, jsonb) from authenticated;
 
 grant execute on function public.keel_cmd_create_account(uuid, text, jsonb, uuid, jsonb) to authenticated;
 grant execute on function public.keel_cmd_record_raw_event(uuid, text, jsonb, uuid, jsonb) to authenticated;

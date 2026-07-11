@@ -147,22 +147,28 @@ export const envelope = (
   };
 };
 
-/** Drain a queue through the worker function until it reports no messages. */
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Drain a queue through the worker until its REAL depth is zero. Messages
+ * mid-retry hide under the visibility timeout, so emptiness comes from the
+ * depth probe, not from an empty read. */
 export const drainQueue = async (queue: string): Promise<string[]> => {
   const details: string[] = [];
-  for (let i = 0; i < 25; i += 1) {
+  for (let i = 0; i < 60; i += 1) {
     const res = await callFunction('/worker/drain', {
       headers: { apikey: stackEnv().automationsSecret },
       body: { queue, batchSize: 20 },
     });
-    if (res.status !== 200) throw new Error(`drain failed: ${res.status} ${JSON.stringify(res.body)}`);
-    const processed = (res.body as { processed: Array<{ status: string; detail: string }> })
-      .processed;
-    if (processed.length === 0) return details;
-    details.push(...processed.map((p) => `${p.status}:${p.detail}`));
-    if (processed.every((p) => p.status === 'retry')) {
-      throw new Error(`queue ${queue} stuck retrying: ${JSON.stringify(processed)}`);
+    if (res.status !== 200) {
+      throw new Error(`drain failed: ${res.status} ${JSON.stringify(res.body)}`);
     }
+    const body = res.body as {
+      processed: Array<{ status: string; detail: string }>;
+      depth: number;
+    };
+    details.push(...body.processed.map((p) => `${p.status}:${p.detail}`));
+    if (body.depth === 0) return details;
+    if (body.processed.length === 0) await sleep(2000); // wait out visibility window
   }
-  throw new Error(`queue ${queue} did not drain in 25 rounds`);
+  throw new Error(`queue ${queue} did not drain in 60 rounds`);
 };
