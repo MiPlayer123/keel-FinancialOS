@@ -6,7 +6,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import * as jose from 'jose';
-import { callFunction, serviceClient, stackEnv, SEED } from './helpers.js';
+import { serviceClient, stackEnv, SEED } from './helpers.js';
 
 const signBody = async (
   body: string,
@@ -82,10 +82,10 @@ describe('webhook-provider verification (test 11)', () => {
   });
 
   it.each([
-    ['missing header', async (b: string) => null],
+    ['missing header', () => Promise.resolve(null)],
     ['tampered body hash', async (b: string) => signBody(b, { tamper: true })],
     ['expired token', async (b: string) => signBody(b, { expired: true })],
-    ['garbage jwt', async () => 'not.a.jwt'],
+    ['garbage jwt', () => Promise.resolve('not.a.jwt')],
   ])('rejects %s: zero ingestion, quarantined', async (_label, makeJwt) => {
     const body = webhookBody(`HOSTILE_${Math.random().toString(36).slice(2, 8)}`);
     const jwt = await makeJwt(body);

@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { SCENARIOS, SimulatorBankProvider } from '@keel/test-fixtures';
-import { drainQueue, serviceClient, stackEnv, SEED } from './helpers.js';
+import { drainQueue, serviceClient, SEED } from './helpers.js';
 
 const feedScenario = async (scenarioName: keyof typeof SCENARIOS): Promise<void> => {
   const scenario = SCENARIOS[scenarioName];

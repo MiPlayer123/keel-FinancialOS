@@ -131,7 +131,9 @@ export default function DashboardPage() {
               id="household-id"
               name="householdId"
               value={householdId}
-              onChange={(event) => setHouseholdId(event.target.value)}
+              onChange={(event) => {
+                setHouseholdId(event.target.value);
+              }}
               placeholder="UUID used by query calls"
             />
           </div>

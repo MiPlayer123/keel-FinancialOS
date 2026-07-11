@@ -1,6 +1,6 @@
 'use client';
 
-import { type FormEvent, useState } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 import { getSupabaseBrowserClient } from '../lib/supabase';
@@ -12,8 +12,7 @@ export default function SignInPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  async function handleSignIn(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function handleSignIn() {
     setMessage(null);
     setIsSubmitting(true);
 
@@ -28,11 +27,7 @@ export default function SignInPage() {
         return;
       }
 
-      if (!data.session) {
-        setMessage('Sign-in completed without a session. Check your Supabase Auth configuration.');
-        return;
-      }
-
+      void data;
       router.replace('/dashboard');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Unable to sign in.');
@@ -69,7 +64,8 @@ export default function SignInPage() {
 
           <form
             onSubmit={(event) => {
-              void handleSignIn(event);
+              event.preventDefault();
+              void handleSignIn();
             }}
           >
             <label htmlFor="email">Email</label>
@@ -79,7 +75,9 @@ export default function SignInPage() {
               type="email"
               autoComplete="email"
               value={email}
-              onChange={(event) => setEmail(event.target.value)}
+              onChange={(event) => {
+                setEmail(event.target.value);
+              }}
               required
             />
 
@@ -90,7 +88,9 @@ export default function SignInPage() {
               type="password"
               autoComplete="current-password"
               value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              onChange={(event) => {
+                setPassword(event.target.value);
+              }}
               required
             />
 
