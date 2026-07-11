@@ -43,20 +43,21 @@ describe('hostile bank-sync scenarios', () => {
     }
   });
 
-  it.each(Object.values(SCENARIOS))('$name canonical expectations are valid and sorted', (scenario) => {
-    const economicKeys = scenario.expectedCanonical.transactions.map(
-      (transaction) => transaction.economicKey,
-    );
-
-    expect(new Set(economicKeys).size).toBe(economicKeys.length);
-    expect(economicKeys).toEqual([...economicKeys].sort());
-    for (const transaction of scenario.expectedCanonical.transactions) {
-      expect(transaction.economicKey).toMatch(
-        /^txn:simulator:sim-conn-alpha:[^:]+$/,
+  it.each(Object.values(SCENARIOS))(
+    '$name canonical expectations are valid and sorted',
+    (scenario) => {
+      const economicKeys = scenario.expectedCanonical.transactions.map(
+        (transaction) => transaction.economicKey,
       );
-      expect(MinorUnitsStringSchema.parse(transaction.amountMinor)).toBe(transaction.amountMinor);
-    }
-  });
+
+      expect(new Set(economicKeys).size).toBe(economicKeys.length);
+      expect(economicKeys).toEqual([...economicKeys].sort());
+      for (const transaction of scenario.expectedCanonical.transactions) {
+        expect(transaction.economicKey).toMatch(/^txn:simulator:sim-conn-alpha:[^:]+$/);
+        expect(MinorUnitsStringSchema.parse(transaction.amountMinor)).toBe(transaction.amountMinor);
+      }
+    },
+  );
 
   it('continues the pending economic key when a posted transaction supersedes it', () => {
     expect(SCENARIOS.delayed_posting.expectedCanonical.transactions[0]?.economicKey).toBe(
@@ -88,21 +89,24 @@ describe('SimulatorBankProvider', () => {
     expect(second).not.toBe(first);
   });
 
-  it.each(Object.values(SCENARIOS))('walks the complete $name pagination chain', async (scenario) => {
-    const provider = new SimulatorBankProvider(scenario);
-    const visitedPages = [];
-    let cursor = '';
+  it.each(Object.values(SCENARIOS))(
+    'walks the complete $name pagination chain',
+    async (scenario) => {
+      const provider = new SimulatorBankProvider(scenario);
+      const visitedPages = [];
+      let cursor = '';
 
-    for (;;) {
-      const page = await provider.sync('connection-001', cursor);
-      visitedPages.push(page);
-      if (!page.hasMore) break;
-      cursor = page.nextCursor;
-    }
+      for (;;) {
+        const page = await provider.sync('connection-001', cursor);
+        visitedPages.push(page);
+        if (!page.hasMore) break;
+        cursor = page.nextCursor;
+      }
 
-    expect(visitedPages).toEqual(scenario.pages);
-    expect(visitedPages.at(-1)?.hasMore).toBe(false);
-  });
+      expect(visitedPages).toEqual(scenario.pages);
+      expect(visitedPages.at(-1)?.hasMore).toBe(false);
+    },
+  );
 
   it('throws RangeError for an unknown cursor', async () => {
     const provider = new SimulatorBankProvider(SCENARIOS.baseline);

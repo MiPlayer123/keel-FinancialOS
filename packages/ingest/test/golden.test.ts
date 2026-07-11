@@ -12,17 +12,20 @@ describe('scenario golden oracles', () => {
     expect(projectCanonicalState(result.nextState)).toEqual(scenario.expectedCanonical);
   });
 
-  it.each(Object.values(SCENARIOS))('$name replays deterministically with only noops', (scenario) => {
-    const ctx = {
-      provider: 'simulator',
-      connectionExternalRef: scenario.connectionExternalRef,
-    };
-    const first = planStream(emptyIngestState(), scenario.pages, ctx);
-    const replay = planStream(first.nextState, scenario.pages, ctx);
+  it.each(Object.values(SCENARIOS))(
+    '$name replays deterministically with only noops',
+    (scenario) => {
+      const ctx = {
+        provider: 'simulator',
+        connectionExternalRef: scenario.connectionExternalRef,
+      };
+      const first = planStream(emptyIngestState(), scenario.pages, ctx);
+      const replay = planStream(first.nextState, scenario.pages, ctx);
 
-    expect(projectCanonicalState(replay.nextState)).toEqual(
-      projectCanonicalState(first.nextState),
-    );
-    expect(replay.actions.every((action) => action.type === 'noop')).toBe(true);
-  });
+      expect(projectCanonicalState(replay.nextState)).toEqual(
+        projectCanonicalState(first.nextState),
+      );
+      expect(replay.actions.every((action) => action.type === 'noop')).toBe(true);
+    },
+  );
 });

@@ -143,16 +143,14 @@ const baseline: Scenario = {
   expectedCanonical: {
     transactions: [
       {
-        economicKey:
-          'txn:simulator:sim-conn-alpha:sim-txn-baseline-card-payment-card',
+        economicKey: 'txn:simulator:sim-conn-alpha:sim-txn-baseline-card-payment-card',
         accountExternalRef: 'sim-acct-card',
         amountMinor: '25000',
         status: 'posted',
         description: 'Payment received from checking account',
       },
       {
-        economicKey:
-          'txn:simulator:sim-conn-alpha:sim-txn-baseline-card-payment-checking',
+        economicKey: 'txn:simulator:sim-conn-alpha:sim-txn-baseline-card-payment-checking',
         accountExternalRef: 'sim-acct-checking',
         amountMinor: '-25000',
         status: 'posted',
@@ -425,8 +423,7 @@ const changedAmount: Scenario = {
   expectedCanonical: {
     transactions: [
       {
-        economicKey:
-          'txn:simulator:sim-conn-alpha:sim-txn-changed-amount-pending',
+        economicKey: 'txn:simulator:sim-conn-alpha:sim-txn-changed-amount-pending',
         accountExternalRef: 'sim-acct-card',
         amountMinor: '-4650',
         status: 'posted',
