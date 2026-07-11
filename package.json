@@ -15,7 +15,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "build:functions": "node scripts/build-functions.mjs",
-    "provision:local": "node scripts/dev/provision-local-env.mjs"
+    "provision:local": "node scripts/dev/provision-local-env.mjs",
+    "test:integration": "vitest run --config tests/integration/vitest.config.ts"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "catalog:",
@@ -25,6 +26,8 @@
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
     "vitest": "catalog:",
-    "esbuild": "^0.25.0"
+    "esbuild": "^0.25.0",
+    "@supabase/supabase-js": "^2.110.0",
+    "jose": "^6.0.0"
   }
 }

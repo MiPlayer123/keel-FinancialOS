@@ -75,7 +75,11 @@ insert into connections (id, household_id, provider, external_ref, status, creat
   ('00000000-0000-4000-8000-00000000a201', '00000000-0000-4000-8000-00000000a001',
    'simulator', 'sim-conn-alpha', 'active', now()),
   ('00000000-0000-4000-8000-00000000b201', '00000000-0000-4000-8000-00000000b001',
-   'simulator', 'sim-conn-beta', 'active', now());
+   'simulator', 'sim-conn-beta', 'active', now()),
+  -- Plaid item stub so verified webhook fixtures route to a household
+  -- (real Plaid linking is stage 1C ⚑; this is a local routing target only).
+  ('00000000-0000-4000-8000-00000000a202', '00000000-0000-4000-8000-00000000a001',
+   'plaid', 'plaid-item-alpha', 'active', now());
 
 -- ---------------------------------------------------------------------------
 -- Chart of accounts. Real accounts get backing asset/liability ledger
