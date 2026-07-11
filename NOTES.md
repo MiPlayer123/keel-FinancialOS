@@ -87,3 +87,17 @@ Deployed to `yrbteeownwjhcushwaga` (FinancialOS) via CLI + Management API with t
 - **⚠ DB password reset** (D-020): the project had no known DB password, so I reset it via `PATCH /database/password` to a generated 32-char value, stored ONLY in ignored `supabase/.env.remote` (never printed/committed). This invalidated any prior connection strings to that project — safe here (dedicated, empty, day-old project). Rotate/manage in the dashboard if desired.
 - **Not deployed**: no cloud seed (seed is local-dev-only by design — real users sign up via Auth); apps/web to Vercel remains a ⚑ (Vercel binding); Plaid stays Sandbox for 1C.
 - **⚠ PAT** still recommended for rotation (came via chat). All uses read from local stores.
+
+### 2026-07-11 — PLAN-1C dual audit round 1 → v2 rewrite
+
+Both audits (Claude + Codex-with-web-research) ruled v1 "not ready — over-scoped, hard parts undesigned". ~20 findings, all valid. v2 rewrite dispositions:
+- **Connection model (Codex B4):** amend `connections` = the Plaid Item; satellites keyed to connection_id with composite tenant FKs. NO parallel connection_items table (would fork the deployed identity).
+- **Currency (Codex M16, Law 4):** USD-only activation gate for 1C + deterministic decimal-string→minor conversion (no float). Replaces worker's hardcoded USD.
+- **Credential crypto (Claude B2/Codex #3):** designed — Supabase Vault KEK, DEK-per-credential, decrypt only inside the sync proc, KEK-rotation re-wraps DEKs, pg_stat_statements/log-scan + token-canary gates. ⚑ security review before C2.
+- **Sync fan-out (Claude B1/Codex #12):** item-notification → lease (advisory lock + sync_generation) → pull → archive exact Plaid page as raw evidence → normalize → EXISTING planner; commit final cursor only after has_more=false; mutation-restart from committed base cursor. Reuses 1A economics without pretending normalized==raw.
+- **Export (Claude B3/Codex):** complete manifest (all canonical+source+audit tables; credentials excluded-by-name), step-up, export_jobs, exports bucket, signed URL, isolated-restore test. QIF/beancount = explicit ⚑ founder ruling, not silent stub.
+- **request_id dedup impossible (Codex M8):** SYNC_UPDATES_AVAILABLE has no request_id; dedup by signed-JWT-fingerprint+body-hash; webhook is an idempotent "sync this item" trigger.
+- **Exchange saga (Codex M7):** begin_link → edge Plaid call (token never logged) → finalize command atomically; /item/remove compensation.
+- **Descoped to 1D/own-stage (both):** categorization, CSV import, transfer confirm (D-012), professional access, periods.reopen. 1C posts to Uncategorized like 1A.
+- Added: item lifecycle (ITEM_LOGIN_REQUIRED/update-mode/disconnect+crypto-shred), account lineage (provider account_id + scored candidates + user confirm, no tuple-merge), webhook hardening (size/env/iat/constant-time/JWK negative-cache), usage_events + circuit breaker (INFRA §14), expanded ⚑ list (client id, KEK, dashboard webhook, sanitized fixtures, Vercel).
+- **D-021:** elevate D-013 (verify-then-store) from deviation to an explicit amendment of doc 17 §3 store-first wording.
