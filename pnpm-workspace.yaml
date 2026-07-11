@@ -1,0 +1,13 @@
+packages:
+  - apps/*
+  - packages/*
+
+catalog:
+  typescript: ^5.9.3
+  vitest: ^4.1.10
+  '@vitest/coverage-v8': ^4.1.10
+  fast-check: ^4.9.0
+  zod: ^4.4.3
+  eslint: ^10.7.0
+  typescript-eslint: ^8.63.0
+  prettier: ^3.9.5

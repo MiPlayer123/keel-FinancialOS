@@ -1,0 +1,13 @@
+# Spec corpus stays byte-identical to what was authored/audited.
+docs/
+CLAUDE.md
+INFRA.md
+PROJECT-SETUP.md
+README-FIRST.md
+TASK-000-STAGE-1A.md
+CURRENT-STATUS.md
+NOTES.md
+PLAN.md
+PROGRESS.md
+pnpm-lock.yaml
+supabase/migrations/
