@@ -2,13 +2,13 @@
 -- revisions, period locks. CLAUDE.md Law 3 (postings invariant) and Law 2
 -- (corrections are reversals, never mutation). Debit-positive (doc 10 §2.4).
 
-create table canonical_transactions (
+create table public.canonical_transactions (
   id uuid primary key default gen_random_uuid(),
-  household_id uuid not null references households (id),
-  entity_id uuid not null references entities (id),
-  account_id uuid not null references accounts (id),
-  status transaction_status not null,
-  source transaction_source not null,
+  household_id uuid not null references public.households (id),
+  entity_id uuid not null references public.entities (id),
+  account_id uuid not null references public.accounts (id),
+  status public.transaction_status not null,
+  source public.transaction_source not null,
   description text not null check (length(description) <= 500),
   effective_date date not null,
   -- Idempotent economics (Law 9): one economic event, one canonical row.
@@ -17,64 +17,64 @@ create table canonical_transactions (
   voided_at timestamptz
 );
 
-create table transaction_source_links (
-  canonical_transaction_id uuid not null references canonical_transactions (id),
-  normalized_source_record_id uuid not null references normalized_source_records (id),
+create table public.transaction_source_links (
+  canonical_transaction_id uuid not null references public.canonical_transactions (id),
+  normalized_source_record_id uuid not null references public.normalized_source_records (id),
   created_at timestamptz not null default now(),
   primary key (canonical_transaction_id, normalized_source_record_id)
 );
 
-create table journal_batches (
+create table public.journal_batches (
   id uuid primary key default gen_random_uuid(),
-  household_id uuid not null references households (id),
-  canonical_transaction_id uuid references canonical_transactions (id),
+  household_id uuid not null references public.households (id),
+  canonical_transaction_id uuid references public.canonical_transactions (id),
   description text not null check (length(description) <= 500),
   effective_date date not null,
   -- Set on compensating batches; the original row is never touched (Law 2).
-  reverses_batch_id uuid references journal_batches (id),
+  reverses_batch_id uuid references public.journal_batches (id),
   command_id uuid not null,
   posted_at timestamptz not null default now()
 );
 
-create table journal_postings (
+create table public.journal_postings (
   id uuid primary key default gen_random_uuid(),
-  batch_id uuid not null references journal_batches (id),
-  ledger_account_id uuid not null references ledger_accounts (id),
-  entity_id uuid not null references entities (id),
+  batch_id uuid not null references public.journal_batches (id),
+  ledger_account_id uuid not null references public.ledger_accounts (id),
+  entity_id uuid not null references public.entities (id),
   amount_minor bigint not null check (amount_minor <> 0),
   currency char(3) not null check (currency = upper(currency))
 );
 
-create index journal_postings_batch on journal_postings (batch_id);
-create index journal_postings_account on journal_postings (ledger_account_id);
+create index journal_postings_batch on public.journal_postings (batch_id);
+create index journal_postings_account on public.journal_postings (ledger_account_id);
 
 -- Postings and batches are append-only: corrections happen through new
 -- compensating batches recorded in journal_revisions.
 create trigger journal_batches_immutable
-  before update or delete on journal_batches
-  for each row execute function keel_forbid_mutation();
+  before update or delete on public.journal_batches
+  for each row execute function public.keel_forbid_mutation();
 create trigger journal_postings_immutable
-  before update or delete on journal_postings
-  for each row execute function keel_forbid_mutation();
+  before update or delete on public.journal_postings
+  for each row execute function public.keel_forbid_mutation();
 
-create table journal_revisions (
+create table public.journal_revisions (
   id uuid primary key default gen_random_uuid(),
-  original_batch_id uuid not null references journal_batches (id),
-  reversal_batch_id uuid not null references journal_batches (id),
-  replacement_batch_id uuid references journal_batches (id),
+  original_batch_id uuid not null references public.journal_batches (id),
+  reversal_batch_id uuid not null references public.journal_batches (id),
+  replacement_batch_id uuid references public.journal_batches (id),
   reason text not null check (length(reason) between 1 and 500),
   created_at timestamptz not null default now(),
   unique (original_batch_id, reversal_batch_id)
 );
 
 create trigger journal_revisions_immutable
-  before update or delete on journal_revisions
-  for each row execute function keel_forbid_mutation();
+  before update or delete on public.journal_revisions
+  for each row execute function public.keel_forbid_mutation();
 
-create table period_locks (
+create table public.period_locks (
   id uuid primary key default gen_random_uuid(),
-  household_id uuid not null references households (id),
-  entity_id uuid references entities (id),
+  household_id uuid not null references public.households (id),
+  entity_id uuid references public.entities (id),
   start_date date not null,
   end_date date not null check (end_date >= start_date),
   locked_by uuid not null references auth.users (id),
@@ -91,14 +91,14 @@ create table period_locks (
 -- Deferred constraint trigger — validated at COMMIT so a batch's postings can
 -- be inserted row by row inside the command transaction.
 -- ---------------------------------------------------------------------------
-create function keel_check_batch_balance() returns trigger
+create function public.keel_check_batch_balance() returns trigger
 language plpgsql as $$
 declare
   bad record;
 begin
   select p.batch_id, p.currency, sum(p.amount_minor) as delta
     into bad
-    from journal_postings p
+    from public.journal_postings p
    where p.batch_id = new.batch_id
    group by p.batch_id, p.currency
   having sum(p.amount_minor) <> 0
@@ -112,7 +112,7 @@ begin
   end if;
 
   -- A batch with fewer than two postings is not a journal entry.
-  if (select count(*) from journal_postings p where p.batch_id = new.batch_id) < 2 then
+  if (select count(*) from public.journal_postings p where p.batch_id = new.batch_id) < 2 then
     raise exception 'KEEL_UNBALANCED: batch % has fewer than two postings', new.batch_id
       using errcode = 'P0002';
   end if;
@@ -122,25 +122,25 @@ end;
 $$;
 
 create constraint trigger journal_postings_balance
-  after insert on journal_postings
+  after insert on public.journal_postings
   deferrable initially deferred
-  for each row execute function keel_check_batch_balance();
+  for each row execute function public.keel_check_batch_balance();
 
 -- ---------------------------------------------------------------------------
 -- Period-lock guard: no posting may land inside a locked (un-reopened) period
 -- for its household/entity scope.
 -- ---------------------------------------------------------------------------
-create function keel_check_period_lock() returns trigger
+create function public.keel_check_period_lock() returns trigger
 language plpgsql as $$
 declare
   batch record;
   lock_row record;
 begin
   select b.household_id, b.effective_date into batch
-    from journal_batches b where b.id = new.batch_id;
+    from public.journal_batches b where b.id = new.batch_id;
 
   select l.id into lock_row
-    from period_locks l
+    from public.period_locks l
    where l.household_id = batch.household_id
      and (l.entity_id is null or l.entity_id = new.entity_id)
      and l.reopened_at is null
@@ -158,5 +158,5 @@ end;
 $$;
 
 create trigger journal_postings_period_lock
-  before insert on journal_postings
-  for each row execute function keel_check_period_lock();
+  before insert on public.journal_postings
+  for each row execute function public.keel_check_period_lock();

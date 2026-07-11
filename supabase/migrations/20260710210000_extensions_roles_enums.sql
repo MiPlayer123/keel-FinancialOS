@@ -31,15 +31,15 @@ grant keel_worker to postgres;
 -- ---------------------------------------------------------------------------
 -- Enums (Law 4: enums over strings; no implicit defaults anywhere).
 -- ---------------------------------------------------------------------------
-create type household_role as enum ('owner', 'partner', 'viewer', 'professional');
-create type entity_kind as enum
+create type public.household_role as enum ('owner', 'partner', 'viewer', 'professional');
+create type public.entity_kind as enum
   ('personal', 'sole_prop', 'llc_single', 'llc_multi', 's_corp', 'trust', 'other');
-create type ledger_account_kind as enum ('asset', 'liability', 'income', 'expense', 'equity');
-create type transaction_status as enum ('pending', 'posted', 'reviewed', 'voided');
-create type transaction_source as enum ('sync', 'manual', 'import', 'split_child', 'system');
-create type bank_provider as enum ('simulator', 'plaid');
-create type connection_status as enum ('linking', 'active', 'reauth_required', 'disconnected');
-create type resource_kind as enum ('account', 'entity', 'document');
-create type resource_permission_level as enum ('view', 'edit', 'export');
-create type ai_risk_class as enum ('A', 'B', 'C', 'D');
-create type autonomy_level as enum ('off', 'suggest', 'auto_with_log');
+create type public.ledger_account_kind as enum ('asset', 'liability', 'income', 'expense', 'equity');
+create type public.transaction_status as enum ('pending', 'posted', 'reviewed', 'voided');
+create type public.transaction_source as enum ('sync', 'manual', 'import', 'split_child', 'system');
+create type public.bank_provider as enum ('simulator', 'plaid');
+create type public.connection_status as enum ('linking', 'active', 'reauth_required', 'disconnected');
+create type public.resource_kind as enum ('account', 'entity', 'document');
+create type public.resource_permission_level as enum ('view', 'edit', 'export');
+create type public.ai_risk_class as enum ('A', 'B', 'C', 'D');
+create type public.autonomy_level as enum ('off', 'suggest', 'auto_with_log');

@@ -46,18 +46,18 @@ where u.email like '%@keel.local';
 -- Households + cross-membership matrix (tenant-isolation tests need a user
 -- who exists in BOTH households with different roles).
 -- ---------------------------------------------------------------------------
-insert into households (id, name, created_at) values
+insert into public.households (id, name, created_at) values
   ('00000000-0000-4000-8000-00000000a001', 'Alpha Household', now()),
   ('00000000-0000-4000-8000-00000000b001', 'Beta Household', now());
 
-insert into household_memberships (household_id, user_id, role, created_at) values
+insert into public.household_memberships (household_id, user_id, role, created_at) values
   ('00000000-0000-4000-8000-00000000a001', '00000000-0000-4000-8000-000000000001', 'owner', now()),
   ('00000000-0000-4000-8000-00000000a001', '00000000-0000-4000-8000-000000000002', 'partner', now()),
   ('00000000-0000-4000-8000-00000000a001', '00000000-0000-4000-8000-000000000004', 'professional', now()),
   ('00000000-0000-4000-8000-00000000b001', '00000000-0000-4000-8000-000000000003', 'owner', now()),
   ('00000000-0000-4000-8000-00000000b001', '00000000-0000-4000-8000-000000000001', 'viewer', now());
 
-insert into entities (id, household_id, name, kind, created_at, archived_at) values
+insert into public.entities (id, household_id, name, kind, created_at, archived_at) values
   ('00000000-0000-4000-8000-00000000a101', '00000000-0000-4000-8000-00000000a001',
    'Personal', 'personal', now(), null),
   ('00000000-0000-4000-8000-00000000a102', '00000000-0000-4000-8000-00000000a001',
@@ -65,13 +65,13 @@ insert into entities (id, household_id, name, kind, created_at, archived_at) val
   ('00000000-0000-4000-8000-00000000b101', '00000000-0000-4000-8000-00000000b001',
    'Personal', 'personal', now(), null);
 
-insert into entity_memberships (entity_id, user_id, created_at) values
+insert into public.entity_memberships (entity_id, user_id, created_at) values
   ('00000000-0000-4000-8000-00000000a101', '00000000-0000-4000-8000-000000000001', now()),
   ('00000000-0000-4000-8000-00000000a101', '00000000-0000-4000-8000-000000000002', now()),
   ('00000000-0000-4000-8000-00000000a102', '00000000-0000-4000-8000-000000000001', now()),
   ('00000000-0000-4000-8000-00000000b101', '00000000-0000-4000-8000-000000000003', now());
 
-insert into connections (id, household_id, provider, external_ref, status, created_at) values
+insert into public.connections (id, household_id, provider, external_ref, status, created_at) values
   ('00000000-0000-4000-8000-00000000a201', '00000000-0000-4000-8000-00000000a001',
    'simulator', 'sim-conn-alpha', 'active', now()),
   ('00000000-0000-4000-8000-00000000b201', '00000000-0000-4000-8000-00000000b001',
@@ -86,7 +86,7 @@ insert into connections (id, household_id, provider, external_ref, status, creat
 -- accounts; categories are expense/income ledger accounts (is_category=true);
 -- one equity account per entity for opening balances.
 -- ---------------------------------------------------------------------------
-insert into ledger_accounts (id, household_id, entity_id, name, kind, currency, is_category, created_at, archived_at) values
+insert into public.ledger_accounts (id, household_id, entity_id, name, kind, currency, is_category, created_at, archived_at) values
   -- Alpha / Personal — real account backings
   ('00000000-0000-4000-8000-00000000a301', '00000000-0000-4000-8000-00000000a001',
    '00000000-0000-4000-8000-00000000a101', 'Simulator Checking', 'asset', 'USD', false, now(), null),
@@ -122,7 +122,7 @@ insert into ledger_accounts (id, household_id, entity_id, name, kind, currency, 
   ('00000000-0000-4000-8000-00000000b318', '00000000-0000-4000-8000-00000000b001',
    '00000000-0000-4000-8000-00000000b101', 'Uncategorized Income', 'income', 'USD', true, now(), null);
 
-insert into accounts
+insert into public.accounts
   (id, household_id, entity_id, connection_id, ledger_account_id, name, subtype, currency, external_ref, created_at, archived_at)
 values
   ('00000000-0000-4000-8000-00000000a401', '00000000-0000-4000-8000-00000000a001',
@@ -138,7 +138,7 @@ values
    '00000000-0000-4000-8000-00000000b301', 'Beta Checking', 'checking', 'USD',
    'sim-acct-beta-checking', now(), null);
 
-insert into account_owners (account_id, user_id, created_at) values
+insert into public.account_owners (account_id, user_id, created_at) values
   ('00000000-0000-4000-8000-00000000a401', '00000000-0000-4000-8000-000000000001', now()),
   ('00000000-0000-4000-8000-00000000a401', '00000000-0000-4000-8000-000000000002', now()),
   ('00000000-0000-4000-8000-00000000a402', '00000000-0000-4000-8000-000000000001', now()),
@@ -146,7 +146,7 @@ insert into account_owners (account_id, user_id, created_at) values
 
 -- Autonomy policies: explicit row per class per household; class D always off
 -- (Law 10; the table CHECK also refuses anything else).
-insert into approval_policies (id, household_id, risk_class, autonomy, created_at) values
+insert into public.approval_policies (id, household_id, risk_class, autonomy, created_at) values
   ('00000000-0000-4000-8000-00000000a501', '00000000-0000-4000-8000-00000000a001', 'A', 'auto_with_log', now()),
   ('00000000-0000-4000-8000-00000000a502', '00000000-0000-4000-8000-00000000a001', 'B', 'suggest', now()),
   ('00000000-0000-4000-8000-00000000a503', '00000000-0000-4000-8000-00000000a001', 'C', 'suggest', now()),

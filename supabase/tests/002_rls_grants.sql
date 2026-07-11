@@ -52,19 +52,19 @@ set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000003","role":"authenticated"}';
 
 select is(
-  (select count(*)::int from households where id = '00000000-0000-4000-8000-00000000a001'),
+  (select count(*)::int from public.households where id = '00000000-0000-4000-8000-00000000a001'),
   0, 'RLS: other household row is invisible');
 select is(
-  (select count(*)::int from accounts where household_id = '00000000-0000-4000-8000-00000000a001'),
+  (select count(*)::int from public.accounts where household_id = '00000000-0000-4000-8000-00000000a001'),
   0, 'RLS: other household accounts invisible');
 select is(
-  (select count(*)::int from canonical_transactions
+  (select count(*)::int from public.canonical_transactions
     where household_id = '00000000-0000-4000-8000-00000000a001'),
   0, 'RLS: other household transactions invisible');
 
 -- Direct writes as authenticated fail even against own household (test 6).
 select throws_ok($$
-  insert into canonical_transactions
+  insert into public.canonical_transactions
     (household_id, entity_id, account_id, status, source, description, effective_date, economic_event_key)
   values ('00000000-0000-4000-8000-00000000b001', '00000000-0000-4000-8000-00000000b101',
           '00000000-0000-4000-8000-00000000b401', 'posted', 'manual', 'smuggled', '2026-07-01',
@@ -72,18 +72,18 @@ select throws_ok($$
 $$, '42501', null, 'authenticated cannot insert canonical transactions');
 
 select throws_ok($$
-  insert into journal_batches (household_id, description, effective_date, command_id)
+  insert into public.journal_batches (household_id, description, effective_date, command_id)
   values ('00000000-0000-4000-8000-00000000b001', 'smuggled batch', '2026-07-01', gen_random_uuid())
 $$, '42501', null, 'authenticated cannot insert journal batches');
 
 select throws_ok($$
-  update period_locks set reopened_at = now(), reopen_reason = 'x' where true
+  update public.period_locks set reopened_at = now(), reopen_reason = 'x' where true
 $$, '42501', null, 'authenticated cannot touch period locks');
 
 -- The user-facing command proc enforces cross-household denial in-database:
 -- casey attempting a post into alpha raises scope violation.
 select throws_ok($$
-  select keel_cmd_post_batch(
+  select public.keel_cmd_post_batch(
     gen_random_uuid(), 'pgtap:casey:alpha:0001',
     '{"kind":"user","userId":"00000000-0000-4000-8000-000000000003"}'::jsonb,
     '00000000-0000-4000-8000-00000000a001',

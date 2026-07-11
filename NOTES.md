@@ -48,3 +48,10 @@ Record every decision, deviation, failed approach, command run, test result, mig
 - packages/authz: Codex-built, 35 tests green, no deviations.
 - packages/test-fixtures: Codex-built, 25 tests green; 2 recorded deviations (no '+' prefix on amounts — contracts schema; 6 provider records in baseline because the card-payment pair needs a record per account).
 - packages/ledger: Codex agent in flight.
+
+### 2026-07-11 later — stack up + protocol change
+
+- **Docker network incident**: image pulls stalled ~1h with zero egress; Docker Desktop VM network was wedged (host network fine). Restart fixed it; founder confirmed a network issue on their side. rem-mobile-app stack auto-recovered (restart policy `always`).
+- **D-016 Codex invocation protocol (founder instruction)**: bypass the plugin subagent; call `codex exec --yolo` directly via shell so Codex gets full network/tool access and the account's latest default model. Plugin sandbox had no npm egress (web-shell verification had to be redone host-side).
+- **D-017 Migration lesson**: supabase CLI ≥2.109 runs migrations with EMPTY search_path — all DDL must be schema-qualified (`public.`). Delegated the mechanical qualification + db-reset/pgTAP iteration loop to Codex --yolo.
+- Local stack live on 55321-55329; `apps/web/.env.local` written with local publishable key (public demo value).
