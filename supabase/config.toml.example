@@ -1,0 +1,15 @@
+# Copy/merge into supabase/config.toml after `supabase init`.
+# New Supabase publishable/secret keys are authorized inside handlers via @supabase/server.
+project_id = "keel"
+
+[functions.api]
+verify_jwt = false
+
+[functions.worker]
+verify_jwt = false
+
+[functions.webhook-provider]
+verify_jwt = false
+
+[functions.scheduled]
+verify_jwt = false

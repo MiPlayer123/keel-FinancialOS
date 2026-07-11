@@ -1,0 +1,37 @@
+# --- Secret boundary (CLAUDE.md Law 12) ---
+# Server-only env files: never commit filled copies.
+.env
+.env.*
+!.env.example
+!.env.*.example
+supabase/.env.remote
+supabase/functions/.env
+apps/web/.env.local
+
+# --- Dependencies / build output ---
+node_modules/
+.pnpm-store/
+dist/
+build/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+.turbo/
+
+# --- Supabase local state ---
+supabase/.branches/
+supabase/.temp/
+supabase/.env
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
+
+# --- Backups (must never be committed) ---
+backups/
+*.dump
+*.sql.gz
