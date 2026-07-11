@@ -28,13 +28,13 @@
 - [x] A7 edge functions: api / worker / webhook-provider / scheduled + esbuild vendor bundle + provisioner (12bde88) — **not yet served/tested**
 - [x] pgTAP suites written (supabase/tests/001, 002) — **not yet run**
 - [x] CI workflow written (.github/workflows/ci.yml) — **not yet pushed/proven**
-- [~] @keel/ingest + fixture key-convention rework — Codex agent in flight (golden oracle: expectedCanonical must equal planner output; keys `txn:simulator:sim-conn-alpha:<providerTxnId>`, supersession continues pending key)
-- [~] apps/web minimal shell — Codex agent in flight
-- [~] `supabase start` — in flight (first-time image pull, slow)
-- [ ] `supabase db reset` green (migrations + seed apply)
-- [ ] `supabase test db` green (pgTAP)
-- [ ] Integration suite (tests 3,5,7,8,9,10,11,12 end-to-end) — write AFTER stack is up; lives at tests/integration/, `pnpm test:integration` script to add
-- [ ] Red-team ingestion CI test (PLAN §3.6.12)
+- [x] @keel/ingest + fixture key rework (golden oracles reproduce; supersession continues pending key)
+- [x] apps/web shell (builds, typechecks; verified host-side)
+- [x] Local stack up (ports 55321-55329)
+- [x] `supabase db reset` green (migrations + seed apply; D-017 schema-qualification)
+- [x] `supabase test db` green (25 pgTAP tests)
+- [x] Integration suite green: 41/41 via `scripts/dev/itest.sh` (reset → serve → test; order load-bearing)
+- [x] Red-team ingestion test green (14 payloads inert, verbatim, exactly-one-txn)
 - [ ] Stage-exit reviews: Claude + Codex audit the full stage diff; dispositions in NOTES
 - [ ] Clean-checkout proof + tag `stage-1a`
 
