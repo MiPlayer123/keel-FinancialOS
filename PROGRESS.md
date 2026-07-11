@@ -2,8 +2,9 @@
 
 > Context-recovery file. Picking this up cold: read `CLAUDE.md`, then `PLAN.md` (incl. §3.5/§3.6 audit amendments), then this file, then the last ~60 lines of `NOTES.md`. The "Resume" section is the exact next action.
 
-**Last updated:** 2026-07-11 (C3 build)
-**Current stage:** Stage 1C building (server-only Plaid read path). PLAN-1C cleared by 4 audit rounds (tag plan-1c-ready). C1 adapter, C2a schema, C2b crypto, C3 link/disconnect saga, C5a reconcile, and C5b sync spine are GREEN. C3 adds remove-before-shred disconnect, token-free hermetic link fixtures, orphan reaping, and race-free lifecycle fencing (215 unit + 58 pgTAP + 57 integration). 6/9 1C steps done. Next: C4 webhook, C6 cron/metering, stage-exit dual audit + tag stage-1c. Deferred C5b review items (M4/B2/M6/m8/m9) remain tracked in NOTES for stage-exit.
+**Last updated:** 2026-07-11 (C4 built and fully gated; not committed)
+**Current stage:** Stage 1C building (server-only Plaid read path). C1 adapter, C2a schema, C2b crypto, C3 link/disconnect saga, C4 webhook verification, C5a reconcile, and C5b sync spine are GREEN. C4 adds real Plaid fetch-by-`kid`, validated positive/safe-stale/negative cache, ES256/JWK/body-hash verification, invalid-vs-unverifiable routing, JWT-fingerprint dedup, bounded quarantine, and the hermetic HTTP-status injection seam. **7/9 1C steps done.**
+**C4 gate:** typecheck + lint clean; 215 Vitest tests plus 5 Deno tests/25 steps; 83 pgTAP assertions; 71 integration tests (C4 webhook suite 19/19, no regression in 04/06/08/09). No commit made. Next: C4 post-build dual review, then C6 cron/metering, stage-exit dual audit + tag. Deferred C5b (M4/B2/M6/m8/m9) + C3 (Codex #2/#3/#4/#5, Claude F2) items remain tracked in NOTES.
 **Path decision:** Path A (personal instrument) working default — NOTES D-001.
 
 ## Environment facts

@@ -208,3 +208,30 @@ Ran the full plan→build→test→**dual audit** loop on C3. Pre-build: 2 dual 
 - **Gate (independently re-run, not self-reported):** typecheck+lint clean, 215 unit, 58 pgTAP, 57 integration — all green with the fixes. Suite-04 shared-queue ordering flake is PRE-EXISTING (simulator `apply_promotion` path, untouched by C3; passed on clean re-run); tracked for a test-isolation hardening pass at stage-exit.
 
 ### Stage 1C: 6 of 9 steps GREEN (C1, C2a, C2b, C3, C5a, C5b). C3 dual-reviewed + hardened + committed. Remaining: C4 webhook, C6 cron/metering, stage-exit dual audit + tag stage-1c.
+
+### 2026-07-11 — C4 real Plaid webhook verification GREEN (v3)
+
+- Added the server-only `plaid_webhook_keys` cache and six service-role-only SECURITY DEFINER RPCs with `keel_api`/`keel_worker` ownership, negative ACL coverage, conditional negative writes, safe-stale metadata, verified verbatim delivery recording, and atomic injected key-response consumption.
+- Replaced static `PLAID_WEBHOOK_JWK` verification with fetch-by-`kid`: exact HTTP-400 `INVALID_WEBHOOK_VERIFICATION_KEY_ID` is the only negative-cache path; fetch/config/import/JWK-shape faults are 503 and never ingest. ES256/typ/kid/iat/hash/environment checks are pinned; body hash comparison is fixed-length XOR accumulation after strict lowercase-hex validation.
+- Public handler now performs declared-size gating before `arrayBuffer`, early non-sandbox ack-drop before key resolution, JWT-fingerprint dedup, typed unroutable 200 routing, bounded `(reason, body_sha256, 1h)` quarantine, and strips `plaid-verification`/`authorization`/`apikey` from stored headers. Credentials, the raw verification header, and full JWKs are never logged.
+- Test coverage: production-RPC key seeding, exact JWT redelivery, nonce-free equal-body/distinct-JWT delivery, negative-cache short circuit, unroutable, bad JWK, outage recovery, safe-stale, none/HS256/RS256/ES384, kid mismatch, time/hash/environment/size guards, ACL denial, and Law-12 database/log canaries. C4 integration cleanup archives only its own `plaid:webhook:<raw-id>` queue messages so the shared-DB replay suite is isolated.
+
+#### C4 build blocker — authoritative conflict resolutions
+
+- `C4-BUILD-SPEC.md:257` says a cached JWK with the wrong `crv` should return 401, but the same spec at lines 179–184 and 249–250—and the user-level HARD RULE—requires every fetched-or-cached JWK shape/import failure to be `unverifiable`/503. Implemented and tested 503; 401 remains only for signature failure against a valid imported key.
+- `C4-BUILD-SPEC.md:125–126` names `webhook_rejections.created_at` in the dedupe index, but the cited deployed table defines `received_at`. The migration indexes `(body_sha256, reason, received_at)` and the handler uses that column for the one-hour window.
+- `C4-BUILD-SPEC.md:261` requests an HTTP integration request over 1 MiB. The local Supabase gateway buffers that body before Edge and destabilizes the worker, so the integration file exercises the production bounded-read helper with a throwing `arrayBuffer()` and proves `{status:401}` without a read. The deployed handler uses that helper and also retains the post-read byte-length backstop.
+
+- Gate evidence: `pnpm -w typecheck`, `pnpm -w lint`, and `pnpm -w test` green (215 Vitest + 5 Deno tests/25 steps); `supabase test db` green (83); `bash scripts/dev/itest.sh` green (71/71). No commit made.
+
+### Stage 1C: 7 of 9 steps GREEN (C1, C2a, C2b, C3, C4, C5a, C5b). Remaining: C6 cron/metering, stage-exit dual audit + tag.
+
+### 2026-07-11 — C4 real Plaid webhook verification: dual reviews + GREEN
+
+Full plan→build→test→dual-audit loop on C4 (public webhook endpoint). Pre-build: dual review (Claude+Codex) both NEEDS REWORK (19 findings) → spec v1→v3; a Codex v3 confirmation (7 residual) → all folded. Biggest catches BEFORE code: body-hash dedup would silently drop every real repeat Plaid notification (dedup must be on the JWT fingerprint — the endpoint's whole purpose); function EXECUTE defaults to PUBLIC (anon could cache a forged signing key); JWK-shape/import failure must be `unverifiable`/503 not a forgery verdict; audit_log.household_id NOT NULL breaks a system-scoped key-cache audit; an authentic wrong-`environment` body would persist real prod data into quarantine.
+Built by Codex vs v3 (3 sensible documented deviations: wrong-curve cached JWK → 503 over a stale spec line; `received_at` not nonexistent `created_at`; oversize test exercises the bounded reader via the gateway). Post-build dual review of the ACTUAL code:
+- **Claude = SHIP** (all 6 security dimensions verified sound; minors: redundant triple body-hash, nullable dedupe col, stale `PLAID_WEBHOOK_JWK` env — deferred, cosmetic, no security/correctness impact).
+- **Codex = DO NOT SHIP → 2 MAJOR DoS-hardening gaps, both FIXED:** (1) bounded reader buffered the full body before the size check when Content-Length is absent (chunked) → rewrote to STREAM `request.body` with a hard cap + cancel (`plaid-webhook-request.ts`); (2) quarantine dedupe was a non-atomic SELECT-then-INSERT (concurrent forgeries all insert) + ignored the insert error → added `keel_webhook_quarantine` SECURITY DEFINER RPC (per-(reason,hash) `pg_advisory_xact_lock` + dedupe-insert, surfaces failure). Codex explicitly confirmed the ENTIRE verification core sound (ES256/JWK/iat/hash, invalid-vs-unverifiable, cache ACLs/upserts, JWT-fingerprint dedup, unroutable, Law 5/12, env ordering, SQL).
+- **Gate (independently re-run):** typecheck+lint clean; 215 vitest + 5 Deno verifier tests; 83 pgTAP (25 C4); 71 integration (19 C4 cases; no regression on 04/06/08/09). Deferred (non-blocking): Claude F1 redundant hashing, F3 stale env; global quarantine rate-cap → C6 breakers.
+
+### Stage 1C: 7 of 9 steps GREEN (C1, C2a, C2b, C3, C4, C5a, C5b). C4 dual-reviewed + DoS-hardened + committed. Remaining: C6 cron/metering, stage-exit dual audit + tag stage-1c.
