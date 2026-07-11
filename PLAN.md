@@ -118,6 +118,25 @@ Dispositions of all 14 findings; full audit text in NOTES.md session log.
 13. **Cron transport** noted for 1B (pg_cron → `net.http_post` to `scheduled`); stub only in 1A.
 14. **`professional_access_grants`** deferred from A6 (satisfies TASK-000 via `resource_permissions`); explicit deferral, lands with support/professional surface in 1D.
 
+## 3.6 Amendments from plan audit v2 (Codex gpt-5.6-sol, 2026-07-11)
+
+Fourteen findings; full text in NOTES.md. Dispositions:
+
+1. **Write path closed as follows**: command procs are `SECURITY DEFINER`, owned by non-BYPASSRLS `keel_api`, `set search_path = public`, `REVOKE ... FROM public, anon`, and re-derive the actor from `auth.uid()` + membership tables in-database (never trusting caller-passed actor for authorization). `authenticated` holds EXECUTE on the five `keel_cmd_*` procs: a direct `.rpc()` call therefore reaches the *same* authorized domain contract as the Edge Function — this is deliberately not a side door (Law 7: same contract, no privilege difference) and is recorded as deviation D-010 against a strict reading of INFRA §5 "runs inside an Edge Function". Edge `api` remains the canonical surface (envelope validation, TS authz, telemetry).
+2. **Seed provisions deterministic `auth.users` rows** (fixed UUIDs, local-only) before memberships; categories seeded as income/expense `ledger_accounts` (`is_category=true`) — the separate BC categories tables stay 1D.
+3. **Webhook ordering reconciled**: verify Plaid-Verification JWT + SHA-256 body hash over the exact buffered bytes in memory FIRST; only verified payloads enter `raw_provider_events`; rejected payloads go to a quarantine table (`webhook_rejections`) for diagnostics. Satisfies CLAUDE.md "verification before ingestion" and preserves doc 17's "store the raw body" intent without evidence poisoning. Negative tests: bad signature/kid/expiry/modified body ⇒ zero raw rows, zero queue messages.
+4. **Changed/removed lineage pulled into 1A (minimal)**: `transaction_modified` ⇒ reversal + replacement batch via `journal_revisions`; `transaction_removed` ⇒ reversal + `voided` status; originals immutable. Reconnect/account-merge lineage stays 1C.
+5. **Provisioning is code**: `scripts/dev/provision-local-env.mjs` (idempotent: copies env examples, generates local automations secret) + `pnpm build:functions` wired as pretest hooks; both run in CI from clean checkout.
+6. **Worker uses `pgmq.read` + visibility timeout + archive-after-success**, `read_ct` threshold routes poison messages to DLQ (archive with failure marker). No `pop`.
+7. **Idempotency scoped per household** — `command_executions` PK `(household_id, economic_event_key)`; payload-hash binding already present. Applied to migrations.
+8. **`periods.reopen` deferred to 1B** with justification: reopen requires step-up auth (INFRA §7) which arrives with the auth-hardening pass; the data model (`reopened_at`, `reopen_reason`) and lock-guard behavior exist now. Deviation D-011.
+9. **Transfers/provenance**: `transfer_links` schema lands in 1A (headroom, BC-v2.1); confirm-flow + income/spend-exclusion property test land in 1D with reports (exclusion is only observable in cash-flow calculations). Read surfaces gain `formulaVersion` + completeness fields now. Deviation D-012.
+10. **Test 5 expanded**: read surfaces (`keel_trial_balance`, `keel_list_transactions`) probed with an other-household JWT; assert zero rows/ids/signals leak.
+11. **Test 10 expanded**: positive named-secret acceptance + missing/publishable/user-JWT/malformed/wrong-secret rejections, for worker and scheduled.
+12. **Red-team fixtures wired into 1A CI**: hostile memo strings run through `ingest.record_raw_event`/`promote_event`; assert inert storage, no writes beyond the validated command, no tool/network effects.
+13. **Migration idempotence language corrected**: migrations are one-shot and history-controlled; the gate is "repeated `supabase db reset` converges to an identical schema" (double-reset schema-diff test).
+14. **Stale citation**: CLAUDE.md references "BC-v2.1 §9.1" which doesn't exist in the included file (ends §7) — noted in NOTES; commits cite CLAUDE.md law numbers or BC-v2.1 §2/§6.
+
 ## 4. After Stage 1A (forward view, gated)
 
 - **1B** local integration hardening (already mostly covered above; whatever pgTAP/RLS surface remains).

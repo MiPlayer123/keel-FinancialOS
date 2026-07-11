@@ -36,6 +36,8 @@ describe('hostile bank-sync scenarios', () => {
   });
 
   it.each(Object.values(SCENARIOS))('$name pages conform to SyncPageSchema', (scenario) => {
+    expect(scenario.connectionExternalRef).toBe('sim-conn-alpha');
+
     for (const page of scenario.pages) {
       expect(SyncPageSchema.parse(page)).toEqual(page);
     }
@@ -49,8 +51,20 @@ describe('hostile bank-sync scenarios', () => {
     expect(new Set(economicKeys).size).toBe(economicKeys.length);
     expect(economicKeys).toEqual([...economicKeys].sort());
     for (const transaction of scenario.expectedCanonical.transactions) {
+      expect(transaction.economicKey).toMatch(
+        /^txn:simulator:sim-conn-alpha:[^:]+$/,
+      );
       expect(MinorUnitsStringSchema.parse(transaction.amountMinor)).toBe(transaction.amountMinor);
     }
+  });
+
+  it('continues the pending economic key when a posted transaction supersedes it', () => {
+    expect(SCENARIOS.delayed_posting.expectedCanonical.transactions[0]?.economicKey).toBe(
+      'txn:simulator:sim-conn-alpha:sim-txn-delayed-pending',
+    );
+    expect(SCENARIOS.changed_amount.expectedCanonical.transactions[0]?.economicKey).toBe(
+      'txn:simulator:sim-conn-alpha:sim-txn-changed-amount-pending',
+    );
   });
 
   it('duplicates the first delivery byte-for-byte on a later page', () => {

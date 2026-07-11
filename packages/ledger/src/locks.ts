@@ -2,9 +2,9 @@ import type { PeriodLockId } from '@keel/contracts';
 import { KeelError } from '@keel/contracts';
 
 export interface PeriodLock {
-  readonly lockId: PeriodLockId;
-  readonly startDate: string;
-  readonly endDate: string;
+  lockId: PeriodLockId;
+  startDate: string;
+  endDate: string;
 }
 
 export const assertPostable = (effectiveDate: string, locks: readonly PeriodLock[]): void => {

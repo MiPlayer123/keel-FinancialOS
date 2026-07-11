@@ -8,22 +8,24 @@
 
 ## Environment facts
 
-- Machine: macOS; node v24.9.0, pnpm 10.33.0, supabase CLI 2.20.3, codex-cli 0.144.1 present.
-- Docker Desktop: must be running for `supabase start` (launched via `open -a Docker`).
+- Machine: macOS; node v24.9.0, pnpm 10.33.0, supabase CLI 2.109.1, codex-cli 0.144.1 (default model gpt-5.6-sol xhigh via ~/.codex/config.toml — never pass -m).
+- Docker Desktop: must be running for `supabase start` (launched; first image pull is slow).
 - Git: initialized on `main`; baseline spec commit `63fe87c`.
-- No cloud credentials in play yet; local-only (`BANK_PROVIDER=simulator`, `AI_PROVIDER=fixture`).
+- Cloud binding (founder decision D-006): documented project `yrbteeownwjhcushwaga` in a separate Supabase account; publishable key + DB password come from founder at deploy ⚑. Supabase MCP account only sees unrelated projects — do not use it for KEEL cloud ops.
+- Executor model (D-007): Codex (gpt-5.6-sol) implements specced leaf tasks in parallel; Claude orchestrates/reviews/owns architecture. Local-only until cloud ⚑ (`BANK_PROVIDER=simulator`, `AI_PROVIDER=fixture`).
+- supabase/config.toml exists (project_id `keel`, per-function verify_jwt=false). `supabase/functions/.env` created from example (git-ignored).
 
 ## Checklist — Stage 1A (see PLAN.md §3 for step contents)
 
 - [x] Read full spec corpus (CLAUDE.md, INFRA.md, BC-v2.1, docs 09–19, TASK-000)
 - [x] Git init + baseline commit + secret-boundary .gitignore
 - [x] PLAN.md written
-- [ ] Plan audited by parallel Claude + Codex agents; findings triaged into PLAN.md/NOTES.md
-- [ ] A1 workspace scaffold
-- [ ] A2 packages/contracts
-- [ ] A3 packages/ledger (100% coverage + property tests)
-- [ ] A4 packages/authz
-- [ ] A5 packages/test-fixtures (hostile streams + red-team data)
+- [x] Claude plan audit done (14 findings) → dispositions in PLAN.md §3.5; Codex audit re-running (model fix: default gpt-5.6-sol, not -m gpt-5.6-codex)
+- [x] A1 workspace scaffold (commit b170df7; TS pinned 5.9 — typescript-eslint lacks TS7 support)
+- [x] A2 packages/contracts (commit 6c65ece; 19 tests)
+- [~] A3 packages/ledger — delegated to Codex agent (in flight)
+- [~] A4 packages/authz — delegated to Codex agent (in flight)
+- [~] A5 packages/test-fixtures — delegated to Codex agent (in flight)
 - [ ] A6 supabase migrations + seed (+ pgTAP)
 - [ ] A7 edge functions (api/worker/webhook-provider/scheduled + simulator adapter)
 - [ ] A8 the 12 TASK-000 required tests all green
