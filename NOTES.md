@@ -133,3 +133,8 @@ Round-3 dual audit: both cleared the ARCHITECTURE (crypto D-B, decimal D-E, pend
 - C5 split: C5a (reconcileSyncBatch + normalized schema + apply_promotion amendment, fixture-proven) before C5b (durable orchestration) — Claude NF-6.
 - **D-023:** export & viewer UI are separate stages (1D/1E); 1C is server-only read path.
 One final targeted Codex verification pass, then build.
+
+### 2026-07-11 — PLAN-1C READY; build start + operating mandate
+
+Founder: "keep this full plan/dev/test/audit loop until the full backend is done, fully end-to-end tested." Operating autonomously through the backend stages with the same protocol proven in 1A: Codex (gpt-5.6, --yolo direct) implements from the plan; Claude reviews/tests/owns trust-boundary code; dual stage-exit audit before each tag. Live Plaid steps remain ⚑ (rotated secret + client id + fixture sanitization) — but C0(fixtures-from-documented-shapes)/C1(adapter)/C2a(schema)/C5a(reconciliation) are all buildable+testable WITHOUT live credentials, so build proceeds to those now; live-Sandbox gates wait at the ⚑.
+Build order: C1(adapter)+C2a(schema) in parallel → C5a(reconciliation) → C2b(crypto ⚑) → C3(saga) → C4(webhook) → C5b(orchestration) → C6(cron/metering). Tag stage-1c after dual review.
