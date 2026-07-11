@@ -17,5 +17,5 @@ export const plaidAmountToKeelMinor = (
     });
   }
 
-  return -decimalToMinor(plaidAmountLexeme, currency);
+  return -decimalToMinor(plaidAmountLexeme, 'USD');
 };

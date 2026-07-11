@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   PLAID_ADAPTER_VERSION,
   PlaidBankProvider,
@@ -14,5 +14,8 @@ describe('@keel/plaid public surface', () => {
     expect(decimalToMinor).toBeTypeOf('function');
     expect(extractAmountLexemes).toBeTypeOf('function');
     expect(plaidAmountToKeelMinor).toBeTypeOf('function');
+    expectTypeOf(decimalToMinor).toEqualTypeOf<
+      (lexeme: string, currency: 'USD') => bigint
+    >();
   });
 });
