@@ -2,8 +2,8 @@
 
 > Context-recovery file. Picking this up cold: read `CLAUDE.md`, then `PLAN.md` (incl. §3.5/§3.6 audit amendments), then this file, then the last ~60 lines of `NOTES.md`. The "Resume" section is the exact next action.
 
-**Last updated:** 2026-07-11 ~01:30 (session 1)
-**Current stage:** Stage 1C building (server-only Plaid read path). PLAN-1C cleared by 4 audit rounds (tag plan-1c-ready). Done+green+committed: C1 adapter, C2a schema, C5a-core reconcile, C2b crypto. Plaid Sandbox LIVE-verified (creds in ignored env). C5b sync spine GREEN + committed + hardened (205 unit + 41 pgTAP + 42 integration). 5/9 1C steps done. Next: C3 saga, C4 webhook, C6 cron, stage-exit dual audit + tag stage-1c. Deferred review items (M4/B2/M6/m8/m9) tracked in NOTES for stage-exit.
+**Last updated:** 2026-07-11 (C3 build)
+**Current stage:** Stage 1C building (server-only Plaid read path). PLAN-1C cleared by 4 audit rounds (tag plan-1c-ready). C1 adapter, C2a schema, C2b crypto, C3 link/disconnect saga, C5a reconcile, and C5b sync spine are GREEN. C3 adds remove-before-shred disconnect, token-free hermetic link fixtures, orphan reaping, and race-free lifecycle fencing (215 unit + 58 pgTAP + 57 integration). 6/9 1C steps done. Next: C4 webhook, C6 cron/metering, stage-exit dual audit + tag stage-1c. Deferred C5b review items (M4/B2/M6/m8/m9) remain tracked in NOTES for stage-exit.
 **Path decision:** Path A (personal instrument) working default — NOTES D-001.
 
 ## Environment facts

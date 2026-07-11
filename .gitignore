@@ -39,3 +39,7 @@ backups/
 # Generated artifacts
 supabase/functions/_shared/vendor/
 .env.local-automations
+
+# harness / skill artifacts (not project files)
+.claude/
+docs/superpowers/

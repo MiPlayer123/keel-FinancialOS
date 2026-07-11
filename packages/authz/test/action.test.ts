@@ -16,6 +16,8 @@ describe('action vocabulary', () => {
       'ingest.promote_event',
       'journal.post_batch',
       'journal.reverse_batch',
+      'connections.link',
+      'connections.disconnect',
       'ledger.trial_balance',
       'transactions.list',
       'audit.read',

@@ -6,6 +6,8 @@ export const WRITE_ACTIONS = [
   'ingest.promote_event',
   'journal.post_batch',
   'journal.reverse_batch',
+  'connections.link',
+  'connections.disconnect',
 ] as const satisfies readonly CommandName[];
 
 export const READ_ACTIONS = ['ledger.trial_balance', 'transactions.list', 'audit.read'] as const;
@@ -24,6 +26,8 @@ export const ACTION_MINIMUM_ROLES = {
   'ingest.promote_event': 'partner',
   'journal.post_batch': 'partner',
   'journal.reverse_batch': 'partner',
+  'connections.link': 'partner',
+  'connections.disconnect': 'partner',
   'ledger.trial_balance': 'viewer',
   'transactions.list': 'viewer',
   'audit.read': 'viewer',

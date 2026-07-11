@@ -11,8 +11,12 @@
 import { withSupabase } from 'npm:@supabase/server@1.3.0';
 import {
   AccountIdSchema,
+  CommandIdSchema,
   CommandEnvelopeSchema,
+  ConnectionIdSchema,
   EntityIdSchema,
+  HouseholdIdSchema,
+  mapAccountsGetToKeel,
   parseCommandPayload,
   authorize,
   type Action,
@@ -21,6 +25,9 @@ import {
   type HouseholdRole,
 } from '../_shared/vendor/keel-domain.mjs';
 import { json, mapDbError, toSnakeKeys } from '../_shared/http.ts';
+import { decryptToken, encryptToken, type EncryptedRecord } from '../_shared/credential-crypto.ts';
+import { currentKekVersion, getKek } from '../_shared/credential-kek.ts';
+import { createPlaidClient, PlaidClientError } from '../_shared/plaid-client.ts';
 
 const COMMAND_TO_PROC: Record<string, string> = {
   'accounts.create': 'keel_cmd_create_account',
@@ -37,6 +44,40 @@ const QUERY_TO_PROC: Record<string, string> = {
 
 // deno-lint-ignore no-explicit-any
 type UserClient = any;
+
+interface LinkBeginResult {
+  attemptId: string;
+  credentialId: string;
+  state: string;
+  connectionId: string | null;
+}
+
+interface CredentialEnvelope extends EncryptedRecord {
+  credentialId: string;
+  householdId: string;
+  provider: 'plaid';
+}
+
+const providerFailure = (error: PlaidClientError): Response =>
+  json(502, {
+    code: 'provider_failed',
+    message: 'Provider request failed.',
+    details: {
+      error_code: error.errorCode,
+      error_type: error.errorType,
+      request_id: error.requestId,
+    },
+  });
+
+const internalFailure = (): Response =>
+  json(500, { code: 'transaction_failed', message: 'Command failed.', details: {} });
+
+const credentialFailure = (): Response =>
+  json(500, {
+    code: 'credential_subsystem_unavailable',
+    message: 'credential subsystem unavailable',
+    details: {},
+  });
 
 const loadAuthzContext = async (
   supabase: UserClient,
@@ -93,6 +134,306 @@ export default {
       body = await req.json();
     } catch {
       return json(400, { code: 'invalid_command', message: 'Invalid JSON.', details: {} });
+    }
+
+    if (path === '/connections/link') {
+      const input = body as Record<string, unknown>;
+      const commandId = CommandIdSchema.safeParse(input['commandId']);
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const entityId = EntityIdSchema.safeParse(input['entityId']);
+      if (!commandId.success || !householdId.success || !entityId.success) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Connection link request failed validation.',
+          details: {},
+        });
+      }
+      const institutionId = input['institutionId'];
+      if (institutionId !== undefined && typeof institutionId !== 'string') {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Connection link request failed validation.',
+          details: {},
+        });
+      }
+
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'connections.link', {
+        householdId: householdId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+
+      const { data: beginData, error: beginError } = await ctx.supabase.rpc('keel_begin_link', {
+        p_command_id: commandId.data,
+        p_household_id: householdId.data,
+        p_entity_id: entityId.data,
+        p_provider: 'plaid',
+        p_institution_id: institutionId ?? null,
+      });
+      if (beginError) return mapDbError(beginError);
+      const begin = beginData as LinkBeginResult;
+
+      if (begin.state === 'succeeded' && begin.connectionId) {
+        const { data: accountRows, error: accountError } = await ctx.supabase
+          .from('accounts')
+          .select('id')
+          .eq('connection_id', begin.connectionId)
+          .order('created_at')
+          .order('id');
+        if (accountError) return internalFailure();
+        return json(200, {
+          connectionId: begin.connectionId,
+          accountIds: (accountRows ?? []).map((row: { id: string }) => row.id),
+        });
+      }
+      if (begin.state !== 'initiated') {
+        return json(409, {
+          code: 'link_attempt_terminated',
+          message: 'This link command cannot be resumed.',
+          details: {},
+        });
+      }
+
+      const plaid = createPlaidClient(ctx.supabaseAdmin, {
+        env: Deno.env.get('PLAID_ENV') ?? 'sandbox',
+        clientId: Deno.env.get('PLAID_CLIENT_ID'),
+        secret: Deno.env.get('PLAID_SECRET'),
+      });
+      let accessToken: string;
+      let itemId: string;
+      try {
+        const publicResult = await plaid.sandboxPublicTokenCreate(begin.attemptId);
+        const exchange = await plaid.publicTokenExchange(begin.attemptId, {
+          public_token: publicResult.public_token,
+        });
+        accessToken = exchange.access_token;
+        itemId = exchange.item_id;
+      } catch (error) {
+        await ctx.supabaseAdmin.rpc('keel_fail_link_attempt', {
+          p_attempt_id: begin.attemptId,
+          p_household_id: householdId.data,
+          p_reason: 'provider_exchange_failed',
+          p_removed: false,
+        });
+        return error instanceof PlaidClientError ? providerFailure(error) : internalFailure();
+      }
+
+      let encrypted: EncryptedRecord;
+      try {
+        const version = currentKekVersion();
+        encrypted = await encryptToken(
+          accessToken,
+          begin.credentialId,
+          householdId.data,
+          'plaid',
+          getKek(version),
+          version,
+        );
+      } catch {
+        let removed = false;
+        try {
+          removed = await plaid.itemRemove(begin.attemptId, { access_token: accessToken });
+        } catch {
+          removed = false;
+        }
+        await ctx.supabaseAdmin.rpc('keel_fail_link_attempt', {
+          p_attempt_id: begin.attemptId,
+          p_household_id: householdId.data,
+          p_reason: 'credential_subsystem_unavailable',
+          p_removed: removed,
+        });
+        return credentialFailure();
+      }
+
+      const { error: exchangePersistError } = await ctx.supabaseAdmin.rpc(
+        'keel_record_link_exchange',
+        {
+          p_attempt_id: begin.attemptId,
+          p_household_id: householdId.data,
+          p_credential_id: begin.credentialId,
+          p_plaid_item_id: itemId,
+          p_ciphertext_b64: encrypted.ciphertext,
+          p_iv_b64: encrypted.iv,
+          p_wrapped_dek_b64: encrypted.wrappedDek,
+          p_wrap_iv_b64: encrypted.wrapIv,
+          p_kek_version: encrypted.kekVersion,
+        },
+      );
+      if (exchangePersistError) {
+        let removed = false;
+        try {
+          removed = await plaid.itemRemove(begin.attemptId, { access_token: accessToken });
+        } catch {
+          removed = false;
+        }
+        await ctx.supabaseAdmin.rpc('keel_fail_link_attempt', {
+          p_attempt_id: begin.attemptId,
+          p_household_id: householdId.data,
+          p_reason: 'exchange_persist_failed',
+          p_removed: removed,
+        });
+        return internalFailure();
+      }
+
+      let mapped: ReturnType<typeof mapAccountsGetToKeel>;
+      try {
+        const accountsBody = await plaid.accountsGet(begin.attemptId, {
+          access_token: accessToken,
+        });
+        mapped = mapAccountsGetToKeel(accountsBody);
+      } catch (error) {
+        await ctx.supabaseAdmin.rpc('keel_fail_link_attempt', {
+          p_attempt_id: begin.attemptId,
+          p_household_id: householdId.data,
+          p_reason: 'accounts_get_failed',
+          p_removed: false,
+        });
+        return error instanceof PlaidClientError ? providerFailure(error) : internalFailure();
+      }
+
+      if (mapped.accounts.length === 0) {
+        let removed = false;
+        try {
+          removed = await plaid.itemRemove(begin.attemptId, { access_token: accessToken });
+        } catch {
+          removed = false;
+        }
+        await ctx.supabaseAdmin.rpc('keel_fail_link_attempt', {
+          p_attempt_id: begin.attemptId,
+          p_household_id: householdId.data,
+          p_reason: 'no_usd_accounts',
+          p_removed: removed,
+        });
+        return json(422, {
+          code: 'no_supported_accounts',
+          message: 'No supported accounts were found.',
+          details: {},
+        });
+      }
+
+      const dbAccounts = mapped.accounts.map((account) => ({
+        external_ref: account.externalRef,
+        name: account.name,
+        subtype: account.subtype,
+        currency: account.currency,
+        kind: account.kind,
+      }));
+      const { data: finalized, error: finalizeError } = await ctx.supabaseAdmin.rpc(
+        'keel_finalize_link',
+        {
+          p_attempt_id: begin.attemptId,
+          p_household_id: householdId.data,
+          p_institution_id: institutionId ?? null,
+          p_consent_expires_at: null,
+          p_accounts: dbAccounts,
+        },
+      );
+      if (finalizeError) {
+        await ctx.supabaseAdmin.rpc('keel_fail_link_attempt', {
+          p_attempt_id: begin.attemptId,
+          p_household_id: householdId.data,
+          p_reason: 'finalize_failed',
+          p_removed: false,
+        });
+        return internalFailure();
+      }
+      return json(200, finalized);
+    }
+
+    if (path === '/connections/disconnect') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const connectionId = ConnectionIdSchema.safeParse(input['connectionId']);
+      if (!householdId.success || !connectionId.success) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Connection disconnect request failed validation.',
+          details: {},
+        });
+      }
+
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'connections.disconnect', {
+        householdId: householdId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+
+      const { data: begin, error: beginError } = await ctx.supabase.rpc(
+        'keel_disconnect_begin',
+        {
+          p_household_id: householdId.data,
+          p_connection_id: connectionId.data,
+          p_reason: 'user_requested',
+        },
+      );
+      if (beginError) return mapDbError(beginError);
+
+      let removed = false;
+      let failure: string | null = null;
+      if (begin.hasCredentials) {
+        const { data: envelopeData, error: envelopeError } = await ctx.supabaseAdmin.rpc(
+          'keel_get_connection_credential_envelope',
+          { p_connection_id: connectionId.data },
+        );
+        if (envelopeError || !envelopeData) {
+          failure = 'credential_unavailable';
+        } else {
+          const envelope = envelopeData as CredentialEnvelope;
+          let token: string;
+          try {
+            token = await decryptToken(
+              envelope,
+              envelope.credentialId,
+              householdId.data,
+              'plaid',
+              getKek(envelope.kekVersion),
+            );
+          } catch (error) {
+            if (error instanceof Error && error.message === 'credential subsystem unavailable') {
+              return credentialFailure();
+            }
+            failure = 'credential_decrypt_failed';
+            token = '';
+          }
+          if (token) {
+            const plaid = createPlaidClient(ctx.supabaseAdmin, {
+              env: Deno.env.get('PLAID_ENV') ?? 'sandbox',
+              clientId: Deno.env.get('PLAID_CLIENT_ID'),
+              secret: Deno.env.get('PLAID_SECRET'),
+            });
+            try {
+              removed = await plaid.itemRemove(connectionId.data, { access_token: token });
+            } catch (error) {
+              failure = error instanceof PlaidClientError
+                ? (error.errorCode ?? 'provider_error')
+                : 'provider_error';
+            }
+          }
+        }
+      } else {
+        failure = 'no_credentials';
+      }
+
+      const { error: completeError } = await ctx.supabaseAdmin.rpc(
+        'keel_disconnect_complete',
+        {
+          p_household_id: householdId.data,
+          p_connection_id: connectionId.data,
+          p_removal_attempt_id: begin.removalAttemptId,
+          p_removed: removed,
+          p_failure: failure,
+        },
+      );
+      if (completeError) return mapDbError(completeError);
+      return json(200, { status: removed ? 'disconnected' : 'disconnecting' });
     }
 
     if (path === '/commands') {

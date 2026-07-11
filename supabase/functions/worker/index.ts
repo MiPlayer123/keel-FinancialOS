@@ -20,6 +20,9 @@ import {
   type ProviderSyncEvent,
 } from '../_shared/vendor/keel-domain.mjs';
 import { json, mapDbError } from '../_shared/http.ts';
+import { decryptToken, type EncryptedRecord } from '../_shared/credential-crypto.ts';
+import { getKek } from '../_shared/credential-kek.ts';
+import { createPlaidClient, PlaidClientError } from '../_shared/plaid-client.ts';
 import { parsePlaidSyncPage, PlaidMutationRestart, readSyncPages } from '../_shared/plaid-sync.ts';
 
 const MAX_ATTEMPTS = 5;
@@ -54,6 +57,14 @@ interface SyncContinuation {
   pageOrdinal: number;
   restartCount: number;
   originalEconomicEventKey: string;
+}
+
+interface ReapClaim extends EncryptedRecord {
+  attemptId: string;
+  householdId: string;
+  credentialId: string;
+  plaidItemId: string;
+  reapClaimId: string;
 }
 
 /** Deterministic sign-based offset routing (Law 1: not AI). Debit-positive:
@@ -556,6 +567,47 @@ const processSyncNotification = async (
   }
 };
 
+const processReapLinks = async (admin: AdminClient): Promise<Response> => {
+  const { data, error } = await admin.rpc('keel_reap_orphan_link_attempts', {});
+  if (error) return mapDbError(error);
+  const claims = (data ?? []) as ReapClaim[];
+  const plaid = createPlaidClient(admin, {
+    env: Deno.env.get('PLAID_ENV') ?? 'sandbox',
+    clientId: Deno.env.get('PLAID_CLIENT_ID'),
+    secret: Deno.env.get('PLAID_SECRET'),
+  });
+  const processed: Array<{ attemptId: string; removed: boolean; errorCode: string | null }> = [];
+
+  for (const claim of claims.slice(0, 25)) {
+    let removed = false;
+    let errorCode: string | null = null;
+    try {
+      const token = await decryptToken(
+        claim,
+        claim.credentialId,
+        claim.householdId,
+        'plaid',
+        getKek(claim.kekVersion),
+      );
+      removed = await plaid.itemRemove(claim.attemptId, { access_token: token });
+    } catch (claimError) {
+      errorCode = claimError instanceof PlaidClientError
+        ? (claimError.errorCode ?? 'provider_error')
+        : 'credential_decrypt_failed';
+    }
+
+    const { error: markError } = await admin.rpc('keel_mark_link_attempt_reaped', {
+      p_attempt_id: claim.attemptId,
+      p_reap_claim_id: claim.reapClaimId,
+      p_removed: removed,
+      p_error: errorCode,
+    });
+    if (markError) return mapDbError(markError);
+    processed.push({ attemptId: claim.attemptId, removed, errorCode });
+  }
+  return json(200, { processed });
+};
+
 export default {
   fetch: withSupabase({ auth: 'secret:automations', env: keelSecretKeys() }, async (req, ctx) => {
     const url = new URL(req.url);
@@ -563,6 +615,9 @@ export default {
 
     if (req.method === 'GET' && path === '/health') {
       return json(200, { ok: true, service: 'worker' });
+    }
+    if (req.method === 'POST' && path === '/reap-links') {
+      return processReapLinks(ctx.supabaseAdmin);
     }
     if (req.method !== 'POST' || path !== '/drain') {
       return json(404, { code: 'not_found', message: 'Not found.', details: {} });

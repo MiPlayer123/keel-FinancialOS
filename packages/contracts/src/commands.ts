@@ -93,9 +93,18 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'journal.post_batch': PostBatchPayloadSchema,
   'journal.reverse_batch': ReverseBatchPayloadSchema,
 } as const;
-export type CommandName = keyof typeof COMMAND_PAYLOAD_SCHEMAS;
-export const CommandNameSchema = z.enum(
-  Object.keys(COMMAND_PAYLOAD_SCHEMAS) as [CommandName, ...CommandName[]],
+export type CommandProcedureName = keyof typeof COMMAND_PAYLOAD_SCHEMAS;
+export type CommandName =
+  | CommandProcedureName
+  | 'connections.link'
+  | 'connections.disconnect';
+export const CommandNameSchema = z.enum([
+  ...(Object.keys(COMMAND_PAYLOAD_SCHEMAS) as CommandProcedureName[]),
+  'connections.link',
+  'connections.disconnect',
+]);
+export const CommandProcedureNameSchema = z.enum(
+  Object.keys(COMMAND_PAYLOAD_SCHEMAS) as [CommandProcedureName, ...CommandProcedureName[]],
 );
 
 /**
@@ -104,7 +113,7 @@ export const CommandNameSchema = z.enum(
  */
 export const CommandEnvelopeSchema = z.object({
   commandId: CommandIdSchema,
-  command: CommandNameSchema,
+  command: CommandProcedureNameSchema,
   economicEventKey: EconomicEventKeySchema,
   actor: ActorSchema,
   householdId: HouseholdIdSchema,
@@ -113,7 +122,7 @@ export const CommandEnvelopeSchema = z.object({
 export type CommandEnvelope = z.infer<typeof CommandEnvelopeSchema>;
 
 /** Parse + narrow an envelope's payload to its command's schema. */
-export const parseCommandPayload = <N extends CommandName>(
+export const parseCommandPayload = <N extends CommandProcedureName>(
   name: N,
   payload: unknown,
 ): z.infer<(typeof COMMAND_PAYLOAD_SCHEMAS)[N]> => {

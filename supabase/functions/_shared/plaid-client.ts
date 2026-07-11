@@ -1,0 +1,175 @@
+// deno-lint-ignore no-explicit-any
+type AdminClient = any;
+
+export interface PlaidErrorFields {
+  error_code: string | null;
+  error_type: string | null;
+  request_id: string | null;
+}
+
+// Law 12 (post-build review finding #1): provider-controlled strings must be
+// allowlisted before they reach the browser, audit_log, removal_attempts, or
+// link_attempts.last_reap_error. Recognized Plaid codes pass through; anything
+// unexpected collapses to a constant so a reflected/token-shaped value can never
+// escape the boundary.
+const ALLOWED_PLAID_ERROR_CODES = new Set<string>([
+  'ITEM_LOGIN_REQUIRED', 'ITEM_NOT_FOUND', 'ITEM_ERROR', 'INVALID_ACCESS_TOKEN',
+  'INVALID_CREDENTIALS', 'INVALID_REQUEST', 'INVALID_INPUT', 'INVALID_FIELD',
+  'INTERNAL_SERVER_ERROR', 'RATE_LIMIT_EXCEEDED', 'PLANNED_MAINTENANCE',
+  'PRODUCT_NOT_READY', 'INSTITUTION_DOWN', 'INSTITUTION_NOT_RESPONDING',
+  'ITEM_LOCKED', 'USER_SETUP_REQUIRED', 'ACCESS_NOT_GRANTED',
+]);
+const ALLOWED_PLAID_ERROR_TYPES = new Set<string>([
+  'INVALID_REQUEST', 'INVALID_INPUT', 'INVALID_RESULT', 'INSTITUTION_ERROR',
+  'RATE_LIMIT_EXCEEDED', 'API_ERROR', 'ITEM_ERROR', 'ASSET_REPORT_ERROR',
+  'AUTH_ERROR', 'BANK_TRANSFER_ERROR', 'OAUTH_ERROR',
+]);
+const normalizeCode = (raw: string | null): string | null =>
+  raw === null ? null : ALLOWED_PLAID_ERROR_CODES.has(raw) ? raw : 'provider_error';
+const normalizeType = (raw: string | null): string | null =>
+  raw === null ? null : ALLOWED_PLAID_ERROR_TYPES.has(raw) ? raw : 'provider_error';
+
+export class PlaidClientError extends Error {
+  readonly errorCode: string | null;
+  readonly errorType: string | null;
+  readonly requestId: string | null;
+
+  constructor(fields: PlaidErrorFields) {
+    super('Plaid request failed');
+    this.name = 'PlaidClientError';
+    // Normalized at construction so EVERY downstream read (browser response,
+    // failure_code, last_reap_error, audit) is already boundary-safe.
+    this.errorCode = normalizeCode(fields.error_code);
+    this.errorType = normalizeType(fields.error_type);
+    this.requestId = fields.request_id;
+  }
+}
+
+export interface PlaidClient {
+  linkTokenCreate(scopeKey: string, requestBody: Record<string, unknown>): Promise<Record<string, unknown>>;
+  sandboxPublicTokenCreate(scopeKey: string, requestBody?: Record<string, unknown>): Promise<{ public_token: string }>;
+  publicTokenExchange(scopeKey: string, requestBody: { public_token: string }): Promise<{ access_token: string; item_id: string }>;
+  accountsGet(scopeKey: string, requestBody: { access_token: string }): Promise<Record<string, unknown>>;
+  itemRemove(scopeKey: string, requestBody: { access_token: string }): Promise<boolean>;
+}
+
+interface PlaidClientConfig {
+  env: string;
+  clientId?: string;
+  secret?: string;
+}
+
+const asRecord = (value: unknown): Record<string, unknown> => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Plaid response is invalid');
+  }
+  return value as Record<string, unknown>;
+};
+
+const errorFields = (body: Record<string, unknown>): PlaidErrorFields => ({
+  error_code: typeof body['error_code'] === 'string' ? body['error_code'] : null,
+  error_type: typeof body['error_type'] === 'string' ? body['error_type'] : null,
+  request_id: typeof body['request_id'] === 'string' ? body['request_id'] : null,
+});
+
+const requiredString = (body: Record<string, unknown>, key: string): string => {
+  const value = body[key];
+  if (typeof value !== 'string' || value.length === 0) throw new Error('Plaid response is invalid');
+  return value;
+};
+
+export const createPlaidClient = (
+  admin: AdminClient,
+  config: PlaidClientConfig,
+): PlaidClient => {
+  const request = async (
+    scopeKey: string,
+    kind: string,
+    path: string,
+    requestBody: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> => {
+    const { data: injected, error: injectionError } = await admin.rpc(
+      'keel_consume_plaid_test_response',
+      { p_scope_key: scopeKey, p_kind: kind },
+    );
+    if (injectionError) throw new Error('Plaid test response unavailable');
+
+    if (typeof injected === 'string') {
+      const body = asRecord(JSON.parse(injected) as unknown);
+      if (kind === 'item_public_token_exchange') {
+        return {
+          access_token: `access-sandbox-${scopeKey}`,
+          item_id: requiredString(body, 'item_id'),
+        };
+      }
+      if (kind === 'sandbox_public_token_create') {
+        return { public_token: `public-sandbox-${scopeKey}` };
+      }
+      return body;
+    }
+
+    if (!config.clientId || !config.secret) throw new Error('plaid unavailable');
+    const response = await fetch(`https://${config.env}.plaid.com${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        client_id: config.clientId,
+        secret: config.secret,
+        ...requestBody,
+      }),
+    });
+    let body: Record<string, unknown>;
+    try {
+      body = asRecord(await response.json());
+    } catch {
+      throw new PlaidClientError({ error_code: null, error_type: null, request_id: null });
+    }
+    if (!response.ok) throw new PlaidClientError(errorFields(body));
+    return body;
+  };
+
+  return {
+    linkTokenCreate: (scopeKey, requestBody) =>
+      request(scopeKey, 'link_token_create', '/link/token/create', requestBody),
+
+    sandboxPublicTokenCreate: async (scopeKey, requestBody = {}) => {
+      const body = await request(
+        scopeKey,
+        'sandbox_public_token_create',
+        '/sandbox/public_token/create',
+        requestBody,
+      );
+      return { public_token: requiredString(body, 'public_token') };
+    },
+
+    publicTokenExchange: async (scopeKey, requestBody) => {
+      const body = await request(
+        scopeKey,
+        'item_public_token_exchange',
+        '/item/public_token/exchange',
+        requestBody,
+      );
+      return {
+        access_token: requiredString(body, 'access_token'),
+        item_id: requiredString(body, 'item_id'),
+      };
+    },
+
+    accountsGet: (scopeKey, requestBody) =>
+      request(scopeKey, 'accounts_get', '/accounts/get', requestBody),
+
+    itemRemove: async (scopeKey, requestBody) => {
+      let body: Record<string, unknown>;
+      try {
+        body = await request(scopeKey, 'item_remove', '/item/remove', requestBody);
+      } catch (error) {
+        if (error instanceof PlaidClientError && error.errorCode === 'ITEM_NOT_FOUND') return true;
+        throw error;
+      }
+      const fields = errorFields(body);
+      if (fields.error_code === 'ITEM_NOT_FOUND') return true;
+      if (fields.error_code !== null) throw new PlaidClientError(fields);
+      return true;
+    },
+  };
+};

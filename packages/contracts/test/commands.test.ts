@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CommandNameSchema,
   CommandEnvelopeSchema,
   EconomicEventKeySchema,
   parseCommandPayload,
@@ -25,6 +26,11 @@ describe('command envelope', () => {
     expect(
       CommandEnvelopeSchema.safeParse({ ...envelope, command: 'journal.delete_batch' }).success,
     ).toBe(false);
+  });
+
+  it('includes the C3 connection lifecycle actions in the closed command vocabulary', () => {
+    expect(CommandNameSchema.parse('connections.link')).toBe('connections.link');
+    expect(CommandNameSchema.parse('connections.disconnect')).toBe('connections.disconnect');
   });
 
   it('rejects agent actors without onBehalfOf (Law 2: attribution)', () => {
