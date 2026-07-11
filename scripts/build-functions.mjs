@@ -34,6 +34,14 @@ await build({
   target: 'es2023',
   mainFields: ['module', 'main'],
   conditions: ['import'],
+  alias: {
+    '@keel/contracts': join(root, 'packages', 'contracts', 'src', 'index.ts'),
+    '@keel/authz': join(root, 'packages', 'authz', 'src', 'index.ts'),
+    '@keel/ingest': join(root, 'packages', 'ingest', 'src', 'index.ts'),
+    '@keel/ledger': join(root, 'packages', 'ledger', 'src', 'index.ts'),
+  },
+  // zod resolves from the workspace root install.
+  nodePaths: [join(root, 'node_modules')],
   // zod is bundled in: the Edge functions get one self-contained artifact.
   external: [],
   banner: {
