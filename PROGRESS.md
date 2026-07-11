@@ -3,7 +3,7 @@
 > Context-recovery file. Picking this up cold: read `CLAUDE.md`, then `PLAN.md` (incl. §3.5/§3.6 audit amendments), then this file, then the last ~60 lines of `NOTES.md`. The "Resume" section is the exact next action.
 
 **Last updated:** 2026-07-11 ~01:30 (session 1)
-**Current stage:** Stage 1A COMPLETE (tagged `stage-1a`). Next: cloud deploy (needs DB password ⚑) then Stage 1C Plaid Sandbox.
+**Current stage:** Stage 1A COMPLETE + DEPLOYED to cloud (FinancialOS). Next: Stage 1C plan (Plaid Sandbox + ingestion depth), being audited.
 **Path decision:** Path A (personal instrument) working default — NOTES D-001.
 
 ## Environment facts

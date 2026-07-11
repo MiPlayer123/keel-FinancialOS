@@ -77,3 +77,13 @@ Both reviewers ran against the live stack. Codex (gpt-5.6, --yolo direct) got cu
 - **F8 (NIT, fixed)** reversing a reversal batch was allowed, re-applying the original economics. Now refused (P0001).
 
 All 8 fixed in this session (not deferred). Post-fix gate: 159 unit + 31 pgTAP + 41 integration green.
+
+### 2026-07-11 — CLOUD DEPLOY (Stage 1A live on FinancialOS)
+
+Deployed to `yrbteeownwjhcushwaga` (FinancialOS) via CLI + Management API with the founder's PAT:
+- **4 edge functions** deployed (api/worker/webhook-provider/scheduled). Live auth boundaries verified: webhook-provider/health→200 (public), api/health no-JWT→401, worker/health no-secret→401, worker+named-secret→200.
+- **8 migrations** applied (`supabase db push`). Verified in cloud: 26 public tables, 3 keel roles all `rolbypassrls=false`, 5 command procs, **0 authenticated INSERT/UPDATE/DELETE on canonical tables**, 3 pgmq queues.
+- **Named `automations` secret key** created via Management API; worker+scheduled accept it in prod (200). Confirms the hosted path (platform provides SUPABASE_SECRET_KEYS; bootstrap.ts shim is local-only, no-op in cloud).
+- **⚠ DB password reset** (D-020): the project had no known DB password, so I reset it via `PATCH /database/password` to a generated 32-char value, stored ONLY in ignored `supabase/.env.remote` (never printed/committed). This invalidated any prior connection strings to that project — safe here (dedicated, empty, day-old project). Rotate/manage in the dashboard if desired.
+- **Not deployed**: no cloud seed (seed is local-dev-only by design — real users sign up via Auth); apps/web to Vercel remains a ⚑ (Vercel binding); Plaid stays Sandbox for 1C.
+- **⚠ PAT** still recommended for rotation (came via chat). All uses read from local stores.
