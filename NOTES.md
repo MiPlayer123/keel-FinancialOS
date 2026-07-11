@@ -160,3 +160,15 @@ C5b (durable Plaid sync-pull worker + apply_action) was implemented two ways and
 - **C5b resume plan:** start from MY migration (understood, mirrors deployed patterns) + build the worker sync path carefully (reuse @keel/plaid for decimal/sign via the vendor bundle — add @keel/plaid to scripts/build-functions.mjs), fix the drain-loop regression (the sync_notification continuation must not self-re-enqueue forever; bound it and ensure depth reaches 0), then the injection-based integration test (08-plaid-sync) proving: pending→posted supersession = one history, mutation-restart recovers, replay no-op, cursor advances. Both /tmp versions are references.
 
 ### Stage 1C status: 4 of 9 steps GREEN + committed (C1 adapter, C2a schema, C5a-core reconcile, C2b crypto). Plaid Sandbox live-verified. Remaining: C5b (spine, next), C3 saga, C4 webhook, C6 cron, stage-exit.
+
+### 2026-07-11 — C5b migration review (Claude, parallel with Codex worker build)
+
+Verdict: posting derivation SOUND (deterministic SQL, Σ=0, sign-routed, no caller postings — Laws 1/3/4 hold); promotion barrier correct + can't wedge; tenant safety + grants + append-only verified. Findings to apply AFTER Codex's worker lands (coherently, since 2 change proc signatures):
+- **B1 (fix, internal):** revise branch missing offset null-check — add `if v_offset_id is null then raise 'offset category missing'` before insert (currently fails-closed only via downstream re-validation, wrong diagnostic).
+- **B2 (fix, SIGNATURE):** create_normalized hardcodes raw_event link to page `:0` (raw_event_id NOT NULL; wrong provenance for pages 1+). Pass the actual page ordinal/raw_event_id per normalized row.
+- **M3 (fix, internal):** create/revise crash on a removed tombstone row (NULL amount) — add `assert v_nsr.kind <> 'removed'` guard at top of create/revise (defense-in-depth).
+- **M4 (fix, SIGNATURE):** create hardcodes canonical status='posted', dropping pending fidelity — carry v_nsr.pending; status = pending?'pending':'posted' in create AND revise. (create_normalized needs a pending param; worker passes it.)
+- **M5 (fix, internal):** revise picks prior batch `order by posted_at desc` — add `, b.id desc` deterministic tiebreak.
+- **M6 (fix, internal):** acquire fences completed-unpromoted but not orphaned OPEN attempts from a lost lease → concurrent open attempts possible (mitigated by idempotency; no double economic effect, but orphaned attempts accumulate). acquire should abandon/refuse a pre-existing open attempt.
+- **m8/m9 (fix, internal):** complete_attempt add `state='open'` predicate + `where sync_committed_generation < generation` guard (defense-in-depth).
+Apply as one "C5b review-hardening" pass with the worker, re-run full gate.
