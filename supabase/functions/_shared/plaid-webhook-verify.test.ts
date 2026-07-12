@@ -112,6 +112,22 @@ Deno.test("verifyPlaidWebhook outcome routing", async (test) => {
     );
   });
 
+  await test.step("budget exhaustion is unverifiable even when a stale JWK is present", async () => {
+    const token = await signBody(keys.privateKey);
+    assertEquals(
+      await verifyPlaidWebhook(bodyBytes, token, {
+        keyResolver: resolver({
+          jwk: keys.publicJwk,
+          stale: true,
+          fetchedAt: new Date(Date.now() - 60_000).toISOString(),
+          keyExpiredAt: null,
+          budgetExhausted: true,
+        }),
+      }),
+      { outcome: "unverifiable", reason: "provider budget exhausted" },
+    );
+  });
+
   await test.step("bad or private JWK is unverifiable, not invalid", async () => {
     assertEquals(
       (await verifyPlaidWebhook(bodyBytes, jwt, {

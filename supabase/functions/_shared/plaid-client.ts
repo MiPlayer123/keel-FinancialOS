@@ -1,6 +1,13 @@
 // deno-lint-ignore no-explicit-any
 type AdminClient = any;
 
+import {
+  meterCall,
+  PLAID_DAILY_CALL_LIMIT,
+  reserveProviderCall,
+  type ProviderCallKind,
+} from './plaid-meter.ts';
+
 export interface PlaidErrorFields {
   error_code: string | null;
   error_type: string | null;
@@ -28,6 +35,8 @@ const normalizeCode = (raw: string | null): string | null =>
   raw === null ? null : ALLOWED_PLAID_ERROR_CODES.has(raw) ? raw : 'provider_error';
 const normalizeType = (raw: string | null): string | null =>
   raw === null ? null : ALLOWED_PLAID_ERROR_TYPES.has(raw) ? raw : 'provider_error';
+const normalizeRequestId = (raw: string | null): string | null =>
+  raw !== null && /^[A-Za-z0-9_-]{1,64}$/.test(raw) ? raw : null;
 
 export class PlaidClientError extends Error {
   readonly errorCode: string | null;
@@ -41,7 +50,14 @@ export class PlaidClientError extends Error {
     // failure_code, last_reap_error, audit) is already boundary-safe.
     this.errorCode = normalizeCode(fields.error_code);
     this.errorType = normalizeType(fields.error_type);
-    this.requestId = fields.request_id;
+    this.requestId = normalizeRequestId(fields.request_id);
+  }
+}
+
+export class ProviderBudgetExhaustedError extends Error {
+  constructor() {
+    super('Provider call budget exhausted');
+    this.name = 'ProviderBudgetExhaustedError';
   }
 }
 
@@ -53,10 +69,13 @@ export interface PlaidClient {
   itemRemove(scopeKey: string, requestBody: { access_token: string }): Promise<boolean>;
 }
 
-interface PlaidClientConfig {
+export interface PlaidClientConfig {
   env: string;
   clientId?: string;
   secret?: string;
+  householdId?: string | null;
+  dailyLimit?: number;
+  fetchImpl?: typeof fetch;
 }
 
 const asRecord = (value: unknown): Record<string, unknown> => {
@@ -84,7 +103,7 @@ export const createPlaidClient = (
 ): PlaidClient => {
   const request = async (
     scopeKey: string,
-    kind: string,
+    kind: ProviderCallKind,
     path: string,
     requestBody: Record<string, unknown>,
   ): Promise<Record<string, unknown>> => {
@@ -95,37 +114,112 @@ export const createPlaidClient = (
     if (injectionError) throw new Error('Plaid test response unavailable');
 
     if (typeof injected === 'string') {
-      const body = asRecord(JSON.parse(injected) as unknown);
-      if (kind === 'item_public_token_exchange') {
-        return {
-          access_token: `access-sandbox-${scopeKey}`,
-          item_id: requiredString(body, 'item_id'),
-        };
+      const start = Date.now();
+      let body: Record<string, unknown>;
+      let result: Record<string, unknown>;
+      try {
+        body = asRecord(JSON.parse(injected) as unknown);
+        if (kind === 'item_public_token_exchange') {
+          result = {
+            access_token: `access-sandbox-${scopeKey}`,
+            item_id: requiredString(body, 'item_id'),
+          };
+        } else if (kind === 'sandbox_public_token_create') {
+          result = { public_token: `public-sandbox-${scopeKey}` };
+        } else {
+          result = body;
+        }
+      } catch (error) {
+        await meterCall(admin, {
+          provider: 'plaid',
+          kind,
+          householdId: config.householdId,
+          start,
+          ok: false,
+          errorCode: 'provider_error',
+          itemRef: scopeKey,
+        });
+        throw error;
       }
-      if (kind === 'sandbox_public_token_create') {
-        return { public_token: `public-sandbox-${scopeKey}` };
-      }
-      return body;
+      await meterCall(admin, {
+        provider: 'plaid',
+        kind,
+        householdId: config.householdId,
+        start,
+        ok: true,
+        requestId: normalizeRequestId(
+          typeof body['request_id'] === 'string' ? body['request_id'] : null,
+        ),
+        itemRef: scopeKey,
+      });
+      return result;
     }
 
     if (!config.clientId || !config.secret) throw new Error('plaid unavailable');
-    const response = await fetch(`https://${config.env}.plaid.com${path}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        client_id: config.clientId,
-        secret: config.secret,
-        ...requestBody,
-      }),
-    });
-    let body: Record<string, unknown>;
-    try {
-      body = asRecord(await response.json());
-    } catch {
-      throw new PlaidClientError({ error_code: null, error_type: null, request_id: null });
+    const reserved = await reserveProviderCall(
+      admin,
+      'plaid',
+      config.dailyLimit ?? PLAID_DAILY_CALL_LIMIT,
+    );
+    if (!reserved) {
+      await meterCall(admin, {
+        provider: 'plaid',
+        kind: 'budget_refused',
+        householdId: config.householdId,
+        start: Date.now(),
+        ok: false,
+        errorCode: 'provider_budget_exhausted',
+        itemRef: scopeKey,
+      });
+      throw new ProviderBudgetExhaustedError();
     }
-    if (!response.ok) throw new PlaidClientError(errorFields(body));
-    return body;
+
+    const start = Date.now();
+    try {
+      const response = await (config.fetchImpl ?? fetch)(
+        `https://${config.env}.plaid.com${path}`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            client_id: config.clientId,
+            secret: config.secret,
+            ...requestBody,
+          }),
+        },
+      );
+      let body: Record<string, unknown>;
+      try {
+        body = asRecord(await response.json());
+      } catch {
+        throw new PlaidClientError({ error_code: null, error_type: null, request_id: null });
+      }
+      if (!response.ok) throw new PlaidClientError(errorFields(body));
+      await meterCall(admin, {
+        provider: 'plaid',
+        kind,
+        householdId: config.householdId,
+        start,
+        ok: true,
+        requestId: normalizeRequestId(
+          typeof body['request_id'] === 'string' ? body['request_id'] : null,
+        ),
+        itemRef: scopeKey,
+      });
+      return body;
+    } catch (error) {
+      await meterCall(admin, {
+        provider: 'plaid',
+        kind,
+        householdId: config.householdId,
+        start,
+        ok: false,
+        errorCode: error instanceof PlaidClientError ? error.errorCode : 'provider_error',
+        requestId: error instanceof PlaidClientError ? error.requestId : null,
+        itemRef: scopeKey,
+      });
+      throw error;
+    }
   };
 
   return {

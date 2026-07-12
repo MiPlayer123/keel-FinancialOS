@@ -199,7 +199,7 @@ Deno.test('C5c live Plaid sync source contract', async (test) => {
       hasMore: false,
       nextCursor: 'injected-base',
     });
-    assertEquals({ rpcCalls, fetchCalls }, { rpcCalls: 0, fetchCalls: 0 });
+    assertEquals({ rpcCalls, fetchCalls }, { rpcCalls: 1, fetchCalls: 0 });
     clearLiveEnv();
   });
 
@@ -218,6 +218,50 @@ Deno.test('C5c live Plaid sync source contract', async (test) => {
     assertEquals(result.nextCursor, 'base-null-envelope');
     assertEquals(fetchCalls, 0);
     clearLiveEnv();
+  });
+
+  await test.step('open live-call budget is transient and performs zero fetches', async () => {
+    const { envelope } = await encryptedEnvelope();
+    const calls: string[] = [];
+    let fetchCalls = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = () => {
+      fetchCalls += 1;
+      return Promise.resolve(response('never', false, 'never'));
+    };
+    try {
+      await assertRejects(
+        () => subject.fetchSyncPagesLive(
+          {
+            rpc: (name: string) => {
+              calls.push(name);
+              if (name === 'keel_get_connection_credential_envelope') {
+                return Promise.resolve({ data: envelope, error: null });
+              }
+              if (name === 'keel_provider_budget_reserve') {
+                return Promise.resolve({ data: false, error: null });
+              }
+              return Promise.resolve({ data: null, error: null });
+            },
+          },
+          crypto.randomUUID(),
+          liveOptions(),
+        ),
+        (error) => {
+          assert(error instanceof PlaidSync.PlaidSyncTransientError);
+          assertEquals((error as PlaidSync.PlaidSyncTransientError).kind, 'budget');
+        },
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearLiveEnv();
+    }
+    assertEquals(fetchCalls, 0);
+    assertEquals(calls, [
+      'keel_get_connection_credential_envelope',
+      'keel_provider_budget_reserve',
+      'keel_meter_provider_call',
+    ]);
   });
 
   await test.step('credential RPC errors are transient failures', async () => {
@@ -425,7 +469,17 @@ Deno.test('C5c live Plaid sync source contract', async (test) => {
     try {
       await assertRejects(
         () => subject.fetchSyncPagesLive(
-          rpcAdmin({ data: envelope, error: null }),
+          {
+            rpc: (name: string) => {
+              if (name === 'keel_get_connection_credential_envelope') {
+                return Promise.resolve({ data: envelope, error: null });
+              }
+              if (name === 'keel_provider_budget_reserve') {
+                return Promise.resolve({ data: true, error: null });
+              }
+              return Promise.resolve({ data: null, error: null });
+            },
+          },
           crypto.randomUUID(),
           liveOptions(undefined),
         ),

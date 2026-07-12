@@ -16,6 +16,29 @@ printf '%s\n' \
   'KEEL_PLAID_FETCH_SPY=true' >> "$ITEST_ENV"
 
 supabase db reset
+
+# `db reset` can return before PostgREST has rebuilt its schema cache. Edge
+# health does not exercise PostgREST, so wait for one authenticated relation
+# query before starting the shared-DB suite (otherwise RPCs race with PGRST002).
+STATUS_ENV="$(supabase status -o env)"
+API_URL="$(printf '%s\n' "$STATUS_ENV" | sed -n 's/^API_URL="\{0,1\}\([^"[:space:]]*\)"\{0,1\}$/\1/p')"
+SERVICE_ROLE_KEY="$(printf '%s\n' "$STATUS_ENV" | sed -n 's/^SERVICE_ROLE_KEY="\{0,1\}\([^"[:space:]]*\)"\{0,1\}$/\1/p')"
+test -n "$API_URL"
+test -n "$SERVICE_ROLE_KEY"
+for _ in $(seq 1 45); do
+  if curl -sf \
+    -H "apikey: $SERVICE_ROLE_KEY" \
+    -H "authorization: Bearer $SERVICE_ROLE_KEY" \
+    "$API_URL/rest/v1/connections?select=id&limit=1" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
+curl -sf \
+  -H "apikey: $SERVICE_ROLE_KEY" \
+  -H "authorization: Bearer $SERVICE_ROLE_KEY" \
+  "$API_URL/rest/v1/connections?select=id&limit=1" >/dev/null
+
 pnpm build:functions
 pkill -f "supabase functions serve" 2>/dev/null || true
 sleep 1

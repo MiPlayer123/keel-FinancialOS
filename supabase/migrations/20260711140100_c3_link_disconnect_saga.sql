@@ -764,7 +764,15 @@ begin
     raise exception 'KEEL_INVALID_COMMAND: stale reap claim' using errcode = 'P0009';
   end if;
 
-  if p_removed then
+  if p_error = 'provider_budget_exhausted' then
+    update public.link_attempts
+       set state = 'exchanged',
+           reap_claim_id = null,
+           reap_claimed_at = null,
+           last_reap_error = p_error
+     where id = p_attempt_id;
+    v_action := 'connection.link_reap_deferred';
+  elsif p_removed then
     update public.link_attempts
        set state = 'reaped',
            credential_ciphertext = null,

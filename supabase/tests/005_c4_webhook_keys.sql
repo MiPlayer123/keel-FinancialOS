@@ -44,7 +44,7 @@ insert into c4_expected_procs(signature, expected_owner) values
   ('public.keel_webhook_key_bump_failure(text)', 'keel_api'),
   ('public.keel_webhook_record_delivery(text,text,jsonb,text,text,timestamp with time zone)', 'keel_worker'),
   ('public.keel_consume_webhook_key_response(text)', 'keel_api'),
-  ('public.keel_webhook_quarantine(text,text,text,jsonb,integer)', 'keel_api');
+  ('public.keel_webhook_quarantine(text,text,text,jsonb,integer,integer)', 'keel_worker');
 
 select is(
   (select count(*)::int from c4_expected_procs where to_regprocedure(signature) is not null),

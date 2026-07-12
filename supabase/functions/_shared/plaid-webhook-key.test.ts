@@ -82,7 +82,10 @@ Deno.test("dedicated webhook verification-key fetch", async (test) => {
   });
 
   await test.step("live path preserves status and exact code without PlaidClientError", async () => {
-    const admin = adminWith(() => ({ data: null, error: null }));
+    const admin = adminWith((name) => ({
+      data: name === "keel_provider_budget_reserve" ? true : null,
+      error: null,
+    }));
     let requestBody = "";
     const result = await fetchWebhookVerificationKey(admin, "kid-key-unit", {
       config: { plaidEnv: "sandbox", clientId: "client-canary", secret: "secret-canary" },
@@ -103,7 +106,10 @@ Deno.test("dedicated webhook verification-key fetch", async (test) => {
   });
 
   await test.step("live credentials and full key never reach captured logs", async () => {
-    const admin = adminWith(() => ({ data: null, error: null }));
+    const admin = adminWith((name) => ({
+      data: name === "keel_provider_budget_reserve" ? true : null,
+      error: null,
+    }));
     const captured: unknown[] = [];
     const original = { log: console.log, warn: console.warn, error: console.error };
     console.log = (...args: unknown[]) => captured.push(args);
@@ -154,6 +160,36 @@ Deno.test("dedicated webhook verification-key fetch", async (test) => {
       "outage",
     );
     assertEquals(calls, 0);
+  });
+
+  await test.step("open provider budget is distinct, metered, and never fetches", async () => {
+    const names: string[] = [];
+    let fetchCalls = 0;
+    const admin = adminWith((name) => {
+      names.push(name);
+      if (name === "keel_consume_webhook_key_response") return { data: null, error: null };
+      if (name === "keel_provider_budget_reserve") return { data: false, error: null };
+      return { data: null, error: null };
+    });
+    const result = await fetchWebhookVerificationKey(admin, "kid-budget-open", {
+      config: {
+        plaidEnv: "sandbox",
+        clientId: "client",
+        secret: "secret",
+        dailyLimit: 1,
+      },
+      fetchImpl: () => {
+        fetchCalls += 1;
+        return Promise.resolve(new Response("{}", { status: 200 }));
+      },
+    });
+    assertEquals(result, { status: "budget_exhausted" });
+    assertEquals(fetchCalls, 0);
+    assertEquals(names, [
+      "keel_consume_webhook_key_response",
+      "keel_provider_budget_reserve",
+      "keel_meter_provider_call",
+    ]);
   });
 });
 
@@ -248,6 +284,52 @@ Deno.test("webhook key resolver cache semantics", async (test) => {
     });
     assertEquals(await resolve("kid-key-unit"), { ...cached, outage: true });
     assertEquals(calls, ["keel_webhook_key_get", "keel_webhook_key_bump_failure"]);
+  });
+
+  await test.step("safe-stale cache hit never fetches or reserves budget", async () => {
+    const tokenIat = Math.floor(Date.now() / 1000);
+    const cached = {
+      jwk: keys.publicJwk,
+      notFound: false,
+      stale: true,
+      fetchedAt: new Date(Date.now() - 60_000).toISOString(),
+      keyExpiredAt: null,
+    };
+    const calls: string[] = [];
+    const admin = adminWith((name) => {
+      calls.push(name);
+      return { data: name === "keel_webhook_key_get" ? cached : null, error: null };
+    });
+    const resolve = createPlaidWebhookKeyResolver(admin, {
+      fetchKey: () => {
+        throw new Error("safe-stale key must not fetch");
+      },
+    });
+
+    assertEquals(await resolve("kid-key-unit", tokenIat), cached);
+    assertEquals(calls, ["keel_webhook_key_get"]);
+  });
+
+  await test.step("budget exhaustion never falls back to an unusable stale key", async () => {
+    const cached = {
+      jwk: keys.publicJwk,
+      notFound: false,
+      stale: true,
+      fetchedAt: new Date(Date.now() - 73 * 60 * 60 * 1000).toISOString(),
+      keyExpiredAt: null,
+    };
+    const admin = adminWith((name) => ({
+      data: name === "keel_webhook_key_get" ? cached : null,
+      error: null,
+    }));
+    const resolve = createPlaidWebhookKeyResolver(admin, {
+      fetchKey: () => Promise.resolve({ status: "budget_exhausted" }),
+    });
+
+    assertEquals(
+      await resolve("kid-key-unit", Math.floor(Date.now() / 1000)),
+      { budgetExhausted: true },
+    );
   });
 
   await test.step("stale cache refreshes and returns the fetched positive key", async () => {

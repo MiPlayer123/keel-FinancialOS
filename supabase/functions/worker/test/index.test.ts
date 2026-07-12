@@ -2,7 +2,7 @@ import { describe, it, vi } from 'vitest';
 import type { LiveSyncOptions, LiveSyncResult } from '../../_shared/plaid-sync.ts';
 
 vi.stubGlobal('Deno', { env: { get: (_name: string): string | undefined => undefined } });
-const { processSyncNotification } = await import('../index.ts');
+const { orderQueueMessages, processSyncNotification } = await import('../index.ts');
 
 const assert: (condition: unknown, message?: string) => asserts condition = (
   condition,
@@ -25,6 +25,16 @@ const syncMessage = (economicEventKey: string) => ({
     economicEventKey,
     refs: { connectionId: 'connection-live' },
   },
+});
+
+describe('worker queue ordering', () => {
+  it('dispatches a claimed batch in monotonic pgmq message order', () => {
+    const message = (msgId: number) => ({ ...syncMessage(`message-${msgId}`), msg_id: msgId });
+    assertEquals(
+      orderQueueMessages([message(30), message(10), message(20)]).map((item) => item.msg_id),
+      [10, 20, 30],
+    );
+  });
 });
 
 const pageBody = (

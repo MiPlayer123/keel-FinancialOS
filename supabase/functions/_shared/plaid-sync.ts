@@ -5,6 +5,11 @@ import {
 } from './vendor/keel-domain.mjs';
 import { decryptToken, type EncryptedRecord } from './credential-crypto.ts';
 import { getKek } from './credential-kek.ts';
+import {
+  meterCall,
+  PLAID_DAILY_CALL_LIMIT,
+  reserveProviderCall,
+} from './plaid-meter.ts';
 
 // deno-lint-ignore no-explicit-any
 type AdminClient = any;
@@ -61,6 +66,7 @@ type PlaidSyncFailureKind =
   | 'credential_rpc'
   | 'credential_decrypt'
   | 'lease_renewal'
+  | 'budget'
   | 'network'
   | 'http'
   | 'invalid_response'
@@ -69,11 +75,19 @@ type PlaidSyncFailureKind =
 
 export class PlaidSyncTransientError extends Error {
   readonly kind: PlaidSyncFailureKind;
-  readonly errorCode: typeof MUTATION_ERROR_CODE | 'provider_error' | null;
+  readonly errorCode:
+    | typeof MUTATION_ERROR_CODE
+    | 'provider_budget_exhausted'
+    | 'provider_error'
+    | null;
 
   constructor(
     kind: PlaidSyncFailureKind,
-    errorCode: typeof MUTATION_ERROR_CODE | 'provider_error' | null = null,
+    errorCode:
+      | typeof MUTATION_ERROR_CODE
+      | 'provider_budget_exhausted'
+      | 'provider_error'
+      | null = null,
   ) {
     super(`Plaid sync request failed (${kind})`);
     this.name = 'PlaidSyncTransientError';
@@ -110,6 +124,9 @@ const normalizeErrorCode = (
   if (value === MUTATION_ERROR_CODE) return MUTATION_ERROR_CODE;
   return typeof value === 'string' ? 'provider_error' : null;
 };
+
+const normalizeRequestId = (value: unknown): string | null =>
+  typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value) ? value : null;
 
 const parseControlBody = (bodyText: string): Record<string, unknown> => {
   try {
@@ -195,6 +212,42 @@ export const fetchSyncPagesLive = async (
       }
 
       const requestCursor = cursor;
+      const liveNetworkBoundary = opts.plaidPost === undefined;
+      if (liveNetworkBoundary) {
+        const reserved = await reserveProviderCall(admin, 'plaid', PLAID_DAILY_CALL_LIMIT);
+        if (!reserved) {
+          await meterCall(admin, {
+            provider: 'plaid',
+            kind: 'budget_refused',
+            householdId: envelope.householdId,
+            start: Date.now(),
+            ok: false,
+            errorCode: 'provider_budget_exhausted',
+            itemRef: connectionId,
+          });
+          throw new PlaidSyncTransientError('budget', 'provider_budget_exhausted');
+        }
+      }
+
+      const requestStart = Date.now();
+      const meterLiveRequest = async (
+        ok: boolean,
+        errorCode: string | null = null,
+        requestId: string | null = null,
+      ): Promise<void> => {
+        if (!liveNetworkBoundary) return;
+        await meterCall(admin, {
+          provider: 'plaid',
+          kind: 'transactions_sync',
+          householdId: envelope.householdId,
+          start: requestStart,
+          ok,
+          errorCode,
+          requestId,
+          itemRef: connectionId,
+        });
+      };
+
       let response: Response;
       try {
         response = await plaidPost('/transactions/sync', {
@@ -203,6 +256,12 @@ export const fetchSyncPagesLive = async (
           count: 100,
         });
       } catch (error) {
+        await meterLiveRequest(
+          false,
+          error instanceof PlaidSyncTransientError
+            ? (error.errorCode ?? 'provider_error')
+            : 'provider_error',
+        );
         if (error instanceof PlaidSyncTransientError) throw error;
         throw new PlaidSyncTransientError('network');
       }
@@ -211,12 +270,21 @@ export const fetchSyncPagesLive = async (
       try {
         bodyText = await response.text();
       } catch {
+        await meterLiveRequest(false, 'provider_error');
         throw new PlaidSyncTransientError('network');
       }
-      const control = parseControlBody(bodyText);
+      let control: Record<string, unknown>;
+      try {
+        control = parseControlBody(bodyText);
+      } catch (error) {
+        await meterLiveRequest(false, 'provider_error');
+        throw error;
+      }
+      const requestId = normalizeRequestId(control['request_id']);
 
       if (!response.ok) {
         const errorCode = normalizeErrorCode(control['error_code']);
+        await meterLiveRequest(false, errorCode, requestId);
         if (response.status === 400 && errorCode === MUTATION_ERROR_CODE) {
           if (restarts >= MAX_LIVE_RESTARTS) {
             throw new PlaidSyncTransientError('mutation_restart_exhausted', errorCode);
@@ -232,11 +300,14 @@ export const fetchSyncPagesLive = async (
       const nextCursor = control['next_cursor'];
       const hasMore = control['has_more'];
       if (typeof nextCursor !== 'string' || typeof hasMore !== 'boolean') {
+        await meterLiveRequest(false, 'provider_error', requestId);
         throw new PlaidSyncTransientError('invalid_response');
       }
       if (hasMore && (nextCursor.length === 0 || nextCursor === requestCursor)) {
+        await meterLiveRequest(false, 'provider_error', requestId);
         throw new PlaidSyncTransientError('stalled_cursor');
       }
+      await meterLiveRequest(true, null, requestId);
 
       pages.push({ pageIndex: pages.length, bodyText });
       cursor = nextCursor;
@@ -281,6 +352,30 @@ export const readSyncPages = async (
     bodyText: row.body_text,
   }));
   if (pages.length > 0) {
+    for (const page of pages) {
+      const start = Date.now();
+      let ok = false;
+      let errorCode: typeof MUTATION_ERROR_CODE | 'provider_error' | null = 'provider_error';
+      let requestId: string | null = null;
+      try {
+        const control = parseControlBody(page.bodyText);
+        errorCode = normalizeErrorCode(control['error_code']);
+        requestId = normalizeRequestId(control['request_id']);
+        ok = errorCode === null;
+      } catch {
+        // The worker still owns parsing/classification; metering records only a
+        // sanitized failure and never copies the injected response body.
+      }
+      await meterCall(admin, {
+        provider: 'plaid',
+        kind: 'transactions_sync',
+        start,
+        ok,
+        errorCode,
+        requestId,
+        itemRef: connectionId,
+      });
+    }
     return {
       source: 'injected',
       status: 'terminal',

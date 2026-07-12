@@ -22,7 +22,11 @@ import {
 import { json, mapDbError } from '../_shared/http.ts';
 import { decryptToken, type EncryptedRecord } from '../_shared/credential-crypto.ts';
 import { getKek } from '../_shared/credential-kek.ts';
-import { createPlaidClient, PlaidClientError } from '../_shared/plaid-client.ts';
+import {
+  createPlaidClient,
+  PlaidClientError,
+  ProviderBudgetExhaustedError,
+} from '../_shared/plaid-client.ts';
 import {
   parsePlaidSyncPage,
   PlaidMutationRestart,
@@ -53,6 +57,9 @@ interface QueueMessage {
     refs: Record<string, string>;
   };
 }
+
+export const orderQueueMessages = (messages: QueueMessage[]): QueueMessage[] =>
+  [...messages].sort((left, right) => left.msg_id - right.msg_id);
 
 interface ProcessOutcome {
   ok: boolean;
@@ -670,14 +677,15 @@ const processReapLinks = async (admin: AdminClient): Promise<Response> => {
   const { data, error } = await admin.rpc('keel_reap_orphan_link_attempts', {});
   if (error) return mapDbError(error);
   const claims = (data ?? []) as ReapClaim[];
-  const plaid = createPlaidClient(admin, {
-    env: Deno.env.get('PLAID_ENV') ?? 'sandbox',
-    clientId: Deno.env.get('PLAID_CLIENT_ID'),
-    secret: Deno.env.get('PLAID_SECRET'),
-  });
   const processed: Array<{ attemptId: string; removed: boolean; errorCode: string | null }> = [];
 
   for (const claim of claims.slice(0, 25)) {
+    const plaid = createPlaidClient(admin, {
+      env: Deno.env.get('PLAID_ENV') ?? 'sandbox',
+      clientId: Deno.env.get('PLAID_CLIENT_ID'),
+      secret: Deno.env.get('PLAID_SECRET'),
+      householdId: claim.householdId,
+    });
     let removed = false;
     let errorCode: string | null = null;
     try {
@@ -690,7 +698,9 @@ const processReapLinks = async (admin: AdminClient): Promise<Response> => {
       );
       removed = await plaid.itemRemove(claim.attemptId, { access_token: token });
     } catch (claimError) {
-      errorCode = claimError instanceof PlaidClientError
+      errorCode = claimError instanceof ProviderBudgetExhaustedError
+        ? 'provider_budget_exhausted'
+        : claimError instanceof PlaidClientError
         ? (claimError.errorCode ?? 'provider_error')
         : 'credential_decrypt_failed';
     }
@@ -738,7 +748,7 @@ export default {
     if (readErr) return mapDbError(readErr);
 
     const results: Array<{ msgId: number; status: string; detail: string }> = [];
-    for (const msg of (messages ?? []) as QueueMessage[]) {
+    for (const msg of orderQueueMessages((messages ?? []) as QueueMessage[])) {
       let outcome: ProcessOutcome;
       if (msg.message.jobType === 'promote_raw_event') {
         outcome = await processPromoteJob(admin, msg);

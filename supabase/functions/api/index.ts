@@ -27,7 +27,11 @@ import {
 import { json, mapDbError, toSnakeKeys } from '../_shared/http.ts';
 import { decryptToken, encryptToken, type EncryptedRecord } from '../_shared/credential-crypto.ts';
 import { currentKekVersion, getKek } from '../_shared/credential-kek.ts';
-import { createPlaidClient, PlaidClientError } from '../_shared/plaid-client.ts';
+import {
+  createPlaidClient,
+  PlaidClientError,
+  ProviderBudgetExhaustedError,
+} from '../_shared/plaid-client.ts';
 
 const COMMAND_TO_PROC: Record<string, string> = {
   'accounts.create': 'keel_cmd_create_account',
@@ -67,6 +71,13 @@ const providerFailure = (error: PlaidClientError): Response =>
       error_type: error.errorType,
       request_id: error.requestId,
     },
+  });
+
+const providerBudgetFailure = (): Response =>
+  json(503, {
+    code: 'provider_budget_exhausted',
+    message: 'Provider call budget exhausted.',
+    details: {},
   });
 
 const internalFailure = (): Response =>
@@ -202,6 +213,7 @@ export default {
         env: Deno.env.get('PLAID_ENV') ?? 'sandbox',
         clientId: Deno.env.get('PLAID_CLIENT_ID'),
         secret: Deno.env.get('PLAID_SECRET'),
+        householdId: householdId.data,
       });
       let accessToken: string;
       let itemId: string;
@@ -219,7 +231,9 @@ export default {
           p_reason: 'provider_exchange_failed',
           p_removed: false,
         });
-        return error instanceof PlaidClientError ? providerFailure(error) : internalFailure();
+        return error instanceof ProviderBudgetExhaustedError
+          ? providerBudgetFailure()
+          : error instanceof PlaidClientError ? providerFailure(error) : internalFailure();
       }
 
       let encrypted: EncryptedRecord;
@@ -292,7 +306,9 @@ export default {
           p_reason: 'accounts_get_failed',
           p_removed: false,
         });
-        return error instanceof PlaidClientError ? providerFailure(error) : internalFailure();
+        return error instanceof ProviderBudgetExhaustedError
+          ? providerBudgetFailure()
+          : error instanceof PlaidClientError ? providerFailure(error) : internalFailure();
       }
 
       if (mapped.accounts.length === 0) {
@@ -408,6 +424,7 @@ export default {
               env: Deno.env.get('PLAID_ENV') ?? 'sandbox',
               clientId: Deno.env.get('PLAID_CLIENT_ID'),
               secret: Deno.env.get('PLAID_SECRET'),
+              householdId: householdId.data,
             });
             try {
               removed = await plaid.itemRemove(connectionId.data, { access_token: token });

@@ -10,12 +10,14 @@ export interface PlaidWebhookKeyResolution {
   notFound?: boolean;
   stale?: boolean;
   outage?: boolean;
+  budgetExhausted?: boolean;
   fetchedAt?: string;
   keyExpiredAt?: string | null;
 }
 
 export type PlaidWebhookKeyResolver = (
   kid: string,
+  tokenIat?: number,
 ) => Promise<PlaidWebhookKeyResolution>;
 
 export type PlaidWebhookVerdict =
@@ -70,12 +72,12 @@ const unverifiable = (reason: string): PlaidWebhookVerdict => ({
   reason,
 });
 
-const safeStaleAllowed = (
+export const safeStaleAllowed = (
   resolution: PlaidWebhookKeyResolution,
   tokenIat: number,
   nowMs: number,
 ): boolean => {
-  if (!resolution.stale || !resolution.outage || !resolution.fetchedAt) return false;
+  if (!resolution.stale || !resolution.fetchedAt) return false;
   const fetchedAtMs = Date.parse(resolution.fetchedAt);
   if (!Number.isFinite(fetchedAtMs)) return false;
   const staleAgeMs = nowMs - fetchedAtMs;
@@ -124,16 +126,18 @@ export const verifyPlaidWebhook = async (
 
   let resolution: PlaidWebhookKeyResolution;
   try {
-    resolution = await deps.keyResolver(protectedHeader.kid);
+    resolution = await deps.keyResolver(protectedHeader.kid, tokenIat);
   } catch {
     return unverifiable('verification key resolution failed');
   }
+  if (resolution.budgetExhausted) return unverifiable('provider budget exhausted');
   if (resolution.notFound) return invalid('verification key id not found');
-  if (resolution.outage) {
-    if (!resolution.jwk) return unverifiable('verification key unavailable');
-    if (!safeStaleAllowed(resolution, tokenIat, nowMs)) {
-      return unverifiable('stale verification key is outside the safe window');
-    }
+  if (resolution.stale && !safeStaleAllowed(resolution, tokenIat, nowMs)) {
+    return unverifiable('stale verification key is outside the safe window');
+  }
+  if (resolution.outage && !resolution.jwk) return unverifiable('verification key unavailable');
+  if (resolution.outage && !resolution.stale) {
+    return unverifiable('verification key unavailable');
   }
   if (!resolution.jwk || !isValidPlaidWebhookJwk(resolution.jwk, protectedHeader.kid)) {
     return unverifiable('verification key shape invalid');

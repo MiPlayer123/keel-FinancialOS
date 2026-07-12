@@ -1,9 +1,15 @@
 import * as jose from 'npm:jose@6';
 import {
   isValidPlaidWebhookJwk,
+  safeStaleAllowed,
   type PlaidWebhookKeyResolution,
   type PlaidWebhookKeyResolver,
 } from './plaid-webhook-verify.ts';
+import {
+  meterCall,
+  PLAID_DAILY_CALL_LIMIT,
+  reserveProviderCall,
+} from './plaid-meter.ts';
 
 export interface WebhookKeyAdminClient {
   rpc(
@@ -15,12 +21,14 @@ export interface WebhookKeyAdminClient {
 export type WebhookVerificationKeyFetchResult =
   | { status: 'ok'; key: Record<string, unknown> }
   | { status: 'invalid_kid' }
+  | { status: 'budget_exhausted' }
   | { status: 'outage' };
 
 interface PlaidWebhookKeyFetchConfig {
   plaidEnv?: string;
   clientId?: string;
   secret?: string;
+  dailyLimit?: number;
 }
 
 export interface FetchWebhookVerificationKeyDeps {
@@ -58,6 +66,16 @@ const classifyResponse = (
   return { status: 'outage' };
 };
 
+const responseRequestId = (bodyText: string): string | null => {
+  try {
+    const body = JSON.parse(bodyText) as unknown;
+    if (!isRecord(body) || typeof body['request_id'] !== 'string') return null;
+    return /^[A-Za-z0-9_-]{1,64}$/.test(body['request_id']) ? body['request_id'] : null;
+  } catch {
+    return null;
+  }
+};
+
 export const fetchWebhookVerificationKey = async (
   admin: WebhookKeyAdminClient,
   keyId: string,
@@ -73,7 +91,17 @@ export const fetchWebhookVerificationKey = async (
       typeof injected['bodyText'] !== 'string') {
       return { status: 'outage' };
     }
-    return classifyResponse(injected['httpStatus'], injected['bodyText']);
+    const start = Date.now();
+    const result = classifyResponse(injected['httpStatus'], injected['bodyText']);
+    await meterCall(admin, {
+      provider: 'plaid',
+      kind: 'webhook_key_get',
+      start,
+      ok: result.status === 'ok',
+      errorCode: result.status === 'ok' ? null : 'provider_error',
+      requestId: responseRequestId(injected['bodyText']),
+    });
+    return result;
   }
 
   const config = deps.config ?? {
@@ -85,6 +113,23 @@ export const fetchWebhookVerificationKey = async (
     return { status: 'outage' };
   }
 
+  const reserved = await reserveProviderCall(
+    admin,
+    'plaid',
+    config.dailyLimit ?? PLAID_DAILY_CALL_LIMIT,
+  );
+  if (!reserved) {
+    await meterCall(admin, {
+      provider: 'plaid',
+      kind: 'budget_refused',
+      start: Date.now(),
+      ok: false,
+      errorCode: 'provider_budget_exhausted',
+    });
+    return { status: 'budget_exhausted' };
+  }
+
+  const start = Date.now();
   let response: Response;
   try {
     response = await (deps.fetchImpl ?? fetch)(
@@ -101,6 +146,13 @@ export const fetchWebhookVerificationKey = async (
       },
     );
   } catch {
+    await meterCall(admin, {
+      provider: 'plaid',
+      kind: 'webhook_key_get',
+      start,
+      ok: false,
+      errorCode: 'provider_error',
+    });
     return { status: 'outage' };
   }
 
@@ -108,9 +160,25 @@ export const fetchWebhookVerificationKey = async (
   try {
     bodyText = await response.text();
   } catch {
+    await meterCall(admin, {
+      provider: 'plaid',
+      kind: 'webhook_key_get',
+      start,
+      ok: false,
+      errorCode: 'provider_error',
+    });
     return { status: 'outage' };
   }
-  return classifyResponse(response.status, bodyText);
+  const result = classifyResponse(response.status, bodyText);
+  await meterCall(admin, {
+    provider: 'plaid',
+    kind: 'webhook_key_get',
+    start,
+    ok: result.status === 'ok',
+    errorCode: result.status === 'ok' ? null : 'provider_error',
+    requestId: responseRequestId(bodyText),
+  });
+  return result;
 };
 
 const rpcSucceeded = async (
@@ -136,7 +204,10 @@ const unixTimestamp = (value: unknown): string | null | undefined => {
 export const createPlaidWebhookKeyResolver = (
   admin: WebhookKeyAdminClient,
   deps: PlaidWebhookKeyResolverDeps = {},
-): PlaidWebhookKeyResolver => async (kid: string): Promise<PlaidWebhookKeyResolution> => {
+): PlaidWebhookKeyResolver => async (
+  kid: string,
+  tokenIat?: number,
+): Promise<PlaidWebhookKeyResolution> => {
   const { data: cachedData, error: cacheError } = await admin.rpc(
     'keel_webhook_key_get',
     { p_kid: kid },
@@ -164,6 +235,10 @@ export const createPlaidWebhookKeyResolver = (
     if (cachedResolution.notFound) return { notFound: true };
     return cachedResolution;
   }
+  if (cachedResolution?.jwk && !cachedResolution.notFound &&
+    tokenIat !== undefined && safeStaleAllowed(cachedResolution, tokenIat, Date.now())) {
+    return cachedResolution;
+  }
 
   const fetched = await (deps.fetchKey
     ? deps.fetchKey(kid)
@@ -173,6 +248,8 @@ export const createPlaidWebhookKeyResolver = (
     const stored = await rpcSucceeded(admin, 'keel_webhook_key_put_negative', { p_kid: kid });
     return stored ? { notFound: true } : { outage: true };
   }
+
+  if (fetched.status === 'budget_exhausted') return { budgetExhausted: true };
 
   if (fetched.status === 'outage') {
     await bumpFailure(admin, kid);
