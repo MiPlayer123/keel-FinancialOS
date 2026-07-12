@@ -364,3 +364,7 @@ Built `@keel/exports` (pure) + `keel_export` NOLOGIN role + `keel_export_househo
 - **DEFERRED (documented):** async Storage/job export for large histories (inline < 5MB or 413 now); step-up MFA (aal2); full cross-project scratch-schema DR restore + synthetic-user remapping; import→canonical lineage (imports not produced pre-1D-domains).
 
 ### Stage 1D EXPORT CORE: GREEN. Law 6 Data Access Guarantee holds (JSON/CSV/QIF/beancount, reproducible, tenant-scoped, secret-safe). Remaining backend: 1D finance domains (recurring/paycheck/statements); Stage-1C deploy-⚑; Stage 1E UI.
+
+### 2026-07-12 — LIVE EXPORT of real Plaid data proven (Data Access Guarantee end-to-end)
+
+Full loop on REAL Plaid Sandbox data: live link (12 accounts) → live /transactions/sync (100 real canonical txns posted, balanced) → `POST /api/admin/export` as owner (alex) → 200. Export contained: 28 JSON tables, 100 canonical_transactions, 200 journal_postings, all 4 formats (JSON + 28 CSV files + QIF + beancount). **Law 12 on the real export bytes:** no connection_credentials table, no `access-sandbox` token, no `wrapped_dek`/`ciphertext` — the export carries ZERO secrets. **Law 4:** `amount_minor` serialized as the STRING `"50000"` (no float corruption). Real exported descriptions: KFC, Touchstone Climbing, CREDIT CARD PAYMENT. The ingest→ledger→export backend is proven working end-to-end on real data.
