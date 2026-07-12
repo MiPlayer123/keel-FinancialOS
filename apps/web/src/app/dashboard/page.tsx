@@ -1,190 +1,100 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 
-import { getSupabaseBrowserClient } from '../../lib/supabase';
+import { getSupabaseBrowserClient } from '@/lib/supabase';
+import { AppShell } from '@/components/keel/app-shell';
+import { PageHeader } from '@/components/keel/page-header';
+import { Money } from '@/components/keel/money';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 
-export default function DashboardPage() {
-  const router = useRouter();
-  const [email, setEmail] = useState<string | null>(null);
-  const [householdId, setHouseholdId] = useState('');
-  const [result, setResult] = useState('Run an API check to inspect its response.');
-  const [isLoading, setIsLoading] = useState(true);
+type Health = 'checking' | 'ok' | 'error';
+
+const metricPlaceholders = [
+  { label: 'Net worth', value: '0' },
+  { label: 'Assets', value: '0' },
+  { label: 'Liabilities', value: '0' },
+];
+
+export default function HomePage() {
+  const [health, setHealth] = useState<Health>('checking');
 
   useEffect(() => {
-    let isActive = true;
-
-    async function loadSession() {
+    void (async () => {
       try {
-        const { data, error } = await getSupabaseBrowserClient().auth.getSession();
-
-        if (error) {
-          throw error;
-        }
-
-        if (!data.session) {
-          router.replace('/');
-          return;
-        }
-
-        if (isActive) {
-          setEmail(data.session.user.email ?? 'Email unavailable');
-          setIsLoading(false);
-        }
-      } catch (error) {
-        if (isActive) {
-          setResult(formatError(error));
-          setIsLoading(false);
-        }
+        const res: { error: unknown } = await getSupabaseBrowserClient().functions.invoke(
+          'api/health',
+          { method: 'GET' },
+        );
+        setHealth(res.error ? 'error' : 'ok');
+      } catch {
+        setHealth('error');
       }
-    }
-
-    void loadSession();
-
-    return () => {
-      isActive = false;
-    };
-  }, [router]);
-
-  async function invokeHealth() {
-    await runRequest(() =>
-      getSupabaseBrowserClient().functions.invoke('api/health', { method: 'GET' }),
-    );
-  }
-
-  async function invokeTransactions() {
-    await runRequest(() =>
-      getSupabaseBrowserClient().functions.invoke('api/queries', {
-        body: { query: 'transactions.list', householdId },
-      }),
-    );
-  }
-
-  async function invokeTrialBalance() {
-    await runRequest(() =>
-      getSupabaseBrowserClient().functions.invoke('api/queries', {
-        body: { query: 'ledger.trial_balance', householdId },
-      }),
-    );
-  }
-
-  async function runRequest(
-    request: () => Promise<{ data: unknown; error: { message: string } | null }>,
-  ) {
-    setIsLoading(true);
-
-    try {
-      const { data, error } = await request();
-      setResult(JSON.stringify({ data, error: error?.message ?? null }, null, 2));
-    } catch (error) {
-      setResult(formatError(error));
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
-  async function handleSignOut() {
-    setIsLoading(true);
-
-    try {
-      const { error } = await getSupabaseBrowserClient().auth.signOut();
-
-      if (error) {
-        setResult(formatError(error));
-        setIsLoading(false);
-        return;
-      }
-
-      router.replace('/');
-    } catch (error) {
-      setResult(formatError(error));
-      setIsLoading(false);
-    }
-  }
+    })();
+  }, []);
 
   return (
-    <main className="shell">
-      <section className="panel dashboard-panel" aria-labelledby="dashboard-heading">
-        <div className="stage-label">KEEL · Stage 1A engineering shell</div>
-        <div className="panel-body">
-          <header className="dashboard-header">
-            <div>
-              <p className="eyebrow">Authenticated function checks</p>
-              <h1 id="dashboard-heading">API smoke dashboard</h1>
-              <p className="signed-in-as">Signed in as {email ?? 'Checking session…'}</p>
-            </div>
-            <button
-              className="button-secondary"
-              type="button"
-              onClick={() => {
-                void handleSignOut();
-              }}
-            >
-              Sign out
-            </button>
-          </header>
+    <AppShell>
+      <PageHeader
+        title="Home"
+        description="Your financial position at a glance."
+        actions={<HealthBadge health={health} />}
+      />
 
-          <div className="field-block">
-            <label htmlFor="household-id">Household ID</label>
-            <input
-              id="household-id"
-              name="householdId"
-              value={householdId}
-              onChange={(event) => {
-                setHouseholdId(event.target.value);
-              }}
-              placeholder="UUID used by query calls"
-            />
-          </div>
+      <div className="space-y-8 p-6">
+        <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          {metricPlaceholders.map((m) => (
+            <Card key={m.label}>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  {m.label}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <Money amountMinor={m.value} className="text-2xl font-semibold" muteZero={false} />
+              </CardContent>
+            </Card>
+          ))}
+        </section>
 
-          <div className="button-row button-row--wrap">
-            <button
-              type="button"
-              onClick={() => {
-                void invokeHealth();
-              }}
-              disabled={isLoading}
-            >
-              API health
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                void invokeTransactions();
-              }}
-              disabled={isLoading}
-            >
-              List transactions
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                void invokeTrialBalance();
-              }}
-              disabled={isLoading}
-            >
-              Trial balance
-            </button>
-          </div>
-
-          <section className="result-block" aria-labelledby="result-heading">
-            <div className="result-heading-row">
-              <h2 id="result-heading">Raw response</h2>
-              <span>{isLoading ? 'Running…' : 'Ready'}</span>
-            </div>
-            <pre>{result}</pre>
-          </section>
-        </div>
-      </section>
-    </main>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Welcome to KEEL</CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm leading-relaxed text-muted-foreground">
+            Your account is signed in and the backend is reachable. Balances, ledger and review
+            surfaces are being wired to your live data next — each connects to the deterministic
+            ledger, and every AI suggestion will wait for your approval.
+          </CardContent>
+        </Card>
+      </div>
+    </AppShell>
   );
 }
 
-function formatError(error: unknown): string {
-  return JSON.stringify(
-    { error: error instanceof Error ? error.message : 'An unknown error occurred.' },
-    null,
-    2,
+function HealthBadge({ health }: { health: Health }) {
+  if (health === 'checking') {
+    return (
+      <Badge variant="secondary" className="gap-1.5">
+        <Loader2 className="size-3 animate-spin" />
+        Connecting
+      </Badge>
+    );
+  }
+  if (health === 'ok') {
+    return (
+      <Badge variant="secondary" className="gap-1.5 text-primary">
+        <CheckCircle2 className="size-3" />
+        Backend connected
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="secondary" className="gap-1.5 text-keel-negative">
+      <XCircle className="size-3" />
+      Backend unreachable
+    </Badge>
   );
 }

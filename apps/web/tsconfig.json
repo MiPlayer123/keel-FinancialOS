@@ -10,6 +10,9 @@
     "moduleResolution": "Bundler",
     "jsx": "preserve",
     "noEmit": true,
+    "paths": {
+      "@/*": ["./src/*"]
+    },
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "plugins": [
