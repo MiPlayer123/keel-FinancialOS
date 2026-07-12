@@ -71,6 +71,8 @@ const QUERY_TO_PROC: Record<string, string> = {
   'paychecks.list': 'keel_list_paychecks',
   'reimbursements.list':'keel_list_reimbursements',
   'statements.list':'keel_list_statements',
+  'dashboard.cash_flow': 'keel_cash_flow',
+  'dashboard.net_worth': 'keel_net_worth_as_of',
 };
 
 // deno-lint-ignore no-explicit-any
@@ -659,9 +661,21 @@ export default {
             : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
         }
       }
-      const { data, error } = await ctx.supabase.rpc(proc, {
-        p_household_id: query.householdId,
-      });
+      const rpcArgs: Record<string, unknown> = { p_household_id: query.householdId };
+      const isoDate = (v: unknown): string | null =>
+        typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
+      const todayIso = new Date().toISOString().slice(0, 10);
+      if (query.query === 'dashboard.cash_flow') {
+        const db = body as { from?: unknown; to?: unknown };
+        const past = new Date();
+        past.setUTCDate(past.getUTCDate() - 30);
+        rpcArgs.p_from = isoDate(db.from) ?? past.toISOString().slice(0, 10);
+        rpcArgs.p_to = isoDate(db.to) ?? todayIso;
+      } else if (query.query === 'dashboard.net_worth') {
+        const db = body as { asOf?: unknown };
+        rpcArgs.p_as_of = isoDate(db.asOf) ?? todayIso;
+      }
+      const { data, error } = await ctx.supabase.rpc(proc, rpcArgs);
       if (error) return mapDbError(error);
       return json(200, data);
     }
