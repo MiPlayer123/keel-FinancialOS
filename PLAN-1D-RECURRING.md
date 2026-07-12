@@ -101,3 +101,68 @@ confirm proc. NO money movement, NO auto-write (risk ladder: detection=B suggest
 ## 5. Out of scope (later 1D/AI): variable-amount forecasting models (class C preview),
 merchant naming/category via AI (class B, separate), the calendar/subscriptions UI (1E),
 cross-account transfer-aware recurring, paycheck/statements domains (their own specs).
+
+---
+## v2 (dual-audit rework — both NEEDS REWORK; fold before building)
+Recurring is a real finance domain, not a quick slice. v2 makes it buildable against the
+DEPLOYED schema and pins every deterministic rule the gate-5 matrix needs.
+
+### BLOCKERS
+- **B1 Schema/read-path (both):** `canonical_transactions` has NO amount/currency/ledger_account_id;
+  statuses are pending/posted/reviewed/voided (no 'confirmed'); amount truth is in journal_postings.
+  Fix: a `keel_worker`-owned service-only READ proc `keel_recurring_read_txns(household)` that joins
+  each `posted|reviewed`, `voided_at is null` canonical txn to its CURRENT unreversed/unsuperseded
+  journal_batch + the ASSET-side posting → `{txnId, accountId, ledgerAccountId, effectiveDate,
+  amountMinor::text, currency, description}`. Exclude pending/voided + multi-real-account batches
+  for this slice. The detector reads THIS, not a nonexistent view.
+- **B4 Suggest-only, no forecast persisted (Codex):** background detection persists CANDIDATES ONLY.
+  `projectOccurrences` runs only AFTER approval (confirm). Variable series persist NO predicted
+  amount at detection — only observed min/max/lower-median as evidence. (Forecasting = class C, later.)
+- **B6 Calendar-grid detection, not modal-gap (both):** a skipped month makes a ~60-day gap that
+  modal-gap/low-variance detection rejects. Fix: fit observations to candidate CALENDAR GRIDS
+  (weekly/biweekly by 7/14-day epoch-day grid; monthly/quarterly/annual by day-of-month/Gregorian
+  month addition; semimonthly by two anchor days), scoring residuals + coverage; gaps near integer
+  cadence multiples are MISSING SLOTS (skipped), not disqualifiers.
+- **B7 Status-event timeline (both):** a single status can't reproduce paused SPANS or the effective
+  cancel date. Fix: append-only `recurring_status_events(series_id, effective_date, transition
+  {suggested→confirmed|paused|resumed|cancelled|rejected}, actor, command_id, created_at)`; backtest
+  + projection REPLAY this timeline (suppress expectations within [paused, resumed); terminate at
+  cancelled effective_date).
+- **B10 Immutable, evidence-bearing projections (Codex):** every candidate/occurrence carries
+  evidence ids (canonical txn + live batch + posting ids), input fingerprint, detector_version,
+  confidence_version, and run-wide `as_of`. Detection writes a NEW immutable detector-run/candidate
+  version; it never destructively regenerates prior derivations.
+
+### MAJORS (pin the determinism + integrity)
+- Exactness (Law 1/4): all comparisons/median/variance on BIGINT — lower-median of the sorted bigint
+  multiset (stable), integer squared residuals for variance, NO `Number()`/float/`Number(a-b)` sort.
+  Confidence = a versioned integer basis-points SCORE (rename from "confidence" unless calibrated
+  against held-out hit-rate); document as a score.
+- Calendar math: operate on validated civil `YYYY-MM-DD` / integer epoch-days; define end-of-month
+  anchoring (clamp DoM to last valid day) + Gregorian month addition; test leap years, month ends,
+  DST-immune (no ms division). 
+- Grouping/cadence: key includes currency + normalizer_version; allow MULTIPLE amount/calendar
+  clusters per merchant/account (don't collapse duplicate subscriptions); semimonthly = explicit
+  anchor-pair vs a strict 14-day biweekly grid, deterministic ties.
+- Matching: deterministic ONE-TO-ONE assignment constrained by series key/currency/sign + a bigint
+  amount policy; rank by date residual, amount residual, effective_date, txnId; unmatched
+  expectations = skipped, unmatched actuals = unexpected.
+- Approval state machine: explicit status on insert (NO implicit default — Law 4); every transition
+  + inverse defined (incl. rejected, resume); detector upsert NEVER resets confirmed/paused/cancelled;
+  approval binds to a locked candidate version/hash.
+- Schema integrity: explicit PK/unique on occurrences; COMPOSITE tenant FKs (series, ledger_account,
+  occurrence, matched_txn all household-scoped); household derived server-side; cross-tenant-reference
+  test.
+- Authz: add typed `recurring.*` actions + resources to `packages/contracts` + `packages/authz`
+  (not just member-read); filter reads by AUTHORIZED account/entity scope (hidden-account safe);
+  recheck household + series ownership in every proc.
+- Runtime boundaries: cron enqueues idempotent `recurring_detection` jobs → bounded `keel_worker`
+  batches run detection via a `keel_worker`-owned service-only suggestion proc; `recurring.confirm/
+  pause/cancel/reject` are `keel_api`-owned authenticated commands (command_id/economic key, JWT
+  actor, audit before/after, domain events). `/scheduled/tick` stays orchestration-only. A
+  non-provider `recurring_detection` meter kind.
+- Occurrence enum: include the states the backtest emits (expected/matched/skipped/unexpected/
+  paused/cancelled) or persist unexpected explicitly; name the table `recurring_occurrences`
+  (canonical) not `expected_occurrences`.
+
+### Verdict: recurring is a proper domain build (a full loop). v2 above is execution-ready.
