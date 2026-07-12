@@ -24,6 +24,7 @@ import { Sheet, SheetContent, SheetTrigger, SheetTitle } from '@/components/ui/s
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { KeelLogo, KeelMark } from '@/components/keel/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { HouseholdProvider } from '@/components/keel/household-context';
 
 type NavItem = { label: string; href: string; icon: LucideIcon };
 
@@ -147,7 +148,12 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
 
         <div className={cn('flex-1', isCollapsed ? 'px-2' : 'px-3')}>
-          <NavLinks collapsed={isCollapsed} onNavigate={() => setMobileOpen(false)} />
+          <NavLinks
+            collapsed={isCollapsed}
+            onNavigate={() => {
+              setMobileOpen(false);
+            }}
+          />
         </div>
 
         <div className={cn('border-t border-border', isCollapsed ? 'p-2' : 'p-3')}>
@@ -243,7 +249,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="w-9" />
         </header>
 
-        <main className="min-w-0 flex-1">{children}</main>
+        <main className="min-w-0 flex-1">
+          <HouseholdProvider>{children}</HouseholdProvider>
+        </main>
       </div>
     </div>
   );
