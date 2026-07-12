@@ -108,6 +108,75 @@ export async function fetchAccounts(householdId: string): Promise<AccountRow[]> 
   }));
 }
 
+/** Connections for a household (RLS-scoped direct read; credentials never exposed). */
+export type ConnectionRow = {
+  id: string;
+  provider: string;
+  status: string;
+  institutionId: string | null;
+  lastSuccessfulSyncAt: string | null;
+};
+
+export async function fetchConnections(householdId: string): Promise<ConnectionRow[]> {
+  const { data, error } = await getSupabaseBrowserClient()
+    .from('connections')
+    .select('id, provider, status, institution_id, last_successful_sync_at')
+    .eq('household_id', householdId)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  type Row = {
+    id: string;
+    provider: string;
+    status: string;
+    institution_id: string | null;
+    last_successful_sync_at: string | null;
+  };
+  return ((data as Row[] | null) ?? []).map((r) => ({
+    id: r.id,
+    provider: r.provider,
+    status: r.status,
+    institutionId: r.institution_id,
+    lastSuccessfulSyncAt: r.last_successful_sync_at,
+  }));
+}
+
+/** First entity of a household (needed to scope a new connection). */
+export async function fetchFirstEntityId(householdId: string): Promise<string | null> {
+  const { data, error } = await getSupabaseBrowserClient()
+    .from('entities')
+    .select('id')
+    .eq('household_id', householdId)
+    .order('created_at')
+    .limit(1);
+  if (error) throw error;
+  return (data as { id: string }[] | null)?.[0]?.id ?? null;
+}
+
+/** Link a (Sandbox) institution. Backend performs the full server-side link. */
+export async function linkConnection(input: {
+  householdId: string;
+  entityId: string;
+  institutionId?: string;
+}): Promise<unknown> {
+  return invoke('api/connections/link', {
+    commandId: newId(),
+    householdId: input.householdId,
+    entityId: input.entityId,
+    ...(input.institutionId ? { institutionId: input.institutionId } : {}),
+  });
+}
+
+export async function disconnectConnection(input: {
+  householdId: string;
+  connectionId: string;
+}): Promise<unknown> {
+  return invoke('api/connections/disconnect', {
+    commandId: newId(),
+    householdId: input.householdId,
+    connectionId: input.connectionId,
+  });
+}
+
 // ---- Row shapes for the read queries we render ----
 
 export type TransactionRow = {
@@ -148,6 +217,19 @@ export type RecurringSeriesRow = {
   occurrences: RecurringOccurrence[];
   statusEvents: RecurringStatusEvent[];
 };
+
+/** Full household export (Law 6). Returns every format inline. */
+export type ExportBundle = {
+  manifest: unknown;
+  json: string;
+  csv: Record<string, string>;
+  qif: string;
+  beancount: string;
+};
+
+export function exportHousehold(householdId: string): Promise<ExportBundle> {
+  return invoke<ExportBundle>('api/admin/export', { householdId });
+}
 
 /** Generate a browser-side UUID for command ids. */
 export function newId(): string {
