@@ -97,11 +97,13 @@ export type CommandProcedureName = keyof typeof COMMAND_PAYLOAD_SCHEMAS;
 export type CommandName =
   | CommandProcedureName
   | 'connections.link'
-  | 'connections.disconnect';
+  | 'connections.disconnect'
+  | 'admin.export_all';
 export const CommandNameSchema = z.enum([
   ...(Object.keys(COMMAND_PAYLOAD_SCHEMAS) as CommandProcedureName[]),
   'connections.link',
   'connections.disconnect',
+  'admin.export_all',
 ]);
 export const CommandProcedureNameSchema = z.enum(
   Object.keys(COMMAND_PAYLOAD_SCHEMAS) as [CommandProcedureName, ...CommandProcedureName[]],

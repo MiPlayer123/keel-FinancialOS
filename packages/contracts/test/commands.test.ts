@@ -33,6 +33,12 @@ describe('command envelope', () => {
     expect(CommandNameSchema.parse('connections.disconnect')).toBe('connections.disconnect');
   });
 
+  it('includes owner-only export in the closed vocabulary but not mutation envelopes', () => {
+    expect(CommandNameSchema.parse('admin.export_all')).toBe('admin.export_all');
+    expect(CommandEnvelopeSchema.safeParse({ ...envelope, command: 'admin.export_all' }).success)
+      .toBe(false);
+  });
+
   it('rejects agent actors without onBehalfOf (Law 2: attribution)', () => {
     expect(
       CommandEnvelopeSchema.safeParse({

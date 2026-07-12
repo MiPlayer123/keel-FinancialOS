@@ -53,6 +53,18 @@ export default defineConfig(
     },
   },
   {
+    // Export tests intentionally parse unknown JSON wire envelopes and build
+    // malformed DTOs to prove fail-closed behavior.
+    files: ['packages/exports/test/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+      '@typescript-eslint/no-unnecessary-type-assertion': 'off',
+      '@typescript-eslint/no-confusing-void-expression': 'off',
+    },
+  },
+  {
     // Integration tests probe untyped wire responses on purpose; the unsafe-
     // any family is noise here. Domain packages keep the strict rules.
     files: ['tests/integration/**/*.ts'],

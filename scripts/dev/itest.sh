@@ -56,6 +56,20 @@ for _ in $(seq 1 45); do
 done
 curl -sf http://127.0.0.1:55321/functions/v1/webhook-provider/health >/dev/null
 
+# Warm the independently bundled authenticated API function too. A healthy
+# unauthenticated probe is exactly 401; the local Edge gateway can briefly
+# return 502 while that isolate starts even after webhook-provider is ready.
+API_HEALTH_CODE=""
+for _ in $(seq 1 45); do
+  API_HEALTH_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+    http://127.0.0.1:55321/functions/v1/api/health || true)"
+  if [ "$API_HEALTH_CODE" = "401" ]; then
+    break
+  fi
+  sleep 1
+done
+test "$API_HEALTH_CODE" = "401"
+
 pnpm test:integration
 if grep -q 'KEEL_PLAID_SYNC_FETCH_ATTEMPT' /tmp/keel-functions.log; then
   echo 'C5c hermeticity failure: Plaid live-sync fetch count was nonzero' >&2

@@ -21,6 +21,7 @@ writeFileSync(
     "export * from '@keel/authz';",
     "export * from '@keel/ingest';",
     "export * from '@keel/ledger';",
+    "export * from '@keel/exports';",
     "export * from '@keel/plaid';",
     '',
   ].join('\n'),
@@ -40,6 +41,7 @@ await build({
     '@keel/authz': join(root, 'packages', 'authz', 'src', 'index.ts'),
     '@keel/ingest': join(root, 'packages', 'ingest', 'src', 'index.ts'),
     '@keel/ledger': join(root, 'packages', 'ledger', 'src', 'index.ts'),
+    '@keel/exports': join(root, 'packages', 'exports', 'src', 'index.ts'),
     '@keel/plaid': join(root, 'packages', 'providers', 'plaid', 'src', 'index.ts'),
   },
   // zod resolves from the workspace root install.

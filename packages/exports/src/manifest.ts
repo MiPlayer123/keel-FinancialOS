@@ -1,0 +1,76 @@
+export interface IncludedTableDefinition {
+  readonly schema: 'public';
+  readonly table: string;
+  readonly columns: readonly string[];
+  readonly sortKey: readonly string[];
+  readonly timestampColumns: readonly string[];
+  readonly bigintColumns: readonly string[];
+  readonly omittedColumns?: Readonly<Record<string, string>>;
+}
+
+const include = <const T extends IncludedTableDefinition>(definition: T): T => definition;
+
+/**
+ * Audited export contract. This is deliberately data rather than scattered
+ * query knowledge so schema additions fail completeness checks until ruled.
+ */
+export const INCLUDE = [
+  include({ schema: 'public', table: 'households', columns: ['id', 'name', 'created_at'], sortKey: ['id'], timestampColumns: ['created_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'entities', columns: ['id', 'household_id', 'name', 'kind', 'created_at', 'archived_at'], sortKey: ['id'], timestampColumns: ['created_at', 'archived_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'household_memberships', columns: ['household_id', 'user_id', 'role', 'created_at'], sortKey: ['household_id', 'user_id'], timestampColumns: ['created_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'entity_memberships', columns: ['entity_id', 'user_id', 'created_at'], sortKey: ['entity_id', 'user_id'], timestampColumns: ['created_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'accounts', columns: ['id', 'household_id', 'entity_id', 'connection_id', 'ledger_account_id', 'name', 'subtype', 'currency', 'external_ref', 'created_at', 'archived_at'], sortKey: ['id'], timestampColumns: ['created_at', 'archived_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'account_owners', columns: ['account_id', 'user_id', 'created_at'], sortKey: ['account_id', 'user_id'], timestampColumns: ['created_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'ledger_accounts', columns: ['id', 'household_id', 'entity_id', 'name', 'kind', 'currency', 'is_category', 'created_at', 'archived_at'], sortKey: ['id'], timestampColumns: ['created_at', 'archived_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'connections', columns: ['id', 'household_id', 'provider', 'external_ref', 'status', 'created_at', 'institution_id', 'consent_expires_at', 'last_successful_sync_at', 'sync_lease_owner', 'sync_leased_until', 'sync_desired_generation', 'sync_committed_generation', 'next_sync_eligible_at'], sortKey: ['id'], timestampColumns: ['created_at', 'consent_expires_at', 'last_successful_sync_at', 'sync_leased_until', 'next_sync_eligible_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'resource_permissions', columns: ['id', 'household_id', 'user_id', 'resource_kind', 'resource_id', 'permission', 'created_at'], sortKey: ['id'], timestampColumns: ['created_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'approval_policies', columns: ['id', 'household_id', 'risk_class', 'autonomy', 'created_at'], sortKey: ['id'], timestampColumns: ['created_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'canonical_transactions', columns: ['id', 'household_id', 'entity_id', 'account_id', 'status', 'source', 'description', 'effective_date', 'economic_event_key', 'created_at', 'voided_at'], sortKey: ['id'], timestampColumns: ['created_at', 'voided_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'journal_batches', columns: ['id', 'household_id', 'canonical_transaction_id', 'description', 'effective_date', 'reverses_batch_id', 'command_id', 'posted_at'], sortKey: ['id'], timestampColumns: ['posted_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'journal_postings', columns: ['id', 'batch_id', 'ledger_account_id', 'entity_id', 'amount_minor', 'currency'], sortKey: ['id'], timestampColumns: [], bigintColumns: ['amount_minor'] }),
+  include({ schema: 'public', table: 'journal_revisions', columns: ['id', 'original_batch_id', 'reversal_batch_id', 'replacement_batch_id', 'reason', 'created_at'], sortKey: ['id'], timestampColumns: ['created_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'period_locks', columns: ['id', 'household_id', 'entity_id', 'start_date', 'end_date', 'locked_by', 'locked_at', 'reopened_at', 'reopen_reason'], sortKey: ['id'], timestampColumns: ['locked_at', 'reopened_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'transaction_source_links', columns: ['canonical_transaction_id', 'normalized_source_record_id', 'created_at', 'household_id'], sortKey: ['canonical_transaction_id', 'normalized_source_record_id'], timestampColumns: ['created_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'transfer_links', columns: ['id', 'household_id', 'txn_out', 'txn_in', 'status', 'decided_by', 'decided_at', 'created_at'], sortKey: ['id'], timestampColumns: ['decided_at', 'created_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'raw_provider_events', columns: ['id', 'household_id', 'connection_id', 'provider', 'provider_event_id', 'account_external_ref', 'received_at', 'recorded_at', 'body_text', 'body_sha256'], sortKey: ['id'], timestampColumns: ['received_at', 'recorded_at'], bigintColumns: [], omittedColumns: { body: 'Parsed convenience copy omitted; body_text is the exact immutable source.' } }),
+  include({ schema: 'public', table: 'normalized_source_records', columns: ['id', 'raw_event_id', 'household_id', 'account_id', 'provider_transaction_id', 'amount_minor', 'currency', 'effective_date', 'description', 'pending', 'pending_transaction_ref', 'created_at', 'kind'], sortKey: ['id'], timestampColumns: ['created_at'], bigintColumns: ['amount_minor'] }),
+  include({ schema: 'public', table: 'import_batches', columns: ['id', 'household_id', 'account_id', 'source_kind', 'filename', 'row_count', 'created_at', 'committed_at', 'rolled_back_at'], sortKey: ['id'], timestampColumns: ['created_at', 'committed_at', 'rolled_back_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'import_rows', columns: ['id', 'import_batch_id', 'row_number', 'raw', 'created_at'], sortKey: ['import_batch_id', 'row_number', 'id'], timestampColumns: ['created_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'ingestion_skips', columns: ['id', 'household_id', 'connection_id', 'raw_event_id', 'provider_transaction_id', 'currency', 'reason', 'created_at'], sortKey: ['id'], timestampColumns: ['created_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'account_lineage', columns: ['id', 'household_id', 'account_id', 'event_type', 'previous_state', 'new_state', 'occurred_at'], sortKey: ['id'], timestampColumns: ['occurred_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'balance_snapshots', columns: ['id', 'household_id', 'account_id', 'as_of', 'available_minor', 'current_minor', 'currency', 'source', 'snapshot_metadata', 'created_at'], sortKey: ['id'], timestampColumns: ['as_of', 'created_at'], bigintColumns: ['available_minor', 'current_minor'] }),
+  include({ schema: 'public', table: 'connection_health_events', columns: ['id', 'household_id', 'connection_id', 'event_type', 'severity', 'details', 'occurred_at'], sortKey: ['id'], timestampColumns: ['occurred_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'audit_log', columns: ['id', 'household_id', 'actor', 'action', 'object_type', 'object_id', 'command_id', 'before', 'after', 'at'], sortKey: ['id'], timestampColumns: ['at'], bigintColumns: ['id'] }),
+  include({ schema: 'public', table: 'domain_events', columns: ['id', 'event_type', 'household_id', 'command_id', 'economic_event_key', 'actor', 'occurred_at', 'payload'], sortKey: ['id'], timestampColumns: ['occurred_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'command_executions', columns: ['household_id', 'economic_event_key', 'command', 'payload_sha256', 'result', 'executed_at'], sortKey: ['household_id', 'economic_event_key'], timestampColumns: ['executed_at'], bigintColumns: [], omittedColumns: { command_id: 'Redundant execution transport identifier; economic_event_key is the portable idempotency identity.' } }),
+] as const;
+
+export type ExportTableName = (typeof INCLUDE)[number]['table'];
+
+export interface ExcludedTableDefinition {
+  readonly schema: 'public' | 'auth';
+  readonly table: string;
+  readonly reason: string;
+}
+
+export const EXCLUDE = [
+  { schema: 'public', table: 'connection_credentials', reason: 'Law 12: encrypted provider credential and wrapped key material are never portable.' },
+  { schema: 'public', table: 'plaid_webhook_keys', reason: 'Operational provider verification-key cache; may contain private JWK material if malformed.' },
+  { schema: 'public', table: 'webhook_rejections', reason: 'Cross-tenant operational quarantine and rejected request bytes, not household finance data.' },
+  { schema: 'public', table: 'webhook_rejection_counters', reason: 'Global operational abuse-prevention counter, not household finance data.' },
+  { schema: 'public', table: 'provider_call_budget', reason: 'Global provider circuit-breaker state, not household finance data.' },
+  { schema: 'public', table: 'usage_events', reason: 'Operational metering includes null-household system telemetry and is excluded wholesale.' },
+  { schema: 'public', table: 'plaid_test_responses', reason: 'Hermetic provider test fixture table; never user data.' },
+  { schema: 'public', table: 'plaid_webhook_key_test_responses', reason: 'Hermetic webhook-key test fixture table; never user data.' },
+  { schema: 'public', table: 'sync_test_pages', reason: 'Hermetic sync test fixture table; never user data.' },
+  { schema: 'public', table: 'sync_attempts', reason: 'Transient provider synchronization execution state and cursors.' },
+  { schema: 'public', table: 'sync_checkpoints', reason: 'Transient provider cursor state; raw evidence and ledger history are portable instead.' },
+  { schema: 'public', table: 'link_attempts', reason: 'Transient connection workflow state that can contain credential envelope material.' },
+  { schema: 'public', table: 'removal_attempts', reason: 'Transient provider disconnection workflow state, not portable finance history.' },
+  { schema: 'auth', table: 'users', reason: 'Auth identities and secrets are excluded; household membership user_id mappings remain portable.' },
+] as const satisfies readonly ExcludedTableDefinition[];
+
+export const ALL_PUBLIC_TABLES = [
+  ...INCLUDE.map((entry) => entry.table),
+  ...EXCLUDE.filter((entry) => entry.schema === 'public').map((entry) => entry.table),
+].sort();

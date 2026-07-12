@@ -6,7 +6,10 @@
  * Flow per command: validate typed envelope (contracts) → compile
  * authorization (authz, fail-closed) → invoke the SECURITY DEFINER command
  * proc through the USER's client so `auth.uid()` reaches the database, which
- * re-checks membership and executes atomically (INFRA §5 steps 4-11).
+ * re-checks membership and executes atomically (INFRA §5 steps 4-11). The
+ * export RPC is the narrow exception: after owner authz here, the service
+ * client calls a service-only snapshot proc whose opaque fields are scanned
+ * before any bytes are returned.
  */
 import { withSupabase } from 'npm:@supabase/server@1.3.0';
 import {
@@ -16,13 +19,20 @@ import {
   ConnectionIdSchema,
   EntityIdSchema,
   HouseholdIdSchema,
+  ExportSecretError,
+  isWithinInlineExportLimit,
   mapAccountsGetToKeel,
   parseCommandPayload,
+  toBeancount,
+  toCsvFiles,
+  toJson,
+  toQif,
   authorize,
   type Action,
   type AuthzContext,
   type HouseholdId,
   type HouseholdRole,
+  type HouseholdExport,
 } from '../_shared/vendor/keel-domain.mjs';
 import { json, mapDbError, toSnakeKeys } from '../_shared/http.ts';
 import { decryptToken, encryptToken, type EncryptedRecord } from '../_shared/credential-crypto.ts';
@@ -145,6 +155,66 @@ export default {
       body = await req.json();
     } catch {
       return json(400, { code: 'invalid_command', message: 'Invalid JSON.', details: {} });
+    }
+
+    if (path === '/admin/export') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      if (!householdId.success) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Export request failed validation.',
+          details: {},
+        });
+      }
+
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'admin.export_all', {
+        householdId: householdId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+
+      const { data, error } = await ctx.supabaseAdmin.rpc('keel_export_household', {
+        p_household_id: householdId.data,
+      });
+      if (error) return mapDbError(error);
+
+      try {
+        const snapshot = data as HouseholdExport;
+        const jsonExport = toJson(snapshot);
+        const envelope = JSON.parse(jsonExport) as { manifest: unknown };
+        const response = {
+          manifest: envelope.manifest,
+          json: jsonExport,
+          csv: toCsvFiles(snapshot),
+          qif: toQif(snapshot),
+          beancount: toBeancount(snapshot),
+        };
+        const serialized = JSON.stringify(response);
+        if (!isWithinInlineExportLimit(serialized)) {
+          return json(413, {
+            code: 'export_too_large',
+            message: 'Use the async export job.',
+            details: {},
+          });
+        }
+        return new Response(serialized, {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      } catch (formatError) {
+        return formatError instanceof ExportSecretError
+          ? json(422, {
+              code: 'export_secret_detected',
+              message: 'Export blocked by the secret boundary.',
+              details: {},
+            })
+          : internalFailure();
+      }
     }
 
     if (path === '/connections/link') {

@@ -165,6 +165,21 @@ describe('authorize', () => {
 
     expectDenied(decision, 'not_authorized');
   });
+
+  it.each([
+    ['owner', true],
+    ['partner', false],
+    ['viewer', false],
+    ['professional', false],
+  ] satisfies readonly [HouseholdRole, boolean][])('%s export access is %s', (role, allowed) => {
+    const decision = authorize(
+      makeContext({ memberships: [{ householdId: HOUSEHOLD, role }] }),
+      'admin.export_all',
+      { householdId: HOUSEHOLD, accountId: ACCOUNT },
+    );
+    expect(decision.allowed).toBe(allowed);
+    if (!allowed) expectDenied(decision, 'not_authorized');
+  });
 });
 
 describe('assertAuthorized', () => {

@@ -10,14 +10,21 @@ export const WRITE_ACTIONS = [
   'connections.disconnect',
 ] as const satisfies readonly CommandName[];
 
-export const READ_ACTIONS = ['ledger.trial_balance', 'transactions.list', 'audit.read'] as const;
+export const EXPORT_ACTIONS = ['admin.export_all'] as const satisfies readonly CommandName[];
+
+export const READ_ACTIONS = [
+  'ledger.trial_balance',
+  'transactions.list',
+  'audit.read',
+  ...EXPORT_ACTIONS,
+] as const;
 
 export const ACTIONS = [...WRITE_ACTIONS, ...READ_ACTIONS] as const;
 
 export type WriteAction = (typeof WRITE_ACTIONS)[number];
 export type ReadAction = (typeof READ_ACTIONS)[number];
 export type Action = (typeof ACTIONS)[number];
-export type MinimumRole = 'viewer' | 'partner';
+export type MinimumRole = 'viewer' | 'partner' | 'owner';
 
 /** Every known action has exactly one explicit minimum-role requirement. */
 export const ACTION_MINIMUM_ROLES = {
@@ -31,6 +38,7 @@ export const ACTION_MINIMUM_ROLES = {
   'ledger.trial_balance': 'viewer',
   'transactions.list': 'viewer',
   'audit.read': 'viewer',
+  'admin.export_all': 'owner',
 } as const satisfies Readonly<Record<Action, MinimumRole>>;
 
 /**
@@ -38,17 +46,17 @@ export const ACTION_MINIMUM_ROLES = {
  * read capability and never satisfy the partner write requirement.
  */
 const ROLE_LATTICE = {
-  owner: { viewer: true, partner: true },
-  partner: { viewer: true, partner: true },
-  viewer: { viewer: true, partner: false },
-  professional: { viewer: true, partner: false },
+  owner: { viewer: true, partner: true, owner: true },
+  partner: { viewer: true, partner: true, owner: false },
+  viewer: { viewer: true, partner: false, owner: false },
+  professional: { viewer: true, partner: false, owner: false },
 } as const satisfies Readonly<Record<HouseholdRole, Readonly<Record<MinimumRole, boolean>>>>;
 
 export const roleAtLeast = (role: HouseholdRole, minimum: MinimumRole): boolean =>
   ROLE_LATTICE[role][minimum];
 
 export const isReadAction = (action: Action): action is ReadAction =>
-  ACTION_MINIMUM_ROLES[action] === 'viewer';
+  (READ_ACTIONS as readonly Action[]).includes(action);
 
 export const isWriteAction = (action: Action): action is WriteAction =>
-  ACTION_MINIMUM_ROLES[action] === 'partner';
+  (WRITE_ACTIONS as readonly Action[]).includes(action);
