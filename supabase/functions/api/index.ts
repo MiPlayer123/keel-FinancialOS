@@ -218,7 +218,17 @@ export default {
       let accessToken: string;
       let itemId: string;
       try {
-        const publicResult = await plaid.sandboxPublicTokenCreate(begin.attemptId);
+        // Live /sandbox/public_token/create requires a real institution + the
+        // products to seed. The injected/hermetic path ignores this body and
+        // synthesizes the token; only the live Sandbox path uses it.
+        const sandboxInstitution =
+          typeof institutionId === 'string' && institutionId.startsWith('ins_')
+            ? institutionId
+            : 'ins_109508';
+        const publicResult = await plaid.sandboxPublicTokenCreate(begin.attemptId, {
+          institution_id: sandboxInstitution,
+          initial_products: ['transactions'],
+        });
         const exchange = await plaid.publicTokenExchange(begin.attemptId, {
           public_token: publicResult.public_token,
         });
