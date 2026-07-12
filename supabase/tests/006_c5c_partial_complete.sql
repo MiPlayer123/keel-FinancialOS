@@ -1,6 +1,65 @@
 -- pgTAP: C5c completion signature, partial health semantics, and live-failure cleanup.
 begin;
-select plan(21);
+select plan(31);
+
+select is(
+  to_regprocedure('public.keel_worker_create_normalized(uuid,uuid,uuid,text,text,text,text,text,text)'),
+  null::regprocedure,
+  'the legacy normalized-creation overload is absent'
+);
+
+select ok(
+  to_regprocedure(
+    'public.keel_worker_create_normalized(uuid,uuid,uuid,uuid,text,text,text,text,text,text,boolean)'
+  ) is not null,
+  'normalized creation accepts exact raw-page provenance and pending state'
+);
+
+select is(
+  (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'keel_worker_create_normalized'),
+  1::int,
+  'normalized creation has exactly one SQL overload'
+);
+
+select is(
+  (select r.rolname from pg_proc p join pg_roles r on r.oid = p.proowner
+    where p.oid =
+      'public.keel_worker_create_normalized(uuid,uuid,uuid,uuid,text,text,text,text,text,text,boolean)'::regprocedure),
+  'keel_worker',
+  'normalized creation remains owned by keel_worker'
+);
+
+select ok(
+  has_function_privilege(
+    'service_role',
+    'public.keel_worker_record_ingestion_skip(uuid,text,text,text)',
+    'EXECUTE'
+  ),
+  'service_role can record a narrow ingestion skip'
+);
+
+select ok(
+  not has_function_privilege(
+    'authenticated',
+    'public.keel_worker_record_ingestion_skip(uuid,text,text,text)',
+    'EXECUTE'
+  ),
+  'authenticated cannot execute the ingestion-skip writer'
+);
+
+select ok(to_regclass('public.ingestion_skips') is not null,
+  'the durable ingestion_skips relation exists');
+
+select ok(
+  exists (
+    select 1 from pg_trigger
+     where tgrelid = 'public.ingestion_skips'::regclass
+       and tgname = 'ingestion_skips_immutable'
+       and not tgisinternal
+  ),
+  'ingestion skips are append-only'
+);
 
 select is(
   to_regprocedure('public.keel_worker_complete_attempt(uuid,uuid,text)'),
@@ -86,6 +145,34 @@ select 'attempt_partial', public.keel_worker_open_attempt(
   (select value from c5c_ids where label = 'owner_partial'),
   ''
 );
+
+insert into c5c_ids(label, value)
+select 'raw_replay', public.keel_worker_archive_page(
+  (select value from c5c_ids where label = 'attempt_partial'),
+  (select value from c5c_ids where label = 'owner_partial'),
+  0,
+  '{"added":[],"modified":[],"removed":[],"next_cursor":"same","has_more":false}'
+);
+
+select is(
+  public.keel_worker_archive_page(
+    (select value from c5c_ids where label = 'attempt_partial'),
+    (select value from c5c_ids where label = 'owner_partial'),
+    0,
+    '{"added":[],"modified":[],"removed":[],"next_cursor":"same","has_more":false}'
+  ),
+  (select value from c5c_ids where label = 'raw_replay'),
+  'same-body page re-archive returns the existing immutable raw id'
+);
+
+select throws_ok($$
+  select public.keel_worker_archive_page(
+    (select value from c5c_ids where label = 'attempt_partial'),
+    (select value from c5c_ids where label = 'owner_partial'),
+    0,
+    '{"added":[],"modified":[],"removed":[],"next_cursor":"different","has_more":false}'
+  )
+$$, 'P0009', null, 'same-ordinal different-body page replay fails closed');
 
 select lives_ok($$
   select public.keel_worker_complete_attempt(

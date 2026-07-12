@@ -1,6 +1,6 @@
 -- pgTAP: C3 Plaid link/disconnect saga, trust boundary, and definer posture.
 begin;
-select plan(17);
+select plan(21);
 
 select ok(
   exists (
@@ -19,7 +19,7 @@ insert into c3_expected_procs(signature) values
   ('public.keel_disconnect_begin(uuid,uuid,text)'),
   ('public.keel_record_link_exchange(uuid,uuid,uuid,text,text,text,text,text,integer)'),
   ('public.keel_finalize_link(uuid,uuid,text,timestamp with time zone,jsonb)'),
-  ('public.keel_fail_link_attempt(uuid,uuid,text,boolean)'),
+  ('public.keel_fail_link_attempt(uuid,uuid,text,boolean,text)'),
   ('public.keel_disconnect_complete(uuid,uuid,uuid,boolean,text)'),
   ('public.keel_set_connection_reauth(uuid,text,boolean)'),
   ('public.keel_get_connection_credential_envelope(uuid)'),
@@ -121,6 +121,44 @@ select ok(
       ) = array['household_id', 'connection_id']
   ),
   'connection_credentials is unique by household and connection'
+);
+
+insert into public.link_attempts
+  (id, household_id, initiated_by_user_id, provider, state, credential_id,
+   plaid_item_id, entity_id)
+values
+  ('94000000-0000-4000-8000-000000000001',
+   '00000000-0000-4000-8000-00000000a001',
+   '00000000-0000-4000-8000-000000000001',
+   'plaid', 'exchanged', '94000000-0000-4000-8000-000000000002',
+   'pgtap-c3-winner', '00000000-0000-4000-8000-00000000a101');
+
+select lives_ok($$
+  select public.keel_fail_link_attempt(
+    '94000000-0000-4000-8000-000000000001',
+    '00000000-0000-4000-8000-00000000a001',
+    'loser_must_not_clobber', false, 'pgtap-c3-loser')
+$$, 'a different Plaid item cannot fail the exchanged winner');
+
+select is(
+  (select state from public.link_attempts
+    where id = '94000000-0000-4000-8000-000000000001'),
+  'exchanged',
+  'the exchanged winner survives a loser failure transition'
+);
+
+select lives_ok($$
+  select public.keel_fail_link_attempt(
+    '94000000-0000-4000-8000-000000000001',
+    '00000000-0000-4000-8000-00000000a001',
+    'winner_downstream_failure', false, 'pgtap-c3-winner')
+$$, 'the matching Plaid item may fail its own exchanged attempt');
+
+select is(
+  (select state from public.link_attempts
+    where id = '94000000-0000-4000-8000-000000000001'),
+  'failed',
+  'the matching exchanged attempt records its downstream failure'
 );
 
 set local role authenticated;

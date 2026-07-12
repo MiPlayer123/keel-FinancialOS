@@ -7,7 +7,10 @@ import { execFileSync, execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { encryptToken, type EncryptedRecord } from '../../supabase/functions/_shared/credential-crypto.ts';
+import {
+  encryptToken,
+  type EncryptedRecord,
+} from '../../supabase/functions/_shared/credential-crypto.ts';
 import {
   authedHeaders,
   callFunction,
@@ -82,10 +85,12 @@ const inject = async (
   body: unknown,
   ordinal = 0,
 ): Promise<void> => {
-  const { error } = await serviceClient().from('plaid_test_responses').insert({
-    scope_key: scopeKey,
-    kind,
-    ordinal,
+  const { error } = await serviceClient()
+    .from('plaid_test_responses')
+    .insert({
+      scope_key: scopeKey,
+      kind,
+      ordinal,
     body_text: JSON.stringify(body),
   });
   if (error) throw new Error(`Plaid injection failed: ${error.message}`);
@@ -140,7 +145,11 @@ const prepareLink = async (
   const attemptId = String(data.attemptId);
   await inject(attemptId, 'sandbox_public_token_create', {});
   await inject(attemptId, 'item_public_token_exchange', { item_id: itemId });
-  await inject(attemptId, 'accounts_get', { accounts, item: { item_id: itemId }, request_id: 'accounts-ok' });
+  await inject(attemptId, 'accounts_get', {
+    accounts,
+    item: { item_id: itemId },
+    request_id: 'accounts-ok',
+  });
   return {
     attemptId,
     credentialId: String(data.credentialId),
@@ -250,7 +259,9 @@ describe('C3 Plaid link/disconnect saga', () => {
     );
     expect(connections[0]?.status).toBe('active');
     expect(
-      dbRows(`select id from public.accounts where connection_id = ${sqlLiteral(happy.connectionId)}::uuid`),
+      dbRows(
+        `select id from public.accounts where connection_id = ${sqlLiteral(happy.connectionId)}::uuid`,
+      ),
     ).toHaveLength(2);
     expect(
       dbRows(
@@ -273,10 +284,12 @@ describe('C3 Plaid link/disconnect saga', () => {
       credential_kek_version: null,
     });
 
-    const { error: pageError } = await serviceClient().from('sync_test_pages').insert({
-      connection_id: happy.connectionId,
-      page_index: 0,
-      body_text: JSON.stringify({
+    const { error: pageError } = await serviceClient()
+      .from('sync_test_pages')
+      .insert({
+        connection_id: happy.connectionId,
+        page_index: 0,
+        body_text: JSON.stringify({
         added: [
           {
             transaction_id: 'txn-c3-one',
@@ -396,7 +409,7 @@ describe('C3 Plaid link/disconnect saga', () => {
     ).toEqual([{ state: 'failed', failure_code: 'INTERNAL_SERVER_ERROR' }]);
   });
 
-  it('T5 refuses sync acquisition while reauthentication is required', async () => {
+  it('T5 refuses writes and dead-letters reauthentication notifications after bounded retries', async () => {
     const target = await linkItem('plaid-item-c3-reauth', [plaidAccount('acct-c3-reauth')]);
     await drainQueue('sync_events');
     const { count: before } = await serviceClient()
@@ -418,21 +431,8 @@ describe('C3 Plaid link/disconnect saga', () => {
       p_received_at: new Date().toISOString(),
     });
     if (notificationError) throw new Error(notificationError.message);
-    const drain = await callFunction('/worker/drain', {
-      headers: { apikey: stackEnv().automationsSecret },
-      body: { queue: 'sync_events', batchSize: 20 },
-    });
-    expect(drain.status).toBe(200);
-    const processed = (drain.body as { processed: Array<{ msgId: number; status: string; detail: string }> })
-      .processed;
-    const refused = processed.find((row) => row.detail.includes('reauth_required'));
-    expect(refused?.status).toBe('retry');
-    if (refused) {
-      await serviceClient().rpc('keel_worker_queue_archive', {
-        p_queue: 'sync_events',
-        p_msg_id: refused.msgId,
-      });
-    }
+    const outcomes = await drainQueue('sync_events');
+    expect(outcomes).toContain('dead_letter:sync lease unavailable: reauth_required');
     const { count: after } = await serviceClient()
       .from('canonical_transactions')
       .select('*', { count: 'exact', head: true })
@@ -443,7 +443,7 @@ describe('C3 Plaid link/disconnect saga', () => {
       p_event_type: 'LOGIN_REPAIRED',
       p_required: false,
     });
-  });
+  }, 60_000);
 
   it('T6 decrypts, removes, and shreds a stale exchanged attempt', async () => {
     const stale = await createStaleAttempt('plaid-item-c3-reap', 'dummy-c3-reaper-token');
@@ -487,10 +487,7 @@ describe('C3 Plaid link/disconnect saga', () => {
   });
 
   it('T8 keeps synthesized access/public token canaries out of every persistence sink', async () => {
-    const canaries = [
-      `access-sandbox-${happy.attemptId}`,
-      `public-sandbox-${happy.attemptId}`,
-    ];
+    const canaries = [`access-sandbox-${happy.attemptId}`, `public-sandbox-${happy.attemptId}`];
     await inject(happy.attemptId, 'sandbox_public_token_create', {}, 90);
     await inject(happy.attemptId, 'item_public_token_exchange', { item_id: PLAID_ITEM }, 90);
     const scans = [
@@ -537,21 +534,26 @@ describe('C3 Plaid link/disconnect saga', () => {
       p_base_cursor: '',
     });
     if (openError || !attemptId) throw new Error('fence attempt open failed');
-    const { error: archiveError } = await svc.rpc('keel_worker_archive_page', {
+    const { data: rawPageId, error: archiveError } = await svc.rpc('keel_worker_archive_page', {
       p_attempt_id: attemptId,
       p_owner: owner,
       p_page_ordinal: 0,
       p_body_text: JSON.stringify({
-        added: [], modified: [], removed: [], next_cursor: 'fenced', has_more: false,
+        added: [],
+        modified: [],
+        removed: [],
+        next_cursor: 'fenced',
+        has_more: false,
         request_id: 'fence-page',
       }),
     });
-    if (archiveError) throw new Error(archiveError.message);
+    if (archiveError || !rawPageId) throw new Error(archiveError?.message ?? 'no raw page id');
     const { data: normalizedId, error: normalizedError } = await svc.rpc(
       'keel_worker_create_normalized',
       {
         p_attempt_id: attemptId,
         p_owner: owner,
+        p_raw_event_id: rawPageId,
         p_account_id: target.accountIds[0],
         p_provider_transaction_id: 'txn-c3-fenced',
         p_kind: 'added',
@@ -559,6 +561,7 @@ describe('C3 Plaid link/disconnect saga', () => {
         p_currency: 'USD',
         p_effective_date: '2026-07-11',
         p_description: 'must not post',
+        p_pending: false,
       },
     );
     if (normalizedError || !normalizedId) throw new Error('fence normalized row failed');
@@ -595,13 +598,14 @@ describe('C3 Plaid link/disconnect saga', () => {
         `select cursor from public.sync_checkpoints where connection_id = ${sqlLiteral(target.connectionId)}::uuid`,
       ),
     ).toEqual(checkpointBefore);
-    const generations = dbRows<{ sync_desired_generation: number; sync_committed_generation: number }>(
+    const generations = dbRows<{
+      sync_desired_generation: number;
+      sync_committed_generation: number;
+    }>(
       `select sync_desired_generation, sync_committed_generation from public.connections where id = ${sqlLiteral(target.connectionId)}::uuid`,
     )[0]!;
     expect(generations.sync_committed_generation).toBe(generationsBefore.sync_committed_generation);
-    expect(generations.sync_desired_generation).toBe(
-      generationsBefore.sync_desired_generation + 1,
-    );
+    expect(generations.sync_desired_generation).toBe(generationsBefore.sync_desired_generation + 1);
 
     await inject(target.connectionId, 'item_remove', { request_id: 'fence-cleanup' });
     expect(await callDisconnect(target.connectionId)).toMatchObject({
@@ -613,11 +617,16 @@ describe('C3 Plaid link/disconnect saga', () => {
   it('T10 parks a stale attempt after five bounded reaper failures', async () => {
     const stale = await createStaleAttempt('plaid-item-c3-retry-cap', 'dummy-c3-retry-token');
     for (let ordinal = 0; ordinal < 5; ordinal += 1) {
-      await inject(stale.attemptId, 'item_remove', {
-        error_code: 'INTERNAL_SERVER_ERROR',
-        error_type: 'API_ERROR',
-        request_id: `retry-${ordinal}`,
-      }, ordinal);
+      await inject(
+        stale.attemptId,
+        'item_remove',
+        {
+          error_code: 'INTERNAL_SERVER_ERROR',
+          error_type: 'API_ERROR',
+          request_id: `retry-${ordinal}`,
+        },
+        ordinal,
+      );
     }
     for (let attempt = 1; attempt <= 5; attempt += 1) {
       const response = await callFunction('/worker/reap-links', {
@@ -756,7 +765,9 @@ describe('C3 Plaid link/disconnect saga', () => {
       createStaleAttempt('plaid-item-c3-dual-b', 'dummy-c3-dual-b'),
     ]);
     for (const attempt of stale) {
-      await inject(attempt.attemptId, 'item_remove', { request_id: `removed-${attempt.attemptId}` });
+      await inject(attempt.attemptId, 'item_remove', {
+        request_id: `removed-${attempt.attemptId}`,
+      });
     }
     const responses = await Promise.all([
       callFunction('/worker/reap-links', {
@@ -787,5 +798,122 @@ describe('C3 Plaid link/disconnect saga', () => {
         .eq('kind', 'item_remove');
       expect(count).toBe(0);
     }
+  });
+
+  it('T15 concurrent same-command loser cannot clobber the exchanged winner', async () => {
+    const commandId = crypto.randomUUID();
+    const clients = await Promise.all([
+      signIn(SEED.users.alex.email),
+      signIn(SEED.users.alex.email),
+    ]);
+    const begins = await Promise.all(
+      clients.map((client) =>
+        client.rpc('keel_begin_link', {
+          p_command_id: commandId,
+          p_household_id: SEED.households.alpha,
+          p_entity_id: SEED.entities.alphaPersonal,
+          p_provider: 'plaid',
+          p_institution_id: 'ins-c3-concurrent',
+        }),
+      ),
+    );
+    expect(begins.every((begin) => begin.error === null)).toBe(true);
+    const attemptIds = new Set(begins.map((begin) => String(begin.data.attemptId)));
+    const credentialIds = new Set(begins.map((begin) => String(begin.data.credentialId)));
+    expect([...attemptIds]).toHaveLength(1);
+    expect([...credentialIds]).toHaveLength(1);
+    const attemptId = [...attemptIds][0]!;
+    const credentialId = [...credentialIds][0]!;
+    const itemIds = [
+      `plaid-item-c3-concurrent-a-${crypto.randomUUID()}`,
+      `plaid-item-c3-concurrent-b-${crypto.randomUUID()}`,
+    ];
+    const kek = currentKek();
+    const envelopes = await Promise.all(
+      itemIds.map((itemId) =>
+        encryptToken(
+          `in-memory-${itemId}`,
+          credentialId,
+          SEED.households.alpha,
+          'plaid',
+          kek.value,
+          kek.version,
+        ),
+      ),
+    );
+    const exchangeResults = await Promise.all(
+      itemIds.map((itemId, index) => {
+        const envelope = envelopes[index]!;
+        return serviceClient().rpc('keel_record_link_exchange', {
+          p_attempt_id: attemptId,
+          p_household_id: SEED.households.alpha,
+          p_credential_id: credentialId,
+          p_plaid_item_id: itemId,
+          p_ciphertext_b64: envelope.ciphertext,
+          p_iv_b64: envelope.iv,
+          p_wrapped_dek_b64: envelope.wrappedDek,
+          p_wrap_iv_b64: envelope.wrapIv,
+          p_kek_version: envelope.kekVersion,
+        });
+      }),
+    );
+    expect(exchangeResults.filter((result) => result.error === null)).toHaveLength(1);
+    expect(exchangeResults.filter((result) => result.error?.code === 'P0009')).toHaveLength(1);
+
+    const exchanged = dbRows<{ state: string; plaid_item_id: string }>(
+      `select state, plaid_item_id from public.link_attempts where id = ${sqlLiteral(attemptId)}::uuid`,
+    )[0]!;
+    expect(exchanged.state).toBe('exchanged');
+    const loserItemId = itemIds.find((itemId) => itemId !== exchanged.plaid_item_id)!;
+    const { error: loserFailureError } = await serviceClient().rpc('keel_fail_link_attempt', {
+      p_attempt_id: attemptId,
+      p_household_id: SEED.households.alpha,
+      p_reason: 'exchange_persist_failed',
+      p_removed: true,
+      p_plaid_item_id: loserItemId,
+    });
+    if (loserFailureError) throw new Error(loserFailureError.message);
+    expect(
+      dbRows<{ state: string; plaid_item_id: string }>(
+        `select state, plaid_item_id from public.link_attempts where id = ${sqlLiteral(attemptId)}::uuid`,
+      ),
+    ).toEqual([{ state: 'exchanged', plaid_item_id: exchanged.plaid_item_id }]);
+
+    const { data: finalized, error: finalizeError } = await serviceClient().rpc(
+      'keel_finalize_link',
+      {
+        p_attempt_id: attemptId,
+        p_household_id: SEED.households.alpha,
+        p_institution_id: 'ins-c3-concurrent',
+        p_consent_expires_at: null,
+        p_accounts: [
+          {
+            external_ref: `acct-c3-concurrent-${crypto.randomUUID()}`,
+            name: 'C3 Concurrent Winner',
+            subtype: 'checking',
+            currency: 'USD',
+            kind: 'asset',
+          },
+        ],
+      },
+    );
+    if (finalizeError) throw new Error(finalizeError.message);
+    const connectionId = String(finalized.connectionId);
+    expect(
+      dbRows<{ external_ref: string }>(
+        `select external_ref from public.connections where external_ref in (${itemIds.map(sqlLiteral).join(',')})`,
+      ),
+    ).toEqual([{ external_ref: exchanged.plaid_item_id }]);
+    expect(
+      dbRows(
+        `select id from public.connection_credentials where connection_id = ${sqlLiteral(connectionId)}::uuid`,
+      ),
+    ).toHaveLength(1);
+    expect(
+      dbRows(
+        `select id from public.accounts where connection_id = ${sqlLiteral(connectionId)}::uuid`,
+      ),
+    ).toHaveLength(1);
+    await drainQueue('sync_events');
   });
 });

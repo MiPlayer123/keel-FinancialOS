@@ -9,9 +9,12 @@ import { drainQueue, serviceClient, SEED, signIn } from './helpers.js';
 const ECONOMIC_KEY = `txn:plaid:${SEED.connections.plaidC5b.ref}:txn-pending-meal`;
 let finalInjectedBodyText = '';
 
-const page = (body: unknown): { connection_id: string; page_index: number; body_text: string } => ({
+const page = (
+  body: unknown,
+  pageIndex: number,
+): { connection_id: string; page_index: number; body_text: string } => ({
   connection_id: SEED.connections.plaidC5b.id,
-  page_index: 0,
+  page_index: pageIndex,
   body_text: JSON.stringify(body),
 });
 
@@ -41,6 +44,19 @@ const recordNotification = async (suffix: string): Promise<void> => {
     p_received_at: '2026-07-11T13:30:00Z',
   });
   if (error) throw new Error(`notification record failed: ${error.message}`);
+};
+
+const replacePages = async (bodies: unknown[]): Promise<void> => {
+  const svc = serviceClient();
+  const { error: deleteError } = await svc
+    .from('sync_test_pages')
+    .delete()
+    .eq('connection_id', SEED.connections.plaidC5b.id);
+  if (deleteError) throw new Error(deleteError.message);
+  const { error: insertError } = await svc
+    .from('sync_test_pages')
+    .insert(bodies.map((body, index) => page(body, index)));
+  if (insertError) throw new Error(insertError.message);
 };
 
 const recordDisabledNotification = async (): Promise<void> => {
@@ -114,25 +130,52 @@ beforeAll(async () => {
   });
   if (accountError) throw new Error(`account create failed: ${accountError.message}`);
 
-  const pages = [
-    page({
-      added: [pendingTransaction],
-      modified: [],
-      removed: [],
-      next_cursor: 'c1',
-      has_more: true,
-      request_id: 'req-before-mutation',
-    }),
-    page({ error_code: 'TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION' }),
-    page({
-      added: [pendingTransaction],
-      modified: [],
-      removed: [],
-      next_cursor: 'c1',
-      has_more: true,
-      request_id: 'req-after-restart-1',
-    }),
-    page({
+  const svc = serviceClient();
+  const { error: deleteError } = await svc
+    .from('sync_test_pages')
+    .delete()
+    .eq('connection_id', SEED.connections.plaidC5b.id);
+  if (deleteError) throw new Error(deleteError.message);
+});
+
+describe('Plaid sync worker (C5b)', () => {
+  it('keeps one economic history when a later attempt supersedes pending with posted', async () => {
+    const svc = serviceClient();
+    await replacePages([
+      {
+        added: [pendingTransaction],
+        modified: [],
+        removed: [],
+        next_cursor: 'pending-before-mutation',
+        has_more: true,
+        request_id: 'req-pending-repeated-across-restart',
+      },
+      { error_code: 'TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION' },
+      {
+        added: [pendingTransaction],
+        modified: [],
+        removed: [],
+        next_cursor: 'pending-complete',
+        has_more: false,
+        request_id: 'req-pending-repeated-across-restart',
+      },
+    ]);
+    await recordNotification('first');
+    const outcomes = await drainQueue('sync_events');
+    expect(outcomes.every((outcome) => !outcome.startsWith('dead_letter:'))).toBe(true);
+
+    const { data: pendingCanonical, error: pendingCanonicalError } = await svc
+      .from('canonical_transactions')
+      .select('id, economic_event_key, status')
+      .eq('economic_event_key', ECONOMIC_KEY)
+      .single();
+    if (pendingCanonicalError) throw new Error(pendingCanonicalError.message);
+    expect(pendingCanonical).toMatchObject({
+      economic_event_key: ECONOMIC_KEY,
+      status: 'pending',
+    });
+
+    const postedPage = {
       added: [
         {
           ...pendingTransaction,
@@ -146,40 +189,36 @@ beforeAll(async () => {
       removed: [{ transaction_id: 'txn-pending-meal' }],
       next_cursor: 'promotion-complete',
       has_more: false,
-      request_id: 'req-after-restart-2',
-    }),
-  ].map((row, pageIndex) => ({ ...row, page_index: pageIndex }));
-  finalInjectedBodyText = pages[3]!.body_text;
-
-  const svc = serviceClient();
-  const { error: deleteError } = await svc
-    .from('sync_test_pages')
-    .delete()
-    .eq('connection_id', SEED.connections.plaidC5b.id);
-  if (deleteError) throw new Error(deleteError.message);
-  const { error: insertError } = await svc.from('sync_test_pages').insert(pages);
-  if (insertError) throw new Error(insertError.message);
-});
-
-describe('Plaid sync worker (C5b)', () => {
-  it('recovers from mutation restart, promotes pending to posted, advances the cursor, and replays as a no-op', async () => {
-    const svc = serviceClient();
-    await recordNotification('first');
-    // Drain to empty. Correctness is asserted on the resulting LEDGER STATE
-    // below (canonical/attempts/cursor/postings) — the authoritative truth —
-    // not on worker log strings, which race with drain timing.
-    const outcomes = await drainQueue('sync_events');
-    expect(outcomes.every((outcome) => !outcome.startsWith('dead_letter:'))).toBe(true);
-    const { data: depth } = await svc.rpc('keel_worker_queue_depth', { p_queue: 'sync_events' });
-    expect(Number(depth)).toBe(0);
+      request_id: 'req-posted-second-attempt-page-1',
+    };
+    finalInjectedBodyText = JSON.stringify(postedPage);
+    await replacePages([
+      {
+        added: [],
+        modified: [],
+        removed: [],
+        next_cursor: 'promotion-page-0',
+        has_more: true,
+        request_id: 'req-posted-second-attempt-page-0',
+      },
+      postedPage,
+    ]);
+    await recordNotification('second');
+    const postedOutcomes = await drainQueue('sync_events');
+    expect(postedOutcomes.every((outcome) => !outcome.startsWith('dead_letter:'))).toBe(true);
 
     const { data: canonical, error: canonicalError } = await svc
       .from('canonical_transactions')
-      .select('id, account_id, status, description')
+      .select('id, account_id, status, description, economic_event_key')
       .eq('economic_event_key', ECONOMIC_KEY);
     if (canonicalError) throw new Error(canonicalError.message);
     expect(canonical).toHaveLength(1);
-    expect(canonical[0]).toMatchObject({ status: 'posted', description: 'Dinner Place' });
+    expect(canonical[0]).toMatchObject({
+      id: pendingCanonical.id,
+      economic_event_key: ECONOMIC_KEY,
+      status: 'posted',
+      description: 'Dinner Place',
+    });
 
     const { count: restartPages, error: restartPageError } = await svc
       .from('raw_provider_events')
@@ -193,7 +232,7 @@ describe('Plaid sync worker (C5b)', () => {
       .from('raw_provider_events')
       .select('body_text')
       .eq('connection_id', SEED.connections.plaidC5b.id)
-      .eq('body->>request_id', 'req-after-restart-2')
+      .eq('body->>request_id', 'req-posted-second-attempt-page-1')
       .order('received_at', { ascending: false })
       .limit(1)
       .single();
@@ -214,7 +253,33 @@ describe('Plaid sync worker (C5b)', () => {
       .eq('state', 'completed')
       .not('promoted_at', 'is', null);
     if (completedError) throw new Error(completedError.message);
-    expect(completed).toBeGreaterThanOrEqual(1);
+    expect(completed).toBeGreaterThanOrEqual(2);
+
+    const { data: sourceLinks, error: sourceLinkError } = await svc
+      .from('transaction_source_links')
+      .select('normalized_source_record_id')
+      .eq('canonical_transaction_id', canonical[0]!.id);
+    if (sourceLinkError) throw new Error(sourceLinkError.message);
+    const { data: lineage, error: lineageError } = await svc
+      .from('normalized_source_records')
+      .select('provider_transaction_id, raw_provider_events!inner(provider_event_id, body)')
+      .in(
+        'id',
+        sourceLinks.map((row) => row.normalized_source_record_id),
+      );
+    if (lineageError) throw new Error(lineageError.message);
+    expect(lineage).toHaveLength(2);
+    expect(lineage).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ provider_transaction_id: 'txn-pending-meal' }),
+        expect.objectContaining({
+          provider_transaction_id: 'txn-posted-meal',
+          raw_provider_events: expect.objectContaining({
+            body: expect.objectContaining({ request_id: 'req-posted-second-attempt-page-1' }),
+          }),
+        }),
+      ]),
+    );
 
     const { data: checkpoint } = await svc
       .from('sync_checkpoints')
@@ -234,6 +299,17 @@ describe('Plaid sync worker (C5b)', () => {
       .select('id')
       .eq('canonical_transaction_id', canonical[0]!.id);
     if (batchError) throw new Error(batchError.message);
+    const { data: revisions, error: revisionError } = await svc
+      .from('journal_revisions')
+      .select('replacement_batch_id, reason')
+      .in(
+        'original_batch_id',
+        batches.map((row) => row.id),
+      );
+    if (revisionError) throw new Error(revisionError.message);
+    expect(revisions).toHaveLength(1);
+    expect(revisions[0]).toMatchObject({ reason: 'sync supersession' });
+    expect(revisions[0]!.replacement_batch_id).not.toBeNull();
     const { data: accountPostings, error: postingError } = await svc
       .from('journal_postings')
       .select('amount_minor')
@@ -249,8 +325,23 @@ describe('Plaid sync worker (C5b)', () => {
     );
     expect(accountSum).toBe(-5218n);
 
+    const { data: allPostings, error: allPostingError } = await svc
+      .from('journal_postings')
+      .select('batch_id, amount_minor, currency')
+      .in(
+        'batch_id',
+        batches.map((row) => row.id),
+      );
+    if (allPostingError) throw new Error(allPostingError.message);
+    const sums = new Map<string, bigint>();
+    for (const posting of allPostings) {
+      expect(posting.currency).toBe('USD');
+      sums.set(posting.batch_id, (sums.get(posting.batch_id) ?? 0n) + BigInt(posting.amount_minor));
+    }
+    expect([...sums.values()].every((sum) => sum === 0n)).toBe(true);
+
     const beforeReplay = await economicCounts();
-    await recordNotification('second');
+    await recordNotification('replay');
     const replayOutcomes = await drainQueue('sync_events');
     expect(replayOutcomes.every((outcome) => !outcome.startsWith('dead_letter:'))).toBe(true);
     // The authoritative no-op proof: economic counts are unchanged.
@@ -259,6 +350,80 @@ describe('Plaid sync worker (C5b)', () => {
       p_queue: 'sync_events',
     });
     expect(Number(replayDepth)).toBe(0);
+  });
+
+  it('durably records a skipped CAD transaction against its raw page', async () => {
+    const svc = serviceClient();
+    await replacePages([
+      {
+        added: [
+          {
+            transaction_id: 'txn-cad-skip',
+            account_id: 'acct-checking',
+            amount: '44.10',
+            iso_currency_code: 'CAD',
+            date: '2026-07-06',
+            name: 'CAD data only',
+            pending: false,
+            pending_transaction_id: null,
+          },
+        ],
+        modified: [],
+        removed: [],
+        next_cursor: 'cad-skip-complete',
+        has_more: false,
+        request_id: 'req-cad-skip',
+      },
+    ]);
+
+    await recordNotification('cad-skip');
+    const outcomes = await drainQueue('sync_events');
+    expect(outcomes.every((outcome) => !outcome.startsWith('dead_letter:'))).toBe(true);
+
+    const { data: skips, error: skipError } = await svc
+      .from('ingestion_skips')
+      .select(
+        'id, household_id, connection_id, provider_transaction_id, currency, reason, raw_provider_events!inner(body)',
+      )
+      .eq('provider_transaction_id', 'txn-cad-skip');
+    if (skipError) throw new Error(skipError.message);
+    expect(skips).toEqual([
+      expect.objectContaining({
+        household_id: SEED.households.alpha,
+        connection_id: SEED.connections.plaidC5b.id,
+        provider_transaction_id: 'txn-cad-skip',
+        currency: 'CAD',
+        reason: 'non_usd',
+        raw_provider_events: expect.objectContaining({
+          body: expect.objectContaining({ request_id: 'req-cad-skip' }),
+        }),
+      }),
+    ]);
+    const { data: skipAudit, error: skipAuditError } = await svc
+      .from('audit_log')
+      .select('action, object_type, object_id, after')
+      .eq('object_id', skips[0]!.id)
+      .single();
+    if (skipAuditError) throw new Error(skipAuditError.message);
+    expect(skipAudit).toMatchObject({
+      action: 'ingest.transaction_skipped',
+      object_type: 'ingestion_skip',
+      object_id: skips[0]!.id,
+      after: { skipId: skips[0]!.id, reason: 'non_usd' },
+    });
+
+    const { count: normalizedCount, error: normalizedError } = await svc
+      .from('normalized_source_records')
+      .select('*', { count: 'exact', head: true })
+      .eq('provider_transaction_id', 'txn-cad-skip');
+    if (normalizedError) throw new Error(normalizedError.message);
+    expect(normalizedCount).toBe(0);
+    const { count: canonicalCount, error: canonicalError } = await svc
+      .from('canonical_transactions')
+      .select('*', { count: 'exact', head: true })
+      .eq('economic_event_key', `txn:plaid:${SEED.connections.plaidC5b.ref}:txn-cad-skip`);
+    if (canonicalError) throw new Error(canonicalError.message);
+    expect(canonicalCount).toBe(0);
   });
 
   it('C5c completes an uninjected disabled sync as a no-op without freshness or dead-letter', async () => {

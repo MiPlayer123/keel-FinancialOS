@@ -297,11 +297,11 @@ describe('webhook-provider verification (test 11)', () => {
   it('uses a safe-stale key on fetch outage within grace and token-time expiry', async () => {
     const kid = `stale-${crypto.randomUUID()}`;
     const body = webhookBody('SAFE_STALE');
-    const expiresAt = new Date(Date.now() + 1500).toISOString();
+    const tokenIat = Math.floor(Date.now() / 1000) - 60;
+    const expiresAt = new Date((tokenIat + 30) * 1000).toISOString();
     await seedPositiveKey(kid, defaultPublicJwk, expiresAt);
-    const jwt = await signBody(body, { kid });
+    const jwt = await signBody(body, { kid, iat: tokenIat });
     await seedFetchResponse(kid, 503, { error_code: 'INTERNAL_SERVER_ERROR' });
-    await new Promise((resolve) => setTimeout(resolve, 1800));
     expect((await postWebhook(body, jwt)).status).toBe(200);
   });
 

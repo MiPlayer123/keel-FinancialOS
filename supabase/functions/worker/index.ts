@@ -257,6 +257,7 @@ export const processSyncNotification = async (
   let owner: string | null = null;
   let attemptId: string | null = null;
   let syncResult: LiveSyncResult | null = null;
+  const rawPageIdByEventId = new Map<string, string>();
   try {
     const rawEventId = msg.message.refs['rawEventId'];
     let raw: { connection_id: string; body: unknown } | null = null;
@@ -308,10 +309,17 @@ export const processSyncNotification = async (
     });
     if (leaseError) return { ok: false, detail: `lease acquire failed: ${leaseError.message}` };
     if (!lease?.acquired) {
+      const reason = String(lease?.reason ?? 'unknown');
+      if (reason === 'disconnected') {
+        return { ok: true, detail: 'connection disconnected; notification dropped' };
+      }
+      if (reason === 'reauth_required' || reason === 'disconnecting') {
+        return { ok: false, detail: `sync lease unavailable: ${reason}` };
+      }
       return {
         ok: false,
         retry: true,
-        detail: `sync lease unavailable: ${lease?.reason ?? 'unknown'}`,
+        detail: `sync lease unavailable: ${reason}`,
       };
     }
 
@@ -334,7 +342,7 @@ export const processSyncNotification = async (
     if (continuation) {
       const { data: archived, error } = await admin
         .from('raw_provider_events')
-        .select('provider_event_id, body_text')
+        .select('id, provider_event_id, body_text')
         .eq('connection_id', connectionId)
         .like('provider_event_id', `${attemptId}:%`);
       if (error) return { ok: false, detail: `attempt restore failed: ${error.message}` };
@@ -350,19 +358,21 @@ export const processSyncNotification = async (
           finalNextCursor,
         );
         allEvents.push(...restored.events);
+        for (const event of restored.events) {
+          if (!rawPageIdByEventId.has(event.eventId)) {
+            rawPageIdByEventId.set(event.eventId, archivedPage.id);
+          }
+        }
         finalNextCursor = restored.nextCursor;
       }
     }
 
     const renewLiveLease = async (): Promise<void> => {
-      const { data: renewed, error: renewError } = await admin.rpc(
-        'keel_worker_renew_sync_lease',
-        {
-          p_connection_id: connectionId,
-          p_owner: owner,
-          p_ttl_seconds: SYNC_LEASE_TTL_S,
-        },
-      );
+      const { data: renewed, error: renewError } = await admin.rpc('keel_worker_renew_sync_lease', {
+        p_connection_id: connectionId,
+        p_owner: owner,
+        p_ttl_seconds: SYNC_LEASE_TTL_S,
+      });
       if (renewError || !renewed) throw new Error('sync lease lost while paging');
     };
     syncResult = await readPages(admin, connectionId, {
@@ -400,14 +410,20 @@ export const processSyncNotification = async (
           return { ok: false, retry: true, detail: 'sync lease lost while paging' };
         }
 
-        const { error: archiveError } = await admin.rpc('keel_worker_archive_page', {
-          p_attempt_id: attemptId,
-          p_owner: owner,
-          p_page_ordinal: pageOrdinal,
-          p_body_text: injected.bodyText,
-        });
-        if (archiveError) {
-          return { ok: false, detail: `page archive failed: ${archiveError.message}` };
+        const { data: archivedRawEventId, error: archiveError } = await admin.rpc(
+          'keel_worker_archive_page',
+          {
+            p_attempt_id: attemptId,
+            p_owner: owner,
+            p_page_ordinal: pageOrdinal,
+            p_body_text: injected.bodyText,
+          },
+        );
+        if (archiveError || !archivedRawEventId) {
+          return {
+            ok: false,
+            detail: `page archive failed: ${archiveError?.message ?? 'no raw page id'}`,
+          };
         }
 
         pageOffset += 1;
@@ -419,9 +435,22 @@ export const processSyncNotification = async (
             finalNextCursor,
           );
           allEvents.push(...parsed.events);
+          for (const event of parsed.events) {
+            if (!rawPageIdByEventId.has(event.eventId)) {
+              rawPageIdByEventId.set(event.eventId, archivedRawEventId);
+            }
+          }
           finalNextCursor = parsed.nextCursor;
           for (const skipped of parsed.skippedTransactions) {
-            console.warn('plaid sync transaction skipped', skipped);
+            const { error: skipError } = await admin.rpc('keel_worker_record_ingestion_skip', {
+              p_raw_event_id: archivedRawEventId,
+              p_provider_transaction_id: skipped.providerTransactionId,
+              p_currency: skipped.currency,
+              p_reason: 'non_usd',
+            });
+            if (skipError) {
+              return { ok: false, detail: `ingestion skip record failed: ${skipError.message}` };
+            }
           }
           pageOrdinal += 1;
           completedPageSet = !parsed.hasMore;
@@ -454,6 +483,7 @@ export const processSyncNotification = async (
           }
           attemptId = restartedAttempt;
           allEvents = [];
+          rawPageIdByEventId.clear();
           finalNextCursor = baseCursor;
           pageOrdinal = 0;
         }
@@ -491,13 +521,18 @@ export const processSyncNotification = async (
       let pageOrdinal = 0;
       for (const livePage of pages) {
         await renewLiveLease();
-        const { error: archiveError } = await admin.rpc('keel_worker_archive_page', {
-          p_attempt_id: attemptId,
-          p_owner: owner,
-          p_page_ordinal: pageOrdinal,
-          p_body_text: livePage.bodyText,
-        });
-        if (archiveError) throw new Error(`page archive failed: ${archiveError.message}`);
+        const { data: archivedRawEventId, error: archiveError } = await admin.rpc(
+          'keel_worker_archive_page',
+          {
+            p_attempt_id: attemptId,
+            p_owner: owner,
+            p_page_ordinal: pageOrdinal,
+            p_body_text: livePage.bodyText,
+          },
+        );
+        if (archiveError || !archivedRawEventId) {
+          throw new Error(`page archive failed: ${archiveError?.message ?? 'no raw page id'}`);
+        }
 
         const parsed = await parsePlaidSyncPage(
           livePage.bodyText,
@@ -505,9 +540,22 @@ export const processSyncNotification = async (
           finalNextCursor,
         );
         allEvents.push(...parsed.events);
+        for (const event of parsed.events) {
+          if (!rawPageIdByEventId.has(event.eventId)) {
+            rawPageIdByEventId.set(event.eventId, archivedRawEventId);
+          }
+        }
         finalNextCursor = parsed.nextCursor;
         for (const skipped of parsed.skippedTransactions) {
-          console.warn('plaid sync transaction skipped', skipped);
+          const { error: skipError } = await admin.rpc('keel_worker_record_ingestion_skip', {
+            p_raw_event_id: archivedRawEventId,
+            p_provider_transaction_id: skipped.providerTransactionId,
+            p_currency: skipped.currency,
+            p_reason: 'non_usd',
+          });
+          if (skipError) {
+            throw new Error(`ingestion skip record failed: ${skipError.message}`);
+          }
         }
         pageOrdinal += 1;
       }
@@ -577,6 +625,10 @@ export const processSyncNotification = async (
       if (!sourceEvent) {
         return sourceFailure(`source event missing for ${action.type} action`);
       }
+      const sourceRawEventId = rawPageIdByEventId.get(sourceEvent.eventId);
+      if (!sourceRawEventId) {
+        return sourceFailure(`raw page missing for ${action.type} action`);
+      }
 
       const providerTransactionId = eventProviderTransactionId(sourceEvent);
       const transaction =
@@ -601,6 +653,7 @@ export const processSyncNotification = async (
         {
           p_attempt_id: attemptId,
           p_owner: owner,
+          p_raw_event_id: sourceRawEventId,
           p_account_id: accountId,
           p_provider_transaction_id: providerTransactionId,
           p_kind: kind,
@@ -608,12 +661,11 @@ export const processSyncNotification = async (
           p_currency: transaction?.currency ?? null,
           p_effective_date: transaction?.date ?? null,
           p_description: transaction?.description ?? null,
+          p_pending: transaction?.pending ?? false,
         },
       );
       if (normalizedError || !normalizedId) {
-        return sourceFailure(
-          `normalized create failed: ${normalizedError?.message ?? 'no id'}`,
-        );
+        return sourceFailure(`normalized create failed: ${normalizedError?.message ?? 'no id'}`);
       }
       const economicKey =
         action.type === 'revise' ? action.next.economicKey : action.view.economicKey;
@@ -648,16 +700,16 @@ export const processSyncNotification = async (
     }
     return {
       ok: true,
-      detail: syncResult.status === 'partial'
-        ? 'live sync continuation enqueued'
-        : syncResult.status === 'noop'
-        ? 'sync noop'
+      detail:
+        syncResult.status === 'partial'
+          ? 'live sync continuation enqueued'
+          : syncResult.status === 'noop'
+            ? 'sync noop'
         : 'sync complete',
     };
   } catch (error) {
     const liveFailure = syncResult?.source !== 'injected';
-    const attemptAlreadyCompleted =
-      error instanceof SyncCompletionError && error.attemptCompleted;
+    const attemptAlreadyCompleted = error instanceof SyncCompletionError && error.attemptCompleted;
     if (liveFailure && !attemptAlreadyCompleted && attemptId !== null && owner !== null) {
       try {
         await abandonLiveSyncAttempt(admin, { attemptId, owner });
@@ -698,10 +750,11 @@ const processReapLinks = async (admin: AdminClient): Promise<Response> => {
       );
       removed = await plaid.itemRemove(claim.attemptId, { access_token: token });
     } catch (claimError) {
-      errorCode = claimError instanceof ProviderBudgetExhaustedError
-        ? 'provider_budget_exhausted'
-        : claimError instanceof PlaidClientError
-        ? (claimError.errorCode ?? 'provider_error')
+      errorCode =
+        claimError instanceof ProviderBudgetExhaustedError
+          ? 'provider_budget_exhausted'
+          : claimError instanceof PlaidClientError
+            ? (claimError.errorCode ?? 'provider_error')
         : 'credential_decrypt_failed';
     }
 

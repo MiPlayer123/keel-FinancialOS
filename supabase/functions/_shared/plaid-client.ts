@@ -4,6 +4,7 @@ type AdminClient = any;
 import {
   meterCall,
   PLAID_DAILY_CALL_LIMIT,
+  refundProviderCall,
   reserveProviderCall,
   type ProviderCallKind,
 } from './plaid-meter.ts';
@@ -101,17 +102,31 @@ export const createPlaidClient = (
   admin: AdminClient,
   config: PlaidClientConfig,
 ): PlaidClient => {
+  if (config.env !== 'sandbox') {
+    throw new Error('Plaid client requires sandbox environment');
+  }
+
   const request = async (
     scopeKey: string,
     kind: ProviderCallKind,
     path: string,
     requestBody: Record<string, unknown>,
   ): Promise<Record<string, unknown>> => {
-    const { data: injected, error: injectionError } = await admin.rpc(
+    const fetchDenied = Deno.env.get('KEEL_PLAID_FETCH_DENY') === 'true';
+    let { data: injected, error: injectionError } = await admin.rpc(
       'keel_consume_plaid_test_response',
       { p_scope_key: scopeKey, p_kind: kind },
     );
     if (injectionError) throw new Error('Plaid test response unavailable');
+    if (typeof injected !== 'string' && fetchDenied) {
+      const recheck = await admin.rpc('keel_consume_plaid_test_response', {
+        p_scope_key: scopeKey,
+        p_kind: kind,
+      });
+      injected = recheck.data;
+      injectionError = recheck.error;
+      if (injectionError) throw new Error('Plaid test response unavailable');
+    }
 
     if (typeof injected === 'string') {
       const start = Date.now();
@@ -173,11 +188,15 @@ export const createPlaidClient = (
       });
       throw new ProviderBudgetExhaustedError();
     }
+    if (fetchDenied) {
+      await refundProviderCall(admin, 'plaid');
+      throw new Error('Plaid fetch disabled in integration');
+    }
 
     const start = Date.now();
     try {
       const response = await (config.fetchImpl ?? fetch)(
-        `https://${config.env}.plaid.com${path}`,
+        `https://sandbox.plaid.com${path}`,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },

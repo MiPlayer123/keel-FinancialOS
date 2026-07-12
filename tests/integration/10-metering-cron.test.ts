@@ -386,12 +386,15 @@ describe('C6 metering + breakers + pg_cron', () => {
         .single();
       expect(counter?.count).toBe(DAILY_LIMIT);
     } finally {
-      const restore = original
-        ? await svc.from('webhook_rejection_counters').update({ count: original.count })
-          .eq('provider', 'plaid').eq('hour_bucket', bucket)
-        : await svc.from('webhook_rejection_counters').delete()
+      if (original) {
+        const restore = await svc.from('webhook_rejection_counters')
+          .update({ count: original.count })
           .eq('provider', 'plaid').eq('hour_bucket', bucket);
-      if (restore.error) throw new Error(restore.error.message);
+        if (restore.error) throw new Error(restore.error.message);
+      } else {
+        dbCommand(`delete from public.webhook_rejection_counters
+          where provider = 'plaid' and hour_bucket = ${sqlLiteral(bucket)}::timestamptz`);
+      }
     }
   });
 

@@ -17,6 +17,18 @@ const assertEquals = (actual: unknown, expected: unknown): void => {
 };
 
 Deno.test('C6 Plaid client meters and reserves at the network boundary', async (test) => {
+  await test.step('construction rejects every non-sandbox Plaid environment', () => {
+    for (const env of ['development', 'production', '', 'SANDBOX']) {
+      try {
+        createPlaidClient({ rpc: () => Promise.resolve({ data: null, error: null }) }, { env });
+        throw new Error('expected sandbox-only construction failure');
+      } catch (error) {
+        assert(error instanceof Error);
+        assertEquals(error.message, 'Plaid client requires sandbox environment');
+      }
+    }
+  });
+
   await test.step('injected provider calls meter but never reserve', async () => {
     const names: string[] = [];
     const admin = {
@@ -33,6 +45,92 @@ Deno.test('C6 Plaid client meters and reserves at the network boundary', async (
     assertEquals(names, [
       'keel_consume_plaid_test_response',
       'keel_meter_provider_call',
+    ]);
+  });
+
+  await test.step('integration fetch-deny rechecks injection visibility without networking', async () => {
+    const priorDeny = Deno.env.get('KEEL_PLAID_FETCH_DENY');
+    let consumeCalls = 0;
+    let fetchCalls = 0;
+    const admin = {
+      rpc: (name: string) => {
+        if (name === 'keel_consume_plaid_test_response') {
+          consumeCalls += 1;
+          return Promise.resolve({
+            data: consumeCalls === 1 ? null : '{"request_id":"visible_second_read"}',
+            error: null,
+          });
+        }
+        return Promise.resolve({ data: null, error: null });
+      },
+    };
+    Deno.env.set('KEEL_PLAID_FETCH_DENY', 'true');
+    try {
+      const client = createPlaidClient(admin, {
+        env: 'sandbox',
+        clientId: 'must-not-fetch',
+        secret: 'must-not-fetch',
+        fetchImpl: () => {
+          fetchCalls += 1;
+          return Promise.resolve(new Response('{}', { status: 200 }));
+        },
+      });
+      await client.linkTokenCreate(crypto.randomUUID(), {});
+    } finally {
+      if (priorDeny === undefined) Deno.env.delete('KEEL_PLAID_FETCH_DENY');
+      else Deno.env.set('KEEL_PLAID_FETCH_DENY', priorDeny);
+    }
+    assertEquals(consumeCalls, 2);
+    assertEquals(fetchCalls, 0);
+  });
+
+  await test.step('integration fetch-deny refunds a reservation and fails closed before networking', async () => {
+    const priorDeny = Deno.env.get('KEEL_PLAID_FETCH_DENY');
+    const names: string[] = [];
+    let fetchCalls = 0;
+    const admin = {
+      rpc: (name: string) => {
+        names.push(name);
+        if (name === 'keel_consume_plaid_test_response') {
+          return Promise.resolve({ data: null, error: null });
+        }
+        if (name === 'keel_provider_budget_reserve') {
+          return Promise.resolve({ data: true, error: null });
+        }
+        if (name === 'keel_provider_budget_refund') {
+          return Promise.resolve({ data: null, error: null });
+        }
+        throw new Error(`unexpected RPC ${name}`);
+      },
+    };
+    Deno.env.set('KEEL_PLAID_FETCH_DENY', 'true');
+    try {
+      const client = createPlaidClient(admin, {
+        env: 'sandbox',
+        clientId: 'must-not-fetch',
+        secret: 'must-not-fetch',
+        fetchImpl: () => {
+          fetchCalls += 1;
+          return Promise.resolve(new Response('{}', { status: 200 }));
+        },
+      });
+      try {
+        await client.linkTokenCreate(crypto.randomUUID(), {});
+        throw new Error('expected integration fetch denial');
+      } catch (error) {
+        assert(error instanceof Error);
+        assertEquals(error.message, 'Plaid fetch disabled in integration');
+      }
+    } finally {
+      if (priorDeny === undefined) Deno.env.delete('KEEL_PLAID_FETCH_DENY');
+      else Deno.env.set('KEEL_PLAID_FETCH_DENY', priorDeny);
+    }
+    assertEquals(fetchCalls, 0);
+    assertEquals(names, [
+      'keel_consume_plaid_test_response',
+      'keel_consume_plaid_test_response',
+      'keel_provider_budget_reserve',
+      'keel_provider_budget_refund',
     ]);
   });
 
@@ -63,6 +161,7 @@ Deno.test('C6 Plaid client meters and reserves at the network boundary', async (
   await test.step('live provider calls reserve immediately before fetch and meter success', async () => {
     const names: string[] = [];
     let fetchCalls = 0;
+    let fetchUrl = '';
     const admin = {
       rpc: (name: string) => {
         names.push(name);
@@ -80,13 +179,15 @@ Deno.test('C6 Plaid client meters and reserves at the network boundary', async (
       clientId: 'client',
       secret: 'secret',
       dailyLimit: 7,
-      fetchImpl: () => {
+      fetchImpl: (input) => {
         fetchCalls += 1;
+        fetchUrl = String(input);
         return Promise.resolve(new Response('{"request_id":"live_C6"}', { status: 200 }));
       },
     });
     await client.linkTokenCreate(crypto.randomUUID(), {});
     assertEquals(fetchCalls, 1);
+    assertEquals(fetchUrl, 'https://sandbox.plaid.com/link/token/create');
     assertEquals(names, [
       'keel_consume_plaid_test_response',
       'keel_provider_budget_reserve',

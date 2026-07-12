@@ -27,6 +27,17 @@ const syncMessage = (economicEventKey: string) => ({
   },
 });
 
+const leaseRefusalAdmin = (reason: string) => ({
+  from: (table: string) => queryFor(table),
+  rpc: async (name: string) => {
+    if (name === 'keel_worker_bump_generation') return { data: null, error: null };
+    if (name === 'keel_worker_acquire_sync_lease') {
+      return { data: { acquired: false, reason }, error: null };
+    }
+    throw new Error(`unexpected RPC ${name}`);
+  },
+});
+
 describe('worker queue ordering', () => {
   it('dispatches a claimed batch in monotonic pgmq message order', () => {
     const message = (msgId: number) => ({ ...syncMessage(`message-${msgId}`), msg_id: msgId });
@@ -41,10 +52,11 @@ const pageBody = (
   nextCursor: string,
   hasMore: boolean,
   transactions: Array<{ id: string; amount: string }> = [],
-): string => JSON.stringify({
-  added: transactions.map((transaction) => ({
-    transaction_id: transaction.id,
-    account_id: 'account-external',
+): string =>
+  JSON.stringify({
+    added: transactions.map((transaction) => ({
+      transaction_id: transaction.id,
+      account_id: 'account-external',
     amount: transaction.amount,
     iso_currency_code: 'USD',
     date: '2026-07-11',
@@ -90,6 +102,30 @@ const queryFor = (
 };
 
 describe('C5c worker durable sync orchestration', () => {
+  it('archives disconnected notifications and bounds other terminal lease refusals', async () => {
+    const readPages = async (): Promise<LiveSyncResult> => {
+      throw new Error('lease refusal must not read Plaid pages');
+    };
+    assertEquals(
+      await processSyncNotification(
+        leaseRefusalAdmin('disconnected'),
+        syncMessage('notification-disconnected'),
+        readPages,
+      ),
+      { ok: true, detail: 'connection disconnected; notification dropped' },
+    );
+    for (const reason of ['reauth_required', 'disconnecting']) {
+      assertEquals(
+        await processSyncNotification(
+          leaseRefusalAdmin(reason),
+          syncMessage(`notification-${reason}`),
+          readPages,
+        ),
+        { ok: false, detail: `sync lease unavailable: ${reason}` },
+      );
+    }
+  });
+
   it('partial then terminal pass commits health only at terminal and renews during promotion', async () => {
     const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
     const enqueued: Array<Record<string, unknown>> = [];
@@ -100,10 +136,11 @@ describe('C5c worker durable sync orchestration', () => {
     let normalized = 0;
     let lastSuccessfulSyncAt: string | null = null;
     const admin = {
-      from: (table: string) => queryFor(table, () => ({
-        committed: committedGeneration,
-        desired: desiredGeneration,
-      })),
+      from: (table: string) =>
+        queryFor(table, () => ({
+          committed: committedGeneration,
+          desired: desiredGeneration,
+        })),
       rpc: async (name: string, args: Record<string, unknown>) => {
         rpcCalls.push({ name, args });
         if (name === 'keel_worker_bump_generation') {
@@ -111,14 +148,19 @@ describe('C5c worker durable sync orchestration', () => {
           return { data: null, error: null };
         }
         if (name === 'keel_worker_acquire_sync_lease') {
-          return { data: { acquired: true, baseCursor: committedGeneration === 0 ? '' : 'cursor-1' }, error: null };
+          return {
+            data: { acquired: true, baseCursor: committedGeneration === 0 ? '' : 'cursor-1' },
+            error: null,
+          };
         }
         if (name === 'keel_worker_open_attempt') {
           attempt += 1;
           return { data: `attempt-${attempt}`, error: null };
         }
         if (name === 'keel_worker_renew_sync_lease') return { data: true, error: null };
-        if (name === 'keel_worker_archive_page') return { data: crypto.randomUUID(), error: null };
+        if (name === 'keel_worker_archive_page') {
+          return { data: `00000000-0000-4000-8000-00000000000${attempt}`, error: null };
+        }
         if (name === 'keel_worker_lookup_state') return { data: [], error: null };
         if (name === 'keel_worker_create_normalized') {
           normalized += 1;
@@ -144,13 +186,15 @@ describe('C5c worker durable sync orchestration', () => {
       {
         source: 'live',
         status: 'partial',
-        pages: [{
-          pageIndex: 0,
-          bodyText: pageBody('cursor-1', true, [
-            { id: 'transaction-1', amount: '10.01' },
-            { id: 'transaction-2', amount: '20.02' },
-          ]),
-        }],
+        pages: [
+          {
+            pageIndex: 0,
+            bodyText: pageBody('cursor-1', true, [
+              { id: 'transaction-1', amount: '10.01' },
+              { id: 'transaction-2', amount: '20.02' },
+            ]),
+          },
+        ],
         hasMore: true,
         nextCursor: 'cursor-1',
       },
@@ -168,22 +212,28 @@ describe('C5c worker durable sync orchestration', () => {
       _options: LiveSyncOptions,
     ): Promise<LiveSyncResult> => results.shift()!;
 
-    const partial = await processSyncNotification(admin, syncMessage('notification-first'), readPages);
+    const partial = await processSyncNotification(
+      admin,
+      syncMessage('notification-first'),
+      readPages,
+    );
     assertEquals(partial, { ok: true, detail: 'live sync continuation enqueued' });
     assertEquals(completions[0]?.['p_fully_synced'], false);
     assertEquals(lastSuccessfulSyncAt, null);
-    assertEquals(enqueued, [{
-      queue_name: 'sync_events',
-      message: {
-        jobType: 'sync_notification',
-        economicEventKey: 'plaid:sync-continuation:attempt-1',
-        refs: { connectionId: 'connection-live' },
+    assertEquals(enqueued, [
+      {
+        queue_name: 'sync_events',
+        message: {
+          jobType: 'sync_notification',
+          economicEventKey: 'plaid:sync-continuation:attempt-1',
+          refs: { connectionId: 'connection-live' },
+        },
       },
-    }]);
+    ]);
 
     const promotionRpcs = rpcCalls.map((call) => call.name);
     const createIndexes = promotionRpcs
-      .map((name, index) => name === 'keel_worker_create_normalized' ? index : -1)
+      .map((name, index) => (name === 'keel_worker_create_normalized' ? index : -1))
       .filter((index) => index >= 0);
     assertEquals(createIndexes.length, 2);
     for (const createIndex of createIndexes) {
@@ -196,6 +246,17 @@ describe('C5c worker durable sync orchestration', () => {
     for (const renewal of rpcCalls.filter((call) => call.name === 'keel_worker_renew_sync_lease')) {
       assertEquals(renewal.args['p_owner'], leaseOwner, 'lease renewal must remain owner-fenced');
     }
+    const normalizedCalls = rpcCalls.filter(
+      (call) => call.name === 'keel_worker_create_normalized',
+    );
+    assertEquals(
+      normalizedCalls.map((call) => call.args['p_pending']),
+      [false, false],
+    );
+    assertEquals(
+      normalizedCalls.map((call) => call.args['p_raw_event_id']),
+      ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000001'],
+    );
 
     const terminal = await processSyncNotification(
       admin,
@@ -239,10 +300,102 @@ describe('C5c worker durable sync orchestration', () => {
       syncMessage('notification-disabled'),
       readPages,
     );
-    assertEquals(outcome, { ok: false, retry: true, detail: 'state lookup failed: state unavailable' });
-    assertEquals(rpcCalls.filter((call) => call.name === 'keel_worker_abandon_and_release'), [{
-      name: 'keel_worker_abandon_and_release',
-      args: { p_attempt_id: 'attempt-disabled', p_owner: rpcCalls[1]?.args['p_owner'] },
-    }]);
+    assertEquals(outcome, {
+      ok: false,
+      retry: true,
+      detail: 'state lookup failed: state unavailable',
+    });
+    assertEquals(
+      rpcCalls.filter((call) => call.name === 'keel_worker_abandon_and_release'),
+      [
+        {
+          name: 'keel_worker_abandon_and_release',
+          args: { p_attempt_id: 'attempt-disabled', p_owner: rpcCalls[1]?.args['p_owner'] },
+        },
+      ],
+    );
+  });
+
+  it('durably records a CAD skip against its exact raw page without normalization', async () => {
+    const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    let desiredGeneration = 0;
+    const rawPageId = '00000000-0000-4000-8000-00000000cad1';
+    const admin = {
+      from: (table: string) =>
+        queryFor(table, () => ({
+          committed: 0,
+          desired: desiredGeneration,
+        })),
+      rpc: async (name: string, args: Record<string, unknown>) => {
+        rpcCalls.push({ name, args });
+        if (name === 'keel_worker_bump_generation') {
+          desiredGeneration = 1;
+          return { data: null, error: null };
+        }
+        if (name === 'keel_worker_acquire_sync_lease') {
+          return { data: { acquired: true, baseCursor: '' }, error: null };
+        }
+        if (name === 'keel_worker_open_attempt') return { data: 'attempt-cad', error: null };
+        if (name === 'keel_worker_renew_sync_lease') return { data: true, error: null };
+        if (name === 'keel_worker_archive_page') return { data: rawPageId, error: null };
+        if (name === 'keel_worker_record_ingestion_skip') return { data: null, error: null };
+        if (name === 'keel_worker_lookup_state') return { data: [], error: null };
+        if (name === 'keel_worker_complete_attempt') return { data: {}, error: null };
+        throw new Error(`unexpected RPC ${name}`);
+      },
+    };
+    const readPages = async (): Promise<LiveSyncResult> => ({
+      source: 'live',
+      status: 'terminal',
+      pages: [
+        {
+          pageIndex: 0,
+          bodyText: JSON.stringify({
+            added: [
+              {
+                transaction_id: 'transaction-cad',
+                account_id: 'account-external',
+                amount: '12.34',
+                iso_currency_code: 'CAD',
+                date: '2026-07-11',
+                name: 'Canadian purchase',
+                pending: false,
+                pending_transaction_id: null,
+              },
+            ],
+            modified: [],
+            removed: [],
+            next_cursor: 'cursor-cad',
+            has_more: false,
+            request_id: 'request-cad',
+          }),
+        },
+      ],
+      hasMore: false,
+      nextCursor: 'cursor-cad',
+    });
+
+    assertEquals(await processSyncNotification(admin, syncMessage('notification-cad'), readPages), {
+      ok: true,
+      detail: 'sync complete',
+    });
+    assertEquals(
+      rpcCalls.filter((call) => call.name === 'keel_worker_record_ingestion_skip'),
+      [
+        {
+          name: 'keel_worker_record_ingestion_skip',
+          args: {
+            p_raw_event_id: rawPageId,
+            p_provider_transaction_id: 'transaction-cad',
+            p_currency: 'CAD',
+            p_reason: 'non_usd',
+          },
+        },
+      ],
+    );
+    assertEquals(
+      rpcCalls.filter((call) => call.name === 'keel_worker_create_normalized').length,
+      0,
+    );
   });
 });

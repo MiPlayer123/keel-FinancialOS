@@ -2,11 +2,12 @@
 
 > Context-recovery file. Picking this up cold: read `CLAUDE.md`, then `PLAN.md` (incl. §3.5/§3.6 audit amendments), then this file, then the last ~60 lines of `NOTES.md`. The "Resume" section is the exact next action.
 
-**Last updated:** 2026-07-11 (C3 @6cb43ec + C4 @368a420 COMMITTED; C5c + C6 built GREEN, uncommitted)
-**Current stage:** Stage 1C server-only Plaid read path is **9/9 build steps GREEN**. C1, C2a, C2b, C3, C4, C5a, and C5b are integrated; C5c and C6 remain uncommitted in the worktree per builder instruction.
+**Last updated:** 2026-07-11 (Stage-1C exit hardening FIX 1–7 GREEN, uncommitted)
+**Current stage:** Stage 1C server-only Plaid read path is **9/9 build steps GREEN + 7/7 exit blockers GREEN**. C1–C6, C5c, the durable pending/provenance spine fixes, terminal-notification liveness, sandbox pin, durable USD rejection, same-command saga ownership, and deterministic safe-stale evidence are integrated in the uncommitted worktree.
 **C5c (GREEN, uncommitted — live /transactions/sync):** tagged injected/live/disabled dispatcher; Sandbox-only opt-in live fetch; encrypted credential decrypt with `'plaid'` AAD and `finally` clear; raw-byte pagination; per-request and promotion-loop lease renewal; bounded mutation restart; stalled-cursor rejection; partial completion; owner-fenced cleanup; fresh-attempt continuation; forced-off integration env plus outbound deny/spy. C6 now meters injected/live sync calls and reserves only at the live network boundary.
 **C6 (GREEN, uncommitted — metering/breakers/cron):** typed Law-12-safe usage events; atomic daily reserve/refund; atomic cadence claim with lease/generation exclusions; counter-based quarantine cap; guarded/idempotent pure-SQL `keel-active-syncs` pg_cron job; all live Plaid boundaries metered and budgeted; `/scheduled/tick` active. Gate: 218 Vitest + 12 Deno/47 steps, 145 pgTAP, 78 integration, 0 Plaid sync fetches in itest. `config.toml` is untouched.
-**Next action:** stage-exit dual audit of C5c+C6 and deferred C5b/C3/C4 hardening, then human-approved integration/commit and tag `stage-1c`. Deploy-time ⚑: real linked-Sandbox pull plus vaulted-secret HTTP schedules for `/worker/drain`, `/worker/reap-links`, and optional `/scheduled/tick`; Production remains human-gated.
+**Exit hardening (GREEN, uncommitted):** one forward migration replaces ambiguous legacy procedure signatures, preserves C3/C5c fences, carries real pending state + exact raw page lineage, and adds immutable tenant-derived ingestion skips. Worker/API/client/test changes close C3 #4, Law 12, C3 #2, and the safe-stale race. Gate: 220 Vitest + 12 Deno suites/54 steps, 175 pgTAP, 81 integration, 0 Plaid sync fetches in itest.
+**Next action:** review the Stage-1C exit-hardening diff, then human-approved commit and tag `stage-1c`. Deploy-time ⚑: real linked-Sandbox pull plus vaulted-secret HTTP schedules for `/worker/drain`, `/worker/reap-links`, and optional `/scheduled/tick`; Production remains human-gated.
 **Path decision:** Path A (personal instrument) working default — NOTES D-001.
 
 ## Environment facts

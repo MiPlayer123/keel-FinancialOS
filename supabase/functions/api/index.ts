@@ -225,12 +225,6 @@ export default {
         accessToken = exchange.access_token;
         itemId = exchange.item_id;
       } catch (error) {
-        await ctx.supabaseAdmin.rpc('keel_fail_link_attempt', {
-          p_attempt_id: begin.attemptId,
-          p_household_id: householdId.data,
-          p_reason: 'provider_exchange_failed',
-          p_removed: false,
-        });
         return error instanceof ProviderBudgetExhaustedError
           ? providerBudgetFailure()
           : error instanceof PlaidClientError ? providerFailure(error) : internalFailure();
@@ -248,18 +242,11 @@ export default {
           version,
         );
       } catch {
-        let removed = false;
         try {
-          removed = await plaid.itemRemove(begin.attemptId, { access_token: accessToken });
+          await plaid.itemRemove(begin.attemptId, { access_token: accessToken });
         } catch {
-          removed = false;
+          // Best effort only: this request never persisted ownership of the attempt.
         }
-        await ctx.supabaseAdmin.rpc('keel_fail_link_attempt', {
-          p_attempt_id: begin.attemptId,
-          p_household_id: householdId.data,
-          p_reason: 'credential_subsystem_unavailable',
-          p_removed: removed,
-        });
         return credentialFailure();
       }
 
@@ -278,18 +265,28 @@ export default {
         },
       );
       if (exchangePersistError) {
-        let removed = false;
         try {
-          removed = await plaid.itemRemove(begin.attemptId, { access_token: accessToken });
+          await plaid.itemRemove(begin.attemptId, { access_token: accessToken });
         } catch {
-          removed = false;
+          // Best effort only: do not mutate the shared attempt on compensation failure.
         }
-        await ctx.supabaseAdmin.rpc('keel_fail_link_attempt', {
-          p_attempt_id: begin.attemptId,
-          p_household_id: householdId.data,
-          p_reason: 'exchange_persist_failed',
-          p_removed: removed,
-        });
+        const { data: persistedAttempt } = await ctx.supabaseAdmin
+          .from('link_attempts')
+          .select('state, plaid_item_id')
+          .eq('id', begin.attemptId)
+          .single();
+        if (
+          exchangePersistError.code === 'P0009' &&
+          exchangePersistError.message.includes('link attempt is not initiated') &&
+          (persistedAttempt?.state === 'exchanged' || persistedAttempt?.state === 'succeeded') &&
+          persistedAttempt.plaid_item_id !== itemId
+        ) {
+          return json(409, {
+            code: 'link_attempt_conflict',
+            message: 'Another request completed this link exchange.',
+            details: {},
+          });
+        }
         return internalFailure();
       }
 
@@ -305,6 +302,7 @@ export default {
           p_household_id: householdId.data,
           p_reason: 'accounts_get_failed',
           p_removed: false,
+          p_plaid_item_id: itemId,
         });
         return error instanceof ProviderBudgetExhaustedError
           ? providerBudgetFailure()
@@ -323,6 +321,7 @@ export default {
           p_household_id: householdId.data,
           p_reason: 'no_usd_accounts',
           p_removed: removed,
+          p_plaid_item_id: itemId,
         });
         return json(422, {
           code: 'no_supported_accounts',
@@ -354,6 +353,7 @@ export default {
           p_household_id: householdId.data,
           p_reason: 'finalize_failed',
           p_removed: false,
+          p_plaid_item_id: itemId,
         });
         return internalFailure();
       }
