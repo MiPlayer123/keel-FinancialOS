@@ -43,7 +43,8 @@ function HomeBody() {
     };
   }, [householdId]);
 
-  const loading = !ready || balances.loading || accounts === null;
+  const waitingForAccounts = householdId !== null && accounts === null;
+  const loading = !ready || balances.loading || waitingForAccounts;
 
   if (loading) {
     return (
@@ -54,8 +55,20 @@ function HomeBody() {
     );
   }
 
+  if (!householdId) {
+    return (
+      <EmptyState
+        icon={<Wallet className="size-6" />}
+        title="No household yet"
+        description="Once your account is set up with a household, balances and accounts appear here."
+      />
+    );
+  }
+
+  const accountList = accounts ?? [];
+
   const balanceByLedger = new Map(balances.rows.map((r) => [r.ledgerAccountId, r.balanceMinor]));
-  const netMinor = accounts.reduce((acc, a) => {
+  const netMinor = accountList.reduce((acc, a) => {
     const b = balanceByLedger.get(a.ledgerAccountId) ?? '0';
     return acc + BigInt(b);
   }, 0n);
@@ -77,7 +90,7 @@ function HomeBody() {
 
       <section className="space-y-3">
         <h2 className="text-sm font-medium text-muted-foreground">Accounts</h2>
-        {accounts.length === 0 ? (
+        {accountList.length === 0 ? (
           <EmptyState
             icon={<Wallet className="size-6" />}
             title="No accounts yet"
@@ -85,7 +98,7 @@ function HomeBody() {
           />
         ) : (
           <div className="overflow-hidden rounded-lg border border-border">
-            {accounts.map((a, i) => (
+            {accountList.map((a, i) => (
               <div
                 key={a.id}
                 className={`flex items-center justify-between px-4 py-3 ${

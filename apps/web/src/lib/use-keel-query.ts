@@ -20,7 +20,10 @@ export function useKeelQuery<Row>(query: string, householdId: string | null) {
   });
 
   const run = useCallback(async () => {
-    if (!householdId) return;
+    if (!householdId) {
+      setState({ rows: [], asOf: null, loading: false, error: null });
+      return;
+    }
     setState((s) => ({ ...s, loading: true, error: null }));
     try {
       const res: QueryResult<Row> = await keelQuery<Row>(query, householdId);

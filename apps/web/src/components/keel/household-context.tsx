@@ -24,6 +24,10 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
+    // Never let a slow/unavailable backend hang the shell on a spinner.
+    const guard = setTimeout(() => {
+      if (active) setReady(true);
+    }, 8000);
     void (async () => {
       const { data } = await getSupabaseBrowserClient().auth.getSession();
       const uid = data.session?.user.id ?? null;
@@ -44,6 +48,7 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
     })();
     return () => {
       active = false;
+      clearTimeout(guard);
     };
   }, []);
 
