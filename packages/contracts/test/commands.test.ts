@@ -85,6 +85,28 @@ describe('command envelope', () => {
     }
   });
 
+  it('parses typed paycheck create/reverse/restore payloads and rejects float or negative money', () => {
+    const create = {
+      employerName: 'Keel Labs', payDate: '2026-07-12', grossMinor: '100000',
+      netMinor: '70000', currency: 'USD',
+      components: [
+        { key: 'salary', kind: 'gross_salary', amountMinor: '100000' },
+        { key: 'deposit', kind: 'direct_deposit', amountMinor: '70000' },
+      ],
+      matches: [{ transactionId: uuid, componentKey: 'deposit', amountMinor: '70000' }],
+      source: { kind: 'paystub', ref: 'stub-1', contentHash: 'a'.repeat(64) },
+    };
+    expect(parseCommandPayload('paychecks.create', create)).toMatchObject(create);
+    expect(parseCommandPayload('paychecks.reverse', { paycheckId: uuid, reason: 'mistake' }))
+      .toMatchObject({ paycheckId: uuid });
+    expect(parseCommandPayload('paychecks.restore', { paycheckId: uuid, reason: 'reinstated' }))
+      .toMatchObject({ paycheckId: uuid });
+    expect(() => parseCommandPayload('paychecks.create', { ...create, grossMinor: 1000.5 })).toThrow();
+    expect(() => parseCommandPayload('paychecks.create', {
+      ...create, components: [{ key: 'salary', kind: 'gross_salary', amountMinor: '-1' }],
+    })).toThrow();
+  });
+
   it('rejects agent actors without onBehalfOf (Law 2: attribution)', () => {
     expect(
       CommandEnvelopeSchema.safeParse({

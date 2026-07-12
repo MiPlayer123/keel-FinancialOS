@@ -43,6 +43,15 @@ insert into expected_export_tables(table_name, allowed_columns, omitted_columns)
   ('recurring_candidate_versions', array['id','household_id','series_id','detector_run_id','candidate_hash','input_fingerprint','detector_version','confidence_version','normalizer_version','as_of','score_bps','evidence','candidate','created_at'], '{}'),
   ('recurring_occurrences', array['household_id','id','series_id','candidate_version_id','occurrence_key','expected_date','expected_amount_minor','currency','amount_kind','status','matched_txn_id','score_bps','evidence','input_fingerprint','detector_version','confidence_version','as_of','created_at'], '{}'),
   ('recurring_status_events', array['household_id','id','series_id','candidate_version_id','transition','effective_date','actor','command_id','created_at'], '{}');
+insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
+  ('employers',array['id','household_id','name','created_at'],'{}'),
+  ('payroll_provider_imports',array['id','household_id','provider','source_ref','content_hash','imported_at'],'{}'),
+  ('paychecks',array['id','household_id','employer_id','pay_date','gross_minor','net_minor','currency','status','formula_version','created_by','created_at','updated_at'],'{}'),
+  ('paycheck_components',array['household_id','id','paycheck_id','component_key','kind','amount_minor','created_at'],'{}'),
+  ('paycheck_templates',array['household_id','id','employer_id','template_version','component_blueprint','formula_version','created_at'],'{}'),
+  ('paycheck_sources',array['household_id','id','paycheck_id','source_kind','source_ref','content_hash','payroll_provider_import_id','created_at'],'{}'),
+  ('paycheck_transaction_matches',array['household_id','id','paycheck_id','component_id','transaction_id','allocated_minor','created_at'],'{}'),
+  ('paycheck_status_events',array['household_id','id','paycheck_id','transition','reason','actor','command_id','created_at'],'{}');
 
 create temporary table excluded_export_tables(table_name text primary key) on commit drop;
 insert into excluded_export_tables(table_name) values
@@ -61,8 +70,8 @@ select ok(
 select is(
   (select count(*)::int from expected_export_tables
     where has_table_privilege('keel_export', format('public.%I', table_name), 'SELECT')),
-  33,
-  'keel_export can SELECT all 33 included tables'
+  41,
+  'keel_export can SELECT all 41 included tables'
 );
 select is(
   (select count(*)::int
@@ -193,8 +202,8 @@ reset role;
 select is(
   (select count(*)::int from jsonb_object_keys(
     public.keel_export_household('00000000-0000-4000-8000-00000000a001')->'tables')),
-  33,
-  'snapshot contains all 33 included table arrays'
+  41,
+  'snapshot contains all 41 included table arrays'
 );
 select is(
   (select count(*)::int from excluded_export_tables e

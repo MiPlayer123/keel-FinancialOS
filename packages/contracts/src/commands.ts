@@ -10,6 +10,7 @@ import {
   LedgerAccountIdSchema,
   RawProviderEventIdSchema,
   RecurringSeriesIdSchema,
+  PaycheckIdSchema,
   UserIdSchema,
 } from './ids.js';
 import { CurrencyCodeSchema, MinorUnitsStringSchema } from './money.js';
@@ -117,6 +118,37 @@ export const RecurringResumePayloadSchema = RecurringTransitionPayloadSchema.ext
 export const RecurringCancelPayloadSchema = RecurringTransitionPayloadSchema;
 export const RecurringRejectPayloadSchema = RecurringTransitionPayloadSchema;
 
+const PaycheckComponentSchema = z.object({
+  key: z.string().min(1).max(100),
+  kind: z.enum([
+    'gross_salary', 'bonus', 'commission', 'reimbursement',
+    'federal_withholding', 'state_withholding', 'local_withholding', 'fica_withholding',
+    'benefit', 'retirement_401k', 'employer_match', 'hsa', 'fsa', 'espp',
+    'rsu_withholding', 'garnishment', 'direct_deposit',
+  ]),
+  amountMinor: MinorUnitsStringSchema.regex(/^\d+$/u, 'paycheck components are non-negative'),
+}).strict();
+const PaycheckMatchSchema = z.object({
+  transactionId: CanonicalTransactionIdSchema,
+  componentKey: z.string().min(1).max(100),
+  amountMinor: MinorUnitsStringSchema.regex(/^\d+$/u, 'match allocations are non-negative'),
+}).strict();
+export const CreatePaycheckPayloadSchema = z.object({
+  employerName: z.string().min(1).max(200), payDate: IsoDateSchema,
+  grossMinor: MinorUnitsStringSchema.regex(/^\d+$/u, 'gross is non-negative'),
+  netMinor: MinorUnitsStringSchema.regex(/^\d+$/u, 'net is non-negative'),
+  currency: CurrencyCodeSchema,
+  components: z.array(PaycheckComponentSchema).min(2).max(100),
+  matches: z.array(PaycheckMatchSchema).min(1).max(100),
+  source: z.object({
+    kind: z.enum(['manual', 'paystub', 'payroll_provider']),
+    ref: z.string().min(1).max(500), contentHash: z.string().regex(/^[a-f0-9]{64}$/u),
+  }).strict(),
+}).strict();
+const PaycheckStatusPayloadSchema = z.object({
+  paycheckId: PaycheckIdSchema, reason: z.string().min(1).max(500),
+}).strict();
+
 export const COMMAND_PAYLOAD_SCHEMAS = {
   'accounts.create': CreateAccountPayloadSchema,
   'ingest.record_raw_event': RecordRawEventPayloadSchema,
@@ -128,6 +160,9 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'recurring.resume': RecurringResumePayloadSchema,
   'recurring.cancel': RecurringCancelPayloadSchema,
   'recurring.reject': RecurringRejectPayloadSchema,
+  'paychecks.create': CreatePaycheckPayloadSchema,
+  'paychecks.reverse': PaycheckStatusPayloadSchema,
+  'paychecks.restore': PaycheckStatusPayloadSchema,
 } as const;
 export type CommandProcedureName = keyof typeof COMMAND_PAYLOAD_SCHEMAS;
 export type CommandName =

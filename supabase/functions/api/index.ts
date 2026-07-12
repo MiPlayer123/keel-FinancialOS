@@ -54,12 +54,16 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'recurring.resume': 'keel_recurring_resume',
   'recurring.cancel': 'keel_recurring_cancel',
   'recurring.reject': 'keel_recurring_reject',
+  'paychecks.create': 'keel_paycheck_create',
+  'paychecks.reverse': 'keel_paycheck_reverse',
+  'paychecks.restore': 'keel_paycheck_restore',
 };
 
 const QUERY_TO_PROC: Record<string, string> = {
   'ledger.trial_balance': 'keel_trial_balance',
   'transactions.list': 'keel_list_transactions',
   'recurring.list': 'keel_list_recurring',
+  'paychecks.list': 'keel_list_paychecks',
 };
 
 // deno-lint-ignore no-explicit-any
@@ -633,13 +637,13 @@ export default {
       if (!proc || typeof query.householdId !== 'string') {
         return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });
       }
-      if (query.query === 'recurring.list') {
+      if (query.query === 'recurring.list' || query.query === 'paychecks.list') {
         const parsedHousehold = HouseholdIdSchema.safeParse(query.householdId);
         if (!parsedHousehold.success) {
           return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });
         }
         const authzCtx = await loadAuthzContext(ctx.supabase, userId);
-        const decision = authorize(authzCtx, 'recurring.list', {
+        const decision = authorize(authzCtx, query.query as Action, {
           kind: 'household', householdId: parsedHousehold.data,
         });
         if (!decision.allowed) {

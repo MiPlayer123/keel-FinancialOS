@@ -26,12 +26,23 @@ describe('action vocabulary', () => {
       'recurring.resume',
       'recurring.cancel',
       'recurring.reject',
+      'paychecks.create',
+      'paychecks.reverse',
+      'paychecks.restore',
       'ledger.trial_balance',
       'transactions.list',
       'recurring.list',
+      'paychecks.list',
       'audit.read',
       'admin.export_all',
     ]);
+  });
+
+  it('requires partner for paycheck mutations and viewer for paycheck reads', () => {
+    expect(ACTION_MINIMUM_ROLES['paychecks.create']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['paychecks.reverse']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['paychecks.restore']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['paychecks.list']).toBe('viewer');
   });
 
   it('requires partner for recurring mutations and viewer for scoped recurring reads', () => {
