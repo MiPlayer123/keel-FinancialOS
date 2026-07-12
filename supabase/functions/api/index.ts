@@ -57,6 +57,10 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'paychecks.create': 'keel_paycheck_create',
   'paychecks.reverse': 'keel_paycheck_reverse',
   'paychecks.restore': 'keel_paycheck_restore',
+  'reimbursements.create_claim':'keel_reimbursement_create_claim',
+  'reimbursements.settle':'keel_reimbursement_settle',
+  'reimbursements.reverse_settlement':'keel_reimbursement_reverse_settlement',
+  'reimbursements.reverse_claim':'keel_reimbursement_reverse_claim',
 };
 
 const QUERY_TO_PROC: Record<string, string> = {
@@ -64,6 +68,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'transactions.list': 'keel_list_transactions',
   'recurring.list': 'keel_list_recurring',
   'paychecks.list': 'keel_list_paychecks',
+  'reimbursements.list':'keel_list_reimbursements',
 };
 
 // deno-lint-ignore no-explicit-any
@@ -637,7 +642,7 @@ export default {
       if (!proc || typeof query.householdId !== 'string') {
         return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });
       }
-      if (query.query === 'recurring.list' || query.query === 'paychecks.list') {
+      if (query.query === 'recurring.list' || query.query === 'paychecks.list' || query.query === 'reimbursements.list') {
         const parsedHousehold = HouseholdIdSchema.safeParse(query.householdId);
         if (!parsedHousehold.success) {
           return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });

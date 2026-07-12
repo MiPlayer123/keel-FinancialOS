@@ -11,6 +11,8 @@ import {
   RawProviderEventIdSchema,
   RecurringSeriesIdSchema,
   PaycheckIdSchema,
+  ReimbursementClaimIdSchema,
+  SettlementIdSchema,
   UserIdSchema,
 } from './ids.js';
 import { CurrencyCodeSchema, MinorUnitsStringSchema } from './money.js';
@@ -149,6 +151,19 @@ const PaycheckStatusPayloadSchema = z.object({
   paycheckId: PaycheckIdSchema, reason: z.string().min(1).max(500),
 }).strict();
 
+export const CreateReimbursementClaimPayloadSchema=z.object({
+  originalTransactionId:CanonicalTransactionIdSchema,counterpartyName:z.string().min(1).max(200),
+  kind:z.enum(['friend','employer','client','insurance','household']),
+  amountMinor:MinorUnitsStringSchema.regex(/^\d+$/u),currency:CurrencyCodeSchema,description:z.string().min(1).max(500),
+}).strict();
+export const SettleReimbursementPayloadSchema=z.object({
+  transactionId:CanonicalTransactionIdSchema,
+  allocations:z.array(z.object({claimId:ReimbursementClaimIdSchema,amountMinor:MinorUnitsStringSchema.regex(/^\d+$/u)}).strict()).min(1).max(100),
+  note:z.string().min(1).max(500),
+}).strict();
+export const ReverseSettlementPayloadSchema=z.object({settlementId:SettlementIdSchema,reason:z.string().min(1).max(500)}).strict();
+export const ReverseClaimPayloadSchema=z.object({claimId:ReimbursementClaimIdSchema,reason:z.string().min(1).max(500)}).strict();
+
 export const COMMAND_PAYLOAD_SCHEMAS = {
   'accounts.create': CreateAccountPayloadSchema,
   'ingest.record_raw_event': RecordRawEventPayloadSchema,
@@ -163,6 +178,10 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'paychecks.create': CreatePaycheckPayloadSchema,
   'paychecks.reverse': PaycheckStatusPayloadSchema,
   'paychecks.restore': PaycheckStatusPayloadSchema,
+  'reimbursements.create_claim':CreateReimbursementClaimPayloadSchema,
+  'reimbursements.settle':SettleReimbursementPayloadSchema,
+  'reimbursements.reverse_settlement':ReverseSettlementPayloadSchema,
+  'reimbursements.reverse_claim':ReverseClaimPayloadSchema,
 } as const;
 export type CommandProcedureName = keyof typeof COMMAND_PAYLOAD_SCHEMAS;
 export type CommandName =

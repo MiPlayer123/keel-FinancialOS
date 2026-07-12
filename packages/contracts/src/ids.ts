@@ -15,6 +15,8 @@ export type CommandId = Brand<string, 'CommandId'>;
 export type PeriodLockId = Brand<string, 'PeriodLockId'>;
 export type RecurringSeriesId = Brand<string, 'RecurringSeriesId'>;
 export type PaycheckId = Brand<string, 'PaycheckId'>;
+export type ReimbursementClaimId = Brand<string,'ReimbursementClaimId'>;
+export type SettlementId = Brand<string,'SettlementId'>;
 
 /**
  * The idempotency key of an economic event (CLAUDE.md Law 9: idempotent
@@ -39,6 +41,8 @@ export const CommandIdSchema = uuid.brand<'CommandId'>();
 export const PeriodLockIdSchema = uuid.brand<'PeriodLockId'>();
 export const RecurringSeriesIdSchema = uuid.brand<'RecurringSeriesId'>();
 export const PaycheckIdSchema = uuid.brand<'PaycheckId'>();
+export const ReimbursementClaimIdSchema=uuid.brand<'ReimbursementClaimId'>();
+export const SettlementIdSchema=uuid.brand<'SettlementId'>();
 
 /**
  * Economic-event keys are caller-constructed deterministic strings, e.g.

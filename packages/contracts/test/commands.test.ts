@@ -107,6 +107,20 @@ describe('command envelope', () => {
     })).toThrow();
   });
 
+  it('parses typed reimbursement claim, settlement, and reversal payloads',()=>{
+    expect(parseCommandPayload('reimbursements.create_claim',{
+      originalTransactionId:uuid,counterpartyName:'Sam',kind:'friend',amountMinor:'4250',currency:'USD',description:'Dinner share',
+    })).toMatchObject({amountMinor:'4250'});
+    expect(parseCommandPayload('reimbursements.settle',{
+      transactionId:uuid,allocations:[{claimId:uuid,amountMinor:'4250'}],note:'Venmo',
+    })).toMatchObject({allocations:[{amountMinor:'4250'}]});
+    expect(parseCommandPayload('reimbursements.reverse_settlement',{settlementId:uuid,reason:'wrong transfer'}))
+      .toMatchObject({settlementId:uuid});
+    expect(parseCommandPayload('reimbursements.reverse_claim',{claimId:uuid,reason:'not owed'})).toMatchObject({claimId:uuid});
+    expect(()=>parseCommandPayload('reimbursements.create_claim',{
+      originalTransactionId:uuid,counterpartyName:'Sam',kind:'friend',amountMinor:42.5,currency:'USD',description:'bad',
+    })).toThrow();
+  });
   it('rejects agent actors without onBehalfOf (Law 2: attribution)', () => {
     expect(
       CommandEnvelopeSchema.safeParse({

@@ -29,10 +29,15 @@ describe('action vocabulary', () => {
       'paychecks.create',
       'paychecks.reverse',
       'paychecks.restore',
+      'reimbursements.create_claim',
+      'reimbursements.settle',
+      'reimbursements.reverse_settlement',
+      'reimbursements.reverse_claim',
       'ledger.trial_balance',
       'transactions.list',
       'recurring.list',
       'paychecks.list',
+      'reimbursements.list',
       'audit.read',
       'admin.export_all',
     ]);
@@ -43,6 +48,14 @@ describe('action vocabulary', () => {
     expect(ACTION_MINIMUM_ROLES['paychecks.reverse']).toBe('partner');
     expect(ACTION_MINIMUM_ROLES['paychecks.restore']).toBe('partner');
     expect(ACTION_MINIMUM_ROLES['paychecks.list']).toBe('viewer');
+  });
+
+  it('requires partner for reimbursement mutations and viewer for reads',()=>{
+    expect(ACTION_MINIMUM_ROLES['reimbursements.create_claim']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['reimbursements.settle']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['reimbursements.reverse_settlement']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['reimbursements.reverse_claim']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['reimbursements.list']).toBe('viewer');
   });
 
   it('requires partner for recurring mutations and viewer for scoped recurring reads', () => {

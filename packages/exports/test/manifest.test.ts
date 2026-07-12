@@ -3,7 +3,7 @@ import { EXCLUDE, INCLUDE } from '../src/index.js';
 
 describe('export manifest', () => {
   it('classifies each manifest public-table decision exactly once', () => {
-    expect(INCLUDE).toHaveLength(41);
+    expect(INCLUDE).toHaveLength(50);
     expect(EXCLUDE.filter((entry) => entry.schema === 'public')).toHaveLength(14);
     const decisions = [
       ...INCLUDE.map((entry) => entry.table),
@@ -38,6 +38,7 @@ describe('export manifest', () => {
       .toEqual(['gross_minor', 'net_minor']);
     expect(INCLUDE.find((entry) => entry.table === 'paycheck_transaction_matches')?.bigintColumns)
       .toEqual(['allocated_minor']);
+    expect(INCLUDE.find((entry)=>entry.table==='reimbursement_claims')?.bigintColumns).toEqual(['amount_minor']);
   });
 
   it('exports exact raw bytes and digest but explicitly omits parsed raw body JSON', () => {
