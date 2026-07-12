@@ -496,6 +496,7 @@ describe('C3 Plaid link/disconnect saga', () => {
     const scans = [
       dbRows('select * from public.connection_credentials'),
       dbRows('select * from public.link_attempts'),
+      dbRows('select * from public.raw_provider_events'),
       dbRows('select * from public.audit_log'),
       dbRows('select * from public.connection_health_events'),
       dbRows('select * from public.usage_events'),
@@ -581,6 +582,7 @@ describe('C3 Plaid link/disconnect saga', () => {
       p_attempt_id: attemptId,
       p_owner: owner,
       p_next_cursor: 'must-not-commit',
+      p_fully_synced: true,
     });
     expect(['P0007', 'P0011']).toContain(completeError?.code);
     expect(

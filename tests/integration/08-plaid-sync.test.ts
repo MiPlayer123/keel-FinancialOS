@@ -7,6 +7,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { drainQueue, serviceClient, SEED, signIn } from './helpers.js';
 
 const ECONOMIC_KEY = `txn:plaid:${SEED.connections.plaidC5b.ref}:txn-pending-meal`;
+let finalInjectedBodyText = '';
 
 const page = (body: unknown): { connection_id: string; page_index: number; body_text: string } => ({
   connection_id: SEED.connections.plaidC5b.id,
@@ -40,6 +41,22 @@ const recordNotification = async (suffix: string): Promise<void> => {
     p_received_at: '2026-07-11T13:30:00Z',
   });
   if (error) throw new Error(`notification record failed: ${error.message}`);
+};
+
+const recordDisabledNotification = async (): Promise<void> => {
+  const { error } = await serviceClient().rpc('keel_worker_record_raw_event', {
+    p_provider: 'plaid',
+    p_connection_external_ref: SEED.connections.plaidAlpha.ref,
+    p_provider_event_id: `c5c-disabled-${crypto.randomUUID()}`,
+    p_account_external_ref: 'item-notification',
+    p_body: {
+      webhook_type: 'TRANSACTIONS',
+      webhook_code: 'SYNC_UPDATES_AVAILABLE',
+      item_id: SEED.connections.plaidAlpha.ref,
+    },
+    p_received_at: '2026-07-11T15:50:00Z',
+  });
+  if (error) throw new Error(`disabled notification record failed: ${error.message}`);
 };
 
 const economicCounts = async (): Promise<{
@@ -132,6 +149,7 @@ beforeAll(async () => {
       request_id: 'req-after-restart-2',
     }),
   ].map((row, pageIndex) => ({ ...row, page_index: pageIndex }));
+  finalInjectedBodyText = pages[3]!.body_text;
 
   const svc = serviceClient();
   const { error: deleteError } = await svc
@@ -170,6 +188,17 @@ describe('Plaid sync worker (C5b)', () => {
       .eq('body->>error_code', 'TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION');
     if (restartPageError) throw new Error(restartPageError.message);
     expect(restartPages).toBeGreaterThanOrEqual(1);
+
+    const { data: archivedFinal, error: archivedFinalError } = await svc
+      .from('raw_provider_events')
+      .select('body_text')
+      .eq('connection_id', SEED.connections.plaidC5b.id)
+      .eq('body->>request_id', 'req-after-restart-2')
+      .order('received_at', { ascending: false })
+      .limit(1)
+      .single();
+    if (archivedFinalError) throw new Error(archivedFinalError.message);
+    expect(archivedFinal.body_text).toBe(finalInjectedBodyText);
 
     const { count: abandoned, error: abandonedError } = await svc
       .from('sync_attempts')
@@ -230,5 +259,52 @@ describe('Plaid sync worker (C5b)', () => {
       p_queue: 'sync_events',
     });
     expect(Number(replayDepth)).toBe(0);
+  });
+
+  it('C5c completes an uninjected disabled sync as a no-op without freshness or dead-letter', async () => {
+    const svc = serviceClient();
+    const { data: before, error: beforeError } = await svc
+      .from('connections')
+      .select('last_successful_sync_at')
+      .eq('id', SEED.connections.plaidAlpha.id)
+      .single();
+    if (beforeError) throw new Error(beforeError.message);
+    const { data: checkpointBefore, error: checkpointBeforeError } = await svc
+      .from('sync_checkpoints')
+      .select('cursor')
+      .eq('connection_id', SEED.connections.plaidAlpha.id)
+      .maybeSingle();
+    if (checkpointBeforeError) throw new Error(checkpointBeforeError.message);
+
+    await recordDisabledNotification();
+    const outcomes = await drainQueue('sync_events');
+    expect(outcomes.every((outcome) => !outcome.startsWith('dead_letter:'))).toBe(true);
+
+    const { data: after, error: afterError } = await svc
+      .from('connections')
+      .select('last_successful_sync_at, sync_lease_owner, sync_leased_until')
+      .eq('id', SEED.connections.plaidAlpha.id)
+      .single();
+    if (afterError) throw new Error(afterError.message);
+    expect(after.last_successful_sync_at).toBe(before.last_successful_sync_at);
+    expect(after.sync_lease_owner).toBeNull();
+    expect(after.sync_leased_until).toBeNull();
+
+    const { data: checkpointAfter, error: checkpointAfterError } = await svc
+      .from('sync_checkpoints')
+      .select('cursor')
+      .eq('connection_id', SEED.connections.plaidAlpha.id)
+      .maybeSingle();
+    if (checkpointAfterError) throw new Error(checkpointAfterError.message);
+    expect(checkpointAfter?.cursor ?? '').toBe(checkpointBefore?.cursor ?? '');
+
+    const { count: completedNoops, error: attemptError } = await svc
+      .from('sync_attempts')
+      .select('*', { count: 'exact', head: true })
+      .eq('connection_id', SEED.connections.plaidAlpha.id)
+      .eq('state', 'completed')
+      .not('promoted_at', 'is', null);
+    if (attemptError) throw new Error(attemptError.message);
+    expect(completedNoops).toBeGreaterThanOrEqual(1);
   });
 });

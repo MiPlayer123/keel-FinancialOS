@@ -8,7 +8,7 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "typecheck": "pnpm -r exec tsc --noEmit",
-    "test": "vitest run && deno test --allow-env supabase/functions/_shared/*.test.ts",
+    "test": "vitest run && deno test --allow-env supabase/functions/_shared/*.test.ts supabase/functions/worker/*.test.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint .",
@@ -19,17 +19,32 @@
     "test:integration": "vitest run --config tests/integration/vitest.config.ts"
   },
   "devDependencies": {
+    "@keel/contracts": "workspace:*",
+    "@keel/test-fixtures": "workspace:*",
+    "@supabase/supabase-js": "^2.110.0",
     "@vitest/coverage-v8": "catalog:",
+    "esbuild": "^0.25.0",
     "eslint": "catalog:",
     "fast-check": "catalog:",
+    "jose": "^6.0.0",
     "prettier": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
-    "vitest": "catalog:",
-    "esbuild": "^0.25.0",
-    "@supabase/supabase-js": "^2.110.0",
-    "jose": "^6.0.0",
-    "@keel/test-fixtures": "workspace:*",
-    "@keel/contracts": "workspace:*"
+    "vitest": "catalog:"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "packages/providers/*"
+  ],
+  "catalog": {
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10",
+    "@vitest/coverage-v8": "^4.1.10",
+    "fast-check": "^4.9.0",
+    "zod": "^4.4.3",
+    "eslint": "^10.7.0",
+    "typescript-eslint": "^8.63.0",
+    "prettier": "^3.9.5"
   }
 }

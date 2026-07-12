@@ -23,7 +23,17 @@ import { json, mapDbError } from '../_shared/http.ts';
 import { decryptToken, type EncryptedRecord } from '../_shared/credential-crypto.ts';
 import { getKek } from '../_shared/credential-kek.ts';
 import { createPlaidClient, PlaidClientError } from '../_shared/plaid-client.ts';
-import { parsePlaidSyncPage, PlaidMutationRestart, readSyncPages } from '../_shared/plaid-sync.ts';
+import {
+  parsePlaidSyncPage,
+  PlaidMutationRestart,
+  readSyncPages,
+  type LiveSyncResult,
+} from '../_shared/plaid-sync.ts';
+import {
+  abandonLiveSyncAttempt,
+  completeSyncAttempt,
+  SyncCompletionError,
+} from './sync-completion.ts';
 
 const MAX_ATTEMPTS = 5;
 const VISIBILITY_TIMEOUT_S = 8;
@@ -232,10 +242,14 @@ const eventProviderTransactionId = (event: ProviderSyncEvent): string =>
     ? event.providerTransactionId
     : event.transaction.providerTransactionId;
 
-const processSyncNotification = async (
+export const processSyncNotification = async (
   admin: AdminClient,
   msg: QueueMessage,
+  readPages: typeof readSyncPages = readSyncPages,
 ): Promise<ProcessOutcome> => {
+  let owner: string | null = null;
+  let attemptId: string | null = null;
+  let syncResult: LiveSyncResult | null = null;
   try {
     const rawEventId = msg.message.refs['rawEventId'];
     let raw: { connection_id: string; body: unknown } | null = null;
@@ -279,7 +293,7 @@ const processSyncNotification = async (
       if (error) return { ok: false, detail: `generation bump failed: ${error.message}` };
     }
 
-    const owner = continuation?.owner ?? crypto.randomUUID();
+    owner = continuation?.owner ?? crypto.randomUUID();
     const { data: lease, error: leaseError } = await admin.rpc('keel_worker_acquire_sync_lease', {
       p_connection_id: connectionId,
       p_owner: owner,
@@ -295,7 +309,7 @@ const processSyncNotification = async (
     }
 
     const baseCursor = String(lease.baseCursor ?? '');
-    let attemptId = continuation?.attemptId;
+    attemptId = continuation?.attemptId ?? null;
     if (!attemptId) {
       const { data, error } = await admin.rpc('keel_worker_open_attempt', {
         p_connection_id: connectionId,
@@ -333,45 +347,153 @@ const processSyncNotification = async (
       }
     }
 
-    const pages = await readSyncPages(admin, connectionId);
-    // No injected script is the guarded live-Plaid stub for C5b. Complete an
-    // empty attempt so the notification is durably consumed without network.
-    let completedPageSet = pages.length === 0;
-    let pageOffset = continuation?.nextPageOffset ?? 0;
-    let pageOrdinal = continuation?.pageOrdinal ?? 0;
-    let restartCount = continuation?.restartCount ?? 0;
-    let pagesProcessed = 0;
+    const renewLiveLease = async (): Promise<void> => {
+      const { data: renewed, error: renewError } = await admin.rpc(
+        'keel_worker_renew_sync_lease',
+        {
+          p_connection_id: connectionId,
+          p_owner: owner,
+          p_ttl_seconds: SYNC_LEASE_TTL_S,
+        },
+      );
+      if (renewError || !renewed) throw new Error('sync lease lost while paging');
+    };
+    syncResult = await readPages(admin, connectionId, {
+      baseCursor,
+      externalRef: connection.external_ref,
+      maxPages: MAX_PAGES_PER_INVOCATION,
+      renewLease: renewLiveLease,
+    });
+    const pages = syncResult.pages;
 
-    while (
-      pageOffset < pages.length &&
-      pagesProcessed < MAX_PAGES_PER_INVOCATION &&
-      !completedPageSet
-    ) {
-      const injected = pages[pageOffset]!;
-      const { data: renewed, error: renewError } = await admin.rpc('keel_worker_renew_sync_lease', {
-        p_connection_id: connectionId,
-        p_owner: owner,
-        p_ttl_seconds: SYNC_LEASE_TTL_S,
-      });
-      if (renewError || !renewed) {
-        return { ok: false, retry: true, detail: 'sync lease lost while paging' };
+    if (syncResult.source === 'injected') {
+      // The injected C5b path remains authoritative and keeps its same-attempt
+      // continuation plus worker-visible mutation-marker replay.
+      let completedPageSet = pages.length === 0;
+      let pageOffset = continuation?.nextPageOffset ?? 0;
+      let pageOrdinal = continuation?.pageOrdinal ?? 0;
+      let restartCount = continuation?.restartCount ?? 0;
+      let pagesProcessed = 0;
+
+      while (
+        pageOffset < pages.length &&
+        pagesProcessed < MAX_PAGES_PER_INVOCATION &&
+        !completedPageSet
+      ) {
+        const injected = pages[pageOffset]!;
+        const { data: renewed, error: renewError } = await admin.rpc(
+          'keel_worker_renew_sync_lease',
+          {
+            p_connection_id: connectionId,
+            p_owner: owner,
+            p_ttl_seconds: SYNC_LEASE_TTL_S,
+          },
+        );
+        if (renewError || !renewed) {
+          return { ok: false, retry: true, detail: 'sync lease lost while paging' };
+        }
+
+        const { error: archiveError } = await admin.rpc('keel_worker_archive_page', {
+          p_attempt_id: attemptId,
+          p_owner: owner,
+          p_page_ordinal: pageOrdinal,
+          p_body_text: injected.bodyText,
+        });
+        if (archiveError) {
+          return { ok: false, detail: `page archive failed: ${archiveError.message}` };
+        }
+
+        pageOffset += 1;
+        pagesProcessed += 1;
+        try {
+          const parsed = await parsePlaidSyncPage(
+            injected.bodyText,
+            connection.external_ref,
+            finalNextCursor,
+          );
+          allEvents.push(...parsed.events);
+          finalNextCursor = parsed.nextCursor;
+          for (const skipped of parsed.skippedTransactions) {
+            console.warn('plaid sync transaction skipped', skipped);
+          }
+          pageOrdinal += 1;
+          completedPageSet = !parsed.hasMore;
+        } catch (error) {
+          if (!(error instanceof PlaidMutationRestart)) throw error;
+          const { error: abandonError } = await admin.rpc('keel_worker_abandon_attempt', {
+            p_attempt_id: attemptId,
+            p_owner: owner,
+          });
+          if (abandonError) {
+            return { ok: false, detail: `attempt abandon failed: ${abandonError.message}` };
+          }
+          restartCount += 1;
+          if (restartCount > MAX_MUTATION_RESTARTS) {
+            return { ok: false, detail: 'Plaid mutation restart limit exceeded' };
+          }
+          const { data: restartedAttempt, error: restartError } = await admin.rpc(
+            'keel_worker_open_attempt',
+            {
+              p_connection_id: connectionId,
+              p_owner: owner,
+              p_base_cursor: baseCursor,
+            },
+          );
+          if (restartError || !restartedAttempt) {
+            return {
+              ok: false,
+              detail: `attempt restart failed: ${restartError?.message ?? 'no id'}`,
+            };
+          }
+          attemptId = restartedAttempt;
+          allEvents = [];
+          finalNextCursor = baseCursor;
+          pageOrdinal = 0;
+        }
       }
 
-      const { error: archiveError } = await admin.rpc('keel_worker_archive_page', {
-        p_attempt_id: attemptId,
-        p_owner: owner,
-        p_page_ordinal: pageOrdinal,
-        p_body_text: injected.bodyText,
-      });
-      if (archiveError) {
-        return { ok: false, detail: `page archive failed: ${archiveError.message}` };
-      }
+      // An injected response script is authoritative. If its last row says
+      // has_more but supplies no next row, finish at its last cursor rather than
+      // manufacturing an infinite continuation.
+      if (!completedPageSet && pageOffset >= pages.length) completedPageSet = true;
 
-      pageOffset += 1;
-      pagesProcessed += 1;
-      try {
+      if (!completedPageSet && pageOffset < pages.length) {
+        const originalEconomicEventKey =
+          continuation?.originalEconomicEventKey ?? msg.message.economicEventKey;
+        const { error } = await admin.rpc('keel_worker_record_raw_event', {
+          p_provider: 'plaid',
+          p_connection_external_ref: connection.external_ref,
+          p_provider_event_id: `sync-continuation:${attemptId}:${pageOffset}`,
+          p_account_external_ref: 'item-notification',
+          p_body: {
+            keelSyncContinuation: {
+              attemptId,
+              owner,
+              nextPageOffset: pageOffset,
+              pageOrdinal,
+              restartCount,
+              originalEconomicEventKey,
+            },
+          },
+          p_received_at: new Date().toISOString(),
+        });
+        if (error) return { ok: false, detail: `continuation enqueue failed: ${error.message}` };
+        return { ok: true, detail: 'sync continuation enqueued' };
+      }
+    } else if (syncResult.source === 'live') {
+      let pageOrdinal = 0;
+      for (const livePage of pages) {
+        await renewLiveLease();
+        const { error: archiveError } = await admin.rpc('keel_worker_archive_page', {
+          p_attempt_id: attemptId,
+          p_owner: owner,
+          p_page_ordinal: pageOrdinal,
+          p_body_text: livePage.bodyText,
+        });
+        if (archiveError) throw new Error(`page archive failed: ${archiveError.message}`);
+
         const parsed = await parsePlaidSyncPage(
-          injected.bodyText,
+          livePage.bodyText,
           connection.external_ref,
           finalNextCursor,
         );
@@ -381,76 +503,23 @@ const processSyncNotification = async (
           console.warn('plaid sync transaction skipped', skipped);
         }
         pageOrdinal += 1;
-        completedPageSet = !parsed.hasMore;
-      } catch (error) {
-        if (!(error instanceof PlaidMutationRestart)) throw error;
-        const { error: abandonError } = await admin.rpc('keel_worker_abandon_attempt', {
-          p_attempt_id: attemptId,
-          p_owner: owner,
-        });
-        if (abandonError) {
-          return { ok: false, detail: `attempt abandon failed: ${abandonError.message}` };
-        }
-        restartCount += 1;
-        if (restartCount > MAX_MUTATION_RESTARTS) {
-          return { ok: false, detail: 'Plaid mutation restart limit exceeded' };
-        }
-        const { data: restartedAttempt, error: restartError } = await admin.rpc(
-          'keel_worker_open_attempt',
-          {
-            p_connection_id: connectionId,
-            p_owner: owner,
-            p_base_cursor: baseCursor,
-          },
-        );
-        if (restartError || !restartedAttempt) {
-          return {
-            ok: false,
-            detail: `attempt restart failed: ${restartError?.message ?? 'no id'}`,
-          };
-        }
-        attemptId = restartedAttempt;
-        allEvents = [];
-        finalNextCursor = baseCursor;
-        pageOrdinal = 0;
       }
+      finalNextCursor = syncResult.nextCursor;
+    } else {
+      finalNextCursor = syncResult.nextCursor;
     }
 
-    // An injected response script is authoritative. If its last row says
-    // has_more but supplies no next row, finish at its last cursor rather than
-    // manufacturing an infinite continuation.
-    if (!completedPageSet && pageOffset >= pages.length) completedPageSet = true;
-
-    if (!completedPageSet && pageOffset < pages.length) {
-      const originalEconomicEventKey =
-        continuation?.originalEconomicEventKey ?? msg.message.economicEventKey;
-      const { error } = await admin.rpc('keel_worker_record_raw_event', {
-        p_provider: 'plaid',
-        p_connection_external_ref: connection.external_ref,
-        p_provider_event_id: `sync-continuation:${attemptId}:${pageOffset}`,
-        p_account_external_ref: 'item-notification',
-        p_body: {
-          keelSyncContinuation: {
-            attemptId,
-            owner,
-            nextPageOffset: pageOffset,
-            pageOrdinal,
-            restartCount,
-            originalEconomicEventKey,
-          },
-        },
-        p_received_at: new Date().toISOString(),
-      });
-      if (error) return { ok: false, detail: `continuation enqueue failed: ${error.message}` };
-      return { ok: true, detail: 'sync continuation enqueued' };
-    }
+    const sourceFailure = (detail: string): ProcessOutcome => {
+      if (syncResult?.source !== 'injected') throw new Error(detail);
+      return { ok: false, detail };
+    };
 
     const touchedProviderIds = [...new Set(allEvents.map(eventProviderTransactionId))];
     const { data: stateRows, error: stateError } = await admin.rpc('keel_worker_lookup_state', {
       p_connection_id: connectionId,
       p_provider_txn_ids: touchedProviderIds,
     });
-    if (stateError) return { ok: false, detail: `state lookup failed: ${stateError.message}` };
+    if (stateError) return sourceFailure(`state lookup failed: ${stateError.message}`);
 
     const byProviderTxnId = new Map<string, CanonicalTxnView>();
     for (const row of (stateRows ?? []) as Array<
@@ -475,6 +544,7 @@ const processSyncNotification = async (
       continuation?.originalEconomicEventKey ?? msg.message.economicEventKey;
 
     for (const action of actions) {
+      await renewLiveLease();
       if (action.type === 'noop') continue;
       let sourceEvent: ProviderSyncEvent | undefined;
       if (action.type === 'create') {
@@ -498,7 +568,7 @@ const processSyncNotification = async (
         });
       }
       if (!sourceEvent) {
-        return { ok: false, detail: `source event missing for ${action.type} action` };
+        return sourceFailure(`source event missing for ${action.type} action`);
       }
 
       const providerTransactionId = eventProviderTransactionId(sourceEvent);
@@ -513,7 +583,7 @@ const processSyncNotification = async (
           .eq('external_ref', transaction.accountExternalRef)
           .single();
         if (accountError || !account) {
-          return { ok: false, detail: `unknown account ${transaction.accountExternalRef}` };
+          return sourceFailure(`unknown account ${transaction.accountExternalRef}`);
         }
         accountId = account.id;
       }
@@ -534,10 +604,9 @@ const processSyncNotification = async (
         },
       );
       if (normalizedError || !normalizedId) {
-        return {
-          ok: false,
-          detail: `normalized create failed: ${normalizedError?.message ?? 'no id'}`,
-        };
+        return sourceFailure(
+          `normalized create failed: ${normalizedError?.message ?? 'no id'}`,
+        );
       }
       const economicKey =
         action.type === 'revise' ? action.next.economicKey : action.view.economicKey;
@@ -547,21 +616,51 @@ const processSyncNotification = async (
         p_economic_key: economicKey,
         p_apply_key: `${originalEconomicEventKey}:${providerTransactionId}`,
       });
-      if (applyError) return { ok: false, detail: `sync apply failed: ${applyError.message}` };
+      if (applyError) return sourceFailure(`sync apply failed: ${applyError.message}`);
     }
 
-    const { error: completeError } = await admin.rpc('keel_worker_complete_attempt', {
-      p_attempt_id: attemptId,
-      p_owner: owner,
-      p_next_cursor: finalNextCursor,
-    });
-    if (completeError) {
-      return { ok: false, detail: `attempt complete failed: ${completeError.message}` };
+    await renewLiveLease();
+    if (syncResult.source === 'injected') {
+      const { error: completeError } = await admin.rpc('keel_worker_complete_attempt', {
+        p_attempt_id: attemptId,
+        p_owner: owner,
+        p_next_cursor: finalNextCursor,
+        p_fully_synced: true,
+      });
+      if (completeError) {
+        return { ok: false, detail: `attempt complete failed: ${completeError.message}` };
+      }
+    } else {
+      await completeSyncAttempt(admin, {
+        attemptId,
+        owner,
+        connectionId,
+        nextCursor: finalNextCursor,
+        status: syncResult.status,
+      });
     }
-    return { ok: true, detail: 'sync complete' };
+    return {
+      ok: true,
+      detail: syncResult.status === 'partial'
+        ? 'live sync continuation enqueued'
+        : syncResult.status === 'noop'
+        ? 'sync noop'
+        : 'sync complete',
+    };
   } catch (error) {
+    const liveFailure = syncResult?.source !== 'injected';
+    const attemptAlreadyCompleted =
+      error instanceof SyncCompletionError && error.attemptCompleted;
+    if (liveFailure && !attemptAlreadyCompleted && attemptId !== null && owner !== null) {
+      try {
+        await abandonLiveSyncAttempt(admin, { attemptId, owner });
+      } catch {
+        return { ok: false, retry: true, detail: 'live sync cleanup failed' };
+      }
+    }
     return {
       ok: false,
+      ...(liveFailure ? { retry: true } : {}),
       detail: error instanceof Error ? error.message : 'unknown Plaid sync failure',
     };
   }
