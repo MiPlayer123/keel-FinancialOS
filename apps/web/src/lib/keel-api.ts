@@ -188,6 +188,26 @@ export async function linkConnection(input: {
   });
 }
 
+/** Create a Plaid Link token so the browser can open Plaid Link (real bank auth). */
+export async function createLinkToken(householdId: string): Promise<string> {
+  const res = await invoke<{ linkToken: string }>('api/connections/link-token', { householdId });
+  return res.linkToken;
+}
+
+/** Exchange a real Plaid-Link public_token → a connection (production/real flow). */
+export async function exchangePublicToken(input: {
+  householdId: string;
+  entityId: string;
+  publicToken: string;
+}): Promise<unknown> {
+  return invoke('api/connections/link', {
+    commandId: newId(),
+    householdId: input.householdId,
+    entityId: input.entityId,
+    publicToken: input.publicToken,
+  });
+}
+
 export async function disconnectConnection(input: {
   householdId: string;
   connectionId: string;

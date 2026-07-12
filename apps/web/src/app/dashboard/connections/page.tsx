@@ -1,19 +1,14 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Link2, Loader2, Plus, RefreshCw } from 'lucide-react';
+import { Link2, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { AppShell } from '@/components/keel/app-shell';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { useHousehold } from '@/components/keel/household-context';
-import {
-  fetchConnections,
-  fetchFirstEntityId,
-  linkConnection,
-  disconnectConnection,
-  type ConnectionRow,
-} from '@/lib/keel-api';
+import { fetchConnections, disconnectConnection, type ConnectionRow } from '@/lib/keel-api';
+import { PlaidLinkButton } from '@/components/keel/plaid-link-button';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -36,7 +31,6 @@ export default function ConnectionsPage() {
 function ConnectionsBody() {
   const { householdId, ready } = useHousehold();
   const [rows, setRows] = useState<ConnectionRow[] | null>(null);
-  const [linking, setLinking] = useState(false);
 
   const load = useCallback(async () => {
     if (!householdId) {
@@ -53,25 +47,6 @@ function ConnectionsBody() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  async function connect() {
-    if (!householdId) return;
-    setLinking(true);
-    try {
-      const entityId = await fetchFirstEntityId(householdId);
-      if (!entityId) {
-        toast.error('No entity found to attach the connection to.');
-        return;
-      }
-      await linkConnection({ householdId, entityId });
-      toast.success('Connected a Sandbox institution.');
-      await load();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not link.');
-    } finally {
-      setLinking(false);
-    }
-  }
 
   async function disconnect(connectionId: string) {
     if (!householdId) return;
@@ -90,18 +65,16 @@ function ConnectionsBody() {
     <>
       <PageHeader
         title="Connections"
-        description="Linked institutions and sync status (Plaid Sandbox)."
+        description="Linked institutions and sync status."
         actions={
-          <Button
-            size="sm"
-            disabled={linking || !householdId}
-            onClick={() => {
-              void connect();
-            }}
-          >
-            {linking ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
-            Connect a bank
-          </Button>
+          householdId ? (
+            <PlaidLinkButton
+              householdId={householdId}
+              onLinked={() => {
+                void load();
+              }}
+            />
+          ) : null
         }
       />
       <div className="p-6">
