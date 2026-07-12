@@ -20,6 +20,9 @@ export const WRITE_ACTIONS = [
   'reimbursements.settle',
   'reimbursements.reverse_settlement',
   'reimbursements.reverse_claim',
+  'statements.create',
+  'reconciliations.close',
+  'reconciliations.reopen',
 ] as const satisfies readonly CommandName[];
 
 export const EXPORT_ACTIONS = ['admin.export_all'] as const satisfies readonly CommandName[];
@@ -30,6 +33,7 @@ export const READ_ACTIONS = [
   'recurring.list',
   'paychecks.list',
   'reimbursements.list',
+  'statements.list',
   'audit.read',
   ...EXPORT_ACTIONS,
 ] as const;
@@ -62,11 +66,13 @@ export const ACTION_MINIMUM_ROLES = {
   'reimbursements.settle':'partner',
   'reimbursements.reverse_settlement':'partner',
   'reimbursements.reverse_claim':'partner',
+  'statements.create':'partner','reconciliations.close':'partner','reconciliations.reopen':'partner',
   'ledger.trial_balance': 'viewer',
   'transactions.list': 'viewer',
   'recurring.list': 'viewer',
   'paychecks.list': 'viewer',
   'reimbursements.list':'viewer',
+  'statements.list':'viewer',
   'audit.read': 'viewer',
   'admin.export_all': 'owner',
 } as const satisfies Readonly<Record<Action, MinimumRole>>;

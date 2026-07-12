@@ -121,6 +121,11 @@ describe('command envelope', () => {
       originalTransactionId:uuid,counterpartyName:'Sam',kind:'friend',amountMinor:42.5,currency:'USD',description:'bad',
     })).toThrow();
   });
+  it('parses typed statement create, close, and reopen payloads',()=>{
+   expect(parseCommandPayload('statements.create',{accountId:uuid,periodStart:'2026-06-01',periodEnd:'2026-06-30',openingMinor:'100',endingMinor:'120',currency:'USD',sourceHash:'b'.repeat(64),lines:[{lineKey:'l1',date:'2026-06-15',amountMinor:'20',description:'deposit'}]})).toMatchObject({endingMinor:'120'});
+   expect(parseCommandPayload('reconciliations.close',{statementId:uuid,items:[{lineId:uuid,resolution:'matched_transaction',transactionId:uuid,explanation:'matched'}],adjustments:[]})).toMatchObject({statementId:uuid});
+   expect(parseCommandPayload('reconciliations.reopen',{sessionId:uuid,reason:'correction'})).toMatchObject({sessionId:uuid});
+  });
   it('rejects agent actors without onBehalfOf (Law 2: attribution)', () => {
     expect(
       CommandEnvelopeSchema.safeParse({

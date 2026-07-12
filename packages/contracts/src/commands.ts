@@ -13,6 +13,8 @@ import {
   PaycheckIdSchema,
   ReimbursementClaimIdSchema,
   SettlementIdSchema,
+  StatementIdSchema,
+  ReconciliationSessionIdSchema,
   UserIdSchema,
 } from './ids.js';
 import { CurrencyCodeSchema, MinorUnitsStringSchema } from './money.js';
@@ -163,6 +165,13 @@ export const SettleReimbursementPayloadSchema=z.object({
 }).strict();
 export const ReverseSettlementPayloadSchema=z.object({settlementId:SettlementIdSchema,reason:z.string().min(1).max(500)}).strict();
 export const ReverseClaimPayloadSchema=z.object({claimId:ReimbursementClaimIdSchema,reason:z.string().min(1).max(500)}).strict();
+export const CreateStatementPayloadSchema=z.object({accountId:AccountIdSchema,periodStart:IsoDateSchema,periodEnd:IsoDateSchema,
+ openingMinor:MinorUnitsStringSchema,endingMinor:MinorUnitsStringSchema,currency:CurrencyCodeSchema,sourceHash:z.string().regex(/^[a-f0-9]{64}$/u),
+ lines:z.array(z.object({lineKey:z.string().min(1).max(100),date:IsoDateSchema,amountMinor:MinorUnitsStringSchema,description:z.string().min(1).max(500)}).strict()).min(1).max(5000)}).strict();
+const ResolutionSchema=z.enum(['matched_transaction','stale_balance','missing_event','duplicate','pending_posting','opening_balance','adjustment']);
+export const CloseReconciliationPayloadSchema=z.object({statementId:StatementIdSchema,items:z.array(z.object({lineId:z.uuid(),resolution:ResolutionSchema,transactionId:CanonicalTransactionIdSchema.optional(),explanation:z.string().min(1).max(500)}).strict()).min(1).max(5000),
+ adjustments:z.array(z.object({kind:ResolutionSchema.exclude(['matched_transaction']),amountMinor:MinorUnitsStringSchema,explanation:z.string().min(1).max(500)}).strict()).max(100)}).strict();
+export const ReopenReconciliationPayloadSchema=z.object({sessionId:ReconciliationSessionIdSchema,reason:z.string().min(1).max(500)}).strict();
 
 export const COMMAND_PAYLOAD_SCHEMAS = {
   'accounts.create': CreateAccountPayloadSchema,
@@ -182,6 +191,9 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'reimbursements.settle':SettleReimbursementPayloadSchema,
   'reimbursements.reverse_settlement':ReverseSettlementPayloadSchema,
   'reimbursements.reverse_claim':ReverseClaimPayloadSchema,
+  'statements.create':CreateStatementPayloadSchema,
+  'reconciliations.close':CloseReconciliationPayloadSchema,
+  'reconciliations.reopen':ReopenReconciliationPayloadSchema,
 } as const;
 export type CommandProcedureName = keyof typeof COMMAND_PAYLOAD_SCHEMAS;
 export type CommandName =

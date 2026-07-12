@@ -62,6 +62,14 @@ insert into expected_export_tables(table_name,allowed_columns,omitted_columns) v
  ('refund_matches',array['household_id','id','expectation_id','transaction_id','allocated_minor','created_at'],'{}'),
  ('settlement_status_events',array['household_id','id','settlement_id','transition','reason','actor','command_id','created_at'],'{}'),
  ('reimbursement_claim_status_events',array['household_id','id','claim_id','transition','reason','actor','command_id','created_at'],'{}');
+insert into expected_export_tables(table_name,allowed_columns,omitted_columns)values
+('statements',array['id','household_id','account_id','period_start','period_end','opening_minor','ending_minor','currency','source_hash','created_by','created_at'],'{}'),
+('statement_lines',array['household_id','id','statement_id','line_key','line_date','amount_minor','description','created_at'],'{}'),
+('reconciliation_sessions',array['household_id','id','statement_id','account_id','ledger_ending_minor','difference_minor','status','formula_version','period_lock_id','closed_by','closed_at','reopened_at','created_at'],'{}'),
+('reconciliation_items',array['household_id','id','session_id','statement_line_id','resolution','transaction_id','explanation','created_at'],'{}'),
+('reconciliation_adjustments',array['household_id','id','session_id','kind','amount_minor','explanation','created_at'],'{}'),
+('close_checklists',array['household_id','id','session_id','checklist_version','checks','created_at'],'{}'),
+('reconciliation_status_events',array['household_id','id','session_id','transition','reason','actor','command_id','created_at'],'{}');
 
 create temporary table excluded_export_tables(table_name text primary key) on commit drop;
 insert into excluded_export_tables(table_name) values
@@ -80,8 +88,8 @@ select ok(
 select is(
   (select count(*)::int from expected_export_tables
     where has_table_privilege('keel_export', format('public.%I', table_name), 'SELECT')),
-  50,
-  'keel_export can SELECT all 50 included tables'
+  57,
+  'keel_export can SELECT all 57 included tables'
 );
 select is(
   (select count(*)::int
@@ -212,8 +220,8 @@ reset role;
 select is(
   (select count(*)::int from jsonb_object_keys(
     public.keel_export_household('00000000-0000-4000-8000-00000000a001')->'tables')),
-  50,
-  'snapshot contains all 50 included table arrays'
+  57,
+  'snapshot contains all 57 included table arrays'
 );
 select is(
   (select count(*)::int from excluded_export_tables e
