@@ -38,6 +38,9 @@ importers:
       '@keel/contracts':
         specifier: workspace:*
         version: link:packages/contracts
+      '@keel/detectors':
+        specifier: workspace:*
+        version: link:packages/detectors
       '@keel/test-fixtures':
         specifier: workspace:*
         version: link:packages/test-fixtures
@@ -121,6 +124,15 @@ importers:
       zod:
         specifier: 'catalog:'
         version: 4.4.3
+    devDependencies:
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.10(@types/node@22.20.1)(@vitest/coverage-v8@4.1.10)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.25.12))
+
+  packages/detectors:
     devDependencies:
       typescript:
         specifier: 'catalog:'

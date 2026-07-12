@@ -43,6 +43,11 @@ export const INCLUDE = [
   include({ schema: 'public', table: 'audit_log', columns: ['id', 'household_id', 'actor', 'action', 'object_type', 'object_id', 'command_id', 'before', 'after', 'at'], sortKey: ['id'], timestampColumns: ['at'], bigintColumns: ['id'] }),
   include({ schema: 'public', table: 'domain_events', columns: ['id', 'event_type', 'household_id', 'command_id', 'economic_event_key', 'actor', 'occurred_at', 'payload'], sortKey: ['id'], timestampColumns: ['occurred_at'], bigintColumns: [] }),
   include({ schema: 'public', table: 'command_executions', columns: ['household_id', 'economic_event_key', 'command', 'payload_sha256', 'result', 'executed_at'], sortKey: ['household_id', 'economic_event_key'], timestampColumns: ['executed_at'], bigintColumns: [], omittedColumns: { command_id: 'Redundant execution transport identifier; economic_event_key is the portable idempotency identity.' } }),
+  include({ schema: 'public', table: 'recurring_detector_runs', columns: ['id', 'household_id', 'run_key', 'as_of', 'detector_version', 'confidence_version', 'normalizer_version', 'candidate_snapshot_hash', 'created_at'], sortKey: ['id'], timestampColumns: ['as_of', 'created_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'recurring_series', columns: ['id', 'household_id', 'series_key', 'account_id', 'ledger_account_id', 'counterparty_key', 'currency', 'sign', 'status', 'current_candidate_version_id', 'confirmed_by', 'confirmed_at', 'created_at', 'updated_at'], sortKey: ['id'], timestampColumns: ['confirmed_at', 'created_at', 'updated_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'recurring_candidate_versions', columns: ['id', 'household_id', 'series_id', 'detector_run_id', 'candidate_hash', 'input_fingerprint', 'detector_version', 'confidence_version', 'normalizer_version', 'as_of', 'score_bps', 'evidence', 'candidate', 'created_at'], sortKey: ['id'], timestampColumns: ['as_of', 'created_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'recurring_occurrences', columns: ['household_id', 'id', 'series_id', 'candidate_version_id', 'occurrence_key', 'expected_date', 'expected_amount_minor', 'currency', 'amount_kind', 'status', 'matched_txn_id', 'score_bps', 'evidence', 'input_fingerprint', 'detector_version', 'confidence_version', 'as_of', 'created_at'], sortKey: ['household_id', 'id'], timestampColumns: ['as_of', 'created_at'], bigintColumns: ['expected_amount_minor'] }),
+  include({ schema: 'public', table: 'recurring_status_events', columns: ['household_id', 'id', 'series_id', 'candidate_version_id', 'transition', 'effective_date', 'actor', 'command_id', 'created_at'], sortKey: ['household_id', 'id'], timestampColumns: ['created_at'], bigintColumns: [] }),
 ] as const;
 
 export type ExportTableName = (typeof INCLUDE)[number]['table'];
@@ -67,6 +72,7 @@ export const EXCLUDE = [
   { schema: 'public', table: 'sync_checkpoints', reason: 'Transient provider cursor state; raw evidence and ledger history are portable instead.' },
   { schema: 'public', table: 'link_attempts', reason: 'Transient connection workflow state that can contain credential envelope material.' },
   { schema: 'public', table: 'removal_attempts', reason: 'Transient provider disconnection workflow state, not portable finance history.' },
+  { schema: 'public', table: 'recurring_detection_claims', reason: 'Transient idempotent cron enqueue claims, not recurring financial history.' },
   { schema: 'auth', table: 'users', reason: 'Auth identities and secrets are excluded; household membership user_id mappings remain portable.' },
 ] as const satisfies readonly ExcludedTableDefinition[];
 

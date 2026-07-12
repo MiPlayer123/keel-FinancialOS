@@ -14,6 +14,7 @@ const makeContext = (overrides: Partial<AuthzContext> = {}): AuthzContext => ({
   memberships: [{ householdId: HOUSEHOLD, role: 'owner' }],
   entityMemberships: [],
   accountOwnerships: [],
+  accountPermissions: [],
   ...overrides,
 });
 
@@ -136,6 +137,70 @@ describe('authorize', () => {
     );
 
     expect(decision.allowed).toBe(true);
+  });
+
+  it('requires positive account scope for recurring reads and writes', () => {
+    const unscoped = makeContext();
+    expectDenied(authorize(unscoped, 'recurring.list', {
+      householdId: HOUSEHOLD,
+      accountId: ACCOUNT,
+      kind: 'recurring_series',
+    }), 'household_scope_violation');
+    expectDenied(authorize(unscoped, 'recurring.confirm', {
+      householdId: HOUSEHOLD,
+      accountId: ACCOUNT,
+      kind: 'recurring_series',
+    }), 'household_scope_violation');
+
+    const ownerScoped = makeContext({
+      accountOwnerships: [{ accountId: ACCOUNT, householdId: HOUSEHOLD }],
+    });
+    expect(authorize(ownerScoped, 'recurring.list', {
+      householdId: HOUSEHOLD, accountId: ACCOUNT, kind: 'recurring_series',
+    }).allowed).toBe(true);
+    expect(authorize(ownerScoped, 'recurring.confirm', {
+      householdId: HOUSEHOLD, accountId: ACCOUNT, kind: 'recurring_series',
+    }).allowed).toBe(true);
+  });
+
+  it('allows recurring view/edit through explicit same-household resource permissions', () => {
+    const ctx = makeContext({
+      accountPermissions: [
+        { accountId: ACCOUNT, householdId: HOUSEHOLD, permission: 'view' },
+      ],
+    });
+    expect(authorize(ctx, 'recurring.list', {
+      householdId: HOUSEHOLD, accountId: ACCOUNT, kind: 'recurring_series',
+    }).allowed).toBe(true);
+    expectDenied(authorize(ctx, 'recurring.pause', {
+      householdId: HOUSEHOLD, accountId: ACCOUNT, kind: 'recurring_series',
+    }), 'household_scope_violation');
+
+    const editor = makeContext({
+      accountPermissions: [
+        { accountId: ACCOUNT, householdId: HOUSEHOLD, permission: 'edit' },
+      ],
+    });
+    expect(authorize(editor, 'recurring.pause', {
+      householdId: HOUSEHOLD, accountId: ACCOUNT, kind: 'recurring_series',
+    }).allowed).toBe(true);
+  });
+
+  it.each([
+    ['view then edit', ['view', 'edit']],
+    ['edit then view', ['edit', 'view']],
+  ] as const)('scans every recurring permission for writes: %s', (_label, permissions) => {
+    const ctx = makeContext({
+      accountPermissions: permissions.map((permission) => ({
+        accountId: ACCOUNT,
+        householdId: HOUSEHOLD,
+        permission,
+      })),
+    });
+
+    expect(authorize(ctx, 'recurring.pause', {
+      householdId: HOUSEHOLD, accountId: ACCOUNT, kind: 'recurring_series',
+    }).allowed).toBe(true);
   });
 
   it('allows a professional to read with household membership', () => {

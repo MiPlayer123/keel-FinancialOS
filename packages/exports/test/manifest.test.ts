@@ -3,8 +3,8 @@ import { EXCLUDE, INCLUDE } from '../src/index.js';
 
 describe('export manifest', () => {
   it('classifies each manifest public-table decision exactly once', () => {
-    expect(INCLUDE).toHaveLength(28);
-    expect(EXCLUDE.filter((entry) => entry.schema === 'public')).toHaveLength(13);
+    expect(INCLUDE).toHaveLength(33);
+    expect(EXCLUDE.filter((entry) => entry.schema === 'public')).toHaveLength(14);
     const decisions = [
       ...INCLUDE.map((entry) => entry.table),
       ...EXCLUDE.filter((entry) => entry.schema === 'public').map((entry) => entry.table),
@@ -32,6 +32,8 @@ describe('export manifest', () => {
       .toEqual(['amount_minor']);
     expect(INCLUDE.find((entry) => entry.table === 'audit_log')?.bigintColumns)
       .toEqual(['id']);
+    expect(INCLUDE.find((entry) => entry.table === 'recurring_occurrences')?.bigintColumns)
+      .toEqual(['expected_amount_minor']);
   });
 
   it('exports exact raw bytes and digest but explicitly omits parsed raw body JSON', () => {

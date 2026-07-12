@@ -12,12 +12,17 @@ import { keelSecretKeys } from '../_shared/bootstrap.ts';
 import { withSupabase } from 'npm:@supabase/server@1.3.0';
 import {
   ProviderSyncEventSchema,
+  CONFIDENCE_VERSION,
+  DETECTOR_VERSION,
+  NORMALIZER_VERSION,
+  detectRecurringSeries,
   planEvent,
   reconcileSyncBatch,
   type CanonicalTxnView,
   type IngestState,
   type PromotionAction,
   type ProviderSyncEvent,
+  type RecurringTransaction,
 } from '../_shared/vendor/keel-domain.mjs';
 import { json, mapDbError } from '../_shared/http.ts';
 import { decryptToken, type EncryptedRecord } from '../_shared/credential-crypto.ts';
@@ -84,6 +89,53 @@ interface ReapClaim extends EncryptedRecord {
   plaidItemId: string;
   reapClaimId: string;
 }
+
+const processRecurringDetection = async (
+  admin: AdminClient,
+  msg: QueueMessage,
+): Promise<ProcessOutcome> => {
+  const householdId = msg.message.refs['householdId'];
+  const asOfTimestamp = msg.message.refs['asOf'];
+  if (!householdId || !asOfTimestamp || !/^\d{4}-\d{2}-\d{2}T/u.test(asOfTimestamp)) {
+    return { ok: false, detail: 'recurring detection scope/asOf missing' };
+  }
+  const asOf = asOfTimestamp.slice(0, 10);
+  try {
+    const { data: rows, error: readError } = await admin.rpc('keel_recurring_read_txns', {
+      p_household_id: householdId,
+    });
+    if (readError) throw new Error(`recurring read failed: ${readError.message}`);
+    const candidates = detectRecurringSeries((rows ?? []) as RecurringTransaction[], { asOf });
+    const { error: upsertError } = await admin.rpc('keel_recurring_upsert_candidates', {
+      p_household_id: householdId,
+      p_run_key: msg.message.economicEventKey,
+      p_as_of: asOfTimestamp,
+      p_detector_version: DETECTOR_VERSION,
+      p_confidence_version: CONFIDENCE_VERSION,
+      p_normalizer_version: NORMALIZER_VERSION,
+      p_candidates: candidates,
+    });
+    if (upsertError) throw new Error(`recurring upsert failed: ${upsertError.message}`);
+    await admin.rpc('keel_meter_recurring_detection', {
+      p_household_id: householdId,
+      p_ok: true,
+      p_error_code: null,
+      p_quantity: candidates.length,
+    });
+    return { ok: true, detail: `recurring candidates: ${candidates.length}` };
+  } catch (error) {
+    await admin.rpc('keel_meter_recurring_detection', {
+      p_household_id: householdId,
+      p_ok: false,
+      p_error_code: 'detection_failed',
+      p_quantity: 0,
+    });
+    return {
+      ok: false,
+      detail: error instanceof Error ? error.message : 'recurring detection failed',
+    };
+  }
+};
 
 /** Deterministic sign-based offset routing (Law 1: not AI). Debit-positive:
  * outflow (negative on the asset) offsets to expense (positive). */
@@ -830,6 +882,8 @@ export default {
         outcome = { ok: true, detail: 'enrichment deferred (stage 1D)' };
       } else if (msg.message.jobType === 'sync_notification') {
         outcome = await processSyncNotification(admin, msg);
+      } else if (msg.message.jobType === 'recurring_detection') {
+        outcome = await processRecurringDetection(admin, msg);
       } else {
         outcome = { ok: false, detail: `unknown jobType ${msg.message.jobType}` };
       }

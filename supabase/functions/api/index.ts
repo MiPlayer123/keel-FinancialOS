@@ -49,11 +49,17 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'ingest.promote_event': 'keel_cmd_promote_event',
   'journal.post_batch': 'keel_cmd_post_batch',
   'journal.reverse_batch': 'keel_cmd_reverse_batch',
+  'recurring.confirm': 'keel_recurring_confirm',
+  'recurring.pause': 'keel_recurring_pause',
+  'recurring.resume': 'keel_recurring_resume',
+  'recurring.cancel': 'keel_recurring_cancel',
+  'recurring.reject': 'keel_recurring_reject',
 };
 
 const QUERY_TO_PROC: Record<string, string> = {
   'ledger.trial_balance': 'keel_trial_balance',
   'transactions.list': 'keel_list_transactions',
+  'recurring.list': 'keel_list_recurring',
 };
 
 // deno-lint-ignore no-explicit-any
@@ -70,6 +76,11 @@ interface CredentialEnvelope extends EncryptedRecord {
   credentialId: string;
   householdId: string;
   provider: 'plaid';
+}
+
+interface ListedRecurringSeries {
+  readonly seriesId: string;
+  readonly accountId: string;
 }
 
 const providerFailure = (error: PlaidClientError): Response =>
@@ -104,10 +115,14 @@ const loadAuthzContext = async (
   supabase: UserClient,
   userId: string,
 ): Promise<AuthzContext> => {
-  const [memberships, entityMemberships, accountOwnerships] = await Promise.all([
+  const [memberships, entityMemberships, accountOwnerships, accountPermissions] = await Promise.all([
     supabase.from('household_memberships').select('household_id, role').eq('user_id', userId),
     supabase.from('entity_memberships').select('entity_id, entities(household_id)'),
     supabase.from('account_owners').select('account_id, accounts(household_id)'),
+    supabase.from('resource_permissions')
+      .select('household_id, resource_id, permission')
+      .eq('user_id', userId)
+      .eq('resource_kind', 'account'),
   ]);
   return {
     userId: userId as AuthzContext['userId'],
@@ -127,6 +142,13 @@ const loadAuthzContext = async (
       (row: { account_id: string; accounts: { household_id: string } | null }) => ({
         accountId: row.account_id as AuthzContext['accountOwnerships'][number]['accountId'],
         householdId: (row.accounts?.household_id ?? '') as HouseholdId,
+      }),
+    ),
+    accountPermissions: (accountPermissions.data ?? []).map(
+      (row: { household_id: string; resource_id: string; permission: string }) => ({
+        accountId: row.resource_id as AuthzContext['accountPermissions'][number]['accountId'],
+        householdId: row.household_id as HouseholdId,
+        permission: row.permission as AuthzContext['accountPermissions'][number]['permission'],
       }),
     ),
   };
@@ -558,8 +580,25 @@ export default {
 
       // Fail-closed TS authorization before the database re-checks (Law 9).
       const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      let recurringSeries: ListedRecurringSeries | undefined;
+      if (envelope.data.command.startsWith('recurring.')) {
+        const { data: recurringList, error: recurringListError } = await ctx.supabase.rpc(
+          'keel_list_recurring',
+          { p_household_id: envelope.data.householdId },
+        );
+        if (recurringListError) return mapDbError(recurringListError);
+        recurringSeries = (recurringList?.rows ?? []).find(
+          (row: { seriesId?: string }) => row.seriesId === payload['seriesId'],
+        ) as ListedRecurringSeries | undefined;
+        if (!recurringSeries) {
+          return json(404, { code: 'not_found', message: 'Not found.', details: {} });
+        }
+      }
       const resource = {
         householdId: envelope.data.householdId,
+        ...(recurringSeries
+          ? { kind: 'recurring_series' as const, accountId: recurringSeries.accountId as never }
+          : {}),
         ...(typeof payload['entityId'] === 'string' &&
         EntityIdSchema.safeParse(payload['entityId']).success
           ? { entityId: payload['entityId'] as never }
@@ -593,6 +632,21 @@ export default {
       const proc = query.query ? QUERY_TO_PROC[query.query] : undefined;
       if (!proc || typeof query.householdId !== 'string') {
         return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });
+      }
+      if (query.query === 'recurring.list') {
+        const parsedHousehold = HouseholdIdSchema.safeParse(query.householdId);
+        if (!parsedHousehold.success) {
+          return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });
+        }
+        const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+        const decision = authorize(authzCtx, 'recurring.list', {
+          kind: 'household', householdId: parsedHousehold.data,
+        });
+        if (!decision.allowed) {
+          return decision.code === 'household_scope_violation'
+            ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+            : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+        }
       }
       const { data, error } = await ctx.supabase.rpc(proc, {
         p_household_id: query.householdId,

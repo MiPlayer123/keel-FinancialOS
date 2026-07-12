@@ -24,12 +24,24 @@ export default {
     }
 
     let enqueued: number;
+    let recurringEnqueued: number;
     try {
-      enqueued = await claimActiveSyncs(ctx.supabaseAdmin);
+      [enqueued, recurringEnqueued] = await Promise.all([
+        claimActiveSyncs(ctx.supabaseAdmin),
+        ctx.supabaseAdmin.rpc('keel_cron_enqueue_recurring_detection', {}).then(
+          ({ data, error }: { data: number | null; error: { message: string } | null }) => {
+            if (error) throw new Error(error.message);
+            return data ?? 0;
+          },
+        ),
+      ]);
     } catch {
       return json(500, { code: 'transaction_failed', message: 'Tick failed.', details: {} });
     }
 
+    // Preserve the established C6 response contract; recurring is a parallel
+    // orchestration side effect, not a renamed sync count.
+    void recurringEnqueued;
     return json(200, { ok: true, enqueued });
   }),
 };

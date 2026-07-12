@@ -8,6 +8,11 @@ export const WRITE_ACTIONS = [
   'journal.reverse_batch',
   'connections.link',
   'connections.disconnect',
+  'recurring.confirm',
+  'recurring.pause',
+  'recurring.resume',
+  'recurring.cancel',
+  'recurring.reject',
 ] as const satisfies readonly CommandName[];
 
 export const EXPORT_ACTIONS = ['admin.export_all'] as const satisfies readonly CommandName[];
@@ -15,6 +20,7 @@ export const EXPORT_ACTIONS = ['admin.export_all'] as const satisfies readonly C
 export const READ_ACTIONS = [
   'ledger.trial_balance',
   'transactions.list',
+  'recurring.list',
   'audit.read',
   ...EXPORT_ACTIONS,
 ] as const;
@@ -35,8 +41,14 @@ export const ACTION_MINIMUM_ROLES = {
   'journal.reverse_batch': 'partner',
   'connections.link': 'partner',
   'connections.disconnect': 'partner',
+  'recurring.confirm': 'partner',
+  'recurring.pause': 'partner',
+  'recurring.resume': 'partner',
+  'recurring.cancel': 'partner',
+  'recurring.reject': 'partner',
   'ledger.trial_balance': 'viewer',
   'transactions.list': 'viewer',
+  'recurring.list': 'viewer',
   'audit.read': 'viewer',
   'admin.export_all': 'owner',
 } as const satisfies Readonly<Record<Action, MinimumRole>>;

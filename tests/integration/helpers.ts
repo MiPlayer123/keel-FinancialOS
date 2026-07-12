@@ -78,6 +78,10 @@ export const SEED = {
     alphaChecking: '00000000-0000-4000-8000-00000000a301',
     alphaGroceries: '00000000-0000-4000-8000-00000000a311',
   },
+  accounts: {
+    alphaChecking: '00000000-0000-4000-8000-00000000a401',
+    betaChecking: '00000000-0000-4000-8000-00000000b401',
+  },
   connections: {
     simAlpha: { id: '00000000-0000-4000-8000-00000000a201', ref: 'sim-conn-alpha' },
     plaidAlpha: { id: '00000000-0000-4000-8000-00000000a202', ref: 'plaid-item-alpha' },

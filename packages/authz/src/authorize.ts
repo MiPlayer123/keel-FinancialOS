@@ -55,6 +55,7 @@ export const authorize = (ctx: AuthzContext, action: Action, resource: ResourceR
   if (
     resource.accountId !== undefined &&
     isWriteAction(action) &&
+    !action.startsWith('recurring.') &&
     !ctx.accountOwnerships.some(
       (candidate) =>
         candidate.accountId === resource.accountId &&
@@ -62,6 +63,21 @@ export const authorize = (ctx: AuthzContext, action: Action, resource: ResourceR
     )
   ) {
     return scopeViolation('Account is not linked to the resource household.');
+  }
+
+  if (resource.accountId !== undefined && action.startsWith('recurring.')) {
+    const ownsAccount = ctx.accountOwnerships.some(
+      (candidate) => candidate.accountId === resource.accountId &&
+        candidate.householdId === resource.householdId,
+    );
+    const explicitlyAllowed = ctx.accountPermissions.some(
+      (candidate) => candidate.accountId === resource.accountId &&
+        candidate.householdId === resource.householdId &&
+        (!isWriteAction(action) || candidate.permission === 'edit'),
+    );
+    if (!ownsAccount && !explicitlyAllowed) {
+      return scopeViolation('Recurring resource account is not authorized.');
+    }
   }
 
   return {

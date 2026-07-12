@@ -37,6 +37,12 @@ insert into expected_export_tables(table_name, allowed_columns, omitted_columns)
   ('audit_log', array['id','household_id','actor','action','object_type','object_id','command_id','before','after','at'], '{}'),
   ('domain_events', array['id','event_type','household_id','command_id','economic_event_key','actor','occurred_at','payload'], '{}'),
   ('command_executions', array['household_id','economic_event_key','command','payload_sha256','result','executed_at'], array['command_id']);
+insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
+  ('recurring_detector_runs', array['id','household_id','run_key','as_of','detector_version','confidence_version','normalizer_version','candidate_snapshot_hash','created_at'], '{}'),
+  ('recurring_series', array['id','household_id','series_key','account_id','ledger_account_id','counterparty_key','currency','sign','status','current_candidate_version_id','confirmed_by','confirmed_at','created_at','updated_at'], '{}'),
+  ('recurring_candidate_versions', array['id','household_id','series_id','detector_run_id','candidate_hash','input_fingerprint','detector_version','confidence_version','normalizer_version','as_of','score_bps','evidence','candidate','created_at'], '{}'),
+  ('recurring_occurrences', array['household_id','id','series_id','candidate_version_id','occurrence_key','expected_date','expected_amount_minor','currency','amount_kind','status','matched_txn_id','score_bps','evidence','input_fingerprint','detector_version','confidence_version','as_of','created_at'], '{}'),
+  ('recurring_status_events', array['household_id','id','series_id','candidate_version_id','transition','effective_date','actor','command_id','created_at'], '{}');
 
 create temporary table excluded_export_tables(table_name text primary key) on commit drop;
 insert into excluded_export_tables(table_name) values
@@ -44,6 +50,7 @@ insert into excluded_export_tables(table_name) values
   ('webhook_rejection_counters'), ('provider_call_budget'), ('usage_events'),
   ('plaid_test_responses'), ('plaid_webhook_key_test_responses'), ('sync_test_pages'),
   ('sync_attempts'), ('sync_checkpoints'), ('link_attempts'), ('removal_attempts');
+insert into excluded_export_tables(table_name) values ('recurring_detection_claims');
 
 select has_role('keel_export', 'dedicated export role exists');
 select ok(
@@ -54,8 +61,8 @@ select ok(
 select is(
   (select count(*)::int from expected_export_tables
     where has_table_privilege('keel_export', format('public.%I', table_name), 'SELECT')),
-  28,
-  'keel_export can SELECT all 28 v2 included tables'
+  33,
+  'keel_export can SELECT all 33 included tables'
 );
 select is(
   (select count(*)::int
@@ -186,8 +193,8 @@ reset role;
 select is(
   (select count(*)::int from jsonb_object_keys(
     public.keel_export_household('00000000-0000-4000-8000-00000000a001')->'tables')),
-  28,
-  'snapshot contains all 28 included table arrays'
+  33,
+  'snapshot contains all 33 included table arrays'
 );
 select is(
   (select count(*)::int from excluded_export_tables e

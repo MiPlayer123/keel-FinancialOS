@@ -21,11 +21,26 @@ describe('action vocabulary', () => {
       'journal.reverse_batch',
       'connections.link',
       'connections.disconnect',
+      'recurring.confirm',
+      'recurring.pause',
+      'recurring.resume',
+      'recurring.cancel',
+      'recurring.reject',
       'ledger.trial_balance',
       'transactions.list',
+      'recurring.list',
       'audit.read',
       'admin.export_all',
     ]);
+  });
+
+  it('requires partner for recurring mutations and viewer for scoped recurring reads', () => {
+    expect(ACTION_MINIMUM_ROLES['recurring.confirm']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['recurring.pause']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['recurring.resume']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['recurring.cancel']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['recurring.reject']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['recurring.list']).toBe('viewer');
   });
 
   it('maps ordinary reads to viewer, writes to partner, and export to owner', () => {

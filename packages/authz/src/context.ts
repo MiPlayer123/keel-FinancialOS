@@ -15,4 +15,9 @@ export interface AuthzContext {
     accountId: AccountId;
     householdId: HouseholdId;
   }[];
+  accountPermissions: readonly {
+    accountId: AccountId;
+    householdId: HouseholdId;
+    permission: 'view' | 'edit' | 'export';
+  }[];
 }

@@ -9,6 +9,7 @@ describe('fail-closed action exhaustiveness', () => {
       memberships: [],
       entityMemberships: [],
       accountOwnerships: [],
+      accountPermissions: [],
     };
 
     const decision = authorize(ctx, action, {

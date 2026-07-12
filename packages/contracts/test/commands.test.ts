@@ -3,6 +3,7 @@ import {
   CommandNameSchema,
   CommandEnvelopeSchema,
   EconomicEventKeySchema,
+  IsoDateSchema,
   parseCommandPayload,
 } from '@keel/contracts';
 
@@ -37,6 +38,51 @@ describe('command envelope', () => {
     expect(CommandNameSchema.parse('admin.export_all')).toBe('admin.export_all');
     expect(CommandEnvelopeSchema.safeParse({ ...envelope, command: 'admin.export_all' }).success)
       .toBe(false);
+  });
+
+  it.each([
+    'recurring.confirm',
+    'recurring.pause',
+    'recurring.resume',
+    'recurring.cancel',
+    'recurring.reject',
+  ])('includes typed %s command payloads in mutation envelopes', (command) => {
+    const recurringEnvelope = {
+      ...envelope,
+      command,
+      payload: {
+        seriesId: uuid,
+        effectiveDate: '2026-07-12',
+        ...(command === 'recurring.confirm' || command === 'recurring.resume'
+          ? { horizonDays: 90 }
+          : {}),
+      },
+    };
+    expect(CommandEnvelopeSchema.safeParse(recurringEnvelope).success).toBe(true);
+    expect(() => parseCommandPayload(command as never, recurringEnvelope.payload)).not.toThrow();
+  });
+
+  it('rejects malformed recurring dates, horizons, and caller derivation fields', () => {
+    expect(() => parseCommandPayload('recurring.confirm', {
+      seriesId: uuid,
+      effectiveDate: '2026-7-12',
+      horizonDays: 0,
+    })).toThrow();
+    expect(() => parseCommandPayload('recurring.confirm', {
+      seriesId: uuid,
+      effectiveDate: '2026-07-12',
+      horizonDays: 90,
+      occurrences: [{ expectedAmountMinor: '999999999' }],
+    })).toThrow();
+  });
+
+  it('validates real Gregorian civil dates, including century leap rules', () => {
+    for (const valid of ['2024-02-29', '2000-02-29', '2026-07-12']) {
+      expect(IsoDateSchema.safeParse(valid).success).toBe(true);
+    }
+    for (const invalid of ['0000-01-01', '2026-02-29', '1900-02-29', '2026-04-31', '2026-99-99']) {
+      expect(IsoDateSchema.safeParse(invalid).success).toBe(false);
+    }
   });
 
   it('rejects agent actors without onBehalfOf (Law 2: attribution)', () => {

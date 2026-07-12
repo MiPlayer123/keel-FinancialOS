@@ -20,6 +20,7 @@
   },
   "devDependencies": {
     "@keel/contracts": "workspace:*",
+    "@keel/detectors": "workspace:*",
     "@keel/test-fixtures": "workspace:*",
     "@supabase/supabase-js": "^2.110.0",
     "@vitest/coverage-v8": "catalog:",

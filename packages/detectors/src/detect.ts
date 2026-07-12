@@ -1,0 +1,373 @@
+import { civilDateToEpochDay, daysInMonth, parseCivilDate } from './civil-date.js';
+import { fingerprint } from './fingerprint.js';
+import { NORMALIZER_VERSION, normalizeCounterparty } from './normalize.js';
+import { bigintSummary, compareBigints } from './statistics.js';
+import type {
+  Cadence,
+  CadenceAnchor,
+  DetectedSeries,
+  RecurringTransaction,
+  TransactionSign,
+} from './types.js';
+
+export const DETECTOR_VERSION = 'recurring-grid-v1' as const;
+export const CONFIDENCE_VERSION = 'recurring-score-bps-v1' as const;
+export const MAX_DETECTION_INPUT_ROWS = 10_000 as const;
+export const MAX_DETECTION_LOOKBACK_DAYS = 3_660 as const;
+
+interface ParsedTransaction extends RecurringTransaction {
+  readonly amount: bigint;
+  readonly epochDay: number;
+  readonly year: number;
+  readonly month: number;
+  readonly day: number;
+}
+
+interface GridSlot {
+  readonly key: string;
+  readonly date: string;
+  readonly epochDay: number;
+}
+
+interface Fit {
+  readonly cadence: Cadence;
+  readonly anchor: CadenceAnchor;
+  readonly matched: readonly ParsedTransaction[];
+  readonly totalSlots: number;
+  readonly residualDays: number;
+  readonly amountFixed: boolean;
+  readonly scoreBps: number;
+  readonly fitKey: string;
+}
+
+const absNumber = (value: number): number => value < 0 ? -value : value;
+const mod = (value: number, divisor: number): number => ((value % divisor) + divisor) % divisor;
+const dateString = (year: number, month: number, day: number): string =>
+  `${year.toString().padStart(4, '0')}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+
+const parseAmount = (wire: string): bigint => {
+  if (!/^-?(0|[1-9][0-9]*)$/u.test(wire) || wire === '-0') {
+    throw new RangeError('amountMinor must be a canonical decimal integer string');
+  }
+  const amount = BigInt(wire);
+  if (amount === 0n) throw new RangeError('recurring transaction amount must be non-zero');
+  return amount;
+};
+
+const parseTransaction = (transaction: RecurringTransaction): ParsedTransaction => {
+  const civil = parseCivilDate(transaction.effectiveDate);
+  if (
+    transaction.txnId.length === 0 || transaction.batchId.length === 0 ||
+    transaction.postingId.length === 0 || transaction.accountId.length === 0 ||
+    transaction.ledgerAccountId.length === 0 || transaction.currency.length === 0
+  ) {
+    throw new RangeError('recurring transaction identity fields must be non-empty');
+  }
+  return {
+    ...transaction,
+    amount: parseAmount(transaction.amountMinor),
+    epochDay: civilDateToEpochDay(transaction.effectiveDate),
+    ...civil,
+  };
+};
+
+const compareTransactions = (left: ParsedTransaction, right: ParsedTransaction): number =>
+  left.effectiveDate.localeCompare(right.effectiveDate) || left.txnId.localeCompare(right.txnId);
+
+const fitSlots = (
+  input: readonly ParsedTransaction[],
+  slots: readonly GridSlot[],
+  toleranceDays: number,
+): { matched: ParsedTransaction[]; totalSlots: number; residualDays: number } | null => {
+  const ranked = input.flatMap((transaction) =>
+    slots.flatMap((slot, slotIndex) => {
+      const residual = absNumber(transaction.epochDay - slot.epochDay);
+      return residual <= toleranceDays ? [{ transaction, slot, slotIndex, residual }] : [];
+    }),
+  ).sort((left, right) =>
+    left.residual - right.residual ||
+    left.transaction.effectiveDate.localeCompare(right.transaction.effectiveDate) ||
+    left.transaction.txnId.localeCompare(right.transaction.txnId),
+  );
+
+  const usedTransactions = new Set<string>();
+  const usedSlots = new Set<string>();
+  const chosen: typeof ranked = [];
+  for (const candidate of ranked) {
+    if (usedTransactions.has(candidate.transaction.txnId) || usedSlots.has(candidate.slot.key)) continue;
+    usedTransactions.add(candidate.transaction.txnId);
+    usedSlots.add(candidate.slot.key);
+    chosen.push(candidate);
+  }
+  if (chosen.length < 3) return null;
+  const chosenSlotIndexes = chosen.map((item) => item.slotIndex);
+  const firstSlot = Math.min(...chosenSlotIndexes);
+  const lastSlot = Math.max(...chosenSlotIndexes);
+  return {
+    matched: chosen.map((item) => item.transaction).sort(compareTransactions),
+    totalSlots: lastSlot - firstSlot + 1,
+    residualDays: chosen.reduce((sum, item) => sum + item.residual, 0),
+  };
+};
+
+const scoreFit = (
+  matched: number,
+  totalSlots: number,
+  residualDays: number,
+  fixed: boolean,
+): number => {
+  const coverage = Math.floor((matched * 7_000) / totalSlots);
+  const count = Math.min(1_500, 750 + (matched - 3) * 250);
+  const fixedBonus = fixed ? 2_000 : 0;
+  return Math.max(1, Math.min(10_000, coverage + count + fixedBonus - residualDays * 250));
+};
+
+const makeFit = (
+  cadence: Cadence,
+  anchor: CadenceAnchor,
+  subset: readonly ParsedTransaction[],
+  slots: readonly GridSlot[],
+  toleranceDays: number,
+): Fit | null => {
+  const result = fitSlots(subset, slots, toleranceDays);
+  if (!result) return null;
+  const amounts = result.matched.map((transaction) => transaction.amount);
+  const fixed = amounts.every((amount) => amount === amounts[0]);
+  const fitKey = `${cadence}|${JSON.stringify(anchor)}|${result.matched.map((item) => item.txnId).join(',')}`;
+  return {
+    cadence,
+    anchor,
+    matched: result.matched,
+    totalSlots: result.totalSlots,
+    residualDays: result.residualDays,
+    amountFixed: fixed,
+    scoreBps: scoreFit(result.matched.length, result.totalSlots, result.residualDays, fixed),
+    fitKey,
+  };
+};
+
+const epochFits = (subset: readonly ParsedTransaction[], intervalDays: 7 | 14): Fit[] => {
+  const minDay = Math.min(...subset.map((transaction) => transaction.epochDay));
+  const maxDay = Math.max(...subset.map((transaction) => transaction.epochDay));
+  const anchors = [...new Set(subset.map((transaction) => mod(transaction.epochDay, intervalDays)))];
+  return anchors.flatMap((remainder) => {
+    const first = minDay - mod(minDay - remainder, intervalDays) - intervalDays;
+    const slots: GridSlot[] = [];
+    for (let day = first; day <= maxDay + intervalDays; day += intervalDays) {
+      slots.push({ key: day.toString(), date: day.toString(), epochDay: day });
+    }
+    const anchor: CadenceAnchor = {
+      kind: 'epoch_grid',
+      intervalDays,
+      anchorEpochDay: first + intervalDays,
+    };
+    const fit = makeFit(intervalDays === 7 ? 'weekly' : 'biweekly', anchor, subset, slots, intervalDays === 7 ? 1 : 2);
+    return fit ? [fit] : [];
+  });
+};
+
+const calendarFits = (
+  subset: readonly ParsedTransaction[],
+  intervalMonths: 1 | 3 | 12,
+): Fit[] => {
+  const minMonth = Math.min(...subset.map((transaction) => transaction.year * 12 + transaction.month - 1));
+  const maxMonth = Math.max(...subset.map((transaction) => transaction.year * 12 + transaction.month - 1));
+  const anchors = [...new Set(subset.map((transaction) => transaction.day))];
+  const phases = [...new Set(subset.map((transaction) => mod(transaction.year * 12 + transaction.month - 1, intervalMonths)))];
+  const cadence: Cadence = intervalMonths === 1 ? 'monthly' : intervalMonths === 3 ? 'quarterly' : 'annual';
+  const tolerance = intervalMonths === 1 ? 3 : intervalMonths === 3 ? 5 : 7;
+  return anchors.flatMap((anchorDay) => phases.flatMap((phase) => {
+    const slots: GridSlot[] = [];
+    for (let monthIndex = minMonth - intervalMonths; monthIndex <= maxMonth + intervalMonths; monthIndex += 1) {
+      if (mod(monthIndex, intervalMonths) !== phase) continue;
+      const year = Math.floor(monthIndex / 12);
+      const month = monthIndex - year * 12 + 1;
+      const date = dateString(year, month, Math.min(anchorDay, daysInMonth(year, month)));
+      slots.push({ key: monthIndex.toString(), date, epochDay: civilDateToEpochDay(date) });
+    }
+    const anchor: CadenceAnchor = {
+      kind: 'day_of_month',
+      day: anchorDay,
+      intervalMonths,
+      phase,
+    };
+    const fit = makeFit(cadence, anchor, subset, slots, tolerance);
+    return fit ? [fit] : [];
+  }));
+};
+
+const semimonthlyFits = (subset: readonly ParsedTransaction[]): Fit[] => {
+  const days = [...new Set(subset.map((transaction) => transaction.day))].sort((a, b) => a - b);
+  const minMonth = Math.min(...subset.map((transaction) => transaction.year * 12 + transaction.month - 1));
+  const maxMonth = Math.max(...subset.map((transaction) => transaction.year * 12 + transaction.month - 1));
+  const pairs: Array<readonly [number, number]> = [];
+  days.forEach((first, firstIndex) => {
+    days.slice(firstIndex + 1).forEach((second) => {
+      if (second - first >= 10 && second - first <= 20) pairs.push([first, second]);
+    });
+  });
+  return pairs.flatMap((pair) => {
+    const slots: GridSlot[] = [];
+    for (let monthIndex = minMonth - 1; monthIndex <= maxMonth + 1; monthIndex += 1) {
+      const year = Math.floor(monthIndex / 12);
+      const month = monthIndex - year * 12 + 1;
+      for (const anchorDay of pair) {
+        const date = dateString(year, month, Math.min(anchorDay, daysInMonth(year, month)));
+        slots.push({ key: date, date, epochDay: civilDateToEpochDay(date) });
+      }
+    }
+    slots.sort((left, right) => left.date.localeCompare(right.date));
+    const anchor: CadenceAnchor = { kind: 'day_pair', days: pair };
+    const fit = makeFit('semimonthly', anchor, subset, slots, 2);
+    return fit ? [fit] : [];
+  });
+};
+
+const subsetsFor = (group: readonly ParsedTransaction[]): ParsedTransaction[][] => {
+  const byAmount = new Map<bigint, ParsedTransaction[]>();
+  for (const transaction of group) {
+    const bucket = byAmount.get(transaction.amount) ?? [];
+    bucket.push(transaction);
+    byAmount.set(transaction.amount, bucket);
+  }
+  const subsets = [...byAmount.values()].filter((bucket) => bucket.length >= 3);
+  subsets.push([...group]);
+  const seen = new Set<string>();
+  return subsets.filter((subset) => {
+    const key = subset.map((transaction) => transaction.txnId).sort().join(',');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+const cadencePriority: Readonly<Record<Cadence, number>> = {
+  weekly: 0,
+  biweekly: 1,
+  semimonthly: 2,
+  monthly: 3,
+  quarterly: 4,
+  annual: 5,
+};
+
+const compareFits = (left: Fit, right: Fit): number =>
+  right.scoreBps - left.scoreBps ||
+  right.matched.length - left.matched.length ||
+  left.residualDays - right.residualDays ||
+  cadencePriority[left.cadence] - cadencePriority[right.cadence] ||
+  left.fitKey.localeCompare(right.fitKey);
+
+const chooseDisjointFits = (group: readonly ParsedTransaction[]): Fit[] => {
+  const unique = new Map<string, Fit>();
+  for (const subset of subsetsFor(group)) {
+    const fits = [
+      ...epochFits(subset, 7),
+      ...epochFits(subset, 14),
+      ...semimonthlyFits(subset),
+      ...calendarFits(subset, 1),
+      ...calendarFits(subset, 3),
+      ...calendarFits(subset, 12),
+    ];
+    for (const fit of fits) {
+      const current = unique.get(fit.fitKey);
+      if (!current || compareFits(fit, current) < 0) unique.set(fit.fitKey, fit);
+    }
+  }
+  const used = new Set<string>();
+  const chosen: Fit[] = [];
+  for (const fit of [...unique.values()].sort(compareFits)) {
+    if (fit.matched.some((transaction) => used.has(transaction.txnId))) continue;
+    fit.matched.forEach((transaction) => used.add(transaction.txnId));
+    chosen.push(fit);
+  }
+  return chosen;
+};
+
+const stableAnchor = (anchor: CadenceAnchor): string => JSON.stringify(anchor);
+
+export const detectRecurringSeries = (
+  transactions: readonly RecurringTransaction[],
+  options: { readonly asOf: string },
+): DetectedSeries[] => {
+  parseCivilDate(options.asOf);
+  if (transactions.length > MAX_DETECTION_INPUT_ROWS) {
+    throw new RangeError(`recurring detection input exceeds ${MAX_DETECTION_INPUT_ROWS.toString()} rows`);
+  }
+  const asOfEpochDay = civilDateToEpochDay(options.asOf);
+  const parsed = transactions.map(parseTransaction)
+    .filter((transaction) => transaction.effectiveDate <= options.asOf &&
+      transaction.epochDay >= asOfEpochDay - MAX_DETECTION_LOOKBACK_DAYS)
+    .sort(compareTransactions);
+  const groups = new Map<string, { counterpartyKey: string; sign: TransactionSign; rows: ParsedTransaction[] }>();
+  for (const transaction of parsed) {
+    const counterpartyKey = transaction.counterpartyKey?.trim().toLowerCase() || normalizeCounterparty(transaction.description);
+    const sign: TransactionSign = transaction.amount < 0n ? 'outflow' : 'inflow';
+    const key = [counterpartyKey, transaction.accountId, transaction.ledgerAccountId, sign, transaction.currency, NORMALIZER_VERSION].join('|');
+    const group = groups.get(key) ?? { counterpartyKey, sign, rows: [] };
+    group.rows.push(transaction);
+    groups.set(key, group);
+  }
+
+  const output: DetectedSeries[] = [];
+  for (const [groupKey, group] of [...groups.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    if (group.rows.length < 3) continue;
+    for (const fit of chooseDisjointFits(group.rows)) {
+      const amounts = fit.matched.map((transaction) => transaction.amount);
+      const summary = bigintSummary(amounts);
+      const first = fit.matched[0] as ParsedTransaction;
+      const last = fit.matched.at(-1) as ParsedTransaction;
+      const identityAmount = fit.amountFixed ? summary.median.toString() : '';
+      const seriesKey = fingerprint(`${groupKey}|${fit.cadence}|${stableAnchor(fit.anchor)}|${identityAmount}`);
+      const evidenceInput = fit.matched.map((transaction) => [
+        transaction.txnId,
+        transaction.batchId,
+        transaction.postingId,
+        transaction.effectiveDate,
+        transaction.amountMinor,
+        transaction.currency,
+      ].join('|')).join('\n');
+      output.push({
+        seriesKey,
+        counterpartyKey: group.counterpartyKey,
+        accountId: first.accountId,
+        ledgerAccountId: first.ledgerAccountId,
+        currency: first.currency,
+        sign: group.sign,
+        cadence: fit.cadence,
+        cadenceAnchor: fit.anchor,
+        amountKind: fit.amountFixed ? 'fixed' : 'variable',
+        representativeAmountMinor: fit.amountFixed ? summary.median.toString() : null,
+        amountSummary: {
+          minMinor: summary.min.toString(),
+          maxMinor: summary.max.toString(),
+          lowerMedianMinor: summary.median.toString(),
+          squaredResidualSum: summary.squaredResidualSum.toString(),
+          count: summary.count,
+        },
+        lastSeen: last.effectiveDate,
+        occurrenceCount: fit.matched.length,
+        coverage: { matchedSlots: fit.matched.length, totalSlots: fit.totalSlots },
+        residualDays: fit.residualDays,
+        scoreBps: fit.scoreBps,
+        evidence: fit.matched.map((transaction) => ({
+          txnId: transaction.txnId,
+          batchId: transaction.batchId,
+          postingId: transaction.postingId,
+        })),
+        inputFingerprint: fingerprint(`${DETECTOR_VERSION}|${CONFIDENCE_VERSION}|${NORMALIZER_VERSION}|${options.asOf}|${evidenceInput}`),
+        detectorVersion: DETECTOR_VERSION,
+        confidenceVersion: CONFIDENCE_VERSION,
+        normalizerVersion: NORMALIZER_VERSION,
+        asOf: options.asOf,
+        requiresApproval: true,
+      });
+    }
+  }
+  return output.sort((left, right) =>
+    left.counterpartyKey.localeCompare(right.counterpartyKey) ||
+    left.accountId.localeCompare(right.accountId) ||
+    left.cadence.localeCompare(right.cadence) ||
+    stableAnchor(left.cadenceAnchor).localeCompare(stableAnchor(right.cadenceAnchor)) ||
+    compareBigints(BigInt(left.amountSummary.lowerMedianMinor), BigInt(right.amountSummary.lowerMedianMinor)),
+  );
+};

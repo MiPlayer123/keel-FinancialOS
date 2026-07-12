@@ -28,6 +28,7 @@ const contextArbitrary: fc.Arbitrary<AuthzContext> = fc.record({
     fc.record({ accountId: accountIdArbitrary, householdId: householdIdArbitrary }),
     { maxLength: 8 },
   ),
+  accountPermissions: fc.constant([]),
 });
 
 const distinctHouseholdsArbitrary = fc
@@ -63,6 +64,7 @@ describe('tenant isolation properties', () => {
             memberships: [{ householdId, role: 'owner' }],
             entityMemberships: [{ entityId, householdId: otherHouseholdId }],
             accountOwnerships: [],
+            accountPermissions: [],
           };
 
           expect(authorize(ctx, action, { householdId, entityId }).allowed).toBe(false);
@@ -84,6 +86,7 @@ describe('tenant isolation properties', () => {
             memberships: [{ householdId, role: 'owner' }],
             entityMemberships: [],
             accountOwnerships: [{ accountId, householdId: otherHouseholdId }],
+            accountPermissions: [],
           };
 
           expect(authorize(ctx, action, { householdId, accountId }).allowed).toBe(false);

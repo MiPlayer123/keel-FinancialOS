@@ -9,6 +9,7 @@ import {
   JournalBatchIdSchema,
   LedgerAccountIdSchema,
   RawProviderEventIdSchema,
+  RecurringSeriesIdSchema,
   UserIdSchema,
 } from './ids.js';
 import { CurrencyCodeSchema, MinorUnitsStringSchema } from './money.js';
@@ -30,8 +31,23 @@ export const ActorSchema = z.discriminatedUnion('kind', [
 ]);
 export type Actor = z.infer<typeof ActorSchema>;
 
-/** ISO-8601 calendar date (no time component) — effective/posting dates. */
-export const IsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'expected YYYY-MM-DD');
+const isGregorianCivilDate = (value: string): boolean => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 1 || month < 1 || month > 12 || day < 1) return false;
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const monthDays = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31] as const;
+  const maxDay = monthDays[month - 1];
+  return maxDay !== undefined && day <= maxDay;
+};
+
+/** ISO-8601 Gregorian calendar date (no time component) — effective/posting dates. */
+export const IsoDateSchema = z.string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'expected YYYY-MM-DD')
+  .refine(isGregorianCivilDate, 'invalid Gregorian civil date');
 
 // ---------------------------------------------------------------------------
 // Stage 1A command payloads (PLAN.md §3.5 amendment 5)
@@ -86,12 +102,32 @@ export const ReverseBatchPayloadSchema = z.object({
   reason: z.string().min(1).max(500),
 });
 
+const RecurringTransitionPayloadSchema = z.object({
+  seriesId: RecurringSeriesIdSchema,
+  effectiveDate: IsoDateSchema,
+}).strict();
+
+export const RecurringConfirmPayloadSchema = RecurringTransitionPayloadSchema.extend({
+  horizonDays: z.number().int().min(1).max(366),
+}).strict();
+export const RecurringPausePayloadSchema = RecurringTransitionPayloadSchema;
+export const RecurringResumePayloadSchema = RecurringTransitionPayloadSchema.extend({
+  horizonDays: z.number().int().min(1).max(366),
+}).strict();
+export const RecurringCancelPayloadSchema = RecurringTransitionPayloadSchema;
+export const RecurringRejectPayloadSchema = RecurringTransitionPayloadSchema;
+
 export const COMMAND_PAYLOAD_SCHEMAS = {
   'accounts.create': CreateAccountPayloadSchema,
   'ingest.record_raw_event': RecordRawEventPayloadSchema,
   'ingest.promote_event': PromoteEventPayloadSchema,
   'journal.post_batch': PostBatchPayloadSchema,
   'journal.reverse_batch': ReverseBatchPayloadSchema,
+  'recurring.confirm': RecurringConfirmPayloadSchema,
+  'recurring.pause': RecurringPausePayloadSchema,
+  'recurring.resume': RecurringResumePayloadSchema,
+  'recurring.cancel': RecurringCancelPayloadSchema,
+  'recurring.reject': RecurringRejectPayloadSchema,
 } as const;
 export type CommandProcedureName = keyof typeof COMMAND_PAYLOAD_SCHEMAS;
 export type CommandName =
