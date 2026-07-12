@@ -30,6 +30,7 @@ import {
 import {
   parsePlaidSyncPage,
   PlaidMutationRestart,
+  PlaidSyncTransientError,
   readSyncPages,
   type LiveSyncResult,
 } from '../_shared/plaid-sync.ts';
@@ -256,6 +257,7 @@ export const processSyncNotification = async (
 ): Promise<ProcessOutcome> => {
   let owner: string | null = null;
   let attemptId: string | null = null;
+  let connectionId: string | null = null;
   let syncResult: LiveSyncResult | null = null;
   const rawPageIdByEventId = new Map<string, string>();
   try {
@@ -273,7 +275,7 @@ export const processSyncNotification = async (
       raw = data;
     }
 
-    const connectionId = raw?.connection_id ?? msg.message.refs['connectionId'];
+    connectionId = raw?.connection_id ?? msg.message.refs['connectionId'] ?? null;
     if (!connectionId) return { ok: false, detail: 'sync connection missing' };
     const continuation = parseContinuation(raw?.body);
 
@@ -709,6 +711,7 @@ export const processSyncNotification = async (
     };
   } catch (error) {
     const liveFailure = syncResult?.source !== 'injected';
+    const reauthCode = error instanceof PlaidSyncTransientError ? error.reauthCode : null;
     const attemptAlreadyCompleted = error instanceof SyncCompletionError && error.attemptCompleted;
     if (liveFailure && !attemptAlreadyCompleted && attemptId !== null && owner !== null) {
       try {
@@ -716,6 +719,20 @@ export const processSyncNotification = async (
       } catch {
         return { ok: false, retry: true, detail: 'live sync cleanup failed' };
       }
+    }
+    if (reauthCode !== null && connectionId !== null) {
+      const { error: reauthError } = await admin.rpc('keel_set_connection_reauth', {
+        p_connection_id: connectionId,
+        p_event_type: reauthCode,
+        p_required: true,
+      });
+      if (reauthError) {
+        return { ok: false, retry: true, detail: 'connection reauthentication update failed' };
+      }
+      return {
+        ok: false,
+        detail: `Plaid sync requires reauthentication (${reauthCode})`,
+      };
     }
     return {
       ok: false,

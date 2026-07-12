@@ -72,8 +72,9 @@ const webhookBody = (
   code: string,
   itemId = SEED.connections.plaidAlpha.ref,
   environment = 'sandbox',
+  webhookType = 'TRANSACTIONS',
 ): string => JSON.stringify({
-  webhook_type: 'TRANSACTIONS',
+  webhook_type: webhookType,
   webhook_code: code,
   item_id: itemId,
   environment,
@@ -209,6 +210,85 @@ describe('webhook-provider verification (test 11)', () => {
     expect((await postWebhook(body, secondJwt)).status).toBe(200);
     expect(await tableCount('raw_provider_events', { provider: 'plaid' })).toBe(beforeRaw + 2);
     expect(await queueDepth()).toBe(beforeQueue + 2);
+  });
+
+  it('sets reauth from a verified ITEM_LOGIN_REQUIRED without recording or enqueueing sync', async () => {
+    const body = webhookBody(
+      'ITEM_LOGIN_REQUIRED',
+      SEED.connections.plaidAlpha.ref,
+      'sandbox',
+      'ITEM',
+    );
+    const beforeRaw = await tableCount('raw_provider_events', { provider: 'plaid' });
+    const beforeQueue = await queueDepth();
+
+    const response = await postWebhook(body, await signBody(body));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ received: true, routed: true });
+    expect(await tableCount('raw_provider_events', { provider: 'plaid' })).toBe(beforeRaw);
+    expect(await queueDepth()).toBe(beforeQueue);
+
+    const svc = serviceClient();
+    const { data: connection, error: connectionError } = await svc
+      .from('connections')
+      .select('status')
+      .eq('id', SEED.connections.plaidAlpha.id)
+      .single();
+    if (connectionError) throw new Error(connectionError.message);
+    expect(connection.status).toBe('reauth_required');
+    const { data: health, error: healthError } = await svc
+      .from('connection_health_events')
+      .select('event_type, severity')
+      .eq('connection_id', SEED.connections.plaidAlpha.id)
+      .eq('event_type', 'ITEM_LOGIN_REQUIRED')
+      .order('occurred_at', { ascending: false })
+      .limit(1)
+      .single();
+    if (healthError) throw new Error(healthError.message);
+    expect(health).toEqual({ event_type: 'ITEM_LOGIN_REQUIRED', severity: 'error' });
+  });
+
+  it('clears reauth from a verified LOGIN_REPAIRED without enqueueing sync', async () => {
+    const body = webhookBody(
+      'LOGIN_REPAIRED',
+      SEED.connections.plaidAlpha.ref,
+      'sandbox',
+      'ITEM',
+    );
+    const beforeRaw = await tableCount('raw_provider_events', { provider: 'plaid' });
+    const beforeQueue = await queueDepth();
+
+    const response = await postWebhook(body, await signBody(body));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ received: true, routed: true });
+    expect(await tableCount('raw_provider_events', { provider: 'plaid' })).toBe(beforeRaw);
+    expect(await queueDepth()).toBe(beforeQueue);
+
+    const { data: connection, error } = await serviceClient()
+      .from('connections')
+      .select('status')
+      .eq('id', SEED.connections.plaidAlpha.id)
+      .single();
+    if (error) throw new Error(error.message);
+    expect(connection.status).toBe('active');
+  });
+
+  it('does not let an unverified ITEM lifecycle webhook change connection state', async () => {
+    const body = webhookBody(
+      'ITEM_LOGIN_REQUIRED',
+      SEED.connections.plaidAlpha.ref,
+      'sandbox',
+      'ITEM',
+    );
+    const response = await postWebhook(body, await signBody(body, { hashBody: `${body}tampered` }));
+    expect(response.status).toBe(401);
+    const { data: connection, error } = await serviceClient()
+      .from('connections')
+      .select('status')
+      .eq('id', SEED.connections.plaidAlpha.id)
+      .single();
+    if (error) throw new Error(error.message);
+    expect(connection.status).toBe('active');
   });
 
   it.each([

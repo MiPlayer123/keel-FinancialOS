@@ -25,6 +25,16 @@ type AdminClient = any;
 const EMPTY_BYTES = new Uint8Array();
 const QUARANTINE_WINDOW_MS = 60 * 60 * 1000;
 const SENSITIVE_HEADERS = new Set(['plaid-verification', 'authorization', 'apikey']);
+const REAUTH_REQUIRED_ITEM_CODES = new Set([
+  'ITEM_LOGIN_REQUIRED',
+  'PENDING_EXPIRATION',
+  'PENDING_DISCONNECT',
+  // Conservative lifecycle handling: revoked permission and bad item state
+  // require user repair and remain write-blocked until Plaid reports repair.
+  'USER_PERMISSION_REVOKED',
+  'ITEM_BAD_STATE',
+]);
+const REAUTH_CLEARED_ITEM_CODE = 'LOGIN_REPAIRED';
 
 // Atomic quarantine (post-build review, Codex #2): the dedupe + insert happen
 // inside a single SECURITY DEFINER RPC serialized by a per-(reason,hash)
@@ -124,6 +134,37 @@ export default {
     const itemId = typeof verdict.body['item_id'] === 'string'
       ? verdict.body['item_id']
       : 'unknown-item';
+    const webhookType = typeof verdict.body['webhook_type'] === 'string'
+      ? verdict.body['webhook_type']
+      : null;
+    const webhookCode = typeof verdict.body['webhook_code'] === 'string'
+      ? verdict.body['webhook_code']
+      : null;
+    const isReauthRequired = webhookType === 'ITEM' && webhookCode !== null &&
+      REAUTH_REQUIRED_ITEM_CODES.has(webhookCode);
+    const isReauthCleared = webhookType === 'ITEM' && webhookCode === REAUTH_CLEARED_ITEM_CODE;
+
+    if (isReauthRequired || isReauthCleared) {
+      const { data: connection, error: connectionError } = await admin
+        .from('connections')
+        .select('id')
+        .eq('provider', 'plaid')
+        .eq('external_ref', itemId)
+        .maybeSingle();
+      if (connectionError) return json(503, { code: 'ingestion_unavailable' });
+      if (!connection) {
+        await quarantine(admin, 'unroutable', bodyBytes, req.headers);
+        return json(200, { received: true, routed: false });
+      }
+      const { error: lifecycleError } = await admin.rpc('keel_set_connection_reauth', {
+        p_connection_id: connection.id,
+        p_event_type: webhookCode,
+        p_required: isReauthRequired,
+      });
+      if (lifecycleError) return json(503, { code: 'ingestion_unavailable' });
+      return json(200, { received: true, routed: true });
+    }
+
     const bodySha256 = await sha256Hex(bodyBytes);
     const { data, error } = await admin.rpc('keel_webhook_record_delivery', {
       p_connection_external_ref: itemId,

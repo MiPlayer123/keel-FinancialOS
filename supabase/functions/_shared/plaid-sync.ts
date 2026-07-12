@@ -29,11 +29,13 @@ export interface ParsedPlaidSyncPage {
 }
 
 const MUTATION_ERROR_CODE = 'TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION';
+const PLAID_REAUTH_CODES = ['ITEM_LOGIN_REQUIRED', 'PENDING_EXPIRATION'] as const;
 const MAX_LIVE_RESTARTS = 3;
 const PLAID_SYNC_TIMEOUT_MS = 10_000;
 
 export type SyncPageSource = 'injected' | 'live' | 'disabled';
 export type SyncPageStatus = 'terminal' | 'partial' | 'noop';
+export type PlaidReauthCode = (typeof PLAID_REAUTH_CODES)[number];
 
 export interface LiveSyncResult {
   source: SyncPageSource;
@@ -77,14 +79,17 @@ export class PlaidSyncTransientError extends Error {
   readonly kind: PlaidSyncFailureKind;
   readonly errorCode:
     | typeof MUTATION_ERROR_CODE
+    | PlaidReauthCode
     | 'provider_budget_exhausted'
     | 'provider_error'
     | null;
+  readonly reauthCode: PlaidReauthCode | null;
 
   constructor(
     kind: PlaidSyncFailureKind,
     errorCode:
       | typeof MUTATION_ERROR_CODE
+      | PlaidReauthCode
       | 'provider_budget_exhausted'
       | 'provider_error'
       | null = null,
@@ -93,6 +98,7 @@ export class PlaidSyncTransientError extends Error {
     this.name = 'PlaidSyncTransientError';
     this.kind = kind;
     this.errorCode = errorCode;
+    this.reauthCode = isPlaidReauthCode(errorCode) ? errorCode : null;
   }
 }
 
@@ -118,10 +124,14 @@ const liveGateEnabled = (): boolean =>
   Boolean(Deno.env.get('PLAID_CLIENT_ID')) &&
   Boolean(Deno.env.get('PLAID_SECRET'));
 
+const isPlaidReauthCode = (value: unknown): value is PlaidReauthCode =>
+  typeof value === 'string' && (PLAID_REAUTH_CODES as readonly string[]).includes(value);
+
 const normalizeErrorCode = (
   value: unknown,
-): typeof MUTATION_ERROR_CODE | 'provider_error' | null => {
+): typeof MUTATION_ERROR_CODE | PlaidReauthCode | 'provider_error' | null => {
   if (value === MUTATION_ERROR_CODE) return MUTATION_ERROR_CODE;
+  if (isPlaidReauthCode(value)) return value;
   return typeof value === 'string' ? 'provider_error' : null;
 };
 
@@ -355,7 +365,8 @@ export const readSyncPages = async (
     for (const page of pages) {
       const start = Date.now();
       let ok = false;
-      let errorCode: typeof MUTATION_ERROR_CODE | 'provider_error' | null = 'provider_error';
+      let errorCode: typeof MUTATION_ERROR_CODE | PlaidReauthCode | 'provider_error' | null =
+        'provider_error';
       let requestId: string | null = null;
       try {
         const control = parseControlBody(page.bodyText);
@@ -375,6 +386,9 @@ export const readSyncPages = async (
         requestId,
         itemRef: connectionId,
       });
+      if (isPlaidReauthCode(errorCode)) {
+        throw new PlaidSyncTransientError('http', errorCode);
+      }
     }
     return {
       source: 'injected',

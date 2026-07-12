@@ -418,6 +418,11 @@ Deno.test('C5c live Plaid sync source contract', async (test) => {
       ),
       (error) => {
         assertEquals(error.name, 'PlaidSyncTransientError');
+        assertEquals(
+          (error as PlaidSync.PlaidSyncTransientError & { reauthCode?: string | null })
+            .reauthCode,
+          null,
+        );
         assert(!error.message.includes(token));
         assert(!error.message.includes('leaked'));
       },
@@ -433,6 +438,35 @@ Deno.test('C5c live Plaid sync source contract', async (test) => {
         assert(!error.message.includes(token));
       },
     );
+    clearLiveEnv();
+  });
+
+  await test.step('recognized ITEM reauth failures expose only normalized reauth codes', async () => {
+    const { token, envelope } = await encryptedEnvelope();
+    for (const errorCode of ['ITEM_LOGIN_REQUIRED', 'PENDING_EXPIRATION']) {
+      await assertRejects(
+        () => subject.fetchSyncPagesLive(
+          rpcAdmin({ data: envelope, error: null }),
+          crypto.randomUUID(),
+          liveOptions(async () => new Response(JSON.stringify({
+            error_type: 'ITEM_ERROR',
+            error_code: errorCode,
+            error_message: token,
+            request_id: 'reauth-required-request',
+          }), { status: 400 })),
+        ),
+        (error) => {
+          assert(error instanceof PlaidSync.PlaidSyncTransientError);
+          const typed = error as PlaidSync.PlaidSyncTransientError & {
+            reauthCode?: string | null;
+          };
+          assertEquals(typed.kind, 'http');
+          assertEquals(typed.errorCode, errorCode);
+          assertEquals(typed.reauthCode, errorCode);
+          assert(!typed.message.includes(token));
+        },
+      );
+    }
     clearLiveEnv();
   });
 

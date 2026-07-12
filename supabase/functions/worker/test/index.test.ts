@@ -1,5 +1,9 @@
 import { describe, it, vi } from 'vitest';
-import type { LiveSyncOptions, LiveSyncResult } from '../../_shared/plaid-sync.ts';
+import {
+  PlaidSyncTransientError,
+  type LiveSyncOptions,
+  type LiveSyncResult,
+} from '../../_shared/plaid-sync.ts';
 
 vi.stubGlobal('Deno', { env: { get: (_name: string): string | undefined => undefined } });
 const { orderQueueMessages, processSyncNotification } = await import('../index.ts');
@@ -313,6 +317,86 @@ describe('C5c worker durable sync orchestration', () => {
           args: { p_attempt_id: 'attempt-disabled', p_owner: rpcCalls[1]?.args['p_owner'] },
         },
       ],
+    );
+  });
+
+  it('abandons a live login failure before setting reauth and does not retry it as transient', async () => {
+    const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const admin = {
+      from: (table: string) => queryFor(table),
+      rpc: async (name: string, args: Record<string, unknown>) => {
+        rpcCalls.push({ name, args });
+        if (name === 'keel_worker_bump_generation') return { data: null, error: null };
+        if (name === 'keel_worker_acquire_sync_lease') {
+          return { data: { acquired: true, baseCursor: 'reauth-cursor' }, error: null };
+        }
+        if (name === 'keel_worker_open_attempt') return { data: 'attempt-reauth', error: null };
+        if (name === 'keel_worker_abandon_and_release') return { data: null, error: null };
+        if (name === 'keel_set_connection_reauth') return { data: null, error: null };
+        throw new Error(`unexpected RPC ${name}`);
+      },
+    };
+    const failure = Object.assign(new PlaidSyncTransientError('http'), {
+      errorCode: 'ITEM_LOGIN_REQUIRED',
+      reauthCode: 'ITEM_LOGIN_REQUIRED',
+    });
+    const readPages = async (): Promise<LiveSyncResult> => {
+      throw failure;
+    };
+
+    const outcome = await processSyncNotification(
+      admin,
+      syncMessage('notification-reauth'),
+      readPages,
+    );
+
+    assertEquals(outcome, {
+      ok: false,
+      detail: 'Plaid sync requires reauthentication (ITEM_LOGIN_REQUIRED)',
+    });
+    const cleanupIndex = rpcCalls.findIndex((call) => call.name === 'keel_worker_abandon_and_release');
+    const reauthIndex = rpcCalls.findIndex((call) => call.name === 'keel_set_connection_reauth');
+    assert(cleanupIndex >= 0, 'reauth failure must abandon the attempt');
+    assert(reauthIndex > cleanupIndex, 'attempt cleanup must precede reauth transition');
+    assertEquals(rpcCalls[reauthIndex]?.args, {
+      p_connection_id: 'connection-live',
+      p_event_type: 'ITEM_LOGIN_REQUIRED',
+      p_required: true,
+    });
+    assertEquals(
+      rpcCalls.filter((call) =>
+        call.name === 'keel_worker_complete_attempt' || call.name === 'keel_worker_apply_action'
+      ).length,
+      0,
+    );
+  });
+
+  it('abandons an ordinary live transient without setting reauth', async () => {
+    const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const admin = {
+      from: (table: string) => queryFor(table),
+      rpc: async (name: string, args: Record<string, unknown>) => {
+        rpcCalls.push({ name, args });
+        if (name === 'keel_worker_bump_generation') return { data: null, error: null };
+        if (name === 'keel_worker_acquire_sync_lease') {
+          return { data: { acquired: true, baseCursor: 'transient-cursor' }, error: null };
+        }
+        if (name === 'keel_worker_open_attempt') return { data: 'attempt-transient', error: null };
+        if (name === 'keel_worker_abandon_and_release') return { data: null, error: null };
+        throw new Error(`unexpected RPC ${name}`);
+      },
+    };
+    const readPages = async (): Promise<LiveSyncResult> => {
+      throw new PlaidSyncTransientError('network');
+    };
+
+    assertEquals(
+      await processSyncNotification(admin, syncMessage('notification-transient'), readPages),
+      { ok: false, retry: true, detail: 'Plaid sync request failed (network)' },
+    );
+    assertEquals(
+      rpcCalls.filter((call) => call.name === 'keel_set_connection_reauth').length,
+      0,
     );
   });
 

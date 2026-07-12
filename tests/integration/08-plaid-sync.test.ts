@@ -472,4 +472,76 @@ describe('Plaid sync worker (C5b)', () => {
     if (attemptError) throw new Error(attemptError.message);
     expect(completedNoops).toBeGreaterThanOrEqual(1);
   });
+
+  it('maps an injected non-2xx ITEM_LOGIN_REQUIRED sync response to reauth and preserves canonical state', async () => {
+    const svc = serviceClient();
+    const [{ data: connectionBefore, error: connectionError }, { data: checkpointBefore }] =
+      await Promise.all([
+        svc
+          .from('connections')
+          .select('status, last_successful_sync_at')
+          .eq('id', SEED.connections.plaidC5b.id)
+          .single(),
+        svc
+          .from('sync_checkpoints')
+          .select('cursor')
+          .eq('connection_id', SEED.connections.plaidC5b.id)
+          .single(),
+      ]);
+    if (connectionError) throw new Error(connectionError.message);
+    const economicsBefore = await economicCounts();
+    const { count: abandonedBefore, error: abandonedBeforeError } = await svc
+      .from('sync_attempts')
+      .select('*', { count: 'exact', head: true })
+      .eq('connection_id', SEED.connections.plaidC5b.id)
+      .eq('state', 'abandoned');
+    if (abandonedBeforeError) throw new Error(abandonedBeforeError.message);
+
+    await replacePages([{
+      error_type: 'ITEM_ERROR',
+      error_code: 'ITEM_LOGIN_REQUIRED',
+      error_message: 'sanitized recorded non-2xx response',
+      request_id: 'req-injected-login-required',
+    }]);
+    await recordNotification('item-login-required');
+    const outcomes = await drainQueue('sync_events');
+    expect(outcomes).toContain('dead_letter:sync lease unavailable: reauth_required');
+
+    const { data: connectionAfter, error: afterError } = await svc
+      .from('connections')
+      .select('status, last_successful_sync_at, sync_lease_owner, sync_leased_until')
+      .eq('id', SEED.connections.plaidC5b.id)
+      .single();
+    if (afterError) throw new Error(afterError.message);
+    expect(connectionAfter).toMatchObject({
+      status: 'reauth_required',
+      last_successful_sync_at: connectionBefore.last_successful_sync_at,
+      sync_lease_owner: null,
+      sync_leased_until: null,
+    });
+    const { data: checkpointAfter, error: checkpointError } = await svc
+      .from('sync_checkpoints')
+      .select('cursor')
+      .eq('connection_id', SEED.connections.plaidC5b.id)
+      .single();
+    if (checkpointError) throw new Error(checkpointError.message);
+    expect(checkpointAfter.cursor).toBe(checkpointBefore?.cursor);
+    expect(await economicCounts()).toEqual(economicsBefore);
+
+    const { count: abandonedAfter, error: abandonedAfterError } = await svc
+      .from('sync_attempts')
+      .select('*', { count: 'exact', head: true })
+      .eq('connection_id', SEED.connections.plaidC5b.id)
+      .eq('state', 'abandoned');
+    if (abandonedAfterError) throw new Error(abandonedAfterError.message);
+    expect(abandonedAfter).toBe((abandonedBefore ?? 0) + 1);
+
+    const { data: lease, error: leaseError } = await svc.rpc('keel_worker_acquire_sync_lease', {
+      p_connection_id: SEED.connections.plaidC5b.id,
+      p_owner: crypto.randomUUID(),
+      p_ttl_seconds: 30,
+    });
+    if (leaseError) throw new Error(leaseError.message);
+    expect(lease).toMatchObject({ acquired: false, reason: 'reauth_required' });
+  }, 60_000);
 });
