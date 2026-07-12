@@ -17,10 +17,21 @@ async function invoke<T>(fn: string, body: Record<string, unknown>): Promise<T> 
   return data;
 }
 
-/** POST /api/queries — read-only, household-scoped. */
-export function keelQuery<Row>(query: string, householdId: string): Promise<QueryResult<Row>> {
-  return invoke<QueryResult<Row>>('api/queries', { query, householdId });
+/** POST /api/queries — read-only, household-scoped. `extra` carries query-specific params. */
+export function keelQuery<Row>(
+  query: string,
+  householdId: string,
+  extra: Record<string, unknown> = {},
+): Promise<QueryResult<Row>> {
+  return invoke<QueryResult<Row>>('api/queries', { query, householdId, ...extra });
 }
+
+export type CashFlowRow = {
+  currency: string;
+  inflowMinor: string;
+  outflowMinor: string;
+  netMinor: string;
+};
 
 /** A typed KEEL command envelope. */
 export type CommandEnvelope = {

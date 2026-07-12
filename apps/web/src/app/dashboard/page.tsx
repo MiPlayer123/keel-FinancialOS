@@ -9,6 +9,7 @@ import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery } from '@/lib/use-keel-query';
 import { fetchAccounts, type AccountRow, type TrialBalanceRow } from '@/lib/keel-api';
+import { CashFlowCard } from '@/components/keel/cash-flow-card';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 
@@ -75,18 +76,23 @@ function HomeBody() {
 
   return (
     <>
-      <Card className="max-w-sm">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium text-muted-foreground">Net position</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Money
-            amountMinor={netMinor.toString()}
-            className="text-3xl font-semibold"
-            muteZero={false}
-          />
-        </CardContent>
-      </Card>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Net position
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Money
+              amountMinor={netMinor.toString()}
+              className="text-3xl font-semibold"
+              muteZero={false}
+            />
+          </CardContent>
+        </Card>
+        <CashFlowCard householdId={householdId} />
+      </div>
 
       <section className="space-y-3">
         <h2 className="text-sm font-medium text-muted-foreground">Accounts</h2>
