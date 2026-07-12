@@ -11,6 +11,8 @@ import {
   Settings,
   LogOut,
   Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -19,7 +21,8 @@ import { cn } from '@/lib/utils';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from '@/components/ui/sheet';
-import { KeelLogo } from '@/components/keel/logo';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { KeelLogo, KeelMark } from '@/components/keel/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
 
 type NavItem = { label: string; href: string; icon: LucideIcon };
@@ -32,27 +35,43 @@ const NAV: NavItem[] = [
   { label: 'Settings', href: '/dashboard/settings', icon: Settings },
 ];
 
-function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
+const COLLAPSE_KEY = 'keel-sidebar-collapsed';
+
+function NavLinks({
+  collapsed,
+  onNavigate,
+}: {
+  collapsed: boolean;
+  onNavigate?: () => void;
+}) {
   const pathname = usePathname();
   return (
     <nav className="flex flex-col gap-0.5">
       {NAV.map(({ label, href, icon: Icon }) => {
         const active = pathname === href || (href !== '/dashboard' && pathname.startsWith(href));
-        return (
+        const link = (
           <Link
             key={href}
             href={href}
             onClick={() => onNavigate?.()}
             className={cn(
-              'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+              'flex items-center gap-3 rounded-md py-2 text-sm font-medium transition-colors',
+              collapsed ? 'justify-center px-0' : 'px-3',
               active
                 ? 'bg-secondary text-foreground'
                 : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
             )}
           >
-            <Icon className="size-4" />
-            {label}
+            <Icon className="size-4 shrink-0" />
+            {collapsed ? null : label}
           </Link>
+        );
+        if (!collapsed) return link;
+        return (
+          <Tooltip key={href}>
+            <TooltipTrigger render={link} />
+            <TooltipContent side="right">{label}</TooltipContent>
+          </Tooltip>
         );
       })}
     </nav>
@@ -64,6 +83,19 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [email, setEmail] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    setCollapsed(window.localStorage.getItem(COLLAPSE_KEY) === '1');
+  }, []);
+
+  function toggleCollapsed() {
+    setCollapsed((prev) => {
+      const next = !prev;
+      window.localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0');
+      return next;
+    });
+  }
 
   useEffect(() => {
     let active = true;
@@ -88,39 +120,86 @@ export function AppShell({ children }: { children: ReactNode }) {
     router.replace('/login');
   }
 
-  const sidebarInner = (
-    <div className="flex h-full flex-col">
-      <div className="px-4 py-5">
-        <KeelLogo />
-      </div>
-      <div className="flex-1 px-3">
-        <NavLinks
-          onNavigate={() => {
-            setMobileOpen(false);
-          }}
-        />
-      </div>
-      <div className="border-t border-border p-3">
-        <div className="flex items-center justify-between gap-2 px-1">
-          <span className="truncate text-xs text-muted-foreground" title={email ?? undefined}>
-            {email ?? '—'}
-          </span>
-          <ThemeToggle />
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="mt-1 w-full justify-start"
-          onClick={() => {
-            void signOut();
-          }}
+  function sidebarInner(isCollapsed: boolean, showCollapseToggle: boolean) {
+    return (
+      <div className="flex h-full flex-col">
+        <div
+          className={cn(
+            'flex items-center py-5',
+            isCollapsed ? 'flex-col gap-3 px-0' : 'justify-between px-4',
+          )}
         >
-          <LogOut className="size-4" />
-          Sign out
-        </Button>
+          {isCollapsed ? <KeelMark className="size-6" /> : <KeelLogo />}
+          {showCollapseToggle ? (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              onClick={toggleCollapsed}
+            >
+              {isCollapsed ? (
+                <PanelLeftOpen className="size-4" />
+              ) : (
+                <PanelLeftClose className="size-4" />
+              )}
+            </Button>
+          ) : null}
+        </div>
+
+        <div className={cn('flex-1', isCollapsed ? 'px-2' : 'px-3')}>
+          <NavLinks collapsed={isCollapsed} onNavigate={() => setMobileOpen(false)} />
+        </div>
+
+        <div className={cn('border-t border-border', isCollapsed ? 'p-2' : 'p-3')}>
+          {isCollapsed ? (
+            <div className="flex flex-col items-center gap-1">
+              <ThemeToggle />
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label="Sign out"
+                      onClick={() => {
+                        void signOut();
+                      }}
+                    >
+                      <LogOut className="size-4" />
+                    </Button>
+                  }
+                />
+                <TooltipContent side="right">Sign out</TooltipContent>
+              </Tooltip>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between gap-2 px-1">
+                <span
+                  className="truncate text-xs text-muted-foreground"
+                  title={email ?? undefined}
+                >
+                  {email ?? '—'}
+                </span>
+                <ThemeToggle />
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-1 w-full justify-start"
+                onClick={() => {
+                  void signOut();
+                }}
+              >
+                <LogOut className="size-4" />
+                Sign out
+              </Button>
+            </>
+          )}
+        </div>
       </div>
-    </div>
-  );
+    );
+  }
 
   if (!ready) {
     return (
@@ -136,8 +215,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-dvh">
       {/* Desktop sidebar */}
-      <aside className="hidden w-60 shrink-0 border-r border-border bg-sidebar lg:block">
-        {sidebarInner}
+      <aside
+        className={cn(
+          'hidden shrink-0 border-r border-border bg-sidebar transition-[width] duration-200 lg:block',
+          collapsed ? 'w-16' : 'w-60',
+        )}
+      >
+        {sidebarInner(collapsed, true)}
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -152,7 +236,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </SheetTrigger>
             <SheetContent side="left" className="w-64 p-0">
               <SheetTitle className="sr-only">Navigation</SheetTitle>
-              {sidebarInner}
+              {sidebarInner(false, false)}
             </SheetContent>
           </Sheet>
           <KeelLogo />

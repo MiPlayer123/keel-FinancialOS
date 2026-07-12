@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -18,6 +18,12 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLocalhost, setIsLocalhost] = useState(false);
+
+  useEffect(() => {
+    const host = window.location.hostname;
+    setIsLocalhost(host === 'localhost' || host === '127.0.0.1');
+  }, []);
 
   async function handleSignIn(event: React.SyntheticEvent) {
     event.preventDefault();
@@ -126,11 +132,13 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          <p className="mt-8 rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
-            Local dev:{' '}
-            <code className="font-mono text-foreground">alex@keel.local</code> /{' '}
-            <code className="font-mono text-foreground">keel-local-dev-password</code>
-          </p>
+          {isLocalhost ? (
+            <p className="mt-8 rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+              Local dev:{' '}
+              <code className="font-mono text-foreground">alex@keel.local</code> /{' '}
+              <code className="font-mono text-foreground">keel-local-dev-password</code>
+            </p>
+          ) : null}
         </div>
       </main>
     </div>

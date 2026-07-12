@@ -20,7 +20,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <html lang="en" suppressHydrationWarning className={cn(geist.variable, geistMono.variable)}>
-      <body className="font-sans antialiased">
+      <body suppressHydrationWarning className="font-sans antialiased">
         <ThemeProvider>
           <TooltipProvider delay={200}>{children}</TooltipProvider>
           <Toaster />
