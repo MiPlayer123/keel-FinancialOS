@@ -3,10 +3,12 @@ import { ArrowRight } from 'lucide-react';
 import { buttonVariants } from '@/components/ui/button';
 import { KeelLogo, KeelMark } from '@/components/keel/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { RedirectIfAuthed } from '@/components/keel/redirect-if-authed';
 
 export default function LandingPage() {
   return (
     <div className="flex min-h-dvh flex-col">
+      <RedirectIfAuthed />
       <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-5">
         <KeelLogo />
         <div className="flex items-center gap-1">

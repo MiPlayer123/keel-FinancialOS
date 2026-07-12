@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard,
+  Wallet,
   ReceiptText,
   BadgeCheck,
   Link2,
@@ -30,6 +31,7 @@ type NavItem = { label: string; href: string; icon: LucideIcon };
 
 const NAV: NavItem[] = [
   { label: 'Home', href: '/dashboard', icon: LayoutDashboard },
+  { label: 'Accounts', href: '/dashboard/accounts', icon: Wallet },
   { label: 'Ledger', href: '/dashboard/ledger', icon: ReceiptText },
   { label: 'Review', href: '/dashboard/review', icon: BadgeCheck },
   { label: 'Connections', href: '/dashboard/connections', icon: Link2 },

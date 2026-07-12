@@ -140,6 +140,17 @@ export async function fetchConnections(householdId: string): Promise<ConnectionR
   }));
 }
 
+/** Map of ledger_account_id → kind (asset/liability/income/expense/equity), RLS-scoped. */
+export async function fetchLedgerKinds(householdId: string): Promise<Map<string, string>> {
+  const { data, error } = await getSupabaseBrowserClient()
+    .from('ledger_accounts')
+    .select('id, kind')
+    .eq('household_id', householdId);
+  if (error) throw error;
+  const rows = (data as { id: string; kind: string }[] | null) ?? [];
+  return new Map(rows.map((r) => [r.id, r.kind]));
+}
+
 /** First entity of a household (needed to scope a new connection). */
 export async function fetchFirstEntityId(householdId: string): Promise<string | null> {
   const { data, error } = await getSupabaseBrowserClient()
