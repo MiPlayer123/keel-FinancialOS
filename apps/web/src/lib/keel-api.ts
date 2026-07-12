@@ -229,6 +229,37 @@ export type RecurringSeriesRow = {
   statusEvents: RecurringStatusEvent[];
 };
 
+// ---- 1D domain read rows (shapes finalized against Codex's query procs) ----
+
+export type PaycheckRow = {
+  paycheckId: string;
+  employerName: string;
+  payDate: string;
+  grossMinor: string;
+  netMinor: string;
+  currency: string;
+  status: string;
+};
+
+export type ReimbursementRow = {
+  claimId: string;
+  counterpartyName: string;
+  amountMinor: string;
+  remainingMinor: string;
+  currency: string;
+  status: string;
+  kind: string;
+};
+
+export type StatementRow = {
+  statementId: string;
+  accountId: string;
+  periodStart: string;
+  periodEnd: string;
+  differenceMinor: string;
+  status: string;
+};
+
 /** Full household export (Law 6). Returns every format inline. */
 export type ExportBundle = {
   manifest: unknown;
