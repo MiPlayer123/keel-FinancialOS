@@ -31,7 +31,7 @@ export default function LandingPage() {
               Sign in
               <ArrowRight className="size-4" />
             </Link>
-            <Link href="/login" className={buttonVariants({ size: 'lg', variant: 'outline' })}>
+            <Link href="/login#signup" className={buttonVariants({ size: 'lg', variant: 'outline' })}>
               Create an account
             </Link>
           </div>

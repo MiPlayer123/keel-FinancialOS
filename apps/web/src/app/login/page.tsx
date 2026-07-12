@@ -13,8 +13,11 @@ import { Label } from '@/components/ui/label';
 import { KeelLogo } from '@/components/keel/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
 
+type Mode = 'signin' | 'signup';
+
 export default function LoginPage() {
   const router = useRouter();
+  const [mode, setMode] = useState<Mode>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -23,23 +26,42 @@ export default function LoginPage() {
   useEffect(() => {
     const host = window.location.hostname;
     setIsLocalhost(host === 'localhost' || host === '127.0.0.1');
+    if (window.location.hash === '#signup') setMode('signup');
   }, []);
 
-  async function handleSignIn(event: React.SyntheticEvent) {
+  const isSignup = mode === 'signup';
+
+  async function submit(event: React.SyntheticEvent) {
     event.preventDefault();
     setIsSubmitting(true);
+    const client = getSupabaseBrowserClient();
     try {
-      const { error } = await getSupabaseBrowserClient().auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (error) {
-        toast.error(error.message);
-        return;
+      if (isSignup) {
+        const { data, error } = await client.auth.signUp({
+          email,
+          password,
+          options: { emailRedirectTo: `${window.location.origin}/dashboard` },
+        });
+        if (error) {
+          toast.error(error.message);
+          return;
+        }
+        if (data.session) {
+          router.replace('/dashboard');
+        } else {
+          toast.success('Account created. Check your email to confirm, then sign in.');
+          setMode('signin');
+        }
+      } else {
+        const { error } = await client.auth.signInWithPassword({ email, password });
+        if (error) {
+          toast.error(error.message);
+          return;
+        }
+        router.replace('/dashboard');
       }
-      router.replace('/dashboard');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Unable to sign in.');
+      toast.error(error instanceof Error ? error.message : 'Something went wrong.');
     } finally {
       setIsSubmitting(false);
     }
@@ -52,7 +74,10 @@ export default function LoginPage() {
     }
     setIsSubmitting(true);
     try {
-      const { error } = await getSupabaseBrowserClient().auth.signInWithOtp({ email });
+      const { error } = await getSupabaseBrowserClient().auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: `${window.location.origin}/dashboard` },
+      });
       if (error) toast.error(error.message);
       else toast.success('Magic link sent. Check your email.');
     } catch (error) {
@@ -74,15 +99,19 @@ export default function LoginPage() {
       <main className="flex flex-1 items-center justify-center px-6 py-12">
         <div className="w-full max-w-sm">
           <div className="mb-8 space-y-1.5">
-            <h1 className="text-2xl font-semibold tracking-tight">Sign in to KEEL</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">
+              {isSignup ? 'Create your KEEL account' : 'Sign in to KEEL'}
+            </h1>
             <p className="text-sm text-muted-foreground">
-              Welcome back. Enter your details to continue.
+              {isSignup
+                ? 'Start your financial system of record.'
+                : 'Welcome back. Enter your details to continue.'}
             </p>
           </div>
 
           <form
             onSubmit={(e) => {
-              void handleSignIn(e);
+              void submit(e);
             }}
             className="space-y-4"
           >
@@ -105,19 +134,20 @@ export default function LoginPage() {
               <Input
                 id="password"
                 type="password"
-                autoComplete="current-password"
+                autoComplete={isSignup ? 'new-password' : 'current-password'}
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => {
                   setPassword(e.target.value);
                 }}
                 required
+                minLength={8}
               />
             </div>
 
             <Button type="submit" className="w-full" disabled={isSubmitting}>
               {isSubmitting ? <Loader2 className="size-4 animate-spin" /> : null}
-              Sign in
+              {isSignup ? 'Create account' : 'Sign in'}
             </Button>
             <Button
               type="button"
@@ -131,6 +161,19 @@ export default function LoginPage() {
               Email me a magic link
             </Button>
           </form>
+
+          <p className="mt-6 text-center text-sm text-muted-foreground">
+            {isSignup ? 'Already have an account?' : "Don't have an account?"}{' '}
+            <button
+              type="button"
+              className="font-medium text-primary hover:underline"
+              onClick={() => {
+                setMode(isSignup ? 'signin' : 'signup');
+              }}
+            >
+              {isSignup ? 'Sign in' : 'Create one'}
+            </button>
+          </p>
 
           {isLocalhost ? (
             <p className="mt-8 rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
