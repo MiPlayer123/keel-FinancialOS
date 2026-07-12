@@ -252,6 +252,55 @@ export default {
       }
     }
 
+    if (path === '/connections/link-token') {
+      // Create a Plaid Link token so the browser can open Plaid Link (real
+      // institution auth). Works in sandbox + production.
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      if (!householdId.success) {
+        return json(400, { code: 'invalid_command', message: 'Unknown command.', details: {} });
+      }
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'connections.link', {
+        kind: 'household',
+        householdId: householdId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+      const plaid = createPlaidClient(ctx.supabaseAdmin, {
+        env: Deno.env.get('PLAID_ENV') ?? 'sandbox',
+        clientId: Deno.env.get('PLAID_CLIENT_ID'),
+        secret: Deno.env.get('PLAID_SECRET'),
+        householdId: householdId.data,
+      });
+      try {
+        const splitEnv = (name: string, fallback: string) =>
+          (Deno.env.get(name) ?? fallback)
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
+        const result = await plaid.linkTokenCreate(`linktoken:${householdId.data}:${userId}`, {
+          user: { client_user_id: userId },
+          client_name: 'KEEL',
+          products: splitEnv('PLAID_PRODUCTS', 'transactions'),
+          country_codes: splitEnv('PLAID_COUNTRY_CODES', 'US'),
+          language: 'en',
+        });
+        const linkToken = result['link_token'];
+        if (typeof linkToken !== 'string') return internalFailure();
+        return json(200, { linkToken });
+      } catch (error) {
+        return error instanceof ProviderBudgetExhaustedError
+          ? providerBudgetFailure()
+          : error instanceof PlaidClientError
+            ? providerFailure(error)
+            : internalFailure();
+      }
+    }
+
     if (path === '/connections/link') {
       const input = body as Record<string, unknown>;
       const commandId = CommandIdSchema.safeParse(input['commandId']);
@@ -320,22 +369,31 @@ export default {
         secret: Deno.env.get('PLAID_SECRET'),
         householdId: householdId.data,
       });
+      const providedPublicToken = input['publicToken'];
       let accessToken: string;
       let itemId: string;
       try {
-        // Live /sandbox/public_token/create requires a real institution + the
-        // products to seed. The injected/hermetic path ignores this body and
-        // synthesizes the token; only the live Sandbox path uses it.
-        const sandboxInstitution =
-          typeof institutionId === 'string' && institutionId.startsWith('ins_')
-            ? institutionId
-            : 'ins_109508';
-        const publicResult = await plaid.sandboxPublicTokenCreate(begin.attemptId, {
-          institution_id: sandboxInstitution,
-          initial_products: ['transactions'],
-        });
+        let publicToken: string;
+        if (typeof providedPublicToken === 'string' && providedPublicToken.length > 0) {
+          // Production / real flow: the frontend obtained a public_token from Plaid
+          // Link (the user authenticated with their real institution). Just exchange it.
+          publicToken = providedPublicToken;
+        } else {
+          // Sandbox synthesis path (no Plaid Link UI): create a public_token
+          // server-side. Live /sandbox/public_token/create requires a real
+          // institution + products; the injected/hermetic path ignores this body.
+          const sandboxInstitution =
+            typeof institutionId === 'string' && institutionId.startsWith('ins_')
+              ? institutionId
+              : 'ins_109508';
+          const publicResult = await plaid.sandboxPublicTokenCreate(begin.attemptId, {
+            institution_id: sandboxInstitution,
+            initial_products: ['transactions'],
+          });
+          publicToken = publicResult.public_token;
+        }
         const exchange = await plaid.publicTokenExchange(begin.attemptId, {
-          public_token: publicResult.public_token,
+          public_token: publicToken,
         });
         accessToken = exchange.access_token;
         itemId = exchange.item_id;

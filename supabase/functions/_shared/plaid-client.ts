@@ -102,8 +102,8 @@ export const createPlaidClient = (
   admin: AdminClient,
   config: PlaidClientConfig,
 ): PlaidClient => {
-  if (config.env !== 'sandbox') {
-    throw new Error('Plaid client requires sandbox environment');
+  if (config.env !== 'sandbox' && config.env !== 'production') {
+    throw new Error('Plaid client env must be sandbox or production');
   }
 
   const request = async (
@@ -196,7 +196,7 @@ export const createPlaidClient = (
     const start = Date.now();
     try {
       const response = await (config.fetchImpl ?? fetch)(
-        `https://sandbox.plaid.com${path}`,
+        `https://${config.env}.plaid.com${path}`,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
