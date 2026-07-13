@@ -1,7 +1,17 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { ReceiptText, ChevronRight, Search, StickyNote, ArrowLeftRight } from 'lucide-react';
+import {
+  ReceiptText,
+  ChevronRight,
+  Search,
+  StickyNote,
+  ArrowLeftRight,
+  ListChecks,
+  Check,
+  X,
+  Loader2,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { AppShell } from '@/components/keel/app-shell';
@@ -9,9 +19,11 @@ import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery } from '@/lib/use-keel-query';
 import {
+  fetchAccounts,
   fetchCategories,
   categorizeTransaction,
   overrideTransaction,
+  type AccountRow,
   type RichTransactionRow,
   type CategoryRow,
 } from '@/lib/keel-api';
@@ -50,6 +62,47 @@ export default function LedgerPage() {
 }
 
 type Grouping = 'none' | 'account' | 'category';
+type SortKey = 'date_desc' | 'date_asc' | 'amount_desc' | 'amount_asc';
+type DatePreset = 'this_month' | 'last_month' | '30d' | '90d' | 'ytd' | 'all';
+
+const DATE_PRESETS: { key: DatePreset; label: string }[] = [
+  { key: 'this_month', label: 'This month' },
+  { key: 'last_month', label: 'Last month' },
+  { key: '30d', label: 'Last 30 days' },
+  { key: '90d', label: 'Last 90 days' },
+  { key: 'ytd', label: 'Year to date' },
+  { key: 'all', label: 'All time' },
+];
+
+/** [fromIso, toIso] bounds for a preset; null bound = unbounded. */
+function presetRange(preset: DatePreset): [string | null, string | null] {
+  const now = new Date();
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  switch (preset) {
+    case 'this_month':
+      return [iso(startOfMonth), null];
+    case 'last_month': {
+      const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+      const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0));
+      return [iso(start), iso(end)];
+    }
+    case '30d': {
+      const d = new Date(now);
+      d.setUTCDate(d.getUTCDate() - 30);
+      return [iso(d), null];
+    }
+    case '90d': {
+      const d = new Date(now);
+      d.setUTCDate(d.getUTCDate() - 90);
+      return [iso(d), null];
+    }
+    case 'ytd':
+      return [`${String(now.getUTCFullYear())}-01-01`, null];
+    case 'all':
+      return [null, null];
+  }
+}
 
 function LedgerTable() {
   const { householdId, ready } = useHousehold();
@@ -58,9 +111,17 @@ function LedgerTable() {
     householdId,
   );
   const [categories, setCategories] = useState<CategoryRow[]>([]);
+  const [accounts, setAccounts] = useState<AccountRow[]>([]);
   const [query, setQuery] = useState('');
   const [grouping, setGrouping] = useState<Grouping>('none');
+  const [datePreset, setDatePreset] = useState<DatePreset>('all');
+  const [accountFilter, setAccountFilter] = useState('all');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [sort, setSort] = useState<SortKey>('date_desc');
   const [editing, setEditing] = useState<RichTransactionRow | null>(null);
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   useEffect(() => {
     if (!householdId) return;
@@ -69,18 +130,67 @@ function LedgerTable() {
       .catch(() => {
         setCategories([]);
       });
+    void fetchAccounts(householdId)
+      .then(setAccounts)
+      .catch(() => {
+        setAccounts([]);
+      });
   }, [householdId]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter(
-      (t) =>
-        t.description.toLowerCase().includes(q) ||
-        t.accountName.toLowerCase().includes(q) ||
-        (t.categoryName ?? '').toLowerCase().includes(q),
-    );
-  }, [rows, query]);
+    const [from, to] = presetRange(datePreset);
+    const out = rows.filter((t) => {
+      if (from && t.effectiveDate < from) return false;
+      if (to && t.effectiveDate > to) return false;
+      if (accountFilter !== 'all' && t.accountId !== accountFilter) return false;
+      if (categoryFilter === 'uncategorized') {
+        if (t.categoryName && !t.categoryName.startsWith('Uncategorized')) return false;
+      } else if (categoryFilter === 'transfers') {
+        if (t.transferStatus !== 'confirmed') return false;
+      } else if (categoryFilter !== 'all' && t.categoryLedgerAccountId !== categoryFilter) {
+        return false;
+      }
+      if (
+        q &&
+        !t.description.toLowerCase().includes(q) &&
+        !t.accountName.toLowerCase().includes(q) &&
+        !(t.categoryName ?? '').toLowerCase().includes(q)
+      ) {
+        return false;
+      }
+      return true;
+    });
+    const byAmount = (a: RichTransactionRow, b: RichTransactionRow) => {
+      const av = BigInt(a.amountMinor || '0');
+      const bv = BigInt(b.amountMinor || '0');
+      return av < bv ? -1 : av > bv ? 1 : 0;
+    };
+    out.sort((a, b) => {
+      switch (sort) {
+        case 'date_desc':
+          return b.effectiveDate.localeCompare(a.effectiveDate) || a.transactionId.localeCompare(b.transactionId);
+        case 'date_asc':
+          return a.effectiveDate.localeCompare(b.effectiveDate) || a.transactionId.localeCompare(b.transactionId);
+        case 'amount_desc':
+          return byAmount(b, a);
+        case 'amount_asc':
+          return byAmount(a, b);
+      }
+    });
+    return out;
+  }, [rows, query, datePreset, accountFilter, categoryFilter, sort]);
+
+  const totals = useMemo(() => {
+    let inflow = 0n;
+    let outflow = 0n;
+    for (const t of filtered) {
+      const v = BigInt(t.amountMinor || '0');
+      if (v > 0n) inflow += v;
+      else outflow += v;
+    }
+    return { inflow: inflow.toString(), outflow: outflow.toString(), count: filtered.length };
+  }, [filtered]);
 
   async function recategorize(txnId: string, categoryLedgerAccountId: string) {
     if (!householdId) return;
@@ -90,6 +200,39 @@ function LedgerTable() {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not update category.');
     }
+  }
+
+  async function bulkCategorize(categoryLedgerAccountId: string) {
+    if (!householdId || selected.size === 0) return;
+    setBulkBusy(true);
+    let ok = 0;
+    let failed = 0;
+    for (const txnId of selected) {
+      try {
+        await categorizeTransaction({ householdId, transactionId: txnId, categoryLedgerAccountId });
+        ok++;
+      } catch {
+        failed++;
+      }
+    }
+    setBulkBusy(false);
+    setSelected(new Set());
+    setSelecting(false);
+    toast[failed > 0 ? 'error' : 'success'](
+      failed > 0
+        ? `Categorized ${String(ok)}, ${String(failed)} failed.`
+        : `Categorized ${String(ok)} transaction${ok === 1 ? '' : 's'}.`,
+    );
+    await refetch();
+  }
+
+  function toggleSelected(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
   if (!ready || loading) {
@@ -122,10 +265,13 @@ function LedgerTable() {
     );
   }
 
+  const expenseCategories = categories.filter((c) => c.kind === 'expense');
+  const incomeCategories = categories.filter((c) => c.kind === 'income');
+
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="relative w-full sm:max-w-xs">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative w-full sm:w-56">
           <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={query}
@@ -136,15 +282,91 @@ function LedgerTable() {
             }}
           />
         </div>
+        <Select
+          value={datePreset}
+          onValueChange={(v) => {
+            if (v) setDatePreset(v);
+          }}
+        >
+          <SelectTrigger className="h-9 w-36">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {DATE_PRESETS.map((p) => (
+              <SelectItem key={p.key} value={p.key}>
+                {p.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={accountFilter}
+          onValueChange={(v) => {
+            if (v) setAccountFilter(v);
+          }}
+        >
+          <SelectTrigger className="h-9 w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All accounts</SelectItem>
+            {accounts.map((a) => (
+              <SelectItem key={a.id} value={a.id}>
+                {a.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={categoryFilter}
+          onValueChange={(v) => {
+            if (v) setCategoryFilter(v);
+          }}
+        >
+          <SelectTrigger className="h-9 w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All categories</SelectItem>
+            <SelectItem value="uncategorized">Uncategorized</SelectItem>
+            <SelectItem value="transfers">Transfers</SelectItem>
+            {expenseCategories.map((c) => (
+              <SelectItem key={c.ledgerAccountId} value={c.ledgerAccountId}>
+                {c.name}
+              </SelectItem>
+            ))}
+            {incomeCategories.map((c) => (
+              <SelectItem key={c.ledgerAccountId} value={c.ledgerAccountId}>
+                {c.name} (income)
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={sort}
+          onValueChange={(v) => {
+            if (v) setSort(v);
+          }}
+        >
+          <SelectTrigger className="h-9 w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="date_desc">Newest first</SelectItem>
+            <SelectItem value="date_asc">Oldest first</SelectItem>
+            <SelectItem value="amount_desc">Largest amount</SelectItem>
+            <SelectItem value="amount_asc">Smallest amount</SelectItem>
+          </SelectContent>
+        </Select>
         <div className="flex items-center gap-2 text-sm">
           <span className="text-muted-foreground">Group by</span>
           <Select
             value={grouping}
             onValueChange={(v) => {
-              setGrouping(v as Grouping);
+              if (v) setGrouping(v);
             }}
           >
-            <SelectTrigger className="h-8 w-36">
+            <SelectTrigger className="h-9 w-32">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -154,7 +376,33 @@ function LedgerTable() {
             </SelectContent>
           </Select>
         </div>
+        <Button
+          variant={selecting ? 'secondary' : 'outline'}
+          size="sm"
+          className="h-9"
+          onClick={() => {
+            setSelecting((s) => !s);
+            setSelected(new Set());
+          }}
+        >
+          <ListChecks className="size-4" />
+          {selecting ? 'Done' : 'Select'}
+        </Button>
       </div>
+
+      {selecting ? (
+        <BulkBar
+          count={selected.size}
+          categories={categories}
+          busy={bulkBusy}
+          onApply={(catId) => {
+            void bulkCategorize(catId);
+          }}
+          onClear={() => {
+            setSelected(new Set());
+          }}
+        />
+      ) : null}
 
       {grouping === 'none' ? (
         <TxnList
@@ -164,6 +412,9 @@ function LedgerTable() {
             void recategorize(id, cat);
           }}
           onEdit={setEditing}
+          selecting={selecting}
+          selected={selected}
+          onToggle={toggleSelected}
         />
       ) : (
         <GroupedList
@@ -174,12 +425,30 @@ function LedgerTable() {
             void recategorize(id, cat);
           }}
           onEdit={setEditing}
+          selecting={selecting}
+          selected={selected}
+          onToggle={toggleSelected}
         />
       )}
+
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm">
+        <span className="text-muted-foreground">
+          {String(totals.count)} transaction{totals.count === 1 ? '' : 's'}
+        </span>
+        <span className="flex items-center gap-4">
+          <span className="text-muted-foreground">
+            In <Money amountMinor={totals.inflow} className="text-foreground" />
+          </span>
+          <span className="text-muted-foreground">
+            Out <Money amountMinor={totals.outflow} />
+          </span>
+        </span>
+      </div>
 
       <TxnEditDialog
         row={editing}
         householdId={householdId}
+        categories={categories}
         onClose={() => {
           setEditing(null);
         }}
@@ -187,121 +456,69 @@ function LedgerTable() {
           setEditing(null);
           void refetch();
         }}
+        onRecategorize={(id, cat) => {
+          void recategorize(id, cat);
+        }}
       />
     </div>
   );
 }
 
-/**
- * Edit the user-facing name + note for a transaction. Presentation overlay
- * only: the provider's original description is immutable and stays visible.
- */
-function TxnEditDialog({
-  row,
-  householdId,
-  onClose,
-  onSaved,
+function BulkBar({
+  count,
+  categories,
+  busy,
+  onApply,
+  onClear,
 }: {
-  row: RichTransactionRow | null;
-  householdId: string | null;
-  onClose: () => void;
-  onSaved: () => void;
+  count: number;
+  categories: CategoryRow[];
+  busy: boolean;
+  onApply: (categoryLedgerAccountId: string) => void;
+  onClear: () => void;
 }) {
-  const [name, setName] = useState('');
-  const [note, setNote] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!row) return;
-    setName(row.description);
-    setNote(row.note ?? '');
-  }, [row]);
-
-  const original = row?.originalDescription ?? row?.description ?? '';
-
-  async function save() {
-    if (!row || !householdId) return;
-    setSaving(true);
-    try {
-      await overrideTransaction({
-        householdId,
-        transactionId: row.transactionId,
-        // Saving the unchanged original name means "no override".
-        displayDescription: name.trim() === original ? '' : name,
-        note,
-      });
-      toast.success('Transaction updated.');
-      onSaved();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not save changes.');
-    } finally {
-      setSaving(false);
-    }
-  }
-
+  const [catId, setCatId] = useState<string | null>(null);
   return (
-    <Dialog
-      open={row !== null}
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
-    >
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Edit transaction</DialogTitle>
-          <DialogDescription>
-            Rename it or add a note. The bank&apos;s original description is kept.
-          </DialogDescription>
-        </DialogHeader>
-        {row ? (
-          <div className="space-y-4">
-            <div className="flex items-baseline justify-between gap-3 text-sm">
-              <span className="truncate text-muted-foreground" title={original}>
-                {original}
-              </span>
-              <Money amountMinor={row.amountMinor} currency={row.currency} signed />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="txn-name">Name</Label>
-              <Input
-                id="txn-name"
-                value={name}
-                maxLength={140}
-                onChange={(e) => {
-                  setName(e.target.value);
-                }}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="txn-note">Note</Label>
-              <Textarea
-                id="txn-note"
-                value={note}
-                maxLength={2000}
-                rows={3}
-                placeholder="Anything worth remembering about this transaction"
-                onChange={(e) => {
-                  setNote(e.target.value);
-                }}
-              />
-            </div>
-          </div>
-        ) : null}
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={saving}>
-            Cancel
-          </Button>
-          <Button
-            onClick={() => {
-              void save();
-            }}
-            disabled={saving || name.trim().length === 0}
-          >
-            {saving ? 'Saving…' : 'Save'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-secondary/40 px-4 py-2.5">
+      <span className="text-sm font-medium">
+        {String(count)} selected
+      </span>
+      <Select
+        value={catId ?? undefined}
+        onValueChange={(v) => {
+          setCatId(v);
+        }}
+      >
+        <SelectTrigger className="h-8 w-48">
+          <SelectValue placeholder="Set category to…" />
+        </SelectTrigger>
+        <SelectContent>
+          {categories.map((c) => (
+            <SelectItem key={c.ledgerAccountId} value={c.ledgerAccountId}>
+              {c.name}
+              {c.kind === 'income' ? ' (income)' : ''}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Button
+        size="sm"
+        disabled={busy || count === 0 || !catId}
+        onClick={() => {
+          if (catId) onApply(catId);
+        }}
+      >
+        {busy ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+        Apply
+      </Button>
+      <Button variant="ghost" size="sm" disabled={busy || count === 0} onClick={onClear}>
+        <X className="size-4" />
+        Clear
+      </Button>
+      <span className="text-xs text-muted-foreground">
+        The category must match each transaction&apos;s direction; mismatches are skipped.
+      </span>
+    </div>
   );
 }
 
@@ -320,19 +537,24 @@ function sumMinor(rows: RichTransactionRow[]): string {
   return rows.reduce((acc, r) => acc + BigInt(r.amountMinor || '0'), 0n).toString();
 }
 
+type ListCallbacks = {
+  onRecategorize: (txnId: string, categoryId: string) => void;
+  onEdit: (row: RichTransactionRow) => void;
+  selecting: boolean;
+  selected: Set<string>;
+  onToggle: (id: string) => void;
+};
+
 function GroupedList({
   rows,
   categories,
   groupBy,
-  onRecategorize,
-  onEdit,
+  ...cb
 }: {
   rows: RichTransactionRow[];
   categories: CategoryRow[];
   groupBy: Grouping;
-  onRecategorize: (txnId: string, categoryId: string) => void;
-  onEdit: (row: RichTransactionRow) => void;
-}) {
+} & ListCallbacks) {
   const groups = useMemo(() => groupRows(rows, groupBy), [rows, groupBy]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
@@ -359,13 +581,7 @@ function GroupedList({
               <Money amountMinor={sumMinor(groupRowsList)} signed className="text-sm tabular-nums" />
             </button>
             {isOpen ? (
-              <TxnList
-                rows={groupRowsList}
-                categories={categories}
-                onRecategorize={onRecategorize}
-                onEdit={onEdit}
-                bordered
-              />
+              <TxnList rows={groupRowsList} categories={categories} bordered {...cb} />
             ) : null}
           </div>
         );
@@ -377,16 +593,17 @@ function GroupedList({
 function TxnList({
   rows,
   categories,
+  bordered,
   onRecategorize,
   onEdit,
-  bordered,
+  selecting,
+  selected,
+  onToggle,
 }: {
   rows: RichTransactionRow[];
   categories: CategoryRow[];
-  onRecategorize: (txnId: string, categoryId: string) => void;
-  onEdit: (row: RichTransactionRow) => void;
   bordered?: boolean;
-}) {
+} & ListCallbacks) {
   return (
     <div
       className={
@@ -400,6 +617,24 @@ function TxnList({
           key={t.transactionId}
           className={`flex items-center gap-3 px-4 py-2.5 ${i > 0 ? 'border-t border-border' : ''}`}
         >
+          {selecting ? (
+            <button
+              type="button"
+              role="checkbox"
+              aria-checked={selected.has(t.transactionId)}
+              aria-label="Select transaction"
+              className={`flex size-5 shrink-0 items-center justify-center rounded border ${
+                selected.has(t.transactionId)
+                  ? 'border-primary bg-primary text-primary-foreground'
+                  : 'border-border'
+              }`}
+              onClick={() => {
+                onToggle(t.transactionId);
+              }}
+            >
+              {selected.has(t.transactionId) ? <Check className="size-3.5" /> : null}
+            </button>
+          ) : null}
           <span className="w-14 shrink-0 font-mono text-xs text-muted-foreground">
             {t.effectiveDate.slice(5)}
           </span>
@@ -409,7 +644,8 @@ function TxnList({
             type="button"
             className="min-w-0 flex-1 rounded-sm text-left outline-none hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring"
             onClick={() => {
-              onEdit(t);
+              if (selecting) onToggle(t.transactionId);
+              else onEdit(t);
             }}
           >
             <p className="truncate text-sm font-medium" title={t.description}>
@@ -506,5 +742,152 @@ function CategoryPicker({
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+/**
+ * Edit the user-facing name + note for a transaction. Presentation overlay
+ * only: the provider's original description is immutable and stays visible.
+ * Also hosts the category picker (on mobile it's the only recategorize path).
+ */
+function TxnEditDialog({
+  row,
+  householdId,
+  categories,
+  onClose,
+  onSaved,
+  onRecategorize,
+}: {
+  row: RichTransactionRow | null;
+  householdId: string | null;
+  categories: CategoryRow[];
+  onClose: () => void;
+  onSaved: () => void;
+  onRecategorize: (txnId: string, categoryId: string) => void;
+}) {
+  const [name, setName] = useState('');
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!row) return;
+    setName(row.description);
+    setNote(row.note ?? '');
+  }, [row]);
+
+  const original = row?.originalDescription ?? row?.description ?? '';
+  const categoryOptions = useMemo(
+    () =>
+      row
+        ? categories.filter((c) => (row.categoryKind ? c.kind === row.categoryKind : true))
+        : [],
+    [categories, row],
+  );
+
+  async function save() {
+    if (!row || !householdId) return;
+    setSaving(true);
+    try {
+      await overrideTransaction({
+        householdId,
+        transactionId: row.transactionId,
+        // Saving the unchanged original name means "no override".
+        displayDescription: name.trim() === original ? '' : name,
+        note,
+      });
+      toast.success('Transaction updated.');
+      onSaved();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save changes.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open={row !== null}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Edit transaction</DialogTitle>
+          <DialogDescription>
+            Rename it or add a note. The bank&apos;s original description is kept.
+          </DialogDescription>
+        </DialogHeader>
+        {row ? (
+          <div className="space-y-4">
+            <div className="flex items-baseline justify-between gap-3 text-sm">
+              <span className="truncate text-muted-foreground" title={original}>
+                {original}
+              </span>
+              <Money amountMinor={row.amountMinor} currency={row.currency} signed />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="txn-name">Name</Label>
+              <Input
+                id="txn-name"
+                value={name}
+                maxLength={140}
+                onChange={(e) => {
+                  setName(e.target.value);
+                }}
+              />
+            </div>
+            {row.transferStatus !== 'confirmed' && categoryOptions.length > 0 ? (
+              <div className="space-y-1.5">
+                <Label>Category</Label>
+                <Select
+                  value={row.categoryLedgerAccountId ?? undefined}
+                  onValueChange={(v) => {
+                    if (v) onRecategorize(row.transactionId, v);
+                  }}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder={row.categoryName ?? 'Uncategorized'} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categoryOptions.map((c) => (
+                      <SelectItem key={c.ledgerAccountId} value={c.ledgerAccountId}>
+                        {c.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
+            <div className="space-y-1.5">
+              <Label htmlFor="txn-note">Note</Label>
+              <Textarea
+                id="txn-note"
+                value={note}
+                maxLength={2000}
+                rows={3}
+                placeholder="Anything worth remembering about this transaction"
+                onChange={(e) => {
+                  setNote(e.target.value);
+                }}
+              />
+            </div>
+          </div>
+        ) : null}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() => {
+              void save();
+            }}
+            disabled={saving || name.trim().length === 0}
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
