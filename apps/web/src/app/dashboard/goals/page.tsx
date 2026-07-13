@@ -444,6 +444,16 @@ function GoalDialog({
       return;
     }
     const minor = parseSignedDollars(target);
+    // A debt target above the current balance is unachievable (progress is
+    // capped by the balance captured at creation) — the server refuses it;
+    // say it clearly here first.
+    if (kind === 'debt' && accountId && minor !== null) {
+      const bal = balances.get(accountId);
+      if (bal !== undefined && BigInt(minor) > BigInt(bal.replace('-', '') || '0')) {
+        toast.error('Target is more than what you owe on that account.');
+        return;
+      }
+    }
     if (minor === null || minor.startsWith('-') || minor === '0') {
       toast.error('Enter a positive target.');
       return;
