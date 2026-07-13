@@ -286,11 +286,38 @@ function LedgerTable() {
 
   if (rows.length === 0) {
     return (
-      <EmptyState
-        icon={<ReceiptText className="size-6" />}
-        title="No transactions yet"
-        description="Connect a bank on the Connections page and posted transactions will appear here."
-      />
+      <div className="space-y-4">
+        <EmptyState
+          icon={<ReceiptText className="size-6" />}
+          title="No transactions yet"
+          description="Connect a bank on the Connections page, or add one by hand — cash counts too."
+        />
+        <div className="flex justify-center">
+          <Button
+            size="sm"
+            onClick={() => {
+              setAdding(true);
+            }}
+          >
+            <Plus className="size-4" />
+            Add transaction
+          </Button>
+        </div>
+        <AddTransactionDialog
+          open={adding}
+          householdId={householdId}
+          userId={userId}
+          accounts={accounts}
+          categories={categories}
+          onClose={() => {
+            setAdding(false);
+          }}
+          onSaved={() => {
+            setAdding(false);
+            void refetch();
+          }}
+        />
+      </div>
     );
   }
 

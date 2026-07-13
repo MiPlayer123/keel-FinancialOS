@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { BarChart3, ArrowDownRight, ArrowUpRight } from 'lucide-react';
 
@@ -11,6 +11,7 @@ import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
 import type { MonthlyCashFlowRow, RichTransactionRow } from '@/lib/keel-api';
 import { CashFlowMonthlyChart } from '@/components/keel/charts';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 
@@ -59,11 +60,15 @@ type CategoryReportRow = {
 };
 
 /**
- * Spending matrix: expense-side transactions, confirmed transfers excluded,
- * NET signed per month (refund inflows on an expense category reduce it —
- * the same net convention as budget-spent-v1). BigInt everywhere.
+ * Category × month matrix, confirmed transfers excluded, NET signed per
+ * month (refund inflows on an expense category reduce it — the same net
+ * convention as budget-spent-v1; income view mirrors it). BigInt everywhere.
  */
-function buildMatrix(rows: RichTransactionRow[], months: string[]): CategoryReportRow[] {
+function buildMatrix(
+  rows: RichTransactionRow[],
+  months: string[],
+  kind: 'expense' | 'income',
+): CategoryReportRow[] {
   const monthSet = new Set(months);
   const byCategory = new Map<string, CategoryReportRow>();
   const add = (categoryId: string | null, name: string, mk: string, spend: bigint) => {
@@ -86,18 +91,26 @@ function buildMatrix(rows: RichTransactionRow[], months: string[]): CategoryRepo
     if (t.transferStatus === 'confirmed') continue;
     const mk = monthKey(t.effectiveDate);
     if (!monthSet.has(mk)) continue;
-    // Split transactions: attribute each expense share to its own category
-    // (debit-positive split amounts ARE net spend).
+    // Split transactions: attribute each share to its own category.
+    // Debit-positive: expense shares are positive spend; income shares are
+    // negative (credits), so income received = -share.
     if (t.splits && t.splits.length > 0) {
       for (const s of t.splits) {
-        if (s.kind !== 'expense') continue;
-        add(s.categoryLedgerAccountId, s.name, mk, BigInt(s.amountMinor || '0'));
+        if (s.kind !== kind) continue;
+        const share = BigInt(s.amountMinor || '0');
+        add(s.categoryLedgerAccountId, s.name, mk, kind === 'expense' ? share : -share);
       }
       continue;
     }
-    if (t.categoryKind !== 'expense') continue;
-    // Cash amount is negative for money out; spending = -amount (net).
-    add(t.categoryLedgerAccountId, t.categoryName ?? 'Uncategorized', mk, -BigInt(t.amountMinor || '0'));
+    if (t.categoryKind !== kind) continue;
+    // Cash convention: negative = money out. Spending = -amount; income = +amount.
+    const cash = BigInt(t.amountMinor || '0');
+    add(
+      t.categoryLedgerAccountId,
+      t.categoryName ?? 'Uncategorized',
+      mk,
+      kind === 'expense' ? -cash : cash,
+    );
   }
   return [...byCategory.values()].sort((a, b) => (b.total > a.total ? 1 : b.total < a.total ? -1 : 0));
 }
@@ -110,8 +123,12 @@ function ReportsBody() {
     householdId,
   );
 
+  const [view, setView] = useState<'expense' | 'income'>('expense');
   const months = useMemo(() => lastMonths(MONTHS_SHOWN), []);
-  const matrix = useMemo(() => buildMatrix(txns.rows, months), [txns.rows, months]);
+  const matrix = useMemo(
+    () => buildMatrix(txns.rows, months, view),
+    [txns.rows, months, view],
+  );
 
   const comparison = useMemo(() => {
     const [prev, curr] = [months[months.length - 2], months[months.length - 1]];
@@ -171,13 +188,33 @@ function ReportsBody() {
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium text-muted-foreground">
-            Spending by category · last {MONTHS_SHOWN} months
+          <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
+            <span>
+              {view === 'expense' ? 'Spending' : 'Income'} by category · last {MONTHS_SHOWN}{' '}
+              months
+            </span>
+            <span className="flex gap-1">
+              {(['expense', 'income'] as const).map((k) => (
+                <Button
+                  key={k}
+                  variant={view === k ? 'secondary' : 'ghost'}
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => {
+                    setView(k);
+                  }}
+                >
+                  {k === 'expense' ? 'Spending' : 'Income'}
+                </Button>
+              ))}
+            </span>
           </CardTitle>
         </CardHeader>
         <CardContent>
           <p className="mb-3 text-xs text-muted-foreground">
-            Net spending per month (refunds reduce it); confirmed transfers excluded.
+            {view === 'expense'
+              ? 'Net spending per month (refunds reduce it); confirmed transfers excluded.'
+              : 'Net income per month; confirmed transfers excluded.'}{' '}
             Click a category to open it in the ledger.
           </p>
           <div className="overflow-x-auto">
