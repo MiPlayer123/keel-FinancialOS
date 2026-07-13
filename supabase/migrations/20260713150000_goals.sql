@@ -16,7 +16,7 @@ create table if not exists public.savings_goals (
   target_date   date,
   -- Optional funding account: where the money notionally sits (earmark display).
   account_id    uuid references public.accounts (id),
-  currency      text not null default 'USD',
+  currency      text not null default 'USD' check (char_length(currency) = 3),
   status        public.goal_status not null default 'active',
   created_at    timestamptz not null default now()
 );
@@ -79,6 +79,9 @@ declare
   v_uid uuid := auth.uid();
   v_id uuid;
   v_currency text := 'USD';
+  v_row public.savings_goals%rowtype;
+  v_saved bigint;
+  v_status public.goal_status;
 begin
   if v_uid is null then
     raise exception 'KEEL_NOT_AUTHENTICATED' using errcode = 'P0004';
@@ -95,8 +98,7 @@ begin
   if p_target_minor is null or p_target_minor <= 0 then
     raise exception 'KEEL_INVALID_TARGET' using errcode = 'P0009';
   end if;
-  if p_target_date is not null and
-     (p_target_date < current_date or p_target_date > (current_date + interval '50 years')::date) then
+  if p_target_date is not null and p_target_date > (current_date + interval '50 years')::date then
     raise exception 'KEEL_INVALID_TARGET_DATE' using errcode = 'P0009';
   end if;
   if p_account_id is not null then
@@ -108,22 +110,52 @@ begin
   end if;
 
   if p_goal_id is null then
+    -- A NEW goal can't target the past; an existing overdue goal must stay
+    -- editable (rename etc.) while keeping its own date.
+    if p_target_date is not null and p_target_date < current_date then
+      raise exception 'KEEL_INVALID_TARGET_DATE' using errcode = 'P0009';
+    end if;
     insert into public.savings_goals
       (household_id, name, target_minor, target_date, account_id, currency)
     values (p_household_id, trim(p_name), p_target_minor, p_target_date, p_account_id, v_currency)
     returning id into v_id;
   else
+    select * into v_row from public.savings_goals
+      where id = p_goal_id and household_id = p_household_id
+      for update;
+    if not found then
+      raise exception 'KEEL_NOT_FOUND: goal' using errcode = 'P0006';
+    end if;
+    -- Past dates are refused only when the date actually changes.
+    if p_target_date is not null
+       and p_target_date is distinct from v_row.target_date
+       and p_target_date < current_date then
+      raise exception 'KEEL_INVALID_TARGET_DATE' using errcode = 'P0009';
+    end if;
+    -- No funding account given: the goal keeps its currency. Contributions
+    -- carry no currency of their own — the unit must never drift under an
+    -- earmark (Law 4).
+    if p_account_id is null then
+      v_currency := v_row.currency;
+    end if;
+    -- 'reached' is derived state; a target change recomputes it (archived
+    -- goals keep their lifecycle status).
+    select coalesce(sum(amount_minor), 0) into v_saved
+      from public.goal_contributions where goal_id = p_goal_id;
+    v_status := case
+      when v_row.status = 'archived' then 'archived'::public.goal_status
+      when v_saved >= p_target_minor then 'reached'::public.goal_status
+      else 'active'::public.goal_status
+    end;
     update public.savings_goals
       set name = trim(p_name),
           target_minor = p_target_minor,
           target_date = p_target_date,
           account_id = p_account_id,
-          currency = v_currency
-      where id = p_goal_id and household_id = p_household_id
+          currency = v_currency,
+          status = v_status
+      where id = p_goal_id
       returning id into v_id;
-    if v_id is null then
-      raise exception 'KEEL_NOT_FOUND: goal' using errcode = 'P0006';
-    end if;
   end if;
 
   insert into public.audit_log (household_id, actor, action, object_type, object_id, after)
@@ -243,9 +275,8 @@ begin
   ) then
     raise exception 'KEEL_NOT_FOUND' using errcode = 'P0006';
   end if;
-  if p_status is null or not exists (
-    select 1 from unnest(enum_range(null::public.goal_status)) st where st::text = p_status
-  ) then
+  -- 'reached' is derived (from Σ contributions vs target), never set by hand.
+  if p_status is null or p_status not in ('active', 'archived') then
     raise exception 'KEEL_INVALID_STATUS: %', coalesce(p_status, '<null>') using errcode = 'P0009';
   end if;
 
@@ -254,6 +285,15 @@ begin
     for update;
   if not found then
     raise exception 'KEEL_NOT_FOUND: goal' using errcode = 'P0006';
+  end if;
+
+  -- Restoring recomputes active vs reached instead of blindly trusting the caller.
+  if p_status = 'active' then
+    select case
+      when coalesce(sum(amount_minor), 0) >= (select target_minor from public.savings_goals where id = p_goal_id)
+      then 'reached' else 'active' end
+      into p_status
+      from public.goal_contributions where goal_id = p_goal_id;
   end if;
   if v_before::text = p_status then
     return;
