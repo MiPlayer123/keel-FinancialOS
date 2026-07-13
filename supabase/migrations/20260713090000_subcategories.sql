@@ -1021,9 +1021,11 @@ grant execute on function public.keel_create_category(uuid, text, public.ledger_
   to authenticated;
 
 -- ---------------------------------------------------------------------------
--- 11. Export DTO: ledger_accounts gains pfc_key / is_system /
--- parent_ledger_account_id (Law 6 — every real column is exported). Wrapper
--- chain pattern: rename the current head, patch {tables,ledger_accounts}.
+-- 11. Export DTO (Law 6 — every real column is exported): ledger_accounts
+-- gains pfc_key / is_system / parent_ledger_account_id, and connections
+-- gains display_name (added 20260712180000 but never entered the export
+-- contract — pgTAP 008 catches the gap). Wrapper chain pattern: rename the
+-- current head, patch {tables,ledger_accounts} and {tables,connections}.
 -- ---------------------------------------------------------------------------
 alter function public.keel_export_household(uuid,timestamptz)
   rename to keel_export_household_pre_subcategories;
@@ -1042,6 +1044,7 @@ as $$
 declare
   v_base jsonb;
   v_ledger_accounts jsonb;
+  v_connections jsonb;
 begin
   v_base := public.keel_export_household_pre_subcategories(p_household_id, p_as_of);
   select coalesce(jsonb_agg(row.dto order by row.id), '[]'::jsonb)
@@ -1065,7 +1068,32 @@ begin
       from public.ledger_accounts account
       where account.household_id = p_household_id
     ) row;
-  return jsonb_set(v_base, '{tables,ledger_accounts}', v_ledger_accounts);
+  select coalesce(jsonb_agg(row.dto order by row.id), '[]'::jsonb)
+    into v_connections
+    from (
+      select connection.id,
+        jsonb_build_object(
+          'id', connection.id,
+          'household_id', connection.household_id,
+          'provider', connection.provider,
+          'external_ref', connection.external_ref,
+          'status', connection.status,
+          'created_at', to_char(connection.created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+          'institution_id', connection.institution_id,
+          'consent_expires_at', case when connection.consent_expires_at is null then null else to_char(connection.consent_expires_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') end,
+          'last_successful_sync_at', case when connection.last_successful_sync_at is null then null else to_char(connection.last_successful_sync_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') end,
+          'sync_lease_owner', connection.sync_lease_owner,
+          'sync_leased_until', case when connection.sync_leased_until is null then null else to_char(connection.sync_leased_until at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') end,
+          'sync_desired_generation', connection.sync_desired_generation,
+          'sync_committed_generation', connection.sync_committed_generation,
+          'next_sync_eligible_at', case when connection.next_sync_eligible_at is null then null else to_char(connection.next_sync_eligible_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') end,
+          'display_name', connection.display_name
+        ) as dto
+      from public.connections connection
+      where connection.household_id = p_household_id
+    ) row;
+  v_base := jsonb_set(v_base, '{tables,ledger_accounts}', v_ledger_accounts);
+  return jsonb_set(v_base, '{tables,connections}', v_connections);
 end;
 $$;
 revoke all on function public.keel_export_household(uuid,timestamptz)
@@ -1094,6 +1122,20 @@ grant execute on function public.keel_seed_entity_categories(uuid, uuid) to serv
 revoke all on function public.keel_autocategorize_household(uuid)
   from public, anon, authenticated;
 grant execute on function public.keel_autocategorize_household(uuid) to service_role;
+
+-- The five overlay/config tables created since the Stage-1A grants pass
+-- (transaction_categories, transaction_overrides, category_rules,
+-- rule_renames, budgets) kept this stack's DEFAULT ACL for anon and
+-- authenticated (TRUNCATE/REFERENCES/TRIGGER) — pgTAP 002 "anon has no
+-- grants at all" catches it. Strip anon entirely; authenticated keeps
+-- exactly its explicit SELECT.
+revoke all on public.transaction_categories, public.transaction_overrides,
+  public.category_rules, public.rule_renames, public.budgets
+  from anon;
+revoke insert, update, delete, truncate, references, trigger
+  on public.transaction_categories, public.transaction_overrides,
+     public.category_rules, public.rule_renames, public.budgets
+  from authenticated;
 
 -- User read/write procs: keep authenticated (they gate membership in-body),
 -- but anon must not be able to reach them at all.
