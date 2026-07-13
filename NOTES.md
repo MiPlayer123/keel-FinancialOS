@@ -841,3 +841,14 @@ fixed and re-verified on the cluster same-session:
   light/dark × desktop/390px. Column guessing, quoted-comma fields,
   (23.45) → −$23.45 red / +$1,500.00 neutral (Law 8: red = negative money
   only) all confirmed on screenshots; page removed before commit.
+
+## 2026-07-13 — CI fully green (first time)
+
+Run 29255069497 on cee136e: unit, migrations+pgTAP+double-reset,
+edge-functions+replay integration (104/104), and secret scan all pass —
+the first fully green Actions run in the repo's history. The four jobs had
+never actually executed correctly before this PR (workflow ordering, token
+permissions, vendor bundle, workstation couplings — see the two CI-fix
+commits). Owner cost note: pushes are now batched (one reviewed push per
+work batch) since each push burns a Vercel preview build + four Actions
+jobs; adversarial review agents run locally before each push.
