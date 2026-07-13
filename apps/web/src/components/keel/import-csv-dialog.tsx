@@ -116,10 +116,10 @@ export function ImportCsvDialog({
             : r.splits,
         };
       });
-      return { rows, skipped: q.skipped };
+      return { rows, skipped: q.skipped, ignored: q.ignored, dayFirst: q.dayFirst };
     }
     if (cDate === null || cAmount === null || cDesc === null) {
-      return { rows: [] as Omit<ParsedRow, 'key'>[], skipped: 0 };
+      return { rows: [] as Omit<ParsedRow, 'key'>[], skipped: 0, ignored: 0, dayFirst: false };
     }
     const rows: Omit<ParsedRow, 'key'>[] = [];
     let skipped = 0;
@@ -136,7 +136,7 @@ export function ImportCsvDialog({
       }
       rows.push({ date, amountMinor, description });
     }
-    return { rows, skipped };
+    return { rows, skipped, ignored: 0, dayFirst: false };
   }, [isQif, text, dataRows, cDate, cAmount, cDesc, flipSigns]);
 
   const account = accounts.find((a) => a.id === accountId);
@@ -253,13 +253,16 @@ export function ImportCsvDialog({
     toast[failed > 0 ? 'error' : 'success'](`${parts.join(' · ')}.`);
     if (imported > 0 || replayed > 0) {
       setText('');
+      setFileName(null);
       onDone();
     }
   }
 
   const colItems = Object.fromEntries(header.map((h, i) => [String(i), h.trim() || `Column ${String(i + 1)}`]));
   const ready =
-    accountId !== null && cDate !== null && cAmount !== null && cDesc !== null && parsed.rows.length > 0;
+    accountId !== null &&
+    parsed.rows.length > 0 &&
+    (isQif || (cDate !== null && cAmount !== null && cDesc !== null));
 
   return (
     <Dialog
@@ -334,6 +337,9 @@ export function ImportCsvDialog({
               placeholder={'Transaction Date,Description,Amount\n07/01/2026,COFFEE SHOP,-4.50'}
               className="font-mono text-xs"
               onChange={(e) => {
+                // Typed/pasted content stands on its own — a previously chosen
+                // file's name must not steer format detection.
+                setFileName(null);
                 setText(e.target.value);
               }}
             />
@@ -391,6 +397,10 @@ export function ImportCsvDialog({
                 <span>
                   {String(parsed.rows.length)} rows ready
                   {parsed.skipped > 0 ? ` · ${String(parsed.skipped)} skipped (unparseable)` : ''}
+                  {parsed.ignored > 0
+                    ? ` · ${String(parsed.ignored)} non-cash records ignored`
+                    : ''}
+                  {isQif && parsed.dayFirst ? ' · dates read day-first (DD/MM)' : ''}
                 </span>
                 <label className="flex cursor-pointer items-center gap-1.5">
                   <input
@@ -421,7 +431,7 @@ export function ImportCsvDialog({
               </div>
               <p className="text-xs text-muted-foreground">
                 {isQif
-                  ? 'Categories and splits from the QIF are matched by name; anything unmatched lands as Uncategorized.'
+                  ? 'Categories and splits from the QIF are matched by name; anything unmatched lands as Uncategorized. Re-imports never duplicate — and never overwrite categorization you have since changed here.'
                   : 'Rows land as Uncategorized; your rules file them automatically within a few minutes.'}
               </p>
             </div>

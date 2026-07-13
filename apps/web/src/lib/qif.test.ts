@@ -8,6 +8,7 @@ describe('parseQifAmount', () => {
     expect(parseQifAmount('12')).toBe('1200');
     expect(parseQifAmount('0.5')).toBe('50');
     expect(parseQifAmount('-0.05')).toBe('-5');
+    expect(parseQifAmount('+5')).toBe('500');
   });
   it('rejects garbage', () => {
     expect(parseQifAmount('abc')).toBeNull();
@@ -21,7 +22,13 @@ describe('parseQifDate', () => {
     expect(parseQifDate('3/15/2024')).toBe('2024-03-15');
     expect(parseQifDate("3/15'24")).toBe('2024-03-15');
     expect(parseQifDate('03/15/99')).toBe('1999-03-15');
+    // Apostrophe separator is ALWAYS a 2000s year in Quicken.
+    expect(parseQifDate("3/15'99")).toBe('2099-03-15');
     expect(parseQifDate('2024-03-15')).toBe('2024-03-15');
+  });
+  it('flips to day-first when asked', () => {
+    expect(parseQifDate('15/3/24', true)).toBe('2024-03-15');
+    expect(parseQifDate('5/3/24', true)).toBe('2024-03-05');
   });
   it('rejects impossible dates', () => {
     expect(parseQifDate('13/45/2024')).toBeNull();
@@ -64,9 +71,11 @@ $-20.00
 
 describe('parseQif', () => {
   it('parses bank records, keeps transfers uncategorized, skips investments', () => {
-    const { rows, skipped } = parseQif(SAMPLE);
+    const { rows, skipped, ignored, dayFirst } = parseQif(SAMPLE);
     expect(rows).toHaveLength(4);
-    expect(skipped).toBe(1); // the investment record
+    expect(skipped).toBe(0);
+    expect(ignored).toBe(1); // the investment record is expected noise, not an error
+    expect(dayFirst).toBe(false);
     expect(rows[0]).toMatchObject({
       date: '2024-03-15',
       amountMinor: '-4250',
@@ -80,6 +89,19 @@ describe('parseQif', () => {
       { categoryName: 'Groceries', amountMinor: '-4000' },
       { categoryName: 'Household', amountMinor: '-2000' },
     ]);
+  });
+  it('reads a whole UK file day-first once any date proves it', () => {
+    const uk = ['!Type:Bank', "D15/3'24", 'T-10.00', 'PBoots', '^', "D5/3'24", 'T-20.00', 'PTesco', '^'].join('\n');
+    const { rows, dayFirst } = parseQif(uk);
+    expect(dayFirst).toBe(true);
+    expect(rows.map((r) => r.date)).toEqual(['2024-03-15', '2024-03-05']);
+  });
+  it('counts !Account metadata blocks as ignored, not unparseable', () => {
+    const withAccount = ['!Account', 'NChecking', 'TBank', '^', '!Type:Bank', "D3/15'24", 'T-1.00', 'PX', '^'].join('\n');
+    const { rows, skipped, ignored } = parseQif(withAccount);
+    expect(rows).toHaveLength(1);
+    expect(skipped).toBe(0);
+    expect(ignored).toBe(1);
   });
   it('detects QIF by extension or header', () => {
     expect(looksLikeQif(SAMPLE)).toBe(true);

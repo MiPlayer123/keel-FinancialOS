@@ -113,11 +113,6 @@ function presetRange(preset: DatePreset): [string | null, string | null] {
   }
 }
 
-/**
- * Rename-proof "is it still on a landing pad?" check: the stable pfc_key when
- * the migration has landed, the seeded name as a fallback until then. Split
- * transactions are categorized by their splits — never "uncategorized".
- */
 /** Amount search: "12.34" or "1234" matches ±1234 minor units (string ops only). */
 function amountMatches(amountMinor: string, q: string): boolean {
   if (!/^\d+(\.\d{1,2})?$/.test(q)) return false;

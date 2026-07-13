@@ -271,8 +271,9 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
               onToggle={() => undefined}
               onEdit={setEditing}
               onRecategorize={(txnId, categoryId) => {
+                if (!householdId) return;
                 void categorizeTransaction({
-                  householdId: householdId ?? '',
+                  householdId,
                   transactionId: txnId,
                   categoryLedgerAccountId: categoryId,
                 })
@@ -310,8 +311,9 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
             void balances.refetch();
           }}
           onRecategorize={(txnId, categoryId) => {
+            if (!householdId) return;
             void categorizeTransaction({
-              householdId: householdId ?? '',
+              householdId,
               transactionId: txnId,
               categoryLedgerAccountId: categoryId,
             })

@@ -58,6 +58,14 @@ export function CategoriesCard() {
     void load();
   }, [load]);
 
+  // ⌘K "Manage categories" lands here cross-page; the card doesn't exist at
+  // hash-scroll time (renders after household resolves), so scroll ourselves.
+  useEffect(() => {
+    if (categories.length === 0) return;
+    if (window.location.hash !== '#categories') return;
+    document.getElementById('categories')?.scrollIntoView({ block: 'start' });
+  }, [categories.length]);
+
   const parents = useMemo(
     () => categories.filter((c) => c.kind === kind && !c.parentLedgerAccountId),
     [categories, kind],

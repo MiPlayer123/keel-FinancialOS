@@ -1016,3 +1016,29 @@ Owner feedback verbatim → work items:
 
 Subcategories/custom categories already shipped (Home → Categories →
 Manage); flagged to owner rather than rebuilt.
+
+## 2026-07-13 — Batch 5 review round (pre-push)
+
+Review agent found the flagship broken: P0 — the QIF Import button could
+NEVER enable (ready gate still demanded CSV column mappings that don't exist
+for QIF; parser-only unit tests couldn't catch a dialog gate). Fixed + P1s:
+- Stale fileName steered pasted CSV into the QIF parser after a .qif had
+  been chosen once (extension checked before content) — fileName now clears
+  on manual edits and after import.
+- DD/MM (UK/EU) files silently imported with transposed/missing dates —
+  file-level detection now flips the whole file to day-first when any
+  slashed date's first field exceeds 12 (one convention per file, never per
+  row), surfaced in the counts line ("dates read day-first").
+- Apostrophe-separator years are always 2000s (Quicken semantics); "+5"
+  amounts accepted; !Account metadata and investment records now count as
+  "non-cash records ignored" instead of lying "unparseable".
+- ⌘K → Manage categories now scrolls reliably cross-page (card self-scrolls
+  after data load; the anchor didn't exist at hash-scroll time).
+- householdId guards replace the '' fallback on the account page; dangling
+  doc comment removed.
+Documented as accepted (review P2s): area-fill color flip sits at data-range
+zero, a hair off when the y-axis pads below the data min (never red above
+zero — the safe direction); QIF re-imports keep KEEL categorization (never
+overwritten by Quicken-side edits — stated in dialog copy); sidebar accounts
+fetch per mount (module cache is a future nicety); SVG-only favicon (PNG
+fallback if unfurlers matter later).
