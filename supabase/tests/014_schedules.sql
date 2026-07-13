@@ -147,7 +147,7 @@ select lives_ok($$
 $$, 'create monthly schedule anchored on the 31st');
 
 select is(
-  (select anchor_day from public.scheduled_transactions
+  (select anchor_day::int from public.scheduled_transactions
     where household_id = '00000000-0000-4000-8000-00000000a001' and description = 'pgTAP Anchor Rent'),
   31, 'anchor_day captured from the declared due date');
 
@@ -162,7 +162,7 @@ select lives_ok($$
 $$, 'save echoing the unchanged due date');
 
 select is(
-  (select anchor_day from public.scheduled_transactions where description = 'pgTAP Anchor Rent'),
+  (select anchor_day::int from public.scheduled_transactions where description = 'pgTAP Anchor Rent'),
   31, 'echoing a clamped/unchanged date preserves anchor_day');
 
 select lives_ok($$
@@ -175,7 +175,7 @@ select is(
   (select next_due_date from public.scheduled_transactions where description = 'pgTAP Anchor Rent'),
   '2026-02-28'::date, 'Jan 31 steps to Feb 28 (28-day February, no leap year)');
 select is(
-  (select anchor_day from public.scheduled_transactions where description = 'pgTAP Anchor Rent'),
+  (select anchor_day::int from public.scheduled_transactions where description = 'pgTAP Anchor Rent'),
   31, 'anchor_day survives the clamp — not collapsed to 28');
 
 select lives_ok($$
