@@ -263,7 +263,12 @@ export type TransactionRow = {
 export type RichTransactionRow = {
   transactionId: string;
   effectiveDate: string;
+  /** Display description: the user's override when set, else the provider's. */
   description: string;
+  /** Immutable provider description (absent until the overlay migration lands). */
+  originalDescription?: string;
+  /** User note (absent until the overlay migration lands). */
+  note?: string | null;
   status: 'pending' | 'posted' | 'reviewed';
   accountId: string;
   accountName: string;
@@ -305,6 +310,21 @@ export async function fetchLatestBalances(householdId: string): Promise<LatestBa
     householdId,
   });
   return Array.isArray(data) ? data : [];
+}
+
+/** Set/clear the user display name + note for a transaction (blank clears). */
+export async function overrideTransaction(input: {
+  householdId: string;
+  transactionId: string;
+  displayDescription: string;
+  note: string;
+}): Promise<unknown> {
+  return invoke('api/transactions/override', {
+    householdId: input.householdId,
+    transactionId: input.transactionId,
+    displayDescription: input.displayDescription,
+    note: input.note,
+  });
 }
 
 /** Re-categorize a transaction (mutable classification overlay). */

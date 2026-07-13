@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { ReceiptText, ChevronRight, Search } from 'lucide-react';
+import { ReceiptText, ChevronRight, Search, StickyNote } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { AppShell } from '@/components/keel/app-shell';
@@ -11,13 +11,25 @@ import { useKeelQuery } from '@/lib/use-keel-query';
 import {
   fetchCategories,
   categorizeTransaction,
+  overrideTransaction,
   type RichTransactionRow,
   type CategoryRow,
 } from '@/lib/keel-api';
 import { Money } from '@/components/keel/money';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Select,
   SelectContent,
@@ -48,6 +60,7 @@ function LedgerTable() {
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [query, setQuery] = useState('');
   const [grouping, setGrouping] = useState<Grouping>('none');
+  const [editing, setEditing] = useState<RichTransactionRow | null>(null);
 
   useEffect(() => {
     if (!householdId) return;
@@ -144,20 +157,151 @@ function LedgerTable() {
       </div>
 
       {grouping === 'none' ? (
-        <TxnList rows={filtered} categories={categories} onRecategorize={(id, cat) => {
-          void recategorize(id, cat);
-        }} />
+        <TxnList
+          rows={filtered}
+          categories={categories}
+          onRecategorize={(id, cat) => {
+            void recategorize(id, cat);
+          }}
+          onEdit={setEditing}
+        />
       ) : (
         <GroupedList
           rows={filtered}
           categories={categories}
           groupBy={grouping}
           onRecategorize={(id, cat) => {
-          void recategorize(id, cat);
-        }}
+            void recategorize(id, cat);
+          }}
+          onEdit={setEditing}
         />
       )}
+
+      <TxnEditDialog
+        row={editing}
+        householdId={householdId}
+        onClose={() => {
+          setEditing(null);
+        }}
+        onSaved={() => {
+          setEditing(null);
+          void refetch();
+        }}
+      />
     </div>
+  );
+}
+
+/**
+ * Edit the user-facing name + note for a transaction. Presentation overlay
+ * only: the provider's original description is immutable and stays visible.
+ */
+function TxnEditDialog({
+  row,
+  householdId,
+  onClose,
+  onSaved,
+}: {
+  row: RichTransactionRow | null;
+  householdId: string | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState('');
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!row) return;
+    setName(row.description);
+    setNote(row.note ?? '');
+  }, [row]);
+
+  const original = row?.originalDescription ?? row?.description ?? '';
+
+  async function save() {
+    if (!row || !householdId) return;
+    setSaving(true);
+    try {
+      await overrideTransaction({
+        householdId,
+        transactionId: row.transactionId,
+        // Saving the unchanged original name means "no override".
+        displayDescription: name.trim() === original ? '' : name,
+        note,
+      });
+      toast.success('Transaction updated.');
+      onSaved();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save changes.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open={row !== null}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Edit transaction</DialogTitle>
+          <DialogDescription>
+            Rename it or add a note. The bank&apos;s original description is kept.
+          </DialogDescription>
+        </DialogHeader>
+        {row ? (
+          <div className="space-y-4">
+            <div className="flex items-baseline justify-between gap-3 text-sm">
+              <span className="truncate text-muted-foreground" title={original}>
+                {original}
+              </span>
+              <Money amountMinor={row.amountMinor} currency={row.currency} signed />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="txn-name">Name</Label>
+              <Input
+                id="txn-name"
+                value={name}
+                maxLength={140}
+                onChange={(e) => {
+                  setName(e.target.value);
+                }}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="txn-note">Note</Label>
+              <Textarea
+                id="txn-note"
+                value={note}
+                maxLength={2000}
+                rows={3}
+                placeholder="Anything worth remembering about this transaction"
+                onChange={(e) => {
+                  setNote(e.target.value);
+                }}
+              />
+            </div>
+          </div>
+        ) : null}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() => {
+              void save();
+            }}
+            disabled={saving || name.trim().length === 0}
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -181,11 +325,13 @@ function GroupedList({
   categories,
   groupBy,
   onRecategorize,
+  onEdit,
 }: {
   rows: RichTransactionRow[];
   categories: CategoryRow[];
   groupBy: Grouping;
   onRecategorize: (txnId: string, categoryId: string) => void;
+  onEdit: (row: RichTransactionRow) => void;
 }) {
   const groups = useMemo(() => groupRows(rows, groupBy), [rows, groupBy]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -217,6 +363,7 @@ function GroupedList({
                 rows={groupRowsList}
                 categories={categories}
                 onRecategorize={onRecategorize}
+                onEdit={onEdit}
                 bordered
               />
             ) : null}
@@ -231,11 +378,13 @@ function TxnList({
   rows,
   categories,
   onRecategorize,
+  onEdit,
   bordered,
 }: {
   rows: RichTransactionRow[];
   categories: CategoryRow[];
   onRecategorize: (txnId: string, categoryId: string) => void;
+  onEdit: (row: RichTransactionRow) => void;
   bordered?: boolean;
 }) {
   return (
@@ -256,7 +405,13 @@ function TxnList({
           </span>
           {/* min-w-0 + truncate: the description can never push into the
               category picker or the amount, no matter how long the memo is. */}
-          <div className="min-w-0 flex-1">
+          <button
+            type="button"
+            className="min-w-0 flex-1 rounded-sm text-left outline-none hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => {
+              onEdit(t);
+            }}
+          >
             <p className="truncate text-sm font-medium" title={t.description}>
               {t.description}
             </p>
@@ -266,8 +421,11 @@ function TxnList({
               {t.categoryName ? (
                 <span className="sm:hidden"> · {t.categoryName}</span>
               ) : null}
+              {t.note ? (
+                <StickyNote className="ml-1 inline size-3 align-[-1px]" aria-label="Has note" />
+              ) : null}
             </p>
-          </div>
+          </button>
           <CategoryPicker
             row={t}
             categories={categories}

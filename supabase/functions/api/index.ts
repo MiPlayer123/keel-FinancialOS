@@ -582,6 +582,41 @@ export default {
       return json(200, { ok: true });
     }
 
+    if (path === '/transactions/override') {
+      // User-editable display name + note. Presentation overlay only — the
+      // canonical description is immutable (source preservation); blank
+      // fields clear the override. The proc enforces membership + ownership.
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const txnId = input['transactionId'];
+      const displayDescription = input['displayDescription'];
+      const note = input['note'];
+      const okString = (v: unknown, max: number) =>
+        v === undefined || v === null || (typeof v === 'string' && v.length <= max);
+      if (
+        !householdId.success ||
+        typeof txnId !== 'string' ||
+        !uuidRe.test(txnId) ||
+        !okString(displayDescription, 140) ||
+        !okString(note, 2000)
+      ) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Override request failed validation.',
+          details: {},
+        });
+      }
+      const { error: ovError } = await ctx.supabase.rpc('keel_set_transaction_override', {
+        p_household_id: householdId.data,
+        p_txn_id: txnId,
+        p_display_description: typeof displayDescription === 'string' ? displayDescription : null,
+        p_note: typeof note === 'string' ? note : null,
+      });
+      if (ovError) return mapDbError(ovError);
+      return json(200, { ok: true });
+    }
+
     if (path === '/connections/sync') {
       const input = body as Record<string, unknown>;
       const householdId = HouseholdIdSchema.safeParse(input['householdId']);
