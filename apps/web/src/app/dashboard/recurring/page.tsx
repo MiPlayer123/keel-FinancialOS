@@ -139,6 +139,8 @@ function RecurringBody() {
         </section>
       ) : null}
 
+      <OccurrenceCalendar rows={active} />
+
       {suggested.length > 0 ? (
         <SeriesSection
           title="Suggested"
@@ -290,5 +292,102 @@ function SeriesCard({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Month calendar of expected occurrences (confirmed series only). Pure
+// layout over data the page already has; amounts stay minor-unit strings.
+// ---------------------------------------------------------------------------
+function OccurrenceCalendar({ rows }: { rows: RecurringSeriesRow[] }) {
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth();
+  const first = new Date(Date.UTC(year, month, 1));
+  const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const lead = first.getUTCDay(); // 0 = Sunday
+  const nowIso = now.toISOString().slice(0, 10);
+  const monthKey = nowIso.slice(0, 7);
+
+  const byDay = new Map<number, { name: string; signedMinor: string; currency: string }[]>();
+  for (const s of rows) {
+    if (s.status !== 'confirmed') continue;
+    for (const o of s.occurrences) {
+      if (!o.expectedDate.startsWith(monthKey)) continue;
+      const day = Number(o.expectedDate.slice(8, 10));
+      const list = byDay.get(day) ?? [];
+      list.push({
+        name: s.counterpartyKey,
+        signedMinor:
+          s.sign === 'outflow' ? `-${o.expectedAmountMinor}` : o.expectedAmountMinor,
+        currency: o.currency,
+      });
+      byDay.set(day, list);
+    }
+  }
+  if (byDay.size === 0) return null;
+
+  const monthName = ['January','February','March','April','May','June','July','August','September','October','November','December'][month];
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-sm font-medium text-muted-foreground">
+        {monthName} {String(year)}
+      </h2>
+      <div className="overflow-x-auto">
+        <div className="min-w-[560px] overflow-hidden rounded-lg border border-border">
+          <div className="grid grid-cols-7 border-b border-border bg-secondary/30 text-center text-[11px] uppercase tracking-wide text-muted-foreground">
+            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
+              <div key={d} className="py-1.5">
+                {d}
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-7">
+            {Array.from({ length: lead }).map((_, i) => (
+              <div key={`lead-${String(i)}`} className="min-h-16 border-b border-r border-border/60" />
+            ))}
+            {Array.from({ length: daysInMonth }).map((_, i) => {
+              const day = i + 1;
+              const iso = `${monthKey}-${String(day).padStart(2, '0')}`;
+              const items = byDay.get(day) ?? [];
+              const isToday = iso === nowIso;
+              return (
+                <div
+                  key={day}
+                  className={`min-h-16 space-y-0.5 border-b border-r border-border/60 p-1 ${
+                    isToday ? 'bg-secondary/40' : ''
+                  }`}
+                >
+                  <p
+                    className={`text-right text-[11px] ${
+                      isToday ? 'font-semibold' : 'text-muted-foreground'
+                    }`}
+                  >
+                    {String(day)}
+                  </p>
+                  {items.slice(0, 2).map((item, idx) => (
+                    <p
+                      key={`${item.name}-${String(idx)}`}
+                      className="truncate text-[11px] leading-tight"
+                      title={item.name}
+                    >
+                      {item.name}
+                      <span className="text-muted-foreground">
+                        {' '}
+                        <Money amountMinor={item.signedMinor} currency={item.currency} signed className="text-[11px]" />
+                      </span>
+                    </p>
+                  ))}
+                  {items.length > 2 ? (
+                    <p className="text-[10px] text-muted-foreground">+{String(items.length - 2)}</p>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }

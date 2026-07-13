@@ -29,6 +29,7 @@ import {
   CategoryBarList,
 } from '@/components/keel/charts';
 import { spendingMix } from '@/lib/spending';
+import { formatMoney } from '@/lib/money';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
@@ -121,6 +122,77 @@ function agoLabel(iso: string): string {
   return `${String(Math.trunc(hours / 24))}d ago`;
 }
 
+
+type Insight = { label: string; value: string; detail: string };
+
+/**
+ * Deterministic pocket insights from data already on the page (Law 1 — no
+ * model anywhere near this). BigInt sums; labels format minor strings.
+ */
+function buildInsights(rows: RichTransactionRow[]): Insight[] {
+  const out: Insight[] = [];
+  const today = new Date();
+  const todayIso = today.toISOString().slice(0, 10);
+  const month = todayIso.slice(0, 7);
+  const dayOfMonth = Number(todayIso.slice(8, 10));
+  const prev = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 1));
+  const prevMonth = prev.toISOString().slice(0, 7);
+  const weekAgo = new Date(today);
+  weekAgo.setUTCDate(weekAgo.getUTCDate() - 7);
+  const weekAgoIso = weekAgo.toISOString().slice(0, 10);
+
+  let biggest: RichTransactionRow | null = null;
+  let mtd = 0n;
+  let prevToSameDay = 0n;
+  const merchants = new Map<string, bigint>();
+
+  for (const t of rows) {
+    if (t.transferStatus === 'confirmed') continue;
+    const cash = BigInt(t.amountMinor || '0');
+    if (cash >= 0n) continue; // outflows only
+    if (t.effectiveDate >= weekAgoIso) {
+      if (!biggest || cash < BigInt(biggest.amountMinor)) biggest = t;
+    }
+    if (t.effectiveDate.startsWith(month)) {
+      mtd += -cash;
+      merchants.set(t.description, (merchants.get(t.description) ?? 0n) + -cash);
+    }
+    if (
+      t.effectiveDate.startsWith(prevMonth) &&
+      Number(t.effectiveDate.slice(8, 10)) <= dayOfMonth
+    ) {
+      prevToSameDay += -cash;
+    }
+  }
+
+  if (biggest) {
+    out.push({
+      label: 'Biggest purchase · 7 days',
+      value: formatMoney(biggest.amountMinor.replace('-', '')),
+      detail: biggest.description.slice(0, 40),
+    });
+  }
+  if (mtd > 0n && prevToSameDay > 0n) {
+    const deltaPct = Number(((mtd - prevToSameDay) * 100n) / prevToSameDay);
+    out.push({
+      label: 'Spending pace vs last month',
+      value: `${deltaPct >= 0 ? '+' : ''}${String(deltaPct)}%`,
+      detail: `${formatMoney(mtd.toString())} so far vs ${formatMoney(prevToSameDay.toString())} by day ${String(dayOfMonth)}`,
+    });
+  }
+  const topMerchant = [...merchants.entries()].sort((a, b) =>
+    b[1] > a[1] ? 1 : b[1] < a[1] ? -1 : 0,
+  )[0];
+  if (topMerchant && topMerchant[1] > 0n) {
+    out.push({
+      label: 'Top merchant this month',
+      value: formatMoney(topMerchant[1].toString()),
+      detail: topMerchant[0].slice(0, 40),
+    });
+  }
+  return out;
+}
+
 function HomeBody() {
   const { householdId, ready } = useHousehold();
   const balances = useKeelQuery<TrialBalanceRow>('ledger.trial_balance', householdId);
@@ -196,6 +268,7 @@ function HomeBody() {
   }, 0n);
 
   const spending = spendingMix(richTxns ?? []);
+  const insights = buildInsights(richTxns ?? []);
   const showMonthlyFlow =
     monthlyFlow !== null &&
     monthlyFlow.some((m) => m.inflowMinor !== '0' || m.outflowMinor !== '0');
@@ -219,6 +292,20 @@ function HomeBody() {
         </Card>
         <CashFlowCard householdId={householdId} />
       </div>
+
+      {insights.length > 0 ? (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          {insights.map((i) => (
+            <div key={i.label} className="rounded-lg border border-border bg-card px-4 py-3">
+              <p className="text-xs text-muted-foreground">{i.label}</p>
+              <p className="text-lg font-semibold tabular-nums">{i.value}</p>
+              <p className="truncate text-xs text-muted-foreground" title={i.detail}>
+                {i.detail}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {forecast !== null && forecast.rows.length > 1 ? (
         <Card>

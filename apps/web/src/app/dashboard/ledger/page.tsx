@@ -180,6 +180,8 @@ function LedgerTable() {
   useEffect(() => {
     const category = searchParams.get('category');
     if (category) setCategoryFilter(category);
+    const q = searchParams.get('q');
+    if (q) setQuery(q);
     if (searchParams.get('add') === '1') {
       setAdding(true);
       router.replace('/dashboard/ledger', { scroll: false });
@@ -673,6 +675,13 @@ function LedgerTable() {
         onRecategorize={(id, cat) => {
           void recategorize(id, cat);
         }}
+        onMerchantSearch={(description) => {
+          setQuery(description);
+          setDatePreset('all');
+          setAccountFilter('all');
+          setCategoryFilter('all');
+          setTagFilter('all');
+        }}
       />
 
       <AddTransactionDialog
@@ -1063,6 +1072,7 @@ function TxnEditDialog({
   onClose,
   onSaved,
   onRecategorize,
+  onMerchantSearch,
 }: {
   row: RichTransactionRow | null;
   householdId: string | null;
@@ -1073,6 +1083,7 @@ function TxnEditDialog({
   onClose: () => void;
   onSaved: () => void;
   onRecategorize: (txnId: string, categoryId: string) => void;
+  onMerchantSearch: (description: string) => void;
 }) {
   const [name, setName] = useState('');
   const [note, setNote] = useState('');
@@ -1206,6 +1217,17 @@ function TxnEditDialog({
               </span>
               <Money amountMinor={row.amountMinor} currency={row.currency} signed />
             </div>
+            <button
+              type="button"
+              className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+              onClick={() => {
+                if (tagsDirty) onTagsMutated();
+                onClose();
+                onMerchantSearch(row.description);
+              }}
+            >
+              See everything from this merchant
+            </button>
             <div className="space-y-1.5">
               <Label htmlFor="txn-name">Name</Label>
               <Input
