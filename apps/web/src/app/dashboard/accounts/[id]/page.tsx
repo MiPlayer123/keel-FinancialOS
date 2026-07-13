@@ -213,6 +213,7 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
             accounts={accounts}
             categories={categories}
             defaultAccountId={accountId}
+            history={txns.rows}
             onClose={() => {
               setAdding(false);
             }}

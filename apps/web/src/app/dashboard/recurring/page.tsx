@@ -8,8 +8,15 @@ import { AppShell } from '@/components/keel/app-shell';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
-import { useKeelQuery } from '@/lib/use-keel-query';
-import { fetchAccounts, type AccountRow, type RecurringSeriesRow } from '@/lib/keel-api';
+import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
+import { BalanceTrendChart, type BalancePoint } from '@/components/keel/charts';
+import {
+  fetchAccounts,
+  fetchLedgerKinds,
+  type AccountRow,
+  type RecurringSeriesRow,
+  type TrialBalanceRow,
+} from '@/lib/keel-api';
 import {
   RECURRING_ACTIONS,
   recurringTransition,
@@ -48,6 +55,8 @@ function RecurringBody() {
     householdId,
   );
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
+  const balanceRows = useKeelQuerySilent<TrialBalanceRow>('ledger.trial_balance', householdId);
+  const [ledgerKinds, setLedgerKinds] = useState<Map<string, string>>(new Map());
 
   useEffect(() => {
     if (!householdId) return;
@@ -55,6 +64,11 @@ function RecurringBody() {
       .then(setAccounts)
       .catch(() => {
         setAccounts([]);
+      });
+    void fetchLedgerKinds(householdId)
+      .then(setLedgerKinds)
+      .catch(() => {
+        setLedgerKinds(new Map());
       });
   }, [householdId]);
 
@@ -140,6 +154,13 @@ function RecurringBody() {
       ) : null}
 
       <OccurrenceCalendar rows={active} />
+
+      <ProjectedCash
+        series={active}
+        balances={balanceRows ?? []}
+        accounts={accounts}
+        ledgerKinds={ledgerKinds}
+      />
 
       {suggested.length > 0 ? (
         <SeriesSection
@@ -396,6 +417,108 @@ function OccurrenceCalendar({ rows }: { rows: RecurringSeriesRow[] }) {
             })}
           </div>
         </div>
+      </div>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Projected cash: today's asset balances rolled forward through the expected
+// occurrences of confirmed series (Quicken's "Projected Balances", household
+// level). Pure BigInt arithmetic over data already on the page — Law 1.
+// Approximation, stated in the caption: card-charged subscriptions reduce the
+// projection when charged, not when the card is paid.
+// ---------------------------------------------------------------------------
+const PROJECTION_DAYS = 60;
+
+function ProjectedCash({
+  series,
+  balances,
+  accounts,
+  ledgerKinds,
+}: {
+  series: RecurringSeriesRow[];
+  balances: TrialBalanceRow[];
+  accounts: AccountRow[];
+  ledgerKinds: Map<string, string>;
+}) {
+  const projection = useMemo(() => {
+    if (balances.length === 0 || ledgerKinds.size === 0) return null;
+    const assetLedgerIds = new Set(
+      accounts
+        .filter((a) => ledgerKinds.get(a.ledgerAccountId) === 'asset')
+        .map((a) => a.ledgerAccountId),
+    );
+    if (assetLedgerIds.size === 0) return null;
+    const assetRows = balances.filter((b) => assetLedgerIds.has(b.ledgerAccountId));
+    if (assetRows.length === 0) return null;
+    // Single-currency projection: the dominant currency across asset accounts.
+    const counts = new Map<string, number>();
+    for (const b of assetRows) counts.set(b.currency, (counts.get(b.currency) ?? 0) + 1);
+    const currency = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'USD';
+    let base = 0n;
+    for (const b of assetRows) {
+      if (b.currency === currency) base += BigInt(b.balanceMinor || '0');
+    }
+
+    const start = new Date();
+    const startIso = start.toISOString().slice(0, 10);
+    const end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + PROJECTION_DAYS);
+    const endIso = end.toISOString().slice(0, 10);
+
+    const deltaByDate = new Map<string, bigint>();
+    for (const s of series) {
+      if (s.status !== 'confirmed') continue;
+      for (const o of s.occurrences) {
+        if (o.status !== 'expected') continue;
+        if (o.currency !== currency) continue;
+        if (o.expectedDate <= startIso || o.expectedDate > endIso) continue;
+        const amt = BigInt(o.expectedAmountMinor || '0');
+        const delta = s.sign === 'outflow' ? -amt : amt;
+        deltaByDate.set(o.expectedDate, (deltaByDate.get(o.expectedDate) ?? 0n) + delta);
+      }
+    }
+    if (deltaByDate.size === 0) return null;
+
+    const points: BalancePoint[] = [{ date: startIso, balanceMinor: base.toString(), currency }];
+    let running = base;
+    let low = base;
+    let lowDate = startIso;
+    for (const [date, delta] of [...deltaByDate.entries()].sort((a, b) =>
+      a[0].localeCompare(b[0]),
+    )) {
+      running += delta;
+      points.push({ date, balanceMinor: running.toString(), currency });
+      if (running < low) {
+        low = running;
+        lowDate = date;
+      }
+    }
+    points.push({ date: endIso, balanceMinor: running.toString(), currency });
+    return { points, low, lowDate, currency };
+  }, [series, balances, accounts, ledgerKinds]);
+
+  if (!projection) return null;
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-sm font-medium text-muted-foreground">
+        Projected cash · next {PROJECTION_DAYS} days
+      </h2>
+      <div className="rounded-lg border border-border p-4">
+        <BalanceTrendChart points={projection.points} height={180} />
+        <p className="mt-2 text-xs text-muted-foreground">
+          Today&apos;s asset balances rolled forward through confirmed recurring bills and
+          income. Lowest point:{' '}
+          <Money
+            amountMinor={projection.low.toString()}
+            currency={projection.currency}
+            className="text-xs"
+          />{' '}
+          around {projection.lowDate}. Card-charged subscriptions are counted when they
+          charge, not when the card is paid.
+        </p>
       </div>
     </section>
   );

@@ -8,6 +8,7 @@ import {
   createManualTransaction,
   type AccountRow,
   type CategoryRow,
+  type RichTransactionRow,
 } from '@/lib/keel-api';
 import { parseSignedDollars } from '@/lib/hash';
 import { Button } from '@/components/ui/button';
@@ -31,6 +32,60 @@ import {
 
 type SplitDraft = { categoryId: string | null; amount: string };
 
+type PayeeMemory = {
+  description: string;
+  direction: 'expense' | 'income';
+  /** Absolute minor units of the most recent occurrence. */
+  amountMinor: string;
+  categoryId: string | null;
+  lastDate: string;
+  count: number;
+};
+
+/**
+ * QuickFill memory: one entry per payee (case-insensitive display name),
+ * remembering the most recent direction/amount/category. Deterministic —
+ * history in, suggestions out (Law 1: no model anywhere near this).
+ */
+function buildPayeeMemory(history: RichTransactionRow[]): PayeeMemory[] {
+  const byName = new Map<string, PayeeMemory>();
+  for (const t of history) {
+    if (t.transferStatus === 'confirmed') continue;
+    const name = t.description.trim();
+    if (name.length === 0) continue;
+    const cash = BigInt(t.amountMinor || '0');
+    if (cash === 0n) continue;
+    const key = name.toLowerCase();
+    const existing = byName.get(key);
+    if (existing) {
+      existing.count += 1;
+      if (t.effectiveDate > existing.lastDate) {
+        existing.lastDate = t.effectiveDate;
+        existing.description = name;
+        existing.direction = cash < 0n ? 'expense' : 'income';
+        existing.amountMinor = (cash < 0n ? -cash : cash).toString();
+        existing.categoryId =
+          t.splits && t.splits.length > 1 ? null : (t.categoryLedgerAccountId ?? null);
+      }
+      continue;
+    }
+    byName.set(key, {
+      description: name,
+      direction: cash < 0n ? 'expense' : 'income',
+      amountMinor: (cash < 0n ? -cash : cash).toString(),
+      categoryId: t.splits && t.splits.length > 1 ? null : (t.categoryLedgerAccountId ?? null),
+      lastDate: t.effectiveDate,
+      count: 1,
+    });
+  }
+  return [...byName.values()];
+}
+
+function minorToDollars(minor: string): string {
+  const m = BigInt(minor);
+  return `${(m / 100n).toString()}.${(m % 100n).toString().padStart(2, '0')}`;
+}
+
 /**
  * Add a manual transaction: one account, signed cash amount, one category or
  * a multi-category split. Splits are REAL balanced postings server-side; this
@@ -43,6 +98,7 @@ export function AddTransactionDialog({
   accounts,
   categories,
   defaultAccountId,
+  history = [],
   onClose,
   onSaved,
 }: {
@@ -52,6 +108,8 @@ export function AddTransactionDialog({
   accounts: AccountRow[];
   categories: CategoryRow[];
   defaultAccountId?: string;
+  /** Recent transactions powering QuickFill payee suggestions (optional). */
+  history?: RichTransactionRow[];
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -73,6 +131,34 @@ export function AddTransactionDialog({
     () => categories.filter((c) => c.kind === direction),
     [categories, direction],
   );
+  const payeeMemory = useMemo(() => buildPayeeMemory(history), [history]);
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const suggestions = useMemo(() => {
+    const q = description.trim().toLowerCase();
+    if (q.length < 2) return [];
+    const starts: PayeeMemory[] = [];
+    const contains: PayeeMemory[] = [];
+    for (const p of payeeMemory) {
+      const name = p.description.toLowerCase();
+      if (name === q) continue; // already typed in full
+      if (name.startsWith(q)) starts.push(p);
+      else if (name.includes(q)) contains.push(p);
+    }
+    const byRecency = (a: PayeeMemory, b: PayeeMemory) => b.lastDate.localeCompare(a.lastDate);
+    return [...starts.sort(byRecency), ...contains.sort(byRecency)].slice(0, 5);
+  }, [description, payeeMemory]);
+
+  function applySuggestion(p: PayeeMemory) {
+    setDescription(p.description);
+    setDirection(p.direction);
+    setAmount(minorToDollars(p.amountMinor));
+    // Only fill the category when it still exists for that direction.
+    const valid =
+      p.categoryId !== null &&
+      categories.some((c) => c.ledgerAccountId === p.categoryId && c.kind === p.direction);
+    setSplits([{ categoryId: valid ? p.categoryId : null, amount: '' }]);
+    setSuggestOpen(false);
+  }
   const optionItems = useMemo(
     () => Object.fromEntries(options.map((c) => [c.ledgerAccountId, c.name])),
     [options],
@@ -237,17 +323,63 @@ export function AddTransactionDialog({
             </div>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
+            <div className="relative space-y-1.5">
               <Label htmlFor="add-desc">Description</Label>
               <Input
                 id="add-desc"
                 value={description}
                 maxLength={500}
                 placeholder="e.g. Farmers market"
+                autoComplete="off"
+                role="combobox"
+                aria-expanded={suggestOpen && suggestions.length > 0}
+                aria-controls="add-desc-suggestions"
                 onChange={(e) => {
                   setDescription(e.target.value);
+                  setSuggestOpen(true);
+                }}
+                onFocus={() => {
+                  setSuggestOpen(true);
+                }}
+                onBlur={() => {
+                  // Let a mousedown on a suggestion land first.
+                  window.setTimeout(() => {
+                    setSuggestOpen(false);
+                  }, 150);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') setSuggestOpen(false);
+                  if (e.key === 'Tab' && suggestOpen && suggestions[0]) {
+                    applySuggestion(suggestions[0]);
+                  }
                 }}
               />
+              {suggestOpen && suggestions.length > 0 ? (
+                <ul
+                  id="add-desc-suggestions"
+                  role="listbox"
+                  className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-md border border-border bg-popover shadow-md"
+                >
+                  {suggestions.map((p) => (
+                    <li key={p.description.toLowerCase()} role="option" aria-selected={false}>
+                      <button
+                        type="button"
+                        className="flex w-full items-baseline justify-between gap-2 px-3 py-1.5 text-left text-sm hover:bg-secondary"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          applySuggestion(p);
+                        }}
+                      >
+                        <span className="min-w-0 truncate">{p.description}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {p.direction === 'expense' ? '−' : '+'}
+                          {minorToDollars(p.amountMinor)}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="add-amount">Amount</Label>

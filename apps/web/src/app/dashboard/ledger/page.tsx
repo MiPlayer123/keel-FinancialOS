@@ -14,6 +14,7 @@ import {
   Loader2,
   Plus,
   Split,
+  Tags as TagsIcon,
   Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -38,6 +39,7 @@ import {
 } from '@/lib/keel-api';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
 import { ImportCsvDialog } from '@/components/keel/import-csv-dialog';
+import { ManageTagsDialog } from '@/components/keel/manage-tags-dialog';
 import { Money } from '@/components/keel/money';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -190,6 +192,7 @@ function LedgerTable() {
   const [editing, setEditing] = useState<RichTransactionRow | null>(null);
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [managingTags, setManagingTags] = useState(false);
   // Render cap (quality bar: interactions <100ms without virtualization).
   // Totals always compute over the FULL filtered set.
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -372,6 +375,7 @@ function LedgerTable() {
           userId={userId}
           accounts={accounts}
           categories={categories}
+          history={rows}
           onClose={() => {
             setAdding(false);
           }}
@@ -500,6 +504,20 @@ function LedgerTable() {
               ))}
             </SelectContent>
           </Select>
+        ) : null}
+        {tags.length > 0 ? (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="h-9 w-9"
+            aria-label="Manage tags"
+            title="Manage tags"
+            onClick={() => {
+              setManagingTags(true);
+            }}
+          >
+            <TagsIcon className="size-4" />
+          </Button>
         ) : null}
         <Select
           value={sort}
@@ -652,6 +670,29 @@ function LedgerTable() {
         </span>
       </div>
 
+      <ManageTagsDialog
+        open={managingTags}
+        householdId={householdId}
+        tags={tags}
+        onClose={() => {
+          setManagingTags(false);
+        }}
+        onMutated={() => {
+          void refetch();
+          if (householdId) {
+            void fetchTags(householdId)
+              .then((next) => {
+                setTags(next);
+                // A deleted tag can't stay selected as the filter.
+                if (tagFilter !== 'all' && !next.some((t) => t.tagId === tagFilter)) {
+                  setTagFilter('all');
+                }
+              })
+              .catch(() => undefined);
+          }
+        }}
+      />
+
       <TxnEditDialog
         row={editing}
         householdId={householdId}
@@ -691,6 +732,7 @@ function LedgerTable() {
         userId={userId}
         accounts={accounts}
         categories={categories}
+        history={rows}
         onClose={() => {
           setAdding(false);
         }}
