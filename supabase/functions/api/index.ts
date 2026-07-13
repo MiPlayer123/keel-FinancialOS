@@ -898,7 +898,12 @@ export default {
       return json(200, { ok: true });
     }
 
-    if (path === '/schedules/save' || path === '/schedules/set-status' || path === '/schedules/advance') {
+    if (
+      path === '/schedules/save' ||
+      path === '/schedules/set-status' ||
+      path === '/schedules/advance' ||
+      path === '/schedules/enter'
+    ) {
       const input = body as Record<string, unknown>;
       const householdId = HouseholdIdSchema.safeParse(input['householdId']);
       const uuidReSched = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -957,6 +962,23 @@ export default {
         });
         if (error) return mapDbError(error);
         return json(200, { ok: true });
+      }
+      if (path === '/schedules/enter') {
+        const scheduleId = input['scheduleId'];
+        const fromDue = input['fromDueDate'];
+        if (
+          typeof scheduleId !== 'string' || !uuidReSched.test(scheduleId) ||
+          typeof fromDue !== 'string' || !dateRe.test(fromDue)
+        ) {
+          return json(400, { code: 'invalid_command', message: 'Schedule request failed validation.', details: {} });
+        }
+        const { data, error } = await ctx.supabase.rpc('keel_schedule_enter', {
+          p_household_id: householdId.data,
+          p_schedule_id: scheduleId,
+          p_from_due: fromDue,
+        });
+        if (error) return mapDbError(error);
+        return json(200, data ?? { ok: true });
       }
       const scheduleId = input['scheduleId'];
       const fromDue = input['fromDueDate'];

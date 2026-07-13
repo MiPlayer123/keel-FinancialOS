@@ -12,7 +12,7 @@ import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
 import { BalanceTrendChart, type BalancePoint } from '@/components/keel/charts';
 import {
   advanceSchedule,
-  createManualTransaction,
+  enterSchedule,
   fetchAccounts,
   fetchCategories,
   fetchLedgerKinds,
@@ -557,7 +557,7 @@ function ProjectedCash({
           deltaByDate.set(due, (deltaByDate.get(due) ?? 0n) + BigInt(sc.amountMinor || '0'));
         }
         if (sc.frequency === 'once') break;
-        due = stepDue(due, sc.frequency);
+        due = stepDue(due, sc.frequency, sc.anchorDay);
         guard += 1;
       }
     }
@@ -623,16 +623,24 @@ const FREQUENCY_LABELS: Record<ScheduleRow['frequency'], string> = {
   annual: 'Yearly',
 };
 
-/** Days-in-month-safe stepping (mirrors Postgres interval '1 month' clamping). */
-function stepDue(dateIso: string, frequency: ScheduleRow['frequency']): string {
+/**
+ * Days-in-month-safe stepping, anchored to the schedule's declared day of
+ * month (mirrors keel_schedule_advance server-side): a bill due Jan 31 steps
+ * to Feb 28, then recovers to Mar 31 once the target month is long enough
+ * again — instead of Postgres's naive interval addition, which would clamp
+ * to the 28th forever. Falls back to the source date's own day when
+ * anchorDay is null (legacy rows before the anchor_day backfill).
+ */
+function stepDue(dateIso: string, frequency: ScheduleRow['frequency'], anchorDay: number | null): string {
   const [y = 0, m = 0, d = 0] = dateIso.split('-').map(Number);
+  const anchor = anchorDay ?? d;
   const addDays = (n: number) => {
     const dt = new Date(Date.UTC(y, m - 1, d + n));
     return dt.toISOString().slice(0, 10);
   };
   const addMonths = (n: number) => {
     const lastDay = new Date(Date.UTC(y, m - 1 + n + 1, 0)).getUTCDate();
-    const dt = new Date(Date.UTC(y, m - 1 + n, Math.min(d, lastDay)));
+    const dt = new Date(Date.UTC(y, m - 1 + n, Math.min(anchor, lastDay)));
     return dt.toISOString().slice(0, 10);
   };
   switch (frequency) {
@@ -682,56 +690,22 @@ function ScheduledSection({
     }
     setBusyId(s.scheduleId);
     try {
-      // Re-read before posting: another tab may have Skipped or Entered this
-      // occurrence. The envelope key makes double-POSTING impossible either
-      // way; this check keeps a stale tab from posting a skipped occurrence.
-      const fresh = (await fetchSchedules(householdId)).find(
-        (x) => x.scheduleId === s.scheduleId,
-      );
-      if (!fresh || fresh.status !== 'active' || fresh.nextDueDate !== s.nextDueDate) {
-        toast.info('This occurrence changed elsewhere — refreshed instead of posting.');
-        onChanged();
-        return;
-      }
-      // Splits offset the cash leg exactly: Σ splits = -amount (invariant 3).
-      await createManualTransaction({
-        householdId,
-        userId,
-        accountId: s.accountId,
-        description: s.description,
-        effectiveDate: s.nextDueDate,
-        amountMinor: s.amountMinor,
-        status: 'posted',
-        splits: [
-          {
-            categoryLedgerAccountId: s.categoryLedgerAccountId,
-            amountMinor: (-BigInt(s.amountMinor)).toString(),
-          },
-        ],
-        attemptKey: `sched:${s.scheduleId}:${s.nextDueDate}`,
-      });
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not enter the transaction.');
-      setBusyId(null);
-      return;
-    }
-    // The transaction IS posted from here on — say so even if the roll fails.
-    try {
-      const res = await advanceSchedule({
+      // Server-side atomic: post + advance commit (or roll back) together in
+      // one call — no client-side re-read, no two-step post-then-advance race.
+      const res = await enterSchedule({
         householdId,
         scheduleId: s.scheduleId,
         fromDueDate: s.nextDueDate,
-        reason: 'entered',
       });
-      if (res.advanced === false) {
-        toast.info(`Entered ${s.description}; the due date had already moved on.`);
+      if (!res.entered) {
+        toast.info('This occurrence changed elsewhere — refreshed.');
+      } else if (res.idempotentReplay) {
+        toast.info('Already entered — nothing new posted.');
       } else {
         toast.success(`Entered ${s.description} — it's in the ledger now.`);
       }
-    } catch {
-      toast.warning(
-        `Entered ${s.description}, but the due date didn't roll — use Skip to advance it.`,
-      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not enter the transaction.');
     } finally {
       onChanged();
       setBusyId(null);
