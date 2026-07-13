@@ -704,3 +704,80 @@ All findings fixed on the branch same-session. Highlights:
   error toasts now surface the server's typed message instead of
   "non-2xx status code"; budget "0" is a real zero budget; leading-dot
   amounts parse; settle dialog resets between claims.
+
+## 2026-07-13 — Session 3: subcategories + manual transactions (SPEC 1 + SPEC 2)
+
+Owner deployed the previous batch (main == branch, migrations 010000→080000
+applied, functions + web live) and reported: category pickers showed UUIDs,
+wants Quicken-style categories-within-categories, per-transaction memos with
+the original Chase description kept (already live), manual transactions +
+cash accounts, manual transfers (live), budgeting reports (live), paycheck
+cadence (live), taxes-as-categories, and asked whether sync is manual
+(it is automatic: 15-min enqueue + 3-min drain; Home now shows it).
+
+**P0 fixed first (3e3aa42, earlier today):** Base UI Select renders the raw
+value — a UUID — in the trigger until the popup mounts unless `items` is
+passed to Select.Root. Every Select with a preselected value now passes an
+items map. Verified against @base-ui/react 1.6.0 typings.
+
+**This batch (two migrations, deliberately ordered):**
+- 20260713090000 subcategories: ledger_accounts.pfc_key (stable system
+  key), is_system, parent_ledger_account_id (ONE level, trigger-enforced:
+  parent same entity+kind, parent not a child, no children on a would-be
+  child, archive blocked while live children exist). Backfill stamps the 20
+  seeded rows by (name, kind) — safe exactly once, BEFORE rename exists;
+  the same migration therefore rekeys EVERY name-based join (autocategorize
+  → keel_pfc_to_category_key; seeding dedupe → pfc_key, archived rows NOT
+  resurrected; keel_worker_apply_action offsets; worker/index.ts offsetKey;
+  opening-balance booking; web fetchOpeningBalancesLedgerId) and only then
+  grants rename/archive/reparent. Landmine documented by the design agent:
+  renaming before rekeying bricks sync ingestion — that ordering is why
+  rename shipped in the SAME migration as the rekeys.
+  Law 4 deviation: is_system uses `default false` for the ALTER backfill;
+  every write path supplies it explicitly.
+- 20260713100000 manual transactions: splits are REAL offset postings (not
+  overlay rows) — trial balance, cash flow, net worth, budgets aggregate
+  them with zero formula changes. keel_cmd_manual_transaction is a full
+  command-envelope proc (idempotency; canonical-key precheck so a colliding
+  key is a typed P0007, not a raw 23505; entity derived from accounts row,
+  never payload; 1-30 splits, same-entity live categories, currency match,
+  duplicate-category reject; Σ splits = -amount precheck with the deferred
+  trigger as backstop; period-lock precheck). Single-split writes a
+  source='user' overlay so rules can never re-display it; multi-split gets
+  NO overlay and both overlay writers now guard (categorize → P0009, rules
+  match single-offset only, keeping preview == apply). Void = Option B:
+  dedicated proc, reversal batch + journal_revisions + voided status,
+  source='manual' only. Rich list rewritten with a lateral aggregate —
+  this also fixes a LIVE bug where any multi-offset batch rendered N
+  duplicate rows — and now emits categoryPfcKey, splits, source. Budgets
+  spent formula bumped to budget-spent-v2-split-aware (overlay participates
+  only when the batch has exactly one offset). One-off cleanup deletes
+  overlay rows sitting on multi-offset batches.
+
+**Frontend:** Ledger Add-transaction dialog (money in/out, splits editor,
+BigInt-exact sum check with a "add/remove N cents" message), split badge +
+split-aware filter/group-by (split rows fan into their categories with
+cash-signed shares), manual void in the edit dialog (two-tap confirm),
+rename-proof uncategorized checks via categoryPfcKey with name fallback for
+deploy skew. Settings Categories card is now a manager: rename, archive
+(optional reassignment of overlays/rules/current+future budgets; server
+deactivates rules if not reassigned), one-level nesting, create-under-
+parent, System badge. Budgets indent children under parents. Reports matrix
+and dashboard spending mix attribute split shares to their own categories.
+Taxes: covered by category management (create a "Taxes" parent with
+subcategories; rules can auto-file into them).
+
+**Wire contracts:** transactions.manual_create / transactions.manual_void in
+contracts (BigInt superRefine sum check), authz WRITE_ACTIONS at partner,
+api COMMAND_TO_PROC + /categories/{rename,archive,reparent} routes.
+
+**Gate evidence:** typecheck clean; 442 vitest (2 new contract suites);
+12 Deno suites/56 steps; apps/web build green. Scratch-PG replay of the
+full migration chain + functional proc tests run by a background agent
+this session (findings, if any, fixed before push — see below).
+
+**Deploy runbook:** apply 20260713090000 then 20260713100000 (order
+matters), rebuild vendor bundle (pnpm build:functions), deploy api + worker,
+deploy web. Web is skew-safe in both directions: pfc_key reads fall back by
+name until the migration lands; new dialogs surface typed server errors if
+procs are missing.
