@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { ReceiptText, ChevronRight, Search, StickyNote } from 'lucide-react';
+import { ReceiptText, ChevronRight, Search, StickyNote, ArrowLeftRight } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { AppShell } from '@/components/keel/app-shell';
@@ -426,13 +426,20 @@ function TxnList({
               ) : null}
             </p>
           </button>
-          <CategoryPicker
-            row={t}
-            categories={categories}
-            onPick={(catId) => {
-              onRecategorize(t.transactionId, catId);
-            }}
-          />
+          {t.transferStatus === 'confirmed' ? (
+            <Badge variant="secondary" className="hidden shrink-0 gap-1 sm:inline-flex">
+              <ArrowLeftRight className="size-3" />
+              Transfer
+            </Badge>
+          ) : (
+            <CategoryPicker
+              row={t}
+              categories={categories}
+              onPick={(catId) => {
+                onRecategorize(t.transactionId, catId);
+              }}
+            />
+          )}
           <div className="flex shrink-0 items-center justify-end gap-2">
             {t.status === 'pending' ? (
               <Badge variant="outline" className="hidden text-[10px] uppercase sm:inline-flex">

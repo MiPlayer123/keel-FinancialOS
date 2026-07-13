@@ -76,6 +76,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'statements.list':'keel_list_statements',
   'dashboard.cash_flow': 'keel_cash_flow',
   'dashboard.net_worth': 'keel_net_worth_as_of',
+  'transfers.list': 'keel_list_transfers',
 };
 
 // deno-lint-ignore no-explicit-any
@@ -614,6 +615,53 @@ export default {
         p_note: typeof note === 'string' ? note : null,
       });
       if (ovError) return mapDbError(ovError);
+      return json(200, { ok: true });
+    }
+
+    if (path === '/transfers/detect') {
+      // Deterministic transfer pairing (Law 1); results are SUGGESTIONS only
+      // and change nothing until the user confirms (suggest→approve, Law 2).
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      if (!householdId.success) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Transfer detect request failed validation.',
+          details: {},
+        });
+      }
+      const { data: created, error: detectError } = await ctx.supabase.rpc(
+        'keel_detect_transfers',
+        { p_household_id: householdId.data },
+      );
+      if (detectError) return mapDbError(detectError);
+      return json(200, { suggested: created ?? 0 });
+    }
+
+    if (path === '/transfers/decide') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const linkId = input['linkId'];
+      const confirm = input['confirm'];
+      if (
+        !householdId.success ||
+        typeof linkId !== 'string' ||
+        !uuidRe.test(linkId) ||
+        typeof confirm !== 'boolean'
+      ) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Transfer decide request failed validation.',
+          details: {},
+        });
+      }
+      const { error: decideError } = await ctx.supabase.rpc('keel_decide_transfer', {
+        p_household_id: householdId.data,
+        p_link_id: linkId,
+        p_confirm: confirm,
+      });
+      if (decideError) return mapDbError(decideError);
       return json(200, { ok: true });
     }
 

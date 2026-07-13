@@ -277,6 +277,8 @@ export type RichTransactionRow = {
   categoryLedgerAccountId: string | null;
   categoryName: string | null;
   categoryKind: 'income' | 'expense' | null;
+  /** Present when this transaction is one side of a suggested/confirmed transfer pair. */
+  transferStatus?: 'suggested' | 'confirmed' | null;
 };
 
 export type CategoryRow = {
@@ -310,6 +312,41 @@ export async function fetchLatestBalances(householdId: string): Promise<LatestBa
     householdId,
   });
   return Array.isArray(data) ? data : [];
+}
+
+/** One detected transfer pair (out side → in side). */
+export type TransferLinkRow = {
+  linkId: string;
+  status: 'suggested' | 'confirmed';
+  effectiveDate: string;
+  amountMinor: string;
+  currency: string;
+  outTxnId: string;
+  outDescription: string;
+  outAccountName: string;
+  inTxnId: string;
+  inDescription: string;
+  inAccountName: string;
+  dayGap: number;
+};
+
+/** Run deterministic transfer detection; returns the number of new suggestions. */
+export async function detectTransfers(householdId: string): Promise<number> {
+  const res = await invoke<{ suggested?: number }>('api/transfers/detect', { householdId });
+  return typeof res.suggested === 'number' ? res.suggested : 0;
+}
+
+/** Confirm (exclude from cash flow) or reject a suggested transfer pair. */
+export async function decideTransfer(input: {
+  householdId: string;
+  linkId: string;
+  confirm: boolean;
+}): Promise<unknown> {
+  return invoke('api/transfers/decide', {
+    householdId: input.householdId,
+    linkId: input.linkId,
+    confirm: input.confirm,
+  });
 }
 
 /** Set/clear the user display name + note for a transaction (blank clears). */

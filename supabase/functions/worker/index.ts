@@ -937,7 +937,33 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
       });
     }
   }
-  return json(200, { refreshed: results });
+
+  // Deterministic classification passes for whatever the drain just landed:
+  // PFC auto-categorization (never overrides user edits) and transfer-pair
+  // SUGGESTIONS (nothing excluded until the user confirms). Best-effort —
+  // a failure here must not fail the balance refresh; the next 3-min cycle
+  // retries.
+  const households = [...new Set(
+    ((conns ?? []) as Array<{ household_id: string }>).map((c) => c.household_id),
+  )];
+  const classified: Array<{ householdId: string; categorized?: number; transfers?: number }> = [];
+  for (const householdId of households) {
+    const entry: { householdId: string; categorized?: number; transfers?: number } = {
+      householdId,
+    };
+    const { data: categorized, error: catErr } = await admin.rpc(
+      'keel_autocategorize_household',
+      { p_household_id: householdId },
+    );
+    if (!catErr && typeof categorized === 'number') entry.categorized = categorized;
+    const { data: transfers, error: trErr } = await admin.rpc('keel_detect_transfers', {
+      p_household_id: householdId,
+    });
+    if (!trErr && typeof transfers === 'number') entry.transfers = transfers;
+    classified.push(entry);
+  }
+
+  return json(200, { refreshed: results, classified });
 };
 
 export default {
