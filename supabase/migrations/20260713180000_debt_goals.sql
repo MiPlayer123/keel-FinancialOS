@@ -490,10 +490,14 @@ drop policy if exists goal_contributions_definer_all on public.goal_contribution
 create policy goal_contributions_definer_all on public.goal_contributions
   for all to keel_api using (true) with check (true);
 
+-- OWNER TO requires the receiving role to hold CREATE on the schema (the
+-- prod migration role is NOT superuser — scratch masks this).
+grant create on schema public to keel_api;
 alter function public.keel_goal_save(uuid,uuid,text,bigint,date,uuid,text) owner to keel_api;
 alter function public.keel_goal_contribute(uuid,uuid,bigint,date) owner to keel_api;
 alter function public.keel_goal_set_status(uuid,uuid,text) owner to keel_api;
 alter function public.keel_list_goals(uuid) owner to keel_api;
+revoke create on schema public from keel_api;
 
 -- ACLs survive OWNER TO; restated per house style.
 revoke all on function public.keel_goal_save(uuid,uuid,text,bigint,date,uuid,text) from public, anon;
