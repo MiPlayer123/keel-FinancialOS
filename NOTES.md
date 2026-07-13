@@ -1042,3 +1042,47 @@ zero — the safe direction); QIF re-imports keep KEEL categorization (never
 overwritten by Quicken-side edits — stated in dialog copy); sidebar accounts
 fetch per mount (module cache is a future nicety); SVG-only favicon (PNG
 fallback if unfurlers matter later).
+
+## 2026-07-13 — Batch 6: savings goals (earmark overlay)
+
+Design ruling: Quicken hides goal money by faking transfers; KEEL never fakes
+postings (Laws 1/3). A goal is a target; contributions are VIRTUAL earmarks —
+progress = Σ contributions, an account's free balance = ledger balance −
+earmarks, computed at read time. Withdraw = negative contribution; the total
+can't go below zero (P0009). Reaching the target flips status to 'reached'
+deterministically and reversibly. Archived goals refuse contributions.
+
+20260713150000_goals.sql: savings_goals + goal_contributions (fail-closed
+ACLs, member-read RLS), keel_goal_save / keel_goal_contribute (FOR UPDATE on
+the goal row; overdraw check) / keel_goal_set_status (idempotent, no-op ≠
+audit) / keel_list_goals (archived included, flagged); export wrapper link
+_pre_goals with explicit DTOs (bigints as text); manifest 65→67; pgTAP 008
+counts + allowlists. Verified on scratch keel8: create/validate/reach-flip/
+withdraw-flip-back/overdraw-refused/status-idempotency/list/export; proacl
+clean.
+
+UI: /dashboard/goals (nav + ⌘K): progress cards, ceiling-division
+"$X/month gets there on time" when a target date exists, Add/Withdraw
+inline, archive/restore. Account detail shows "earmarked for goals · free"
+under the balance when goals live there.
+
+## 2026-07-13 — Batch 6 review round (pre-push, Sonnet reviews from next batch per owner)
+
+Review agent (no P0s; race/cross-tenant/export-chain all verified clean, incl.
+a live two-session FOR UPDATE race probe). Fixed:
+- P1 currency drift: updating a goal without a funding account reset currency
+  to USD while EUR earmarks kept their numbers — update now preserves the
+  row's currency when p_account_id is null (the unit may never drift under
+  an amount, Law 4).
+- P1 stale 'reached': target changes now recompute status from Σ
+  contributions under the same FOR UPDATE (raise target → back to active;
+  lower → reached), archived stays archived.
+- P1 overdue goals were un-editable (past-date check hit updates keeping
+  their own date) — the lower bound now applies to new goals and to CHANGED
+  dates only.
+- P2 keel_goal_set_status accepts only active|archived ('reached' is derived,
+  never set by hand) and restore recomputes active-vs-reached instead of
+  trusting the caller. currency gets a char_length(3) check.
+Accepted as-is: no-op goal.update audits (matches keel_schedule_save house
+pattern); monthsUntil month-granularity UTC convention (codebase-wide).
+All re-verified on scratch keel8.

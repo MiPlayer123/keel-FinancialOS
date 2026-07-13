@@ -86,6 +86,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'budgets.list': 'keel_list_budgets',
   'tags.list': 'keel_list_tags',
   'schedules.list': 'keel_list_schedules',
+  'goals.list': 'keel_list_goals',
   'dashboard.cash_flow_forecast': 'keel_cash_flow_forecast',
 };
 
@@ -821,6 +822,77 @@ export default {
         p_txn_id: txnId,
         p_tag_id: tagId,
         p_assigned: assigned,
+      });
+      if (error) return mapDbError(error);
+      return json(200, { ok: true });
+    }
+
+    if (path === '/goals/save' || path === '/goals/contribute' || path === '/goals/set-status') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const uuidReGoal = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const dateReGoal = /^\d{4}-\d{2}-\d{2}$/;
+      if (!householdId.success) {
+        return json(400, { code: 'invalid_command', message: 'Goal request failed validation.', details: {} });
+      }
+      if (path === '/goals/save') {
+        const goalId = input['goalId'] ?? null;
+        const name = input['name'];
+        const targetMinor = input['targetMinor'];
+        const targetDate = input['targetDate'] ?? null;
+        const accountId = input['accountId'] ?? null;
+        if (
+          (goalId !== null && (typeof goalId !== 'string' || !uuidReGoal.test(goalId))) ||
+          typeof name !== 'string' || name.trim().length === 0 || name.length > 80 ||
+          typeof targetMinor !== 'string' || !/^\d{1,18}$/.test(targetMinor) ||
+          (targetDate !== null && (typeof targetDate !== 'string' || !dateReGoal.test(targetDate))) ||
+          (accountId !== null && (typeof accountId !== 'string' || !uuidReGoal.test(accountId)))
+        ) {
+          return json(400, { code: 'invalid_command', message: 'Goal request failed validation.', details: {} });
+        }
+        const { data, error } = await ctx.supabase.rpc('keel_goal_save', {
+          p_household_id: householdId.data,
+          p_goal_id: goalId,
+          p_name: name,
+          p_target_minor: targetMinor,
+          p_target_date: targetDate,
+          p_account_id: accountId,
+        });
+        if (error) return mapDbError(error);
+        return json(200, { goalId: data });
+      }
+      if (path === '/goals/contribute') {
+        const goalId = input['goalId'];
+        const amountMinor = input['amountMinor'];
+        const contributedOn = input['contributedOn'];
+        if (
+          typeof goalId !== 'string' || !uuidReGoal.test(goalId) ||
+          typeof amountMinor !== 'string' || !/^-?\d{1,18}$/.test(amountMinor) || amountMinor === '0' ||
+          typeof contributedOn !== 'string' || !dateReGoal.test(contributedOn)
+        ) {
+          return json(400, { code: 'invalid_command', message: 'Goal request failed validation.', details: {} });
+        }
+        const { data, error } = await ctx.supabase.rpc('keel_goal_contribute', {
+          p_household_id: householdId.data,
+          p_goal_id: goalId,
+          p_amount_minor: amountMinor,
+          p_contributed_on: contributedOn,
+        });
+        if (error) return mapDbError(error);
+        return json(200, data ?? { ok: true });
+      }
+      const goalId = input['goalId'];
+      const status = input['status'];
+      if (
+        typeof goalId !== 'string' || !uuidReGoal.test(goalId) ||
+        typeof status !== 'string' || status.length > 10
+      ) {
+        return json(400, { code: 'invalid_command', message: 'Goal request failed validation.', details: {} });
+      }
+      const { error } = await ctx.supabase.rpc('keel_goal_set_status', {
+        p_household_id: householdId.data,
+        p_goal_id: goalId,
+        p_status: status,
       });
       if (error) return mapDbError(error);
       return json(200, { ok: true });

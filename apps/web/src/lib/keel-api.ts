@@ -689,6 +689,70 @@ export type TrialBalanceRow = {
   balanceMinor: string;
 };
 
+export type GoalRow = {
+  goalId: string;
+  name: string;
+  /** Positive minor units. */
+  targetMinor: string;
+  targetDate: string | null;
+  accountId: string | null;
+  currency: string;
+  status: 'active' | 'reached' | 'archived';
+  /** Σ contributions (earmarked, never posted — money doesn't move). */
+  savedMinor: string;
+};
+
+export async function fetchGoals(householdId: string): Promise<GoalRow[]> {
+  const data = await invoke<GoalRow[]>('api/queries', { query: 'goals.list', householdId });
+  return Array.isArray(data) ? data : [];
+}
+
+/** Create (no goalId) or update a savings goal. */
+export async function saveGoal(input: {
+  householdId: string;
+  goalId?: string;
+  name: string;
+  targetMinor: string;
+  targetDate: string | null;
+  accountId: string | null;
+}): Promise<{ goalId?: string }> {
+  return invoke('api/goals/save', {
+    householdId: input.householdId,
+    goalId: input.goalId ?? null,
+    name: input.name,
+    targetMinor: input.targetMinor,
+    targetDate: input.targetDate,
+    accountId: input.accountId,
+  });
+}
+
+/** Add (positive) or withdraw (negative) an earmark. */
+export async function contributeGoal(input: {
+  householdId: string;
+  goalId: string;
+  amountMinor: string;
+  contributedOn: string;
+}): Promise<{ savedMinor?: string; status?: string }> {
+  return invoke('api/goals/contribute', {
+    householdId: input.householdId,
+    goalId: input.goalId,
+    amountMinor: input.amountMinor,
+    contributedOn: input.contributedOn,
+  });
+}
+
+export async function setGoalStatus(input: {
+  householdId: string;
+  goalId: string;
+  status: 'active' | 'archived';
+}): Promise<unknown> {
+  return invoke('api/goals/set-status', {
+    householdId: input.householdId,
+    goalId: input.goalId,
+    status: input.status,
+  });
+}
+
 export type ScheduleRow = {
   scheduleId: string;
   accountId: string;
