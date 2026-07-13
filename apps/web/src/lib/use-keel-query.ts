@@ -1,7 +1,25 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { keelQuery, type QueryResult } from '@/lib/keel-api';
+
+/**
+ * Shared cache-key prefix for every `useKeelQuery`/`useKeelQuerySilent` read.
+ * Query results are cached (stale-while-revalidate — see `QueryProvider`'s
+ * `staleTime`) so repeat navigation across dashboard pages shows data
+ * instantly instead of a full loading skeleton.
+ *
+ * The `refetch()` each hook returns invalidates every key under this prefix,
+ * not just the one query it belongs to: a single save (categorize a
+ * transaction, settle a claim, contribute to a goal...) can change data
+ * behind several *different* queries — including ones not currently
+ * mounted, like the Home dashboard's trial balance while the user is on the
+ * Ledger page. A stale cached balance surviving a save would be worse than
+ * no cache at all, so we invalidate broadly rather than trying to enumerate
+ * exactly which query names each mutation touches.
+ */
+const KEEL_QUERY_KEY = 'keel-query';
 
 type State<Row> = {
   rows: Row[];
@@ -10,39 +28,35 @@ type State<Row> = {
   error: string | null;
 };
 
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Failed to load.';
+}
+
 // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- Row is caller-specified and types the returned rows
 export function useKeelQuery<Row>(query: string, householdId: string | null) {
-  const [state, setState] = useState<State<Row>>({
-    rows: [],
-    asOf: null,
-    loading: true,
-    error: null,
+  const queryClient = useQueryClient();
+
+  const result = useQuery({
+    queryKey: [KEEL_QUERY_KEY, query, householdId],
+    queryFn: async (): Promise<QueryResult<Row>> => {
+      if (!householdId) throw new Error('useKeelQuery: disabled (no household)');
+      return keelQuery<Row>(query, householdId);
+    },
+    enabled: householdId !== null,
   });
 
-  const run = useCallback(async () => {
-    if (!householdId) {
-      setState({ rows: [], asOf: null, loading: false, error: null });
-      return;
-    }
-    setState((s) => ({ ...s, loading: true, error: null }));
-    try {
-      const res: QueryResult<Row> = await keelQuery<Row>(query, householdId);
-      setState({ rows: res.rows, asOf: res.asOf, loading: false, error: null });
-    } catch (err) {
-      setState({
-        rows: [],
-        asOf: null,
-        loading: false,
-        error: err instanceof Error ? err.message : 'Failed to load.',
-      });
-    }
-  }, [query, householdId]);
+  const refetch = useCallback(async () => {
+    await queryClient.invalidateQueries({ queryKey: [KEEL_QUERY_KEY] });
+  }, [queryClient]);
 
-  useEffect(() => {
-    void run();
-  }, [run]);
+  const state: State<Row> = {
+    rows: result.data?.rows ?? [],
+    asOf: result.data?.asOf ?? null,
+    loading: result.isLoading,
+    error: result.isError ? toErrorMessage(result.error) : null,
+  };
 
-  return { ...state, refetch: run };
+  return { ...state, refetch };
 }
 
 /**
@@ -56,27 +70,19 @@ export function useKeelQuerySilent<Row>(
   householdId: string | null,
   extra?: Record<string, unknown>,
 ): Row[] | null {
-  const [rows, setRows] = useState<Row[] | null>(null);
   const extraKey = JSON.stringify(extra ?? {});
 
-  useEffect(() => {
-    if (!householdId) {
-      setRows([]);
-      return;
-    }
-    let active = true;
-    setRows(null);
-    keelQuery<Row>(query, householdId, JSON.parse(extraKey) as Record<string, unknown>)
-      .then((res) => {
-        if (active) setRows(res.rows);
-      })
-      .catch(() => {
-        if (active) setRows([]);
-      });
-    return () => {
-      active = false;
-    };
-  }, [query, householdId, extraKey]);
+  const result = useQuery({
+    queryKey: [KEEL_QUERY_KEY, query, householdId, extraKey],
+    queryFn: async (): Promise<QueryResult<Row>> => {
+      if (!householdId) throw new Error('useKeelQuerySilent: disabled (no household)');
+      return keelQuery<Row>(query, householdId, JSON.parse(extraKey) as Record<string, unknown>);
+    },
+    enabled: householdId !== null,
+  });
 
-  return rows;
+  if (householdId === null) return [];
+  if (result.isSuccess) return result.data.rows;
+  if (result.isError) return [];
+  return null;
 }
