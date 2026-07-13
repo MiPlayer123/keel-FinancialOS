@@ -284,6 +284,7 @@ function LedgerTable() {
         </div>
         <Select
           value={datePreset}
+          items={Object.fromEntries(DATE_PRESETS.map((p) => [p.key, p.label]))}
           onValueChange={(v) => {
             if (v) setDatePreset(v);
           }}
@@ -301,6 +302,10 @@ function LedgerTable() {
         </Select>
         <Select
           value={accountFilter}
+          items={{
+            all: 'All accounts',
+            ...Object.fromEntries(accounts.map((a) => [a.id, a.name])),
+          }}
           onValueChange={(v) => {
             if (v) setAccountFilter(v);
           }}
@@ -319,6 +324,17 @@ function LedgerTable() {
         </Select>
         <Select
           value={categoryFilter}
+          items={{
+            all: 'All categories',
+            uncategorized: 'Uncategorized',
+            transfers: 'Transfers',
+            ...Object.fromEntries(
+              categories.map((c) => [
+                c.ledgerAccountId,
+                c.kind === 'income' ? `${c.name} (income)` : c.name,
+              ]),
+            ),
+          }}
           onValueChange={(v) => {
             if (v) setCategoryFilter(v);
           }}
@@ -344,6 +360,12 @@ function LedgerTable() {
         </Select>
         <Select
           value={sort}
+          items={{
+            date_desc: 'Newest first',
+            date_asc: 'Oldest first',
+            amount_desc: 'Largest amount',
+            amount_asc: 'Smallest amount',
+          }}
           onValueChange={(v) => {
             if (v) setSort(v);
           }}
@@ -362,6 +384,7 @@ function LedgerTable() {
           <span className="text-muted-foreground">Group by</span>
           <Select
             value={grouping}
+            items={{ none: 'None', account: 'Account', category: 'Category' }}
             onValueChange={(v) => {
               if (v) setGrouping(v);
             }}
@@ -485,6 +508,12 @@ function BulkBar({
       </span>
       <Select
         value={catId ?? undefined}
+        items={Object.fromEntries(
+          categories.map((c) => [
+            c.ledgerAccountId,
+            c.kind === 'income' ? `${c.name} (income)` : c.name,
+          ]),
+        )}
         onValueChange={(v) => {
           setCatId(v);
         }}
@@ -723,6 +752,7 @@ function CategoryPicker({
   return (
     <Select
       value={row.categoryLedgerAccountId ?? undefined}
+      items={Object.fromEntries(options.map((c) => [c.ledgerAccountId, c.name]))}
       onValueChange={(v) => {
         if (v) onPick(v);
       }}
@@ -842,6 +872,9 @@ function TxnEditDialog({
                 <Label>Category</Label>
                 <Select
                   value={row.categoryLedgerAccountId ?? undefined}
+                  items={Object.fromEntries(
+                    categoryOptions.map((c) => [c.ledgerAccountId, c.name]),
+                  )}
                   onValueChange={(v) => {
                     if (v) onRecategorize(row.transactionId, v);
                   }}

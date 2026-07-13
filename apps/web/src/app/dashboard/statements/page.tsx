@@ -453,6 +453,7 @@ function CreateStatementDialog({
               <Label>Account</Label>
               <Select
                 value={accountId ?? undefined}
+                items={Object.fromEntries(accounts.map((a) => [a.id, a.name]))}
                 onValueChange={(v) => {
                   setAccountId(v);
                 }}

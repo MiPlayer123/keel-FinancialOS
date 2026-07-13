@@ -41,9 +41,24 @@ export function TxnPicker({
     [rows, direction],
   );
 
+  const items = useMemo(
+    () =>
+      Object.fromEntries(
+        options.map((t) => [
+          t.transactionId,
+          `${t.effectiveDate.slice(5)} · ${t.description.slice(0, 42)} · ${formatMoney(
+            t.amountMinor,
+            { currency: t.currency, signed: true },
+          )}`,
+        ]),
+      ),
+    [options],
+  );
+
   return (
     <Select
       value={value ?? undefined}
+      items={items}
       onValueChange={(v) => {
         if (v) onChange(v);
       }}

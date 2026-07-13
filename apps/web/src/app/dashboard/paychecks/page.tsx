@@ -483,6 +483,7 @@ function CreatePaycheckDialog({
               <div key={i} className="flex items-center gap-2">
                 <Select
                   value={c.kind}
+                  items={Object.fromEntries(kindOptions.map((k) => [k, KIND_LABELS[k] ?? k]))}
                   onValueChange={(v) => {
                     if (v) setComponent(i, { kind: v });
                   }}

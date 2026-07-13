@@ -119,6 +119,7 @@ export function CategoriesCard() {
               <Label>Type</Label>
               <Select
                 value={kind}
+                items={{ expense: 'Spending', income: 'Income' }}
                 onValueChange={(v) => {
                   if (v) setKind(v);
                 }}

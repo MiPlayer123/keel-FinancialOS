@@ -160,6 +160,7 @@ export function AddAccountDialog({ onCreated }: { onCreated: () => void }) {
               <Label>Type</Label>
               <Select
                 value={subtype}
+                items={Object.fromEntries(SUBTYPES.map((s) => [s.value, s.label]))}
                 onValueChange={(v) => {
                   if (v) setSubtype(v);
                 }}

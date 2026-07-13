@@ -208,6 +208,12 @@ export function RulesCard() {
                 <Label>Set category to</Label>
                 <Select
                   value={categoryId ?? undefined}
+                  items={Object.fromEntries(
+                    categories.map((c) => [
+                      c.ledgerAccountId,
+                      c.kind === 'income' ? `${c.name} (income)` : c.name,
+                    ]),
+                  )}
                   onValueChange={(v) => {
                     setCategoryId(v);
                   }}
