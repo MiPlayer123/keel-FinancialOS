@@ -765,6 +765,7 @@ export type ScheduleRow = {
   frequency: 'once' | 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'semiannual' | 'annual';
   nextDueDate: string;
   autoEnterDays: number | null;
+  anchorDay: number | null;
   status: 'active' | 'paused';
 };
 
@@ -828,6 +829,31 @@ export async function advanceSchedule(input: {
     scheduleId: input.scheduleId,
     fromDueDate: input.fromDueDate,
     reason: input.reason,
+  });
+}
+
+/**
+ * Atomically post the occurrence's manual transaction AND advance the due
+ * date server-side (one commit, or neither) — replaces the old
+ * createManualTransaction + advanceSchedule client-orchestrated pair.
+ * A stale tab (fence mismatch) returns {entered:false, reason:'moved', ...}
+ * rather than an error.
+ */
+export async function enterSchedule(input: {
+  householdId: string;
+  scheduleId: string;
+  fromDueDate: string;
+}): Promise<{
+  entered: boolean;
+  reason?: string;
+  idempotentReplay?: boolean;
+  nextDueDate?: string;
+  status?: string;
+}> {
+  return invoke('api/schedules/enter', {
+    householdId: input.householdId,
+    scheduleId: input.scheduleId,
+    fromDueDate: input.fromDueDate,
   });
 }
 

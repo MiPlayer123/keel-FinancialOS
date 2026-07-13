@@ -1086,3 +1086,91 @@ a live two-session FOR UPDATE race probe). Fixed:
 Accepted as-is: no-op goal.update audits (matches keel_schedule_save house
 pattern); monthsUntil month-granularity UTC convention (codebase-wide).
 All re-verified on scratch keel8.
+
+## 2026-07-13 — Batch 7: server-side atomic Enter + day-of-month anchoring
+
+Closes the two gaps flagged when scheduled transactions shipped
+(20260713140000): (1) Enter was client-orchestrated post-then-advance — the
+post could succeed and the advance fail, stranding a due date on an
+already-entered occurrence; (2) `date + interval '1 month'` clamps to the
+last day of the target month and never recovers (Jan 31 -> Feb 28 -> Mar 28
+forever), unlike Quicken's day-of-month anchoring.
+
+20260713160000_schedule_enter.sql: `anchor_day` column (backfilled from
+existing `next_due_date`; `keel_schedule_save` sets/re-anchors it on every
+create and update — an update always re-anchors to whatever due date it is
+given, including a user-changed one). `keel_schedule_advance` monthly/
+quarterly/semiannual/annual stepping now targets
+`min(anchor_day, days_in_target_month)`; weekly/biweekly/once unchanged;
+fence semantics preserved exactly. New `keel_schedule_enter(household,
+schedule, from_due)`: locks the row FOR UPDATE, fences on status='active'
+and next_due_date=from_due (mismatch -> `{entered:false, reason:'moved'}`,
+NOT an exception — a stale tab is not an error), requires a category
+(P0009 KEEL_SCHEDULE_NEEDS_CATEGORY otherwise), posts through the existing
+`keel_cmd_manual_transaction` envelope, then advances inline — all in one
+transaction, so post+advance commit or roll back together.
+
+Ownership/grants investigated on scratch keel8 before writing the proc:
+`keel_cmd_manual_transaction` is owned by `keel_api` but already grants
+EXECUTE to `authenticated`; `keel_schedule_enter` follows the sibling
+`keel_schedule_*` procs and is owned by `postgres`, which is superuser on
+this instance and bypasses EXECUTE grant checks entirely — so the nested
+call already worked without changes. Added an explicit
+`grant execute ... to postgres` anyway (belt-and-suspenders) so the nested
+call stays correct if this proc is ever re-owned off superuser.
+
+Export: scheduled_transactions gained a column, so the wrapper chain gained
+a new link (`_pre_schedule_anchor`, same dance as `_pre_goals`) with the
+full explicit DTO including `anchor_day`; manifest.ts and 008_export.sql
+allowlists updated (table count unchanged at 67 — no new table).
+
+Edge route `/schedules/enter` (mirrors `/schedules/advance` validation) ->
+`keel_schedule_enter`. Client: `enterSchedule()` replaces the old
+`fetchSchedules` re-read + `createManualTransaction` + `advanceSchedule`
+three-call dance in `ScheduledSection.enter()` with one call; toasts cover
+`{entered:false}` (moved elsewhere), `{entered:true, idempotentReplay:true}`
+(already entered), and plain success. `stepDue` (the client-side
+`ProjectedCash` preview) now anchors the same way, driven by the new
+`ScheduleRow.anchorDay` field (`keel_list_schedules` emits it).
+
+Verified on a scratch copy of keel8 (`keel9a`) as a member user: monthly
+schedule due 2026-08-31 -> anchor_day 31; advance -> 2026-09-30; advance
+again -> 2026-10-31 (anchor recovered). `keel_schedule_enter` posts a real
+canonical_transactions row under the `manual:sched:{id}:{date}` economic
+key, advances, returns `entered:true`; the old due date then returns
+`entered:false reason:'moved'`; a schedule with no category raises P0009.
+Two sequential `enter` calls with the same from_due: first `entered:true`,
+second `entered:false`, exactly one canonical transaction for the key.
+`proacl` on every touched function shows no PUBLIC/anon EXECUTE. Export
+head includes `anchor_day` in `scheduled_transactions`.
+`pnpm vitest run` (444 tests, all passing — the one pre-existing failed
+suite is the worker test's missing `_shared/vendor/keel-domain.mjs` bundle,
+untouched by this change and out of scope per the task), `pnpm -w
+typecheck`, and `apps/web` `pnpm build` (lint included) all pass.
+
+## 2026-07-13 — Batch 7 (first parallel-agent batch, Sonnet workers) + review
+
+Three Sonnet agents in isolated worktrees, merged clean:
+A. keel_schedule_enter — post + advance in ONE transaction via the existing
+   manual envelope (key byte-identical to the old client flow, verified — no
+   double-post from history); anchor_day column so month-end bills recover
+   the 31st (min(anchor, days-in-month) stepping); export chain link
+   _pre_schedule_anchor; client Enter is now one call.
+B. Month in Review on Reports: month chips (default last full month),
+   income/spending/net with vs-prev deltas, top-5 categories with deltas,
+   biggest purchase, merchant/txn counts, savings rate. Pure BigInt.
+C. Budget rebalance wand: 3-full-months average actuals, whole-dollar
+   ceiling, increases scaled to preserve the current total to the exact
+   minor unit (remainder walked into largest increases), preview
+   suggest→approve, rollover flags untouched (verified against
+   keel_set_budget's coalesce semantics).
+
+Review (Sonnet): 1 P1 fixed — the save-update branch re-anchored
+unconditionally, so an edit echoing an already-clamped date (31-anchor on
+Feb 28) collapsed the anchor to 28, reintroducing the drift; anchor now
+recomputes only when the due date actually changes (verified: echo keeps 31
+and recovers the 31st; real change re-anchors).
+Follow-ups (batch 8): re-own the keel_schedule_* family to keel_api
+(currently migration-owner, superuser locally — bigger definer blast radius
+than the envelope procs); pgTAP suite for enter/advance/anchor semantics
+(scratch DO-block smoke exists, CI coverage doesn't).

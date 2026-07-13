@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { AppShell } from '@/components/keel/app-shell';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
+import { RebalanceBudgetsDialog } from '@/components/keel/rebalance-budgets-dialog';
 import { useHousehold } from '@/components/keel/household-context';
 import { fetchBudgets, setBudget, copyBudgets, type BudgetRow } from '@/lib/keel-api';
 import { parseSignedDollars, minorToDollars } from '@/lib/hash';
@@ -170,7 +171,16 @@ function BudgetsBody() {
             {copying ? <Loader2 className="size-4 animate-spin" /> : <Copy className="size-4" />}
             Copy last month
           </Button>
-        ) : null}
+        ) : (
+          <RebalanceBudgetsDialog
+            householdId={householdId}
+            monthIso={monthIso}
+            rows={budgeted}
+            onDone={() => {
+              void load();
+            }}
+          />
+        )}
       </div>
 
       {budgeted.length > 0 ? (
