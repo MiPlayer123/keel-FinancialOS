@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 import {
   categorizeTransaction,
   fetchAccounts,
+  fetchGoals,
   fetchCategories,
   fetchLedgerKinds,
   fetchLatestBalances,
@@ -22,6 +23,7 @@ import {
   type CategoryRow,
   type DailyBalanceRow,
   type LatestBalanceRow,
+  type GoalRow,
   type RichTransactionRow,
   type TagRow,
   type TrialBalanceRow,
@@ -57,6 +59,7 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
   const [provider, setProvider] = useState<LatestBalanceRow | null>(null);
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [tags, setTags] = useState<TagRow[]>([]);
+  const [goals, setGoals] = useState<GoalRow[]>([]);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<RichTransactionRow | null>(null);
   const router = useRouter();
@@ -99,6 +102,13 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
       })
       .catch(() => {
         if (active) setTags([]);
+      });
+    void fetchGoals(householdId)
+      .then((g) => {
+        if (active) setGoals(g);
+      })
+      .catch(() => {
+        if (active) setGoals([]);
       });
     return () => {
       active = false;
@@ -188,6 +198,12 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
               available at the bank
             </p>
           ) : null}
+          <EarmarkLine
+            goals={goals}
+            accountId={accountId}
+            balanceMinor={balanceMinor}
+            currency={account.currency}
+          />
         </div>
       </div>
 
@@ -340,5 +356,35 @@ function BackLink() {
       <ArrowLeft className="size-4" />
       Accounts
     </Link>
+  );
+}
+
+/**
+ * Earmarks are bookkeeping, not transfers (money never moves) — this line
+ * shows how much of the balance is spoken for by goals living here, and what
+ * that leaves free. BigInt only (Law 4).
+ */
+function EarmarkLine({
+  goals,
+  accountId,
+  balanceMinor,
+  currency,
+}: {
+  goals: GoalRow[];
+  accountId: string;
+  balanceMinor: string;
+  currency: string;
+}) {
+  const earmarked = goals
+    .filter((g) => g.accountId === accountId && g.status !== 'archived')
+    .reduce((acc, g) => acc + BigInt(g.savedMinor || '0'), 0n);
+  if (earmarked <= 0n) return null;
+  const free = BigInt(balanceMinor || '0') - earmarked;
+  return (
+    <p className="text-xs text-muted-foreground">
+      <Money amountMinor={earmarked.toString()} currency={currency} className="text-xs" /> earmarked
+      for goals · <Money amountMinor={free.toString()} currency={currency} className="text-xs" />{' '}
+      free
+    </p>
   );
 }
