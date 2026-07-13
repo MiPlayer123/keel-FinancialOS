@@ -272,7 +272,12 @@ function computeFreeToSpend(
       if (o.status !== 'expected') continue;
       if (o.currency !== currency) continue;
       if (!o.expectedDate.startsWith(month)) continue;
-      if (o.expectedDate <= todayIso) continue; // already reflected in received/spent
+      // Today counts as STILL DUE: an occurrence dated today with status
+      // 'expected' hasn't matched a posted transaction yet, so it's in
+      // neither received nor spent — dropping it would overstate "free"
+      // right before the money leaves. Once it posts and matches, its
+      // status leaves 'expected' and it exits this sum.
+      if (o.expectedDate < todayIso) continue;
       const amt = BigInt(o.expectedAmountMinor || '0');
       if (s.sign === 'inflow') expectedMinor += amt;
       else billsDueMinor += amt;
@@ -285,7 +290,9 @@ function computeFreeToSpend(
     let due = sc.nextDueDate;
     let guard = 0;
     while (due <= monthEndIso && guard < 60) {
-      if (due > todayIso) {
+      // Same today-counts-as-due rule: an un-entered schedule due today is
+      // still ahead of you (Enter advances the date, removing it here).
+      if (due >= todayIso) {
         const amt = BigInt(sc.amountMinor || '0');
         if (amt > 0n) expectedMinor += amt;
         else billsDueMinor += -amt;

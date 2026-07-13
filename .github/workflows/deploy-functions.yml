@@ -7,12 +7,12 @@ name: deploy-functions
 # dashboard → Account → Access Tokens); the project ref is public config.
 
 on:
-  push:
+  # Gate on CI: deploy only after the ci workflow SUCCEEDS on main. A direct
+  # push trigger would race CI and could ship a red commit to prod functions.
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
     branches: [main]
-    paths:
-      - 'supabase/functions/**'
-      - 'packages/**'
-      - 'scripts/build-functions.mjs'
 
 concurrency:
   group: deploy-functions
@@ -20,9 +20,12 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:

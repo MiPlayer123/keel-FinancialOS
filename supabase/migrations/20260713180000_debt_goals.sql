@@ -128,6 +128,13 @@ begin
     if v_kind is distinct from v_row.kind then
       raise exception 'KEEL_GOAL_KIND_IMMUTABLE' using errcode = 'P0009';
     end if;
+    -- A debt goal's start_balance_minor was captured against ONE account at
+    -- creation; re-pointing it would freeze paidMinor against a stale
+    -- baseline (reproducible numbers, BC-v2.1 §9.1). Immutable like kind.
+    if v_row.kind = 'debt'
+       and p_account_id is distinct from v_row.account_id then
+      raise exception 'KEEL_DEBT_GOAL_ACCOUNT_IMMUTABLE' using errcode = 'P0009';
+    end if;
     -- Past dates are refused only when the date actually changes.
     if p_target_date is not null
        and p_target_date is distinct from v_row.target_date
@@ -467,3 +474,33 @@ grant create on schema public to keel_export;
 alter function public.keel_export_household(uuid,timestamptz) owner to keel_export;
 revoke create on schema public from keel_export;
 grant execute on function public.keel_export_household(uuid,timestamptz) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Ownership hardening (same rationale as 20260713170000 for schedules): the
+-- goal procs run SECURITY DEFINER; the migration runner is a superuser
+-- locally, a needlessly large blast radius. keel_api owns them; grants +
+-- definer_all policies make every table the bodies touch reachable.
+-- ---------------------------------------------------------------------------
+grant select, insert, update on public.savings_goals to keel_api;
+grant select, insert on public.goal_contributions to keel_api;
+drop policy if exists savings_goals_definer_all on public.savings_goals;
+create policy savings_goals_definer_all on public.savings_goals
+  for all to keel_api using (true) with check (true);
+drop policy if exists goal_contributions_definer_all on public.goal_contributions;
+create policy goal_contributions_definer_all on public.goal_contributions
+  for all to keel_api using (true) with check (true);
+
+alter function public.keel_goal_save(uuid,uuid,text,bigint,date,uuid,text) owner to keel_api;
+alter function public.keel_goal_contribute(uuid,uuid,bigint,date) owner to keel_api;
+alter function public.keel_goal_set_status(uuid,uuid,text) owner to keel_api;
+alter function public.keel_list_goals(uuid) owner to keel_api;
+
+-- ACLs survive OWNER TO; restated per house style.
+revoke all on function public.keel_goal_save(uuid,uuid,text,bigint,date,uuid,text) from public, anon;
+grant execute on function public.keel_goal_save(uuid,uuid,text,bigint,date,uuid,text) to authenticated;
+revoke all on function public.keel_goal_contribute(uuid,uuid,bigint,date) from public, anon;
+grant execute on function public.keel_goal_contribute(uuid,uuid,bigint,date) to authenticated;
+revoke all on function public.keel_goal_set_status(uuid,uuid,text) from public, anon;
+grant execute on function public.keel_goal_set_status(uuid,uuid,text) to authenticated;
+revoke all on function public.keel_list_goals(uuid) from public, anon;
+grant execute on function public.keel_list_goals(uuid) to authenticated, service_role;
