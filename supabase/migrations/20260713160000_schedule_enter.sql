@@ -122,8 +122,15 @@ begin
           frequency = p_frequency::public.schedule_frequency,
           next_due_date = p_next_due_date,
           auto_enter_days = p_auto_enter_days,
-          -- Re-anchor to the (possibly changed) day of the new due date.
-          anchor_day = extract(day from p_next_due_date)::smallint
+          -- Re-anchor ONLY when the caller actually changed the due date. An
+          -- edit that echoes back an already-clamped date (a 31-anchor sitting
+          -- on Feb 28) must not collapse the anchor to 28 — that would
+          -- reintroduce the month-end drift this migration exists to fix.
+          anchor_day = case
+            when p_next_due_date is distinct from next_due_date
+              then extract(day from p_next_due_date)::smallint
+            else anchor_day
+          end
       where id = p_schedule_id and household_id = p_household_id
       returning id into v_id;
     if v_id is null then

@@ -1147,3 +1147,30 @@ head includes `anchor_day` in `scheduled_transactions`.
 suite is the worker test's missing `_shared/vendor/keel-domain.mjs` bundle,
 untouched by this change and out of scope per the task), `pnpm -w
 typecheck`, and `apps/web` `pnpm build` (lint included) all pass.
+
+## 2026-07-13 — Batch 7 (first parallel-agent batch, Sonnet workers) + review
+
+Three Sonnet agents in isolated worktrees, merged clean:
+A. keel_schedule_enter — post + advance in ONE transaction via the existing
+   manual envelope (key byte-identical to the old client flow, verified — no
+   double-post from history); anchor_day column so month-end bills recover
+   the 31st (min(anchor, days-in-month) stepping); export chain link
+   _pre_schedule_anchor; client Enter is now one call.
+B. Month in Review on Reports: month chips (default last full month),
+   income/spending/net with vs-prev deltas, top-5 categories with deltas,
+   biggest purchase, merchant/txn counts, savings rate. Pure BigInt.
+C. Budget rebalance wand: 3-full-months average actuals, whole-dollar
+   ceiling, increases scaled to preserve the current total to the exact
+   minor unit (remainder walked into largest increases), preview
+   suggest→approve, rollover flags untouched (verified against
+   keel_set_budget's coalesce semantics).
+
+Review (Sonnet): 1 P1 fixed — the save-update branch re-anchored
+unconditionally, so an edit echoing an already-clamped date (31-anchor on
+Feb 28) collapsed the anchor to 28, reintroducing the drift; anchor now
+recomputes only when the due date actually changes (verified: echo keeps 31
+and recovers the 31st; real change re-anchors).
+Follow-ups (batch 8): re-own the keel_schedule_* family to keel_api
+(currently migration-owner, superuser locally — bigger definer blast radius
+than the envelope procs); pgTAP suite for enter/advance/anchor semantics
+(scratch DO-block smoke exists, CI coverage doesn't).
