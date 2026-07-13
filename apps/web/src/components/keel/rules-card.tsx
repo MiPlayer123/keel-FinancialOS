@@ -224,8 +224,10 @@ export function RulesCard() {
                   <SelectContent>
                     {categories.map((c) => (
                       <SelectItem key={c.ledgerAccountId} value={c.ledgerAccountId}>
-                        {c.name}
-                        {c.kind === 'income' ? ' (income)' : ''}
+                        <span className={c.parentLedgerAccountId ? 'pl-3' : ''}>
+                          {c.name}
+                          {c.kind === 'income' ? ' (income)' : ''}
+                        </span>
                       </SelectItem>
                     ))}
                   </SelectContent>

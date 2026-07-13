@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { BarChart3, ArrowDownRight, ArrowUpRight } from 'lucide-react';
 
@@ -9,8 +9,18 @@ import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
-import type { MonthlyCashFlowRow, RichTransactionRow } from '@/lib/keel-api';
-import { CashFlowMonthlyChart } from '@/components/keel/charts';
+import {
+  fetchCategories,
+  type CategoryRow,
+  type MonthlyCashFlowRow,
+  type RichTransactionRow,
+} from '@/lib/keel-api';
+import {
+  CashFlowMonthlyChart,
+  CashFlowSankey,
+  type SankeyFlowLink,
+  type SankeyFlowNode,
+} from '@/components/keel/charts';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -115,15 +125,139 @@ function buildMatrix(
   return [...byCategory.values()].sort((a, b) => (b.total > a.total ? 1 : b.total < a.total ? -1 : 0));
 }
 
+type FlowGraph = {
+  nodes: SankeyFlowNode[];
+  links: SankeyFlowLink[];
+  totalInMinor: string;
+  totalOutMinor: string;
+  savedMinor: string;
+} | null;
+
+/**
+ * This month's money movement as a flow: income categories → Income →
+ * spending categories, with "Saved" / "From savings" balancing the sides so
+ * every ribbon is positive. Net convention matches the matrix; subcategories
+ * roll up into their parents; confirmed transfers excluded. BigInt sums.
+ */
+function buildFlow(rows: RichTransactionRow[], categories: CategoryRow[]): FlowGraph {
+  const month = new Date().toISOString().slice(0, 7);
+  const byId = new Map(categories.map((c) => [c.ledgerAccountId, c]));
+  const rollup = (id: string | null, fallback: string): { key: string; name: string } => {
+    const cat = id ? byId.get(id) : undefined;
+    const parent = cat?.parentLedgerAccountId ? byId.get(cat.parentLedgerAccountId) : undefined;
+    const top = parent ?? cat;
+    return top ? { key: top.ledgerAccountId, name: top.name } : { key: fallback, name: fallback };
+  };
+
+  const income = new Map<string, { name: string; total: bigint }>();
+  const expense = new Map<string, { name: string; total: bigint }>();
+  const add = (
+    map: Map<string, { name: string; total: bigint }>,
+    key: string,
+    name: string,
+    v: bigint,
+  ) => {
+    const e = map.get(key) ?? { name, total: 0n };
+    e.total += v;
+    map.set(key, e);
+  };
+
+  for (const t of rows) {
+    if (t.transferStatus === 'confirmed') continue;
+    if (!t.effectiveDate.startsWith(month)) continue;
+    if (t.splits && t.splits.length > 0) {
+      for (const s of t.splits) {
+        const share = BigInt(s.amountMinor || '0');
+        const { key, name } = rollup(s.categoryLedgerAccountId, s.name);
+        // Debit-positive: expense shares positive = spend; income shares
+        // negative = money received.
+        if (s.kind === 'expense') add(expense, key, name, share);
+        else add(income, key, name, -share);
+      }
+      continue;
+    }
+    const cash = BigInt(t.amountMinor || '0');
+    const { key, name } = rollup(t.categoryLedgerAccountId, t.categoryName ?? 'Uncategorized');
+    if (t.categoryKind === 'expense') add(expense, key, name, -cash);
+    else if (t.categoryKind === 'income') add(income, key, name, cash);
+  }
+
+  const fold = (map: Map<string, { name: string; total: bigint }>, cap: number, otherName: string) => {
+    const positive = [...map.values()].filter((e) => e.total > 0n);
+    positive.sort((a, b) => (b.total > a.total ? 1 : b.total < a.total ? -1 : 0));
+    const top = positive.slice(0, cap);
+    const rest = positive.slice(cap);
+    if (rest.length > 0) {
+      top.push({ name: otherName, total: rest.reduce((acc, e) => acc + e.total, 0n) });
+    }
+    return top;
+  };
+
+  const inFlows = fold(income, 5, 'Other income');
+  const outFlows = fold(expense, 8, 'Everything else');
+  const totalIn = inFlows.reduce((a, e) => a + e.total, 0n);
+  const totalOut = outFlows.reduce((a, e) => a + e.total, 0n);
+  if (totalIn === 0n || totalOut === 0n) return null;
+
+  const saved = totalIn - totalOut;
+  const nodes: SankeyFlowNode[] = [];
+  const links: SankeyFlowLink[] = [];
+  const hubTotal = saved < 0n ? totalOut : totalIn;
+
+  for (const e of inFlows) {
+    nodes.push({ name: e.name, side: 'in', column: 'left', totalMinor: e.total.toString() });
+  }
+  if (saved < 0n) {
+    nodes.push({ name: 'From savings', side: 'in', column: 'left', totalMinor: (-saved).toString() });
+  }
+  const hubIndex = nodes.length;
+  nodes.push({ name: 'Income', side: 'hub', column: 'hub', totalMinor: hubTotal.toString() });
+  for (let i = 0; i < hubIndex; i++) {
+    links.push({ source: i, target: hubIndex, valueMinor: nodes[i]?.totalMinor ?? '0' });
+  }
+  for (const e of outFlows) {
+    links.push({ source: hubIndex, target: nodes.length, valueMinor: e.total.toString() });
+    nodes.push({ name: e.name, side: 'out', column: 'right', totalMinor: e.total.toString() });
+  }
+  if (saved > 0n) {
+    links.push({ source: hubIndex, target: nodes.length, valueMinor: saved.toString() });
+    nodes.push({ name: 'Saved', side: 'in', column: 'right', totalMinor: saved.toString() });
+  }
+  return {
+    nodes,
+    links,
+    totalInMinor: totalIn.toString(),
+    totalOutMinor: totalOut.toString(),
+    savedMinor: saved.toString(),
+  };
+}
+
 function ReportsBody() {
   const { householdId, ready } = useHousehold();
   const txns = useKeelQuery<RichTransactionRow>('transactions.rich', householdId);
+  const [categories, setCategories] = useState<CategoryRow[]>([]);
+
+  useEffect(() => {
+    if (!householdId) return;
+    let active = true;
+    fetchCategories(householdId)
+      .then((c) => {
+        if (active) setCategories(c);
+      })
+      .catch(() => {
+        if (active) setCategories([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [householdId]);
   const monthlyFlow = useKeelQuerySilent<MonthlyCashFlowRow>(
     'dashboard.cash_flow_monthly',
     householdId,
   );
 
   const [view, setView] = useState<'expense' | 'income'>('expense');
+  const flow = useMemo(() => buildFlow(txns.rows, categories), [txns.rows, categories]);
   const months = useMemo(() => lastMonths(MONTHS_SHOWN), []);
   const matrix = useMemo(
     () => buildMatrix(txns.rows, months, view),
@@ -173,6 +307,40 @@ function ReportsBody() {
 
   return (
     <>
+      {flow ? (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Where this month&apos;s money went
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <CashFlowSankey nodes={flow.nodes} links={flow.links} />
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+              <span className="text-muted-foreground">
+                Income <Money amountMinor={flow.totalInMinor} className="text-foreground" />
+              </span>
+              <span className="text-muted-foreground">
+                Spent <Money amountMinor={flow.totalOutMinor} className="text-foreground" />
+              </span>
+              <span className="text-muted-foreground">
+                {flow.savedMinor.startsWith('-') ? 'From savings ' : 'Saved '}
+                <Money
+                  amountMinor={
+                    flow.savedMinor.startsWith('-') ? flow.savedMinor.slice(1) : flow.savedMinor
+                  }
+                  className="text-foreground"
+                />
+              </span>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Income on the left, spending on the right; subcategories roll up into
+              their parents. Confirmed transfers excluded.
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
+
       {showFlow ? (
         <Card>
           <CardHeader className="pb-2">

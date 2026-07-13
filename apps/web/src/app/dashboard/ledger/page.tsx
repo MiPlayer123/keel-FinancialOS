@@ -652,8 +652,10 @@ function BulkBar({
         <SelectContent>
           {categories.map((c) => (
             <SelectItem key={c.ledgerAccountId} value={c.ledgerAccountId}>
-              {c.name}
-              {c.kind === 'income' ? ' (income)' : ''}
+              <span className={c.parentLedgerAccountId ? 'pl-3' : ''}>
+                {c.name}
+                {c.kind === 'income' ? ' (income)' : ''}
+              </span>
             </SelectItem>
           ))}
         </SelectContent>
@@ -1107,7 +1109,7 @@ function TxnEditDialog({
                   <SelectContent>
                     {categoryOptions.map((c) => (
                       <SelectItem key={c.ledgerAccountId} value={c.ledgerAccountId}>
-                        {c.name}
+                        {c.parentLedgerAccountId ? <span className="pl-3">{c.name}</span> : c.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
