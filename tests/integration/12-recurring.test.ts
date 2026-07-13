@@ -103,7 +103,9 @@ describe('suggest-only detector worker', () => {
       requiresApproval: true,
       detectorVersion: 'recurring-grid-v1',
       confidenceVersion: 'recurring-score-bps-v1',
-      asOf: '2026-07-12',
+      // Detection runs with as_of = now(); the candidate is stamped with
+      // the run date, not the authoring date.
+      asOf: new Date().toISOString().slice(0, 10),
       occurrences: [],
     });
     expect(candidate.evidence).toHaveLength(4);
@@ -139,7 +141,9 @@ describe('suggest-only detector worker', () => {
     const { error } = await service.rpc('keel_recurring_upsert_candidates', {
       p_household_id: SEED.households.beta,
       p_run_key: 'itest:recurring:smuggle:beta',
-      p_as_of: '2026-07-12T12:00:00Z',
+      // Match the candidate's OWN derivation date so the metadata-mismatch
+      // guard (P0009) can't fire before the tenant check under test (P0006).
+      p_as_of: `${candidate.asOf}T12:00:00Z`,
       p_detector_version: candidate.detectorVersion,
       p_confidence_version: candidate.confidenceVersion,
       p_normalizer_version: candidate.normalizerVersion,

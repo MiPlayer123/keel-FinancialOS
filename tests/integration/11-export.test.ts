@@ -1,5 +1,6 @@
 /** Stage 1D Law 6 export, Law 9 tenant scope, Law 12 secret boundary. */
 import { execFileSync, execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -18,7 +19,9 @@ import {
 } from './helpers.js';
 
 const ROOT = join(import.meta.dirname, '..', '..');
-const PSQL = '/Library/PostgreSQL/17/bin/psql';
+const PSQL = existsSync('/Library/PostgreSQL/17/bin/psql')
+  ? '/Library/PostgreSQL/17/bin/psql'
+  : 'psql'; // CI/Linux: client on PATH
 const ACCOUNT_ID = '00000000-0000-4000-8000-00000000a401';
 const BETA_POSTING_ID = '99000000-0000-4000-8000-0000000000b1';
 const CREDENTIAL_CANARY = 'EXPORT-CREDENTIAL-CANARY';

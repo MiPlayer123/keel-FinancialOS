@@ -12,16 +12,29 @@ export function spendingMix(rows: RichTransactionRow[], days = 30): CategorySpen
   const cutoffIso = cutoff.toISOString().slice(0, 10);
 
   const totals = new Map<string, { total: bigint; currency: string }>();
+  const add = (name: string, spend: bigint, currency: string) => {
+    const entry = totals.get(name) ?? { total: 0n, currency };
+    entry.total += spend;
+    totals.set(name, entry);
+  };
   for (const t of rows) {
     if (t.transferStatus === 'confirmed') continue;
-    if (t.categoryKind !== 'expense') continue;
     if (t.effectiveDate < cutoffIso) continue;
+    // Split transactions carry their categories on the splits (categoryKind
+    // is null at the top level) — attribute each expense share directly.
+    if (t.splits && t.splits.length > 0) {
+      for (const s of t.splits) {
+        if (s.kind !== 'expense') continue;
+        const share = BigInt(s.amountMinor || '0');
+        if (share <= 0n) continue; // debit-positive: positive = spend
+        add(s.name, share, t.currency);
+      }
+      continue;
+    }
+    if (t.categoryKind !== 'expense') continue;
     const amount = BigInt(t.amountMinor || '0');
     if (amount >= 0n) continue;
-    const key = t.categoryName ?? 'Uncategorized';
-    const entry = totals.get(key) ?? { total: 0n, currency: t.currency };
-    entry.total += -amount;
-    totals.set(key, entry);
+    add(t.categoryName ?? 'Uncategorized', -amount, t.currency);
   }
 
   const sorted = [...totals.entries()].sort((a, b) => (b[1].total > a[1].total ? 1 : -1));

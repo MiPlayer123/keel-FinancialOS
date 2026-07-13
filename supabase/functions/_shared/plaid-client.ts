@@ -170,7 +170,6 @@ export const createPlaidClient = (
       return result;
     }
 
-    if (!config.clientId || !config.secret) throw new Error('plaid unavailable');
     const reserved = await reserveProviderCall(
       admin,
       'plaid',
@@ -191,6 +190,13 @@ export const createPlaidClient = (
     if (fetchDenied) {
       await refundProviderCall(admin, 'plaid');
       throw new Error('Plaid fetch disabled in integration');
+    }
+    // Budget refusal must be independent of provider configuration: the gate
+    // runs first (with an exact refund here) so an unconfigured environment
+    // still answers 503 provider_budget_exhausted, not a 500.
+    if (!config.clientId || !config.secret) {
+      await refundProviderCall(admin, 'plaid');
+      throw new Error('plaid unavailable');
     }
 
     const start = Date.now();

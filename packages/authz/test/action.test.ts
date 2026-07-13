@@ -36,6 +36,8 @@ describe('action vocabulary', () => {
       'statements.create',
       'reconciliations.close',
       'reconciliations.reopen',
+      'transactions.manual_create',
+      'transactions.manual_void',
       'ledger.trial_balance',
       'transactions.list',
       'recurring.list',

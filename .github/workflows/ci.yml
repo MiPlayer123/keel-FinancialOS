@@ -22,6 +22,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm lint
+      # worker vitest + deno suites import the generated vendor bundle
+      # (git-ignored) — build it or the suites die at import time.
+      - run: pnpm build:functions
       - run: pnpm test
       - name: ledger coverage gate (100%)
         run: pnpm --filter @keel/ledger test
@@ -61,9 +64,11 @@ jobs:
         with:
           version: latest
       - run: pnpm install --frozen-lockfile
+      - run: supabase start
+      # provision:local aliases the RUNNING stack's key as the automations
+      # secret, so it must come after `supabase start` (it hard-fails cold).
       - run: pnpm provision:local
       - run: pnpm build:functions
-      - run: supabase start
       - run: supabase db reset
       - name: serve functions
         run: |
@@ -77,6 +82,11 @@ jobs:
   secrets:
     name: secret scan (tracked files + built bundle)
     runs-on: ubuntu-latest
+    # gitleaks-action's pull_request mode lists the PR's commits via the API;
+    # without an explicit pull-requests:read grant the default token 403s.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:

@@ -12,7 +12,7 @@
  * tracked files; never prints secret values.
  */
 import { execSync } from 'node:child_process';
-import { generateKeyPairSync } from 'node:crypto';
+import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -68,6 +68,19 @@ if (existingJwk && existingPriv) {
   const priv = privateKey.export({ format: 'jwk' });
   functionsEnv = upsertLine(functionsEnv, 'PLAID_WEBHOOK_JWK', JSON.stringify(pub));
   privateJwkJson = JSON.stringify(priv);
+}
+
+// 3. Credential-envelope KEK (C5): 32 random bytes, base64 — LOCAL-ONLY.
+// The cloud KEK is provisioned at the secrets human checkpoint, never here.
+if (!/^KEEL_CREDENTIAL_KEK=.+$/m.test(functionsEnv)) {
+  functionsEnv = upsertLine(
+    functionsEnv,
+    'KEEL_CREDENTIAL_KEK',
+    randomBytes(32).toString('base64'),
+  );
+}
+if (!/^KEEL_CREDENTIAL_KEK_VERSION=.+$/m.test(functionsEnv)) {
+  functionsEnv = upsertLine(functionsEnv, 'KEEL_CREDENTIAL_KEK_VERSION', '1');
 }
 
 writeFileSync(functionsEnvPath, functionsEnv);

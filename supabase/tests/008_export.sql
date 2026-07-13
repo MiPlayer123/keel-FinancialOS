@@ -15,8 +15,8 @@ insert into expected_export_tables(table_name, allowed_columns, omitted_columns)
   ('entity_memberships', array['entity_id','user_id','created_at'], '{}'),
   ('accounts', array['id','household_id','entity_id','connection_id','ledger_account_id','name','subtype','currency','external_ref','created_at','archived_at'], '{}'),
   ('account_owners', array['account_id','user_id','created_at'], '{}'),
-  ('ledger_accounts', array['id','household_id','entity_id','name','kind','currency','is_category','created_at','archived_at'], '{}'),
-  ('connections', array['id','household_id','provider','external_ref','status','created_at','institution_id','consent_expires_at','last_successful_sync_at','sync_lease_owner','sync_leased_until','sync_desired_generation','sync_committed_generation','next_sync_eligible_at'], '{}'),
+  ('ledger_accounts', array['id','household_id','entity_id','name','kind','currency','is_category','created_at','archived_at','pfc_key','is_system','parent_ledger_account_id'], '{}'),
+  ('connections', array['id','household_id','provider','external_ref','status','created_at','institution_id','consent_expires_at','last_successful_sync_at','sync_lease_owner','sync_leased_until','sync_desired_generation','sync_committed_generation','next_sync_eligible_at','display_name'], '{}'),
   ('resource_permissions', array['id','household_id','user_id','resource_kind','resource_id','permission','created_at'], '{}'),
   ('approval_policies', array['id','household_id','risk_class','autonomy','created_at'], '{}'),
   ('canonical_transactions', array['id','household_id','entity_id','account_id','status','source','description','effective_date','economic_event_key','created_at','voided_at'], '{}'),
@@ -44,13 +44,16 @@ insert into expected_export_tables(table_name, allowed_columns, omitted_columns)
   ('recurring_occurrences', array['household_id','id','series_id','candidate_version_id','occurrence_key','expected_date','expected_amount_minor','currency','amount_kind','status','matched_txn_id','score_bps','evidence','input_fingerprint','detector_version','confidence_version','as_of','created_at'], '{}'),
   ('recurring_status_events', array['household_id','id','series_id','candidate_version_id','transition','effective_date','actor','command_id','created_at'], '{}');
 insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
+  ('tags', array['id','household_id','name','created_at'], '{}'),
+  ('transaction_tags', array['canonical_transaction_id','tag_id','household_id','created_at'], '{}');
+insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
   ('transaction_categories', array['canonical_transaction_id','household_id','category_ledger_account_id','source','rule_id','created_at','updated_at'], '{}'),
   ('transaction_overrides', array['canonical_transaction_id','household_id','display_description','note','created_at','updated_at'], '{}');
 insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
   ('category_rules', array['id','household_id','entity_id','matcher','pattern','category_ledger_account_id','rename_to','priority','active','created_at','updated_at'], '{}'),
   ('rule_renames', array['canonical_transaction_id','household_id','rule_id','display_name','created_at','updated_at'], '{}');
 insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
-  ('budgets', array['household_id','category_ledger_account_id','month','amount_minor','currency','created_at','updated_at'], '{}');
+  ('budgets', array['household_id','category_ledger_account_id','month','amount_minor','currency','created_at','updated_at','rollover'], '{}');
 insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
   ('employers',array['id','household_id','name','created_at'],'{}'),
   ('payroll_provider_imports',array['id','household_id','provider','source_ref','content_hash','imported_at'],'{}'),
@@ -96,8 +99,8 @@ select ok(
 select is(
   (select count(*)::int from expected_export_tables
     where has_table_privilege('keel_export', format('public.%I', table_name), 'SELECT')),
-  62,
-  'keel_export can SELECT all 62 included tables'
+  64,
+  'keel_export can SELECT all 64 included tables'
 );
 select is(
   (select count(*)::int
@@ -228,8 +231,8 @@ reset role;
 select is(
   (select count(*)::int from jsonb_object_keys(
     public.keel_export_household('00000000-0000-4000-8000-00000000a001')->'tables')),
-  62,
-  'snapshot contains all 62 included table arrays'
+  64,
+  'snapshot contains all 64 included table arrays'
 );
 select is(
   (select count(*)::int from excluded_export_tables e

@@ -54,6 +54,27 @@ export const serviceClient = (): SupabaseClient =>
     auth: { persistSession: false },
   });
 
+/**
+ * Service-role RPC for test SCAFFOLDING (fixture planting) only — retries
+ * the local gateway's transient "invalid response ... upstream server"
+ * hiccup a few times. Never use for calls whose response is under test.
+ */
+export const serviceRpcWithRetry = async (
+  fn: string,
+  args: Record<string, unknown>,
+  attempts = 3,
+): Promise<void> => {
+  let lastMessage = 'unknown error';
+  for (let i = 0; i < attempts; i++) {
+    const { error } = await serviceClient().rpc(fn, args);
+    if (!error) return;
+    lastMessage = error.message;
+    if (!/upstream server|fetch failed|ECONNREFUSED|502|503/i.test(lastMessage)) break;
+    await new Promise((resolve) => setTimeout(resolve, 500 * (i + 1)));
+  }
+  throw new Error(lastMessage);
+};
+
 export const anonClient = (): SupabaseClient =>
   createClient(stackEnv().apiUrl, stackEnv().anonKey, {
     auth: { persistSession: false },

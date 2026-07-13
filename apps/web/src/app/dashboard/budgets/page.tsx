@@ -91,7 +91,18 @@ function BudgetsBody() {
     );
   }
 
-  const list = rows ?? [];
+  // Children sort directly under their parent (one-level tree).
+  const raw = rows ?? [];
+  const nameById = new Map(raw.map((r) => [r.categoryLedgerAccountId, r.categoryName]));
+  const groupOf = (r: BudgetRow) =>
+    r.parentLedgerAccountId ? (nameById.get(r.parentLedgerAccountId) ?? '') : r.categoryName;
+  const depthOf = (r: BudgetRow) => (r.parentLedgerAccountId ? 1 : 0);
+  const list = [...raw].sort(
+    (a, b) =>
+      groupOf(a).localeCompare(groupOf(b)) ||
+      depthOf(a) - depthOf(b) ||
+      a.categoryName.localeCompare(b.categoryName),
+  );
   const budgeted = list.filter((r) => r.budgetMinor !== null);
   const unbudgeted = list.filter(
     (r) => r.budgetMinor === null && r.spentMinor !== '0',
@@ -203,9 +214,15 @@ function BudgetsBody() {
 }
 
 function ProgressBar({ spent, budget }: { spent: bigint; budget: bigint }) {
-  const over = budget > 0n && spent > budget;
+  // budget ≤ 0 (carry ate it all) reads as fully over, matching the copy
+  // beside it — never a green empty bar under an "Over by…" label.
+  const over = budget > 0n ? spent > budget : budget < 0n || spent > 0n;
   const pct =
-    budget <= 0n ? 0 : Math.min(100, Number((spent * 100n) / (budget === 0n ? 1n : budget)));
+    budget <= 0n
+      ? over
+        ? 100
+        : 0
+      : Math.min(100, Number((spent * 100n) / budget));
   return (
     <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-secondary">
       <div
@@ -238,12 +255,24 @@ function BudgetLine({
 
   const spent = useMemo(() => BigInt(row.spentMinor), [row.spentMinor]);
   const budget = row.budgetMinor !== null ? BigInt(row.budgetMinor) : null;
-  const remaining = budget !== null ? budget - spent : null;
+  // Rollover months measure against budget + carry ("available").
+  const rollover = row.rollover === true;
+  const available =
+    budget !== null
+      ? rollover && row.availableMinor != null
+        ? BigInt(row.availableMinor)
+        : budget
+      : null;
+  const remaining = available !== null ? available - spent : null;
 
-  async function save() {
+  async function save(nextRollover?: boolean) {
     const trimmed = value.trim();
     let amountMinor: string | null = null;
-    if (trimmed.length > 0) {
+    if (nextRollover !== undefined) {
+      // Rollover-only toggle: null amount + flag = "keep the amount"
+      // server-side, so a stale client value can never revert an edit.
+      amountMinor = null;
+    } else if (trimmed.length > 0) {
       const minor = parseSignedDollars(trimmed);
       if (minor === null || minor.startsWith('-')) {
         toast.error('Enter a non-negative amount.');
@@ -258,8 +287,10 @@ function BudgetLine({
         categoryLedgerAccountId: row.categoryLedgerAccountId,
         monthIso,
         amountMinor,
+        ...(nextRollover !== undefined ? { rollover: nextRollover } : {}),
       });
-      setEditing(false);
+      // A rollover toggle leaves any in-progress amount edit alone.
+      if (nextRollover === undefined) setEditing(false);
       onSaved();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not save the budget.');
@@ -271,7 +302,13 @@ function BudgetLine({
   return (
     <div className={`px-4 py-3 ${first ? '' : 'border-t border-border'}`}>
       <div className="flex items-center justify-between gap-3">
-        <p className="min-w-0 flex-1 truncate text-sm font-medium">{row.categoryName}</p>
+        <p
+          className={`min-w-0 flex-1 truncate text-sm font-medium ${
+            row.parentLedgerAccountId ? 'pl-4' : ''
+          }`}
+        >
+          {row.categoryName}
+        </p>
         <div className="flex shrink-0 items-center gap-3 text-sm">
           <span className="text-muted-foreground">
             <Money amountMinor={row.spentMinor} className="text-foreground" /> spent
@@ -322,27 +359,47 @@ function BudgetLine({
           )}
         </div>
       </div>
-      {budget !== null ? (
+      {budget !== null && available !== null ? (
         <>
-          <ProgressBar spent={spent} budget={budget} />
-          {remaining !== null ? (
-            <p className="mt-1 text-xs text-muted-foreground">
-              {remaining < 0n ? (
+          <ProgressBar spent={spent} budget={available} />
+          <div className="mt-1 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+            <p>
+              {remaining !== null && remaining < 0n ? (
                 <>
-                  Over by{' '}
-                  <Money
-                    amountMinor={remaining.toString()}
-                    className="text-xs"
-                  />
+                  Over by <Money amountMinor={remaining.toString()} className="text-xs" />
                 </>
-              ) : (
+              ) : remaining !== null ? (
                 <>
                   <Money amountMinor={remaining.toString()} className="text-xs text-foreground" />{' '}
                   left
+                  {rollover && row.carryMinor != null && row.carryMinor !== '0' ? (
+                    <>
+                      {' '}
+                      (incl.{' '}
+                      <Money amountMinor={row.carryMinor} signed className="text-xs" /> carried)
+                    </>
+                  ) : null}
                 </>
-              )}
+              ) : null}
             </p>
-          ) : null}
+            {row.rollover !== undefined ? (
+              <button
+                type="button"
+                disabled={busy}
+                className={`shrink-0 rounded-full border px-2 py-0.5 transition-colors ${
+                  rollover
+                    ? 'border-foreground/30 text-foreground'
+                    : 'border-dashed border-border hover:text-foreground'
+                }`}
+                title="Carry unspent budget (or overspend) into next month"
+                onClick={() => {
+                  void save(!rollover);
+                }}
+              >
+                {rollover ? 'Rollover on' : 'Rollover'}
+              </button>
+            ) : null}
+          </div>
         </>
       ) : null}
     </div>

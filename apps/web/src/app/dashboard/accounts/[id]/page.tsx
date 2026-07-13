@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { ArrowLeft, ReceiptText } from 'lucide-react';
+import { ArrowLeft, Plus, ReceiptText } from 'lucide-react';
 
 import { AppShell } from '@/components/keel/app-shell';
 import { EmptyState } from '@/components/keel/page-header';
@@ -12,17 +12,21 @@ import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
 import {
   fetchAccounts,
+  fetchCategories,
   fetchLedgerKinds,
   fetchLatestBalances,
   type AccountRow,
+  type CategoryRow,
   type DailyBalanceRow,
   type LatestBalanceRow,
   type RichTransactionRow,
   type TrialBalanceRow,
 } from '@/lib/keel-api';
+import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
 import { BalanceTrendChart, CategoryBarList } from '@/components/keel/charts';
 import { spendingMix } from '@/lib/spending';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 
@@ -36,7 +40,7 @@ export default function AccountDetailPage() {
 }
 
 function AccountDetailBody({ accountId }: { accountId: string }) {
-  const { householdId, ready } = useHousehold();
+  const { householdId, userId, ready } = useHousehold();
   const balances = useKeelQuery<TrialBalanceRow>('ledger.trial_balance', householdId);
   const txns = useKeelQuery<RichTransactionRow>('transactions.rich', householdId);
   const trend = useKeelQuerySilent<DailyBalanceRow>('accounts.balance_daily', householdId, {
@@ -45,6 +49,8 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
   const [kinds, setKinds] = useState<Map<string, string> | null>(null);
   const [provider, setProvider] = useState<LatestBalanceRow | null>(null);
+  const [categories, setCategories] = useState<CategoryRow[]>([]);
+  const [adding, setAdding] = useState(false);
 
   useEffect(() => {
     if (!householdId) {
@@ -70,6 +76,13 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
       })
       .catch(() => {
         if (active) setProvider(null);
+      });
+    void fetchCategories(householdId)
+      .then((c) => {
+        if (active) setCategories(c);
+      })
+      .catch(() => {
+        if (active) setCategories([]);
       });
     return () => {
       active = false;
@@ -177,14 +190,43 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <section className="space-y-2 lg:col-span-2">
-          <h2 className="text-sm font-medium text-muted-foreground">
-            Transactions{accountTxns.length > 0 ? ` (${String(accountTxns.length)})` : ''}
-          </h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium text-muted-foreground">
+              Transactions{accountTxns.length > 0 ? ` (${String(accountTxns.length)})` : ''}
+            </h2>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => {
+                setAdding(true);
+              }}
+            >
+              <Plus className="size-3.5" />
+              Add
+            </Button>
+          </div>
+          <AddTransactionDialog
+            open={adding}
+            householdId={householdId}
+            userId={userId}
+            accounts={accounts}
+            categories={categories}
+            defaultAccountId={accountId}
+            onClose={() => {
+              setAdding(false);
+            }}
+            onSaved={() => {
+              setAdding(false);
+              void txns.refetch();
+              void balances.refetch();
+            }}
+          />
           {accountTxns.length === 0 ? (
             <EmptyState
               icon={<ReceiptText className="size-6" />}
               title="No transactions yet"
-              description="Transactions for this account will appear here once it syncs."
+              description="Transactions land here when the account syncs — or add one by hand."
             />
           ) : (
             <div className="overflow-hidden rounded-lg border border-border">

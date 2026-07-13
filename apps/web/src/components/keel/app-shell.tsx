@@ -9,6 +9,7 @@ import {
   ReceiptText,
   Repeat,
   PiggyBank,
+  BarChart3,
   Banknote,
   ArrowLeftRight,
   FileCheck2,
@@ -31,6 +32,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { KeelLogo, KeelMark } from '@/components/keel/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { HouseholdProvider } from '@/components/keel/household-context';
+import { QuickNav } from '@/components/keel/quick-nav';
 import { ReviewBadge } from '@/components/keel/review-badge';
 
 type NavItem = { label: string; href: string; icon: LucideIcon };
@@ -41,6 +43,7 @@ const NAV: NavItem[] = [
   { label: 'Ledger', href: '/dashboard/ledger', icon: ReceiptText },
   { label: 'Recurring', href: '/dashboard/recurring', icon: Repeat },
   { label: 'Budgets', href: '/dashboard/budgets', icon: PiggyBank },
+  { label: 'Reports', href: '/dashboard/reports', icon: BarChart3 },
   { label: 'Paychecks', href: '/dashboard/paychecks', icon: Banknote },
   { label: 'Reimbursements', href: '/dashboard/reimbursements', icon: ArrowLeftRight },
   { label: 'Statements', href: '/dashboard/statements', icon: FileCheck2 },
@@ -265,7 +268,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         </header>
 
         <main className="min-w-0 flex-1">
-          <HouseholdProvider>{children}</HouseholdProvider>
+          <HouseholdProvider>
+            <QuickNav />
+            {children}
+          </HouseholdProvider>
         </main>
       </div>
     </div>

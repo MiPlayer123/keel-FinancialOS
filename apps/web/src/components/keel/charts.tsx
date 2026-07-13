@@ -16,6 +16,7 @@ import {
   BarChart,
   CartesianGrid,
   ResponsiveContainer,
+  Sankey,
   Tooltip,
   XAxis,
   YAxis,
@@ -246,6 +247,127 @@ export function CategoryBarList({ items }: { items: CategorySpend[] }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Cash-flow Sankey: income categories → Income → spending categories, with a
+// "Saved" (or "From savings") balancing node so both sides always sum equal.
+// Two hues only (the validated inflow/outflow pair); links are recessive
+// neutral ribbons; every label wears ink tokens, values live in the tooltip.
+// ---------------------------------------------------------------------------
+
+export type SankeyFlowNode = {
+  name: string;
+  /** Color job: money-in vs money-out (the validated hue pair). */
+  side: 'in' | 'out' | 'hub';
+  /** Layout column — explicit because recharts gives node shapes no
+   * container geometry to infer it from. */
+  column: 'left' | 'hub' | 'right';
+  /** Exact display amount (minor units, BigInt-safe string). */
+  totalMinor: string;
+};
+export type SankeyFlowLink = { source: number; target: number; valueMinor: string };
+
+const NODE_W = 10;
+
+type SankeyNodeShapeProps = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  payload: SankeyFlowNode & { value: number };
+};
+
+function FlowNode(props: SankeyNodeShapeProps) {
+  const { x, y, width, height, payload } = props;
+  const fill =
+    payload.side === 'out' ? 'var(--keel-chart-outflow)' : 'var(--keel-chart-inflow)';
+  const rect = (
+    <rect x={x} y={y} width={width} height={Math.max(height, 2)} rx={2} fill={fill} />
+  );
+  // Hub carries no label (its totals live in the caption) so side-column
+  // labels can sit OUTSIDE the plot and never collide with ribbons.
+  if (payload.column === 'hub') return rect;
+  const right = payload.column === 'right';
+  return (
+    <g>
+      {rect}
+      <text
+        x={right ? x + width + 6 : x - 6}
+        y={y + Math.max(height, 2) / 2}
+        textAnchor={right ? 'start' : 'end'}
+        dominantBaseline="middle"
+        className="fill-[var(--foreground)]"
+        fontSize={12}
+      >
+        {`${payload.name} · ${formatMoney(payload.totalMinor)}`}
+      </text>
+    </g>
+  );
+}
+
+/**
+ * @param nodes hub first is NOT required; links reference node indexes.
+ * Geometry converts to Number for pixels only — labels format the minor
+ * strings directly (Law 4).
+ */
+export function CashFlowSankey({
+  nodes,
+  links,
+  height,
+}: {
+  nodes: SankeyFlowNode[];
+  links: SankeyFlowLink[];
+  height?: number;
+}) {
+  if (nodes.length < 3 || links.length === 0) return null;
+  const data = {
+    nodes: nodes.map((n) => ({ ...n })),
+    links: links.map((l) => ({
+      source: l.source,
+      target: l.target,
+      value: Math.max(toGeometry(l.valueMinor.replace('-', '')), 0.01),
+    })),
+  };
+  const sideCount = Math.max(
+    nodes.filter((n) => n.side === 'in').length,
+    nodes.filter((n) => n.side === 'out').length,
+  );
+  const h = height ?? Math.max(220, sideCount * 44);
+  return (
+    // Flow labels need real width — on narrow screens the diagram scrolls in
+    // its own container rather than colliding (never the page).
+    <div className="overflow-x-auto">
+      <div className="min-w-[560px]">
+        <ResponsiveContainer width="100%" height={h}>
+          <Sankey
+        data={data}
+        nodeWidth={NODE_W}
+        nodePadding={14}
+        margin={{ top: 8, right: 175, bottom: 8, left: 175 }}
+        node={(p: unknown) => <FlowNode {...(p as SankeyNodeShapeProps)} />}
+        link={{ stroke: 'var(--muted-foreground)', strokeOpacity: 0.18 }}
+      >
+        <Tooltip
+          content={({ payload }) => {
+            const item = payload[0]?.payload as
+              | { payload?: { name?: string; totalMinor?: string } }
+              | undefined;
+            const inner = item?.payload;
+            if (!inner?.name || !inner.totalMinor) return null;
+            return (
+              <TooltipShell>
+                <p className="font-medium">{inner.name}</p>
+                <p className="text-muted-foreground">{formatMoney(inner.totalMinor)}</p>
+              </TooltipShell>
+            );
+          }}
+        />
+          </Sankey>
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 }

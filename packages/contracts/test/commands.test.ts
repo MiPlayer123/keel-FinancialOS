@@ -182,6 +182,69 @@ describe('command payloads', () => {
     ).toThrow();
   });
 
+  it('transactions.manual_create enforces splits sum to -amount (BigInt, no floats)', () => {
+    const good = parseCommandPayload('transactions.manual_create', {
+      accountId: uuid,
+      description: 'Farmers market',
+      effectiveDate: '2026-07-13',
+      amountMinor: '-4500',
+      status: 'posted',
+      splits: [
+        { categoryLedgerAccountId: uuid, amountMinor: '3000' },
+        { categoryLedgerAccountId: uuid, amountMinor: '1500' },
+      ],
+    });
+    expect(good.splits).toHaveLength(2);
+
+    // Unbalanced splits fail closed.
+    expect(() =>
+      parseCommandPayload('transactions.manual_create', {
+        accountId: uuid,
+        description: 'Farmers market',
+        effectiveDate: '2026-07-13',
+        amountMinor: '-4500',
+        status: 'posted',
+        splits: [{ categoryLedgerAccountId: uuid, amountMinor: '4400' }],
+      }),
+    ).toThrow();
+
+    // Zero amounts are meaningless economics.
+    expect(() =>
+      parseCommandPayload('transactions.manual_create', {
+        accountId: uuid,
+        description: 'Nothing',
+        effectiveDate: '2026-07-13',
+        amountMinor: '0',
+        status: 'posted',
+        splits: [{ categoryLedgerAccountId: uuid, amountMinor: '0' }],
+      }),
+    ).toThrow();
+
+    // Floats never ride money fields.
+    expect(() =>
+      parseCommandPayload('transactions.manual_create', {
+        accountId: uuid,
+        description: 'Float smuggling',
+        effectiveDate: '2026-07-13',
+        amountMinor: -45.0,
+        status: 'posted',
+        splits: [{ categoryLedgerAccountId: uuid, amountMinor: '4500' }],
+      }),
+    ).toThrow();
+  });
+
+  it('transactions.manual_void requires a reason', () => {
+    expect(
+      parseCommandPayload('transactions.manual_void', {
+        transactionId: uuid,
+        reason: 'typo — re-entered',
+      }).reason,
+    ).toContain('typo');
+    expect(() =>
+      parseCommandPayload('transactions.manual_void', { transactionId: uuid, reason: '' }),
+    ).toThrow();
+  });
+
   it('ingest.record_raw_event stores body verbatim as data', () => {
     const parsed = parseCommandPayload('ingest.record_raw_event', {
       provider: 'simulator',

@@ -138,9 +138,10 @@ const processRecurringDetection = async (
 };
 
 /** Deterministic sign-based offset routing (Law 1: not AI). Debit-positive:
- * outflow (negative on the asset) offsets to expense (positive). */
-const offsetName = (amountMinor: bigint): string =>
-  amountMinor < 0n ? 'Uncategorized Expense' : 'Uncategorized Income';
+ * outflow (negative on the asset) offsets to expense (positive). Looked up by
+ * stable pfc_key, never name — system categories are renameable. */
+const offsetKey = (amountMinor: bigint): string =>
+  amountMinor < 0n ? 'uncategorized_expense' : 'uncategorized_income';
 
 /** Map a planner action + source event to keel_worker_apply_promotion's
  * jsonb contract ({kind, economic_key, reason, txn:{snake_case…}}). */
@@ -251,7 +252,7 @@ const processPromoteJob = async (
       .from('ledger_accounts')
       .select('id')
       .eq('entity_id', account.entity_id)
-      .eq('name', offsetName(amount))
+      .eq('pfc_key', offsetKey(amount))
       .single();
     if (!offset) return { ok: false, detail: 'offset category missing from seed' };
     postings = [

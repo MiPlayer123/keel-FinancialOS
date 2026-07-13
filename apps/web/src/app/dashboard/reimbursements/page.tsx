@@ -471,6 +471,9 @@ function CreateClaimDialog({
               <Label>Relationship</Label>
               <Select
                 value={kind}
+                items={Object.fromEntries(
+                  CLAIM_KINDS.map((k) => [k, k.charAt(0).toUpperCase() + k.slice(1)]),
+                )}
                 onValueChange={(v) => {
                   if (v) setKind(v);
                 }}

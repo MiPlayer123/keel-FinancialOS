@@ -4,7 +4,7 @@
  * only inside Edge memory from the server-minted attempt id.
  */
 import { execFileSync, execSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -24,7 +24,9 @@ import {
 
 const ROOT = join(import.meta.dirname, '..', '..');
 const PLAID_ITEM = 'plaid-item-c3';
-const PSQL = '/Library/PostgreSQL/17/bin/psql';
+const PSQL = existsSync('/Library/PostgreSQL/17/bin/psql')
+  ? '/Library/PostgreSQL/17/bin/psql'
+  : 'psql'; // CI/Linux: client on PATH
 
 let alexToken: string;
 let cachedLocalDb: { args: string[]; password: string } | null = null;
