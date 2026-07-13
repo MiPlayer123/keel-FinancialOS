@@ -13,14 +13,18 @@ import {
   fetchAccounts,
   fetchCashFlowForecast,
   fetchConnections,
+  fetchSchedules,
   syncConnection,
   type AccountRow,
   type DailyBalanceRow,
   type ForecastBill,
   type MonthlyCashFlowRow,
+  type RecurringSeriesRow,
   type RichTransactionRow,
+  type ScheduleRow,
   type TrialBalanceRow,
 } from '@/lib/keel-api';
+import { stepScheduleDue } from '@/lib/recurring';
 import { Badge } from '@/components/ui/badge';
 import { CashFlowCard } from '@/components/keel/cash-flow-card';
 import {
@@ -203,6 +207,196 @@ function buildInsights(rows: RichTransactionRow[]): Insight[] {
   return out;
 }
 
+type FreeToSpend = {
+  currency: string;
+  freeMinor: bigint;
+  receivedMinor: bigint;
+  expectedMinor: bigint;
+  spentMinor: bigint;
+  billsDueMinor: bigint;
+  /** Whole days strictly after today through month end (may be 0 on the last day). */
+  daysLeft: number;
+  /** Floor(free / daysLeft) minor units, only meaningful when free > 0 and days remain. */
+  perDayMinor: bigint | null;
+  hasRecurringData: boolean;
+};
+
+/**
+ * "Free to spend" this month (Simplifi/Copilot-style headline), computed
+ * entirely from data already on the page — Law 1, no model in the loop.
+ * free = received so far + expected income still to come
+ *       − spent so far − bills still due.
+ * Confirmed transfers are excluded (moving money isn't income or spend).
+ * Only confirmed recurring series and active schedules count as "still to
+ * come" — mirrors Recurring's Projected Cash card, including its documented
+ * double-count risk when a schedule duplicates a detected series (the user
+ * is expected to pause one; no fuzzy dedupe here either).
+ */
+function computeFreeToSpend(
+  richTxns: RichTransactionRow[],
+  series: RecurringSeriesRow[],
+  schedules: ScheduleRow[],
+): FreeToSpend | null {
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const [yearStr, monthStr] = todayIso.split('-');
+  const year = Number(yearStr);
+  const monthNum = Number(monthStr);
+  const month = todayIso.slice(0, 7);
+  const dayOfMonth = Number(todayIso.slice(8, 10));
+  const daysInMonth = new Date(Date.UTC(year, monthNum, 0)).getUTCDate();
+  const monthEndIso = `${month}-${String(daysInMonth).padStart(2, '0')}`;
+  const daysLeft = Math.max(0, daysInMonth - dayOfMonth);
+
+  const currencyCounts = new Map<string, number>();
+  for (const t of richTxns) {
+    currencyCounts.set(t.currency, (currencyCounts.get(t.currency) ?? 0) + 1);
+  }
+  const currency = [...currencyCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'USD';
+
+  let receivedMinor = 0n;
+  let spentMinor = 0n;
+  for (const t of richTxns) {
+    if (t.transferStatus === 'confirmed') continue;
+    if (t.currency !== currency) continue;
+    if (!t.effectiveDate.startsWith(month)) continue;
+    const amt = BigInt(t.amountMinor || '0');
+    if (amt > 0n) receivedMinor += amt;
+    else if (amt < 0n) spentMinor += -amt;
+  }
+
+  let expectedMinor = 0n;
+  let billsDueMinor = 0n;
+  for (const s of series) {
+    if (s.status !== 'confirmed') continue;
+    for (const o of s.occurrences) {
+      if (o.status !== 'expected') continue;
+      if (o.currency !== currency) continue;
+      if (!o.expectedDate.startsWith(month)) continue;
+      if (o.expectedDate <= todayIso) continue; // already reflected in received/spent
+      const amt = BigInt(o.expectedAmountMinor || '0');
+      if (s.sign === 'inflow') expectedMinor += amt;
+      else billsDueMinor += amt;
+    }
+  }
+
+  for (const sc of schedules) {
+    if (sc.status !== 'active') continue;
+    if (sc.currency !== currency) continue;
+    let due = sc.nextDueDate;
+    let guard = 0;
+    while (due <= monthEndIso && guard < 60) {
+      if (due > todayIso) {
+        const amt = BigInt(sc.amountMinor || '0');
+        if (amt > 0n) expectedMinor += amt;
+        else billsDueMinor += -amt;
+      }
+      if (sc.frequency === 'once') break;
+      due = stepScheduleDue(due, sc.frequency, sc.anchorDay);
+      guard += 1;
+    }
+  }
+
+  const freeMinor = receivedMinor + expectedMinor - spentMinor - billsDueMinor;
+  const perDayMinor =
+    freeMinor > 0n && daysLeft > 0 ? freeMinor / BigInt(daysLeft) : null;
+
+  return {
+    currency,
+    freeMinor,
+    receivedMinor,
+    expectedMinor,
+    spentMinor,
+    billsDueMinor,
+    daysLeft,
+    perDayMinor,
+    hasRecurringData: series.length > 0 || schedules.length > 0,
+  };
+}
+
+function FreeToSpendCard({
+  richTxns,
+  series,
+  schedules,
+}: {
+  richTxns: RichTransactionRow[];
+  series: RecurringSeriesRow[];
+  schedules: ScheduleRow[];
+}) {
+  const fts = computeFreeToSpend(richTxns, series, schedules);
+  if (!fts) return null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium text-muted-foreground">
+          Free to spend · this month
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div>
+          <Money
+            amountMinor={fts.freeMinor.toString()}
+            currency={fts.currency}
+            className="text-3xl font-semibold"
+            muteZero={false}
+          />
+          {fts.perDayMinor !== null ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {formatMoney(fts.perDayMinor.toString(), { currency: fts.currency })} / day for the{' '}
+              {fts.daysLeft} day{fts.daysLeft === 1 ? '' : 's'} left this month
+            </p>
+          ) : null}
+        </div>
+        <div
+          className={`grid grid-cols-2 gap-3 ${fts.hasRecurringData ? 'sm:grid-cols-4' : ''}`}
+        >
+          <div>
+            <p className="text-xs text-muted-foreground">In so far</p>
+            <Money amountMinor={fts.receivedMinor.toString()} currency={fts.currency} className="text-sm" />
+          </div>
+          {fts.hasRecurringData ? (
+            <div>
+              <p className="text-xs text-muted-foreground">Still expected</p>
+              <Money
+                amountMinor={fts.expectedMinor.toString()}
+                currency={fts.currency}
+                className="text-sm"
+              />
+            </div>
+          ) : null}
+          <div>
+            <p className="text-xs text-muted-foreground">Spent so far</p>
+            <Money
+              amountMinor={`-${fts.spentMinor.toString()}`}
+              currency={fts.currency}
+              signed
+              className="text-sm"
+            />
+          </div>
+          {fts.hasRecurringData ? (
+            <div>
+              <p className="text-xs text-muted-foreground">Bills still due</p>
+              <Money
+                amountMinor={`-${fts.billsDueMinor.toString()}`}
+                currency={fts.currency}
+                signed
+                className="text-sm"
+              />
+            </div>
+          ) : null}
+        </div>
+        {fts.hasRecurringData ? (
+          <p className="text-xs text-muted-foreground">
+            Income received and spending so far, plus confirmed recurring bills/income and
+            schedules still due this month (if a schedule duplicates a detected series, it
+            counts twice — pause one on the Recurring page).
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
 function HomeBody() {
   const { householdId, ready } = useHousehold();
   const balances = useKeelQuery<TrialBalanceRow>('ledger.trial_balance', householdId);
@@ -215,7 +409,9 @@ function HomeBody() {
     householdId,
   );
   const richTxns = useKeelQuerySilent<RichTransactionRow>('transactions.rich', householdId);
+  const recurringSeries = useKeelQuerySilent<RecurringSeriesRow>('recurring.list', householdId);
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
+  const [schedules, setSchedules] = useState<ScheduleRow[]>([]);
   const [forecast, setForecast] = useState<{
     rows: DailyBalanceRow[];
     bills: ForecastBill[];
@@ -241,6 +437,21 @@ function HomeBody() {
       })
       .catch(() => {
         if (active) setAccounts([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [householdId]);
+
+  useEffect(() => {
+    if (!householdId) return;
+    let active = true;
+    void fetchSchedules(householdId)
+      .then((s) => {
+        if (active) setSchedules(s);
+      })
+      .catch(() => {
+        if (active) setSchedules([]);
       });
     return () => {
       active = false;
@@ -285,6 +496,12 @@ function HomeBody() {
 
   return (
     <>
+      <FreeToSpendCard
+        richTxns={richTxns ?? []}
+        series={recurringSeries ?? []}
+        schedules={schedules}
+      />
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Card>
           <CardHeader className="pb-2">
