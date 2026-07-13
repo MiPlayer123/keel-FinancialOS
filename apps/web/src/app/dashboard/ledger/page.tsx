@@ -118,6 +118,13 @@ function LedgerTable() {
   const [accountFilter, setAccountFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [sort, setSort] = useState<SortKey>('date_desc');
+
+  // Deep links (e.g. from Reports): /dashboard/ledger?category=<id|uncategorized>.
+  // Applied post-mount to avoid a server/client hydration mismatch.
+  useEffect(() => {
+    const param = new URLSearchParams(window.location.search).get('category');
+    if (param) setCategoryFilter(param);
+  }, []);
   const [editing, setEditing] = useState<RichTransactionRow | null>(null);
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
