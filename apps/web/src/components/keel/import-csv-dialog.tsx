@@ -1,10 +1,11 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { FileUp, Loader2, Upload } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, FileUp, Loader2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 
 import {
+  createCategory,
   createManualTransaction,
   overrideTransaction,
   type AccountRow,
@@ -45,6 +46,29 @@ type ParsedRow = {
   splits?: QifSplit[];
 };
 
+type ImportAnalysis = {
+  confidence: 'high' | 'review';
+  dateRange: string | null;
+  duplicates: number;
+  outflows: number;
+  inflows: number;
+  matchedCategories: number;
+  unmatchedCategories: number;
+  validSplits: number;
+  invalidSplits: number;
+  missingCategories: { name: string; kind: 'expense' | 'income' }[];
+  notes: string[];
+};
+
+function formatDateRange(rows: Omit<ParsedRow, 'key'>[]): string | null {
+  if (rows.length === 0) return null;
+  const dates = rows.map((r) => r.date).sort();
+  const first = dates[0];
+  const last = dates.at(-1);
+  if (!first || !last) return null;
+  return first === last ? first : `${first} → ${last}`;
+}
+
 /**
  * CSV + QIF import, Quicken-style but idempotent: every row rides the
  * transactions.manual_create envelope with a content-hash economic key, so
@@ -80,6 +104,7 @@ export function ImportCsvDialog({
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [createMissingCategories, setCreateMissingCategories] = useState(true);
 
   const [fileName, setFileName] = useState<string | null>(null);
   const isQif = useMemo(
@@ -141,6 +166,90 @@ export function ImportCsvDialog({
 
   const account = accounts.find((a) => a.id === accountId);
 
+  const analysis = useMemo<ImportAnalysis>(() => {
+    const notes: string[] = [];
+    let duplicates = 0;
+    let outflows = 0;
+    let inflows = 0;
+    let matchedCategories = 0;
+    let unmatchedCategories = 0;
+    let validSplits = 0;
+    let invalidSplits = 0;
+    const seen = new Map<string, number>();
+    const missingByKey = new Map<string, { name: string; kind: 'expense' | 'income' }>();
+
+    for (const row of parsed.rows) {
+      const tuple = `${row.date}|${row.amountMinor}|${row.description.toLowerCase()}`;
+      const count = seen.get(tuple) ?? 0;
+      if (count > 0) duplicates++;
+      seen.set(tuple, count + 1);
+      const outflow = row.amountMinor.startsWith('-');
+      if (outflow) outflows++;
+      else inflows++;
+
+      if (row.splits && row.splits.length > 1) {
+        const sum = row.splits.reduce((a, sp) => a + BigInt(sp.amountMinor), 0n);
+        if (sum === BigInt(row.amountMinor)) validSplits++;
+        else invalidSplits++;
+        for (const split of row.splits) {
+          const splitOutflow = split.amountMinor.startsWith('-');
+          if (categoryByName(split.categoryName, splitOutflow ? 'expense' : 'income')) {
+            matchedCategories++;
+          } else if (split.categoryName) {
+            unmatchedCategories++;
+            missingByKey.set(
+              `${splitOutflow ? 'expense' : 'income'}:${split.categoryName.toLowerCase()}`,
+              {
+                name: split.categoryName,
+                kind: splitOutflow ? 'expense' : 'income',
+              },
+            );
+          }
+        }
+      } else if (row.categoryName) {
+        if (categoryByName(row.categoryName, outflow ? 'expense' : 'income')) matchedCategories++;
+        else {
+          unmatchedCategories++;
+          missingByKey.set(`${outflow ? 'expense' : 'income'}:${row.categoryName.toLowerCase()}`, {
+            name: row.categoryName,
+            kind: outflow ? 'expense' : 'income',
+          });
+        }
+      }
+    }
+
+    if (parsed.skipped > 0) notes.push(`${String(parsed.skipped)} rows could not be parsed.`);
+    if (duplicates > 0) notes.push(`${String(duplicates)} rows look duplicated inside this file.`);
+    if (unmatchedCategories > 0) {
+      notes.push(`${String(unmatchedCategories)} QIF categories will land as Uncategorized.`);
+    }
+    if (invalidSplits > 0) {
+      notes.push(
+        `${String(invalidSplits)} split transactions did not add up and will import as single-category rows.`,
+      );
+    }
+    if (!isQif && parsed.rows.length > 0) {
+      notes.push('CSV has no category/split metadata; rules can clean these after import.');
+    }
+
+    return {
+      confidence:
+        parsed.rows.length > 0 && parsed.skipped === 0 && duplicates === 0 && invalidSplits === 0
+          ? 'high'
+          : 'review',
+      dateRange: formatDateRange(parsed.rows),
+      duplicates,
+      outflows,
+      inflows,
+      matchedCategories,
+      unmatchedCategories,
+      validSplits,
+      invalidSplits,
+      missingCategories: [...missingByKey.values()].slice(0, 25),
+      notes,
+    };
+  }, [parsed, isQif, account?.entityId, categories]);
+
   function uncategorizedFor(sign: 'expense' | 'income'): CategoryRow | undefined {
     const wantKey = sign === 'expense' ? 'uncategorized_expense' : 'uncategorized_income';
     const wantName = sign === 'expense' ? 'Uncategorized Expense' : 'Uncategorized Income';
@@ -165,8 +274,67 @@ export function ImportCsvDialog({
     return find(name) ?? (leaf ? find(leaf) : undefined);
   }
 
+  const categoryByNameFrom = (
+    available: CategoryRow[],
+    name: string | null | undefined,
+    sign: 'expense' | 'income',
+  ) => {
+    if (!name) return undefined;
+    const find = (n: string) =>
+      available.find(
+        (c) =>
+          c.entityId === account?.entityId &&
+          c.kind === sign &&
+          c.name.toLowerCase() === n.toLowerCase(),
+      );
+    const leaf = name.includes(':') ? name.split(':').at(-1) : null;
+    return find(name) ?? (leaf ? find(leaf) : undefined);
+  };
+
+  async function categoriesForImport(): Promise<CategoryRow[]> {
+    if (
+      !householdId ||
+      !account ||
+      !createMissingCategories ||
+      analysis.missingCategories.length === 0
+    ) {
+      return categories;
+    }
+    const next = [...categories];
+    for (const missing of analysis.missingCategories) {
+      const name = missing.name.includes(':')
+        ? (missing.name.split(':').at(-1) ?? missing.name)
+        : missing.name;
+      const existing =
+        categoryByNameFrom(next, name, missing.kind) ??
+        categoryByNameFrom(next, missing.name, missing.kind);
+      if (existing) continue;
+      try {
+        const created = await createCategory({
+          householdId,
+          entityId: account.entityId,
+          name: name.slice(0, 80),
+          kind: missing.kind,
+        });
+        if (created.ledgerAccountId) {
+          next.push({
+            ledgerAccountId: created.ledgerAccountId,
+            name: name.slice(0, 80),
+            kind: missing.kind,
+            entityId: account.entityId,
+          });
+        }
+      } catch {
+        // Best effort only: if a category already exists via race/rename, the
+        // transaction still imports safely to Uncategorized below.
+      }
+    }
+    return next;
+  }
+
   async function runImport() {
     if (!householdId || !userId || !account) return;
+    const workingCategories = await categoriesForImport();
     const expenseCat = uncategorizedFor('expense');
     const incomeCat = uncategorizedFor('income');
     if (!expenseCat || !incomeCat) {
@@ -190,16 +358,18 @@ export function ImportCsvDialog({
         const outflow = row.amountMinor.startsWith('-');
         const fallback = outflow ? expenseCat : incomeCat;
         // QIF splits become REAL splits when they add up; each maps by name.
-        let payloadSplits: { categoryLedgerAccountId: string; amountMinor: string }[] | null =
-          null;
+        let payloadSplits: { categoryLedgerAccountId: string; amountMinor: string }[] | null = null;
         if (row.splits && row.splits.length > 1) {
           const sum = row.splits.reduce((a, sp) => a + BigInt(sp.amountMinor), 0n);
           if (sum === BigInt(row.amountMinor)) {
             payloadSplits = row.splits.map((sp) => {
               const spOut = sp.amountMinor.startsWith('-');
               const cat =
-                categoryByName(sp.categoryName, spOut ? 'expense' : 'income') ??
-                (spOut ? expenseCat : incomeCat);
+                categoryByNameFrom(
+                  workingCategories,
+                  sp.categoryName,
+                  spOut ? 'expense' : 'income',
+                ) ?? (spOut ? expenseCat : incomeCat);
               return {
                 categoryLedgerAccountId: cat.ledgerAccountId,
                 amountMinor: (-BigInt(sp.amountMinor)).toString(),
@@ -209,11 +379,13 @@ export function ImportCsvDialog({
         }
         if (!payloadSplits) {
           const cat =
-            categoryByName(row.categoryName, outflow ? 'expense' : 'income') ?? fallback;
+            categoryByNameFrom(
+              workingCategories,
+              row.categoryName,
+              outflow ? 'expense' : 'income',
+            ) ?? fallback;
           const negated = outflow ? row.amountMinor.slice(1) : `-${row.amountMinor}`;
-          payloadSplits = [
-            { categoryLedgerAccountId: cat.ledgerAccountId, amountMinor: negated },
-          ];
+          payloadSplits = [{ categoryLedgerAccountId: cat.ledgerAccountId, amountMinor: negated }];
         }
         const result: CommandResult = await createManualTransaction({
           householdId,
@@ -258,7 +430,9 @@ export function ImportCsvDialog({
     }
   }
 
-  const colItems = Object.fromEntries(header.map((h, i) => [String(i), h.trim() || `Column ${String(i + 1)}`]));
+  const colItems = Object.fromEntries(
+    header.map((h, i) => [String(i), h.trim() || `Column ${String(i + 1)}`]),
+  );
   const ready =
     accountId !== null &&
     parsed.rows.length > 0 &&
@@ -275,9 +449,9 @@ export function ImportCsvDialog({
         <DialogHeader>
           <DialogTitle>Import CSV or QIF</DialogTitle>
           <DialogDescription>
-            Paste a bank CSV export or a Quicken QIF file (or pick the file).
-            Importing the same file twice never duplicates — rows are keyed by
-            their content. QIF categories and splits come along by name.
+            Paste a bank CSV export or a Quicken QIF file (or pick the file). Importing the same
+            file twice never duplicates — rows are keyed by their content. QIF categories and splits
+            come along by name.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -412,6 +586,62 @@ export function ImportCsvDialog({
                   />
                   Flip signs (money out shown positive)
                 </label>
+              </div>
+              <div className="rounded-md border border-border p-3 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  {analysis.confidence === 'high' ? (
+                    <CheckCircle2 className="size-4 text-primary" />
+                  ) : (
+                    <AlertTriangle className="size-4 text-muted-foreground" />
+                  )}
+                  <span className="font-medium">
+                    {analysis.confidence === 'high'
+                      ? 'High-confidence import'
+                      : 'Review before importing'}
+                  </span>
+                  {analysis.dateRange ? (
+                    <span className="text-muted-foreground">· {analysis.dateRange}</span>
+                  ) : null}
+                </div>
+                <div className="mt-2 grid gap-2 sm:grid-cols-4">
+                  <span>{String(analysis.outflows)} outflows</span>
+                  <span>{String(analysis.inflows)} inflows</span>
+                  <span>{String(analysis.duplicates)} duplicate-looking</span>
+                  <span>
+                    {String(analysis.matchedCategories)} categories matched
+                    {analysis.unmatchedCategories > 0
+                      ? ` / ${String(analysis.unmatchedCategories)} unmatched`
+                      : ''}
+                  </span>
+                </div>
+                {analysis.validSplits > 0 || analysis.invalidSplits > 0 ? (
+                  <p className="mt-2 text-muted-foreground">
+                    {String(analysis.validSplits)} split transactions valid
+                    {analysis.invalidSplits > 0
+                      ? ` · ${String(analysis.invalidSplits)} split transactions need cleanup`
+                      : ''}
+                  </p>
+                ) : null}
+                {analysis.notes.length > 0 ? (
+                  <ul className="mt-2 list-disc pl-4 text-muted-foreground">
+                    {analysis.notes.map((note) => (
+                      <li key={note}>{note}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                {analysis.missingCategories.length > 0 ? (
+                  <label className="mt-3 flex cursor-pointer items-center gap-2 text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={createMissingCategories}
+                      onChange={(e) => {
+                        setCreateMissingCategories(e.target.checked);
+                      }}
+                    />
+                    Create {String(analysis.missingCategories.length)} missing QIF categories before
+                    import
+                  </label>
+                ) : null}
               </div>
               <div className="max-h-40 space-y-1 overflow-y-auto rounded-md border border-border px-3 py-2">
                 {parsed.rows.slice(0, 8).map((r, i) => (

@@ -635,13 +635,16 @@ export default {
       const name = input['name'];
       const kind = input['kind'];
       const parent = input['parentLedgerAccountId'];
+      const entityId = input['entityId'];
       const uuidReCat = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (
         !householdId.success ||
         typeof name !== 'string' || name.trim().length === 0 || name.length > 80 ||
         (kind !== 'expense' && kind !== 'income') ||
         (parent !== undefined && parent !== null &&
-          (typeof parent !== 'string' || !uuidReCat.test(parent)))
+          (typeof parent !== 'string' || !uuidReCat.test(parent))) ||
+        (entityId !== undefined && entityId !== null &&
+          (typeof entityId !== 'string' || !uuidReCat.test(entityId)))
       ) {
         return json(400, { code: 'invalid_command', message: 'Category request failed validation.', details: {} });
       }
@@ -650,6 +653,7 @@ export default {
         p_name: name,
         p_kind: kind,
         p_parent_ledger_account_id: typeof parent === 'string' ? parent : null,
+        p_entity_id: typeof entityId === 'string' ? entityId : null,
       });
       if (error) return mapDbError(error);
       return json(200, { ledgerAccountId: data });
