@@ -473,3 +473,42 @@ fallback) and `/connections/rename`, both behind `connections.link` authz + the
 procs' own membership checks. Link now records the Plaid Link `metadata.institution.name`
 as `display_name`. Frontend: name display + inline rename + "Sync now" on the
 Connections page. Verified both routes return `{ok:true}` for a real user session.
+
+## 2026-07-12 — Usable ledger: real net worth, categories, rich ledger
+
+Audit of the live account found three "it's wrong" issues; fixed end-to-end.
+
+1. **Net worth wrong / "Chase negative"** — `balance_snapshots` was empty; ledger
+   balances were only the ~30-day synced window. Added `worker /refresh-balances`
+   (Plaid accountsGet → snapshots) + `keel_apply_account_balance` which books a
+   one-time Opening Balances equity entry so each account's ledger total = the
+   provider's reported balance (debit-positive: asset=+current, liability=-current);
+   subsequent synced transactions move it exactly as the bank does. Wired into the
+   cron. Verified net worth = $16,326.95 ($16,742.00 checking − $415.05 card).
+   Balance anchor rounds provider dollars→minor (accountsGet returns parsed JSON,
+   no lexeme); per-transaction economics stay lexeme-lossless. Migration 20260712190000.
+
+2. **Everything Uncategorized** — Plaid returns `personal_finance_category` (kept in
+   raw events). `keel_pfc_to_category_name` maps PFC primary → a seeded per-entity
+   taxonomy (deterministic, Law 1 — no LLM). Migrations 20260712170000/200000 seed the
+   taxonomy (trigger + backfill).
+   **Design ruling (deviation):** `journal_postings` are append-only
+   (`keel_forbid_mutation`), so a category is NOT an in-place offset move and full
+   revisions per re-categorize would churn the ledger. The immutable double-entry
+   ledger stays the record of money movement (offset remains Uncategorized for correct
+   income/expense/net-worth totals); the user-facing CATEGORY is a mutable, audited
+   classification overlay (`transaction_categories`, migration 200100) keyed to the
+   canonical transaction — the standard consumer-finance separation of bookkeeping
+   account vs. budget category. `keel_autocategorize_household` classified all 120 from
+   PFC; `keel_categorize_transaction` upserts + audits user edits. Category P&L reads the
+   overlay. Follow-up: reconcile overlay categories back into a proper expense-account
+   revision path if strict ledger-category unification is later required.
+
+3. **Ledger showed no amount/category/account** — `keel_list_transactions_rich`
+   (migration 200200) returns signed amount (cash posting), account, and category
+   (overlay → offset fallback). Ledger UI rebuilt: amounts (red = negative money),
+   category chips with inline same-kind re-categorize, account, search, and
+   group-by-account / group-by-category (expandable). Nav sidebar pinned (sticky h-dvh).
+
+Verified live end-to-end: rich query, categories.list (19), and a user re-categorize
+(→ Shopping) all green.

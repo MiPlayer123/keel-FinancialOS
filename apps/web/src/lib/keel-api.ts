@@ -259,6 +259,67 @@ export type TransactionRow = {
   economicEventKey: string;
 };
 
+/** Rich ledger row: amount, account, and category for display + re-categorize. */
+export type RichTransactionRow = {
+  transactionId: string;
+  effectiveDate: string;
+  description: string;
+  status: 'pending' | 'posted' | 'reviewed';
+  accountId: string;
+  accountName: string;
+  amountMinor: string;
+  currency: string;
+  categoryLedgerAccountId: string | null;
+  categoryName: string | null;
+  categoryKind: 'income' | 'expense' | null;
+};
+
+export type CategoryRow = {
+  ledgerAccountId: string;
+  name: string;
+  kind: 'income' | 'expense';
+  entityId: string;
+};
+
+/** Categories (ledger accounts flagged is_category) for the re-categorize picker. */
+export async function fetchCategories(householdId: string): Promise<CategoryRow[]> {
+  const data = await invoke<CategoryRow[]>('api/queries', {
+    query: 'categories.list',
+    householdId,
+  });
+  return Array.isArray(data) ? data : [];
+}
+
+/** Latest provider balance per account (current + available). */
+export type LatestBalanceRow = {
+  accountId: string;
+  currentMinor: string;
+  availableMinor: string | null;
+  currency: string;
+  asOf: string;
+};
+
+export async function fetchLatestBalances(householdId: string): Promise<LatestBalanceRow[]> {
+  const data = await invoke<LatestBalanceRow[]>('api/queries', {
+    query: 'balances.latest',
+    householdId,
+  });
+  return Array.isArray(data) ? data : [];
+}
+
+/** Re-categorize a transaction (mutable classification overlay). */
+export async function categorizeTransaction(input: {
+  householdId: string;
+  transactionId: string;
+  categoryLedgerAccountId: string;
+}): Promise<unknown> {
+  return invoke('api/transactions/categorize', {
+    householdId: input.householdId,
+    transactionId: input.transactionId,
+    categoryLedgerAccountId: input.categoryLedgerAccountId,
+  });
+}
+
 export type TrialBalanceRow = {
   ledgerAccountId: string;
   currency: string;

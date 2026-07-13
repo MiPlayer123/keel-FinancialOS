@@ -67,6 +67,9 @@ const COMMAND_TO_PROC: Record<string, string> = {
 const QUERY_TO_PROC: Record<string, string> = {
   'ledger.trial_balance': 'keel_trial_balance',
   'transactions.list': 'keel_list_transactions',
+  'transactions.rich': 'keel_list_transactions_rich',
+  'categories.list': 'keel_list_categories',
+  'balances.latest': 'keel_latest_balances',
   'recurring.list': 'keel_list_recurring',
   'paychecks.list': 'keel_list_paychecks',
   'reimbursements.list':'keel_list_reimbursements',
@@ -548,6 +551,35 @@ export default {
         });
       }
       return json(200, finalized);
+    }
+
+    if (path === '/transactions/categorize') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const txnId = input['transactionId'];
+      const categoryId = input['categoryLedgerAccountId'];
+      if (
+        !householdId.success ||
+        typeof txnId !== 'string' ||
+        !uuidRe.test(txnId) ||
+        typeof categoryId !== 'string' ||
+        !uuidRe.test(categoryId)
+      ) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Categorize request failed validation.',
+          details: {},
+        });
+      }
+      // The proc enforces household membership (auth.uid) + category validity.
+      const { error: catError } = await ctx.supabase.rpc('keel_categorize_transaction', {
+        p_household_id: householdId.data,
+        p_txn_id: txnId,
+        p_category_ledger_account_id: categoryId,
+      });
+      if (catError) return mapDbError(catError);
+      return json(200, { ok: true });
     }
 
     if (path === '/connections/sync') {
