@@ -17,6 +17,7 @@ import {
 } from '@/lib/keel-api';
 import { Skeleton } from '@/components/ui/skeleton';
 import { AddAccountDialog } from '@/components/keel/add-account-dialog';
+import { RecordTransferDialog } from '@/components/keel/record-transfer-dialog';
 
 type Enriched = AccountRow & { kind: string; balanceMinor: string };
 
@@ -114,12 +115,21 @@ function AccountsBody() {
           <p className="text-sm text-muted-foreground">Net worth</p>
           <Money amountMinor={netMinor} className="text-3xl font-semibold" muteZero={false} />
         </div>
-        <AddAccountDialog
-          onCreated={() => {
-            setReload((n) => n + 1);
-            void balances.refetch();
-          }}
-        />
+        <div className="flex flex-wrap justify-end gap-2">
+          <RecordTransferDialog
+            accounts={accounts}
+            onDone={() => {
+              setReload((n) => n + 1);
+              void balances.refetch();
+            }}
+          />
+          <AddAccountDialog
+            onCreated={() => {
+              setReload((n) => n + 1);
+              void balances.refetch();
+            }}
+          />
+        </div>
       </div>
 
       <AccountGroup title="Assets" rows={assets} />
