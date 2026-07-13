@@ -519,12 +519,14 @@ export async function createCategory(input: {
   name: string;
   kind: 'expense' | 'income';
   parentLedgerAccountId?: string | null;
-}): Promise<unknown> {
-  return invoke('api/categories/create', {
+  entityId?: string | null;
+}): Promise<{ ledgerAccountId?: string }> {
+  return invoke<{ ledgerAccountId?: string }>('api/categories/create', {
     householdId: input.householdId,
     name: input.name,
     kind: input.kind,
     parentLedgerAccountId: input.parentLedgerAccountId ?? null,
+    entityId: input.entityId ?? null,
   });
 }
 

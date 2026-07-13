@@ -11,6 +11,8 @@ import { getSupabaseBrowserClient } from '@/lib/supabase';
 import {
   exportHousehold,
   fetchAuditLog,
+  keelCommand,
+  newId,
   type AuditLogRow,
   type ExportBundle,
 } from '@/lib/keel-api';
@@ -221,8 +223,9 @@ function actorLabel(actor: AuditLogRow['actor']): string {
  * append-only trail (Law 2). This is the visible slice of that trust surface.
  */
 function ActivityCard() {
-  const { householdId } = useHousehold();
+  const { householdId, userId } = useHousehold();
   const [rows, setRows] = useState<AuditLogRow[] | null>(null);
+  const [reversing, setReversing] = useState<string | null>(null);
 
   useEffect(() => {
     if (!householdId) return;
@@ -241,6 +244,31 @@ function ActivityCard() {
 
   if (rows === null || rows.length === 0) return null;
 
+  async function reverseBatch(row: AuditLogRow) {
+    if (!householdId || !userId || !row.objectId) return;
+    const commandId = newId();
+    setReversing(row.id.toString());
+    try {
+      await keelCommand({
+        commandId,
+        command: 'journal.reverse_batch',
+        economicEventKey: `journal.reverse_batch:${row.objectId}`,
+        actor: { kind: 'user', userId },
+        householdId,
+        payload: {
+          batchId: row.objectId,
+          reason: 'User undo from activity log',
+        },
+      });
+      toast.success('Journal batch reversed.');
+      setRows(await fetchAuditLog(householdId, 20));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not reverse this journal batch.');
+    } finally {
+      setReversing(null);
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -248,21 +276,42 @@ function ActivityCard() {
       </CardHeader>
       <CardContent>
         <p className="mb-3 text-sm text-muted-foreground">
-          Every change — yours or KEEL&apos;s — is recorded in an append-only audit
-          trail. The most recent entries:
+          Every change — yours or KEEL&apos;s — is recorded in an append-only audit trail. The most
+          recent entries:
         </p>
         <div className="space-y-2">
-          {rows.map((r) => (
-            <div key={r.id} className="flex items-baseline justify-between gap-3 text-sm">
-              <span className="min-w-0 truncate">
-                {ACTION_LABELS[r.action] ?? r.action}
-                <span className="text-muted-foreground"> · {actorLabel(r.actor)}</span>
-              </span>
-              <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                {r.at.slice(0, 16).replace('T', ' ')}
-              </span>
-            </div>
-          ))}
+          {rows.map((r) => {
+            const canUndo =
+              r.action === 'journal.batch_posted' && r.objectType === 'journal_batch' && r.objectId;
+            return (
+              <div key={r.id} className="flex items-baseline justify-between gap-3 text-sm">
+                <span className="min-w-0 truncate">
+                  {ACTION_LABELS[r.action] ?? r.action}
+                  <span className="text-muted-foreground"> · {actorLabel(r.actor)}</span>
+                </span>
+                <span className="flex shrink-0 items-center gap-2">
+                  {canUndo ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={reversing === r.id.toString()}
+                      onClick={() => {
+                        void reverseBatch(r);
+                      }}
+                    >
+                      {reversing === r.id.toString() ? (
+                        <Loader2 className="size-3 animate-spin" />
+                      ) : null}
+                      Undo
+                    </Button>
+                  ) : null}
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {r.at.slice(0, 16).replace('T', ' ')}
+                  </span>
+                </span>
+              </div>
+            );
+          })}
         </div>
       </CardContent>
     </Card>
