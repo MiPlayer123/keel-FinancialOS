@@ -19,6 +19,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { RulesCard } from '@/components/keel/rules-card';
+import { CategoriesCard } from '@/components/keel/categories-card';
 
 type Format = 'json' | 'qif' | 'beancount';
 
@@ -43,6 +44,7 @@ export default function SettingsPage() {
       <PageHeader title="Settings" description="Account, household and data export." />
       <div className="max-w-2xl space-y-6 p-6">
         <HouseholdCard />
+        <CategoriesCard />
         <RulesCard />
         <PasswordCard />
         <ExportCard />

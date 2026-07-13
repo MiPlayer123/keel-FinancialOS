@@ -624,6 +624,27 @@ export default {
       return json(200, { ok: true });
     }
 
+    if (path === '/categories/create') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const name = input['name'];
+      const kind = input['kind'];
+      if (
+        !householdId.success ||
+        typeof name !== 'string' || name.trim().length === 0 || name.length > 80 ||
+        (kind !== 'expense' && kind !== 'income')
+      ) {
+        return json(400, { code: 'invalid_command', message: 'Category request failed validation.', details: {} });
+      }
+      const { data, error } = await ctx.supabase.rpc('keel_create_category', {
+        p_household_id: householdId.data,
+        p_name: name,
+        p_kind: kind,
+      });
+      if (error) return mapDbError(error);
+      return json(200, { ledgerAccountId: data });
+    }
+
     if (path === '/budgets/set' || path === '/budgets/copy') {
       const input = body as Record<string, unknown>;
       const householdId = HouseholdIdSchema.safeParse(input['householdId']);

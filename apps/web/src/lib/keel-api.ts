@@ -431,6 +431,19 @@ export async function copyBudgets(householdId: string, monthIso: string): Promis
   return typeof res.copied === 'number' ? res.copied : 0;
 }
 
+/** Create a custom category (create-only; rename/archive deferred). */
+export async function createCategory(input: {
+  householdId: string;
+  name: string;
+  kind: 'expense' | 'income';
+}): Promise<unknown> {
+  return invoke('api/categories/create', {
+    householdId: input.householdId,
+    name: input.name,
+    kind: input.kind,
+  });
+}
+
 /** One user-authored categorization/rename rule. */
 export type RuleRow = {
   ruleId: string;
