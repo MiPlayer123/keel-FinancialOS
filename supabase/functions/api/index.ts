@@ -80,6 +80,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'dashboard.cash_flow_monthly': 'keel_cash_flow_monthly',
   'accounts.balance_daily': 'keel_account_balance_daily',
   'transfers.list': 'keel_list_transfers',
+  'rules.list': 'keel_list_rules',
 };
 
 // deno-lint-ignore no-explicit-any
@@ -619,6 +620,67 @@ export default {
       });
       if (ovError) return mapDbError(ovError);
       return json(200, { ok: true });
+    }
+
+    if (path === '/rules/save' || path === '/rules/delete' || path === '/rules/apply') {
+      // Deterministic user-authored rules (Law 1). Apply supports dryRun for
+      // the preview-before-retroactive contract (BC-v2.1 §3); membership is
+      // enforced inside each proc.
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!householdId.success) {
+        return json(400, { code: 'invalid_command', message: 'Rule request failed validation.', details: {} });
+      }
+      if (path === '/rules/apply') {
+        const { data, error } = await ctx.supabase.rpc('keel_apply_rules', {
+          p_household_id: householdId.data,
+          p_dry_run: input['dryRun'] === true,
+        });
+        if (error) return mapDbError(error);
+        return json(200, data);
+      }
+      if (path === '/rules/delete') {
+        const ruleId = input['ruleId'];
+        if (typeof ruleId !== 'string' || !uuidRe.test(ruleId)) {
+          return json(400, { code: 'invalid_command', message: 'Rule request failed validation.', details: {} });
+        }
+        const { error } = await ctx.supabase.rpc('keel_rule_delete', {
+          p_household_id: householdId.data,
+          p_rule_id: ruleId,
+        });
+        if (error) return mapDbError(error);
+        return json(200, { ok: true });
+      }
+      const ruleId = input['ruleId'];
+      const pattern = input['pattern'];
+      const categoryId = input['categoryLedgerAccountId'];
+      const renameTo = input['renameTo'];
+      const priority = input['priority'];
+      const active = input['active'];
+      if (
+        (ruleId !== undefined && (typeof ruleId !== 'string' || !uuidRe.test(ruleId))) ||
+        typeof pattern !== 'string' || pattern.length > 140 ||
+        (categoryId !== undefined && categoryId !== null &&
+          (typeof categoryId !== 'string' || !uuidRe.test(categoryId))) ||
+        (renameTo !== undefined && renameTo !== null &&
+          (typeof renameTo !== 'string' || renameTo.length > 140)) ||
+        (priority !== undefined && typeof priority !== 'number') ||
+        (active !== undefined && typeof active !== 'boolean')
+      ) {
+        return json(400, { code: 'invalid_command', message: 'Rule request failed validation.', details: {} });
+      }
+      const { data, error } = await ctx.supabase.rpc('keel_rule_save', {
+        p_household_id: householdId.data,
+        p_rule_id: typeof ruleId === 'string' ? ruleId : null,
+        p_pattern: pattern,
+        p_category_ledger_account_id: typeof categoryId === 'string' ? categoryId : null,
+        p_rename_to: typeof renameTo === 'string' ? renameTo : null,
+        p_priority: typeof priority === 'number' ? Math.trunc(priority) : null,
+        p_active: typeof active === 'boolean' ? active : null,
+      });
+      if (error) return mapDbError(error);
+      return json(200, { ruleId: data });
     }
 
     if (path === '/transfers/detect') {

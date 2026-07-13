@@ -365,6 +365,54 @@ export async function decideTransfer(input: {
   });
 }
 
+/** One user-authored categorization/rename rule. */
+export type RuleRow = {
+  ruleId: string;
+  pattern: string;
+  categoryLedgerAccountId: string | null;
+  categoryName: string | null;
+  renameTo: string | null;
+  priority: number;
+  active: boolean;
+};
+
+export async function fetchRules(householdId: string): Promise<RuleRow[]> {
+  const res = await keelQuery<RuleRow>('rules.list', householdId);
+  return res.rows;
+}
+
+export async function saveRule(input: {
+  householdId: string;
+  ruleId?: string;
+  pattern: string;
+  categoryLedgerAccountId?: string | null;
+  renameTo?: string | null;
+  priority?: number;
+  active?: boolean;
+}): Promise<{ ruleId?: string }> {
+  return invoke('api/rules/save', {
+    householdId: input.householdId,
+    ...(input.ruleId ? { ruleId: input.ruleId } : {}),
+    pattern: input.pattern,
+    categoryLedgerAccountId: input.categoryLedgerAccountId ?? null,
+    renameTo: input.renameTo ?? null,
+    ...(input.priority !== undefined ? { priority: input.priority } : {}),
+    ...(input.active !== undefined ? { active: input.active } : {}),
+  });
+}
+
+export async function deleteRule(householdId: string, ruleId: string): Promise<unknown> {
+  return invoke('api/rules/delete', { householdId, ruleId });
+}
+
+/** Two-phase retroactive apply: dryRun previews counts, then confirm. */
+export async function applyRules(
+  householdId: string,
+  dryRun: boolean,
+): Promise<{ dryRun: boolean; categorized: number; renamed: number }> {
+  return invoke('api/rules/apply', { householdId, dryRun });
+}
+
 /** Set/clear the user display name + note for a transaction (blank clears). */
 export async function overrideTransaction(input: {
   householdId: string;

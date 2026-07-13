@@ -951,6 +951,11 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
     const entry: { householdId: string; categorized?: number; transfers?: number } = {
       householdId,
     };
+    // Rules first (user intent beats provider hints; user edits beat both —
+    // the proc's upsert predicate enforces the lattice), then PFC fills the
+    // remainder. Best-effort: keel_apply_rules may not exist until the rules
+    // migration lands.
+    await admin.rpc('keel_apply_rules', { p_household_id: householdId, p_dry_run: false });
     const { data: categorized, error: catErr } = await admin.rpc(
       'keel_autocategorize_household',
       { p_household_id: householdId },
