@@ -819,3 +819,25 @@ fixed and re-verified on the cluster same-session:
   deploying the worker function (it queries pfc_key; jobs would fail-retry,
   self-healing but noisy). Web before migrations is degraded-not-broken
   (name fallback for opening balances; typed 400s for the new dialogs).
+
+## 2026-07-13 — Session 3 continued: CSV import + taste pass
+
+- CSV import (Ledger → Import): client-side RFC-4180 parser (no new deps),
+  header-based column guessing, US + ISO dates, accounting negatives and
+  $/comma amounts normalized straight to minor-unit strings (truncate,
+  never round). Every row is a transactions.manual_create command keyed by
+  sha256(account|date|amount|description|occurrence): re-importing a file
+  replays (invariant 3), duplicates within one file are distinct
+  occurrences. Rows land Uncategorized; rules file them on the next worker
+  cycle. Deviation noted: the Stage-1 import_batches/import_rows staging
+  tables are NOT used by this path (no staging procs exist yet); when the
+  full import-staging flow ships, this dialog should write a batch record.
+- Income view on Reports (Spending ⇄ Income toggle, same net convention);
+  Add-transaction reachable from the empty-ledger state and account pages
+  (shared dialog, account prefilled); ledger group-by-date with
+  Today/Yesterday headers; amount search ("12.34" or "1234"); suggested
+  one-tap categories including Taxes (explicitly requested).
+- Visual verification: temporary /dev-dialogs page + headless Chromium,
+  light/dark × desktop/390px. Column guessing, quoted-comma fields,
+  (23.45) → −$23.45 red / +$1,500.00 neutral (Law 8: red = negative money
+  only) all confirmed on screenshots; page removed before commit.
