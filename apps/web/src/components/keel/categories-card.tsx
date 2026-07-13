@@ -87,6 +87,24 @@ export function CategoriesCard() {
 
   const expense = categories.filter((c) => c.kind === 'expense');
   const income = categories.filter((c) => c.kind === 'income');
+  const existingNames = new Set(categories.map((c) => c.name.toLowerCase()));
+  const suggestions = SUGGESTED_CATEGORIES.filter(
+    (s) => !existingNames.has(s.name.toLowerCase()),
+  ).slice(0, 6);
+
+  async function quickAdd(s: { name: string; kind: 'expense' | 'income' }) {
+    if (!householdId) return;
+    setBusy(true);
+    try {
+      await createCategory({ householdId, name: s.name, kind: s.kind });
+      toast.success(`Added ${s.name}.`);
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not create the category.');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <Card>
@@ -248,21 +266,52 @@ export function CategoriesCard() {
             </div>
           </div>
         ) : (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setAdding(true);
-            }}
-          >
-            <Plus className="size-4" />
-            New category
-          </Button>
+          <div className="space-y-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setAdding(true);
+              }}
+            >
+              <Plus className="size-4" />
+              New category
+            </Button>
+            {suggestions.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-xs text-muted-foreground">Ideas:</span>
+                {suggestions.map((s) => (
+                  <button
+                    key={s.name}
+                    type="button"
+                    disabled={busy}
+                    className="rounded-full border border-dashed border-border px-2.5 py-0.5 text-xs text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground"
+                    onClick={() => {
+                      void quickAdd(s);
+                    }}
+                  >
+                    + {s.name}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
         )}
       </CardContent>
     </Card>
   );
 }
+
+/** One-tap starters people actually use (taxes explicitly requested). */
+const SUGGESTED_CATEGORIES: { name: string; kind: 'expense' | 'income' }[] = [
+  { name: 'Taxes', kind: 'expense' },
+  { name: 'Rent', kind: 'expense' },
+  { name: 'Subscriptions', kind: 'expense' },
+  { name: 'Gifts & Charity', kind: 'expense' },
+  { name: 'Pets', kind: 'expense' },
+  { name: 'Interest', kind: 'income' },
+  { name: 'Tax Refund', kind: 'income' },
+];
 
 function CategoryManageList({
   title,
