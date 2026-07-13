@@ -1,11 +1,18 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Tags, Plus, Loader2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Tags, Plus, Loader2, Pencil, Archive, CornerDownRight, Check, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { useHousehold } from '@/components/keel/household-context';
-import { createCategory, fetchCategories, type CategoryRow } from '@/lib/keel-api';
+import {
+  archiveCategory,
+  createCategory,
+  fetchCategories,
+  renameCategory,
+  reparentCategory,
+  type CategoryRow,
+} from '@/lib/keel-api';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -20,9 +27,11 @@ import {
 } from '@/components/ui/select';
 
 /**
- * Category manager, create-only slice. New categories appear in every picker
- * (ledger, rules, budgets) immediately. Rename/archive are deferred until
- * system categories get a stable key (PFC auto-categorization joins by name).
+ * Category manager: create (optionally nested), rename, archive (with
+ * optional reassignment), and one-level nesting — Quicken-style
+ * categories-within-categories. System categories are renameable because
+ * every backend join uses their stable pfc_key, never the name; the two
+ * Uncategorized landing pads refuse archive server-side.
  */
 export function CategoriesCard() {
   const { householdId } = useHousehold();
@@ -30,22 +39,27 @@ export function CategoriesCard() {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
   const [kind, setKind] = useState<'expense' | 'income'>('expense');
+  const [parentId, setParentId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [managing, setManaging] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!householdId) return;
+    try {
+      setCategories(await fetchCategories(householdId));
+    } catch {
+      setCategories([]);
+    }
+  }, [householdId]);
 
   useEffect(() => {
-    if (!householdId) return;
-    let active = true;
-    fetchCategories(householdId)
-      .then((c) => {
-        if (active) setCategories(c);
-      })
-      .catch(() => {
-        if (active) setCategories([]);
-      });
-    return () => {
-      active = false;
-    };
-  }, [householdId]);
+    void load();
+  }, [load]);
+
+  const parents = useMemo(
+    () => categories.filter((c) => c.kind === kind && !c.parentLedgerAccountId),
+    [categories, kind],
+  );
 
   if (!householdId) return null;
 
@@ -53,11 +67,17 @@ export function CategoriesCard() {
     if (!householdId || name.trim().length === 0) return;
     setBusy(true);
     try {
-      await createCategory({ householdId, name: name.trim(), kind });
+      await createCategory({
+        householdId,
+        name: name.trim(),
+        kind,
+        parentLedgerAccountId: parentId,
+      });
       toast.success(`Added ${name.trim()}. It's available in every picker now.`);
       setName('');
+      setParentId(null);
       setAdding(false);
-      setCategories(await fetchCategories(householdId));
+      await load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not create the category.');
     } finally {
@@ -71,17 +91,55 @@ export function CategoriesCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Tags className="size-4" />
-          Categories
+        <CardTitle className="flex items-center justify-between gap-2 text-base">
+          <span className="flex items-center gap-2">
+            <Tags className="size-4" />
+            Categories
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => {
+              setManaging((m) => !m);
+            }}
+          >
+            {managing ? 'Done' : 'Manage'}
+          </Button>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {categories.length > 0 ? (
+        {managing ? (
+          <div className="space-y-4">
+            {expense.length > 0 ? (
+              <CategoryManageList
+                title="Spending"
+                categories={expense}
+                householdId={householdId}
+                onChanged={() => {
+                  void load();
+                }}
+              />
+            ) : null}
+            {income.length > 0 ? (
+              <CategoryManageList
+                title="Income"
+                categories={income}
+                householdId={householdId}
+                onChanged={() => {
+                  void load();
+                }}
+              />
+            ) : null}
+          </div>
+        ) : categories.length > 0 ? (
           <div className="space-y-2">
             <div className="flex flex-wrap gap-1.5">
               {expense.map((c) => (
                 <Badge key={c.ledgerAccountId} variant="secondary">
+                  {c.parentLedgerAccountId ? (
+                    <CornerDownRight className="size-3 opacity-60" />
+                  ) : null}
                   {c.name}
                 </Badge>
               ))}
@@ -90,6 +148,9 @@ export function CategoriesCard() {
               <div className="flex flex-wrap gap-1.5">
                 {income.map((c) => (
                   <Badge key={c.ledgerAccountId} variant="outline">
+                    {c.parentLedgerAccountId ? (
+                      <CornerDownRight className="size-3 opacity-60" />
+                    ) : null}
                     {c.name}
                   </Badge>
                 ))}
@@ -99,39 +160,69 @@ export function CategoriesCard() {
         ) : null}
 
         {adding ? (
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-            <div className="flex-1 space-y-1.5">
-              <Label htmlFor="cat-name">Name</Label>
-              <Input
-                id="cat-name"
-                value={name}
-                maxLength={80}
-                placeholder="e.g. Climbing, Pets, Side income"
-                onChange={(e) => {
-                  setName(e.target.value);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void add();
-                }}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Type</Label>
-              <Select
-                value={kind}
-                items={{ expense: 'Spending', income: 'Income' }}
-                onValueChange={(v) => {
-                  if (v) setKind(v);
-                }}
-              >
-                <SelectTrigger className="w-32">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="expense">Spending</SelectItem>
-                  <SelectItem value="income">Income</SelectItem>
-                </SelectContent>
-              </Select>
+          <div className="space-y-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+              <div className="flex-1 space-y-1.5">
+                <Label htmlFor="cat-name">Name</Label>
+                <Input
+                  id="cat-name"
+                  value={name}
+                  maxLength={80}
+                  placeholder="e.g. Climbing, Pets, Side income"
+                  onChange={(e) => {
+                    setName(e.target.value);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void add();
+                  }}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Type</Label>
+                <Select
+                  value={kind}
+                  items={{ expense: 'Spending', income: 'Income' }}
+                  onValueChange={(v) => {
+                    if (v) {
+                      setKind(v);
+                      setParentId(null);
+                    }
+                  }}
+                >
+                  <SelectTrigger className="w-32">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="expense">Spending</SelectItem>
+                    <SelectItem value="income">Income</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Nest under</Label>
+                <Select
+                  value={parentId ?? 'none'}
+                  items={{
+                    none: 'Top level',
+                    ...Object.fromEntries(parents.map((p) => [p.ledgerAccountId, p.name])),
+                  }}
+                  onValueChange={(v) => {
+                    setParentId(v === 'none' ? null : v);
+                  }}
+                >
+                  <SelectTrigger className="w-40">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Top level</SelectItem>
+                    {parents.map((p) => (
+                      <SelectItem key={p.ledgerAccountId} value={p.ledgerAccountId}>
+                        {p.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <div className="flex gap-2">
               <Button
@@ -170,5 +261,317 @@ export function CategoriesCard() {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function CategoryManageList({
+  title,
+  categories,
+  householdId,
+  onChanged,
+}: {
+  title: string;
+  categories: CategoryRow[];
+  householdId: string;
+  onChanged: () => void;
+}) {
+  return (
+    <div className="space-y-1">
+      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{title}</p>
+      <div className="overflow-hidden rounded-md border border-border">
+        {categories.map((c, i) => (
+          <CategoryManageRow
+            key={c.ledgerAccountId}
+            category={c}
+            siblings={categories}
+            householdId={householdId}
+            first={i === 0}
+            onChanged={onChanged}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CategoryManageRow({
+  category,
+  siblings,
+  householdId,
+  first,
+  onChanged,
+}: {
+  category: CategoryRow;
+  siblings: CategoryRow[];
+  householdId: string;
+  first: boolean;
+  onChanged: () => void;
+}) {
+  const [mode, setMode] = useState<'idle' | 'rename' | 'archive' | 'nest'>('idle');
+  const [value, setValue] = useState(category.name);
+  const [reassignTo, setReassignTo] = useState<string | null>(null);
+  const [nestUnder, setNestUnder] = useState<string | null>(
+    category.parentLedgerAccountId ?? null,
+  );
+  const [busy, setBusy] = useState(false);
+
+  const isLandingPad =
+    category.pfcKey === 'uncategorized_expense' || category.pfcKey === 'uncategorized_income';
+  const hasChildren = siblings.some(
+    (s) => s.parentLedgerAccountId === category.ledgerAccountId,
+  );
+  const parentOptions = siblings.filter(
+    (s) => !s.parentLedgerAccountId && s.ledgerAccountId !== category.ledgerAccountId,
+  );
+  const reassignOptions = siblings.filter(
+    (s) => s.ledgerAccountId !== category.ledgerAccountId,
+  );
+
+  async function run(action: () => Promise<unknown>, success: string) {
+    setBusy(true);
+    try {
+      await action();
+      toast.success(success);
+      setMode('idle');
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'That change did not go through.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className={`flex flex-wrap items-center gap-2 px-3 py-2 ${first ? '' : 'border-t border-border'}`}
+    >
+      <span
+        className={`flex min-w-0 flex-1 items-center gap-1.5 text-sm ${
+          category.parentLedgerAccountId ? 'pl-4' : ''
+        }`}
+      >
+        {category.parentLedgerAccountId ? (
+          <CornerDownRight className="size-3 shrink-0 text-muted-foreground" />
+        ) : null}
+        {mode === 'rename' ? (
+          <Input
+            value={value}
+            maxLength={80}
+            className="h-7"
+            autoFocus
+            onChange={(e) => {
+              setValue(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && value.trim()) {
+                void run(
+                  () =>
+                    renameCategory({
+                      householdId,
+                      categoryLedgerAccountId: category.ledgerAccountId,
+                      name: value.trim(),
+                    }),
+                  'Renamed.',
+                );
+              }
+              if (e.key === 'Escape') setMode('idle');
+            }}
+          />
+        ) : (
+          <span className="truncate">{category.name}</span>
+        )}
+        {category.isSystem && mode === 'idle' ? (
+          <Badge variant="outline" className="shrink-0 text-[10px] uppercase">
+            System
+          </Badge>
+        ) : null}
+      </span>
+
+      {mode === 'idle' ? (
+        <span className="flex shrink-0 items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`Rename ${category.name}`}
+            onClick={() => {
+              setValue(category.name);
+              setMode('rename');
+            }}
+          >
+            <Pencil className="size-3.5" />
+          </Button>
+          {!hasChildren ? (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Nest ${category.name}`}
+              onClick={() => {
+                setNestUnder(category.parentLedgerAccountId ?? null);
+                setMode('nest');
+              }}
+            >
+              <CornerDownRight className="size-3.5" />
+            </Button>
+          ) : null}
+          {!isLandingPad ? (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Archive ${category.name}`}
+              onClick={() => {
+                setReassignTo(null);
+                setMode('archive');
+              }}
+            >
+              <Archive className="size-3.5" />
+            </Button>
+          ) : null}
+        </span>
+      ) : mode === 'rename' ? (
+        <span className="flex shrink-0 items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Save name"
+            disabled={busy || value.trim().length === 0}
+            onClick={() => {
+              void run(
+                () =>
+                  renameCategory({
+                    householdId,
+                    categoryLedgerAccountId: category.ledgerAccountId,
+                    name: value.trim(),
+                  }),
+                'Renamed.',
+              );
+            }}
+          >
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Cancel rename"
+            disabled={busy}
+            onClick={() => {
+              setMode('idle');
+            }}
+          >
+            <X className="size-3.5" />
+          </Button>
+        </span>
+      ) : mode === 'nest' ? (
+        <span className="flex shrink-0 items-center gap-1.5">
+          <Select
+            value={nestUnder ?? 'none'}
+            items={{
+              none: 'Top level',
+              ...Object.fromEntries(parentOptions.map((p) => [p.ledgerAccountId, p.name])),
+            }}
+            onValueChange={(v) => {
+              setNestUnder(v === 'none' ? null : v);
+            }}
+          >
+            <SelectTrigger className="h-7 w-36 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">Top level</SelectItem>
+              {parentOptions.map((p) => (
+                <SelectItem key={p.ledgerAccountId} value={p.ledgerAccountId}>
+                  {p.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Save nesting"
+            disabled={busy}
+            onClick={() => {
+              void run(
+                () =>
+                  reparentCategory({
+                    householdId,
+                    categoryLedgerAccountId: category.ledgerAccountId,
+                    parentLedgerAccountId: nestUnder,
+                  }),
+                'Moved.',
+              );
+            }}
+          >
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Cancel nesting"
+            disabled={busy}
+            onClick={() => {
+              setMode('idle');
+            }}
+          >
+            <X className="size-3.5" />
+          </Button>
+        </span>
+      ) : (
+        <span className="flex shrink-0 flex-wrap items-center gap-1.5">
+          <span className="text-xs text-muted-foreground">Move existing to</span>
+          <Select
+            value={reassignTo ?? 'none'}
+            items={{
+              none: 'Leave in place',
+              ...Object.fromEntries(reassignOptions.map((p) => [p.ledgerAccountId, p.name])),
+            }}
+            onValueChange={(v) => {
+              setReassignTo(v === 'none' ? null : v);
+            }}
+          >
+            <SelectTrigger className="h-7 w-36 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">Leave in place</SelectItem>
+              {reassignOptions.map((p) => (
+                <SelectItem key={p.ledgerAccountId} value={p.ledgerAccountId}>
+                  {p.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Confirm archive"
+            disabled={busy}
+            onClick={() => {
+              void run(
+                () =>
+                  archiveCategory({
+                    householdId,
+                    categoryLedgerAccountId: category.ledgerAccountId,
+                    reassignTo,
+                  }),
+                'Archived — history is untouched, the name just leaves the pickers.',
+              );
+            }}
+          >
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Cancel archive"
+            disabled={busy}
+            onClick={() => {
+              setMode('idle');
+            }}
+          >
+            <X className="size-3.5" />
+          </Button>
+        </span>
+      )}
+    </div>
   );
 }

@@ -277,6 +277,15 @@ export type TransactionRow = {
 };
 
 /** Rich ledger row: amount, account, and category for display + re-categorize. */
+/** One split of a multi-category transaction (real offset posting). */
+export type TransactionSplit = {
+  categoryLedgerAccountId: string;
+  name: string;
+  kind: 'income' | 'expense';
+  /** Debit-positive: positive = spend on that category. */
+  amountMinor: string;
+};
+
 export type RichTransactionRow = {
   transactionId: string;
   effectiveDate: string;
@@ -287,6 +296,8 @@ export type RichTransactionRow = {
   /** User note (absent until the overlay migration lands). */
   note?: string | null;
   status: 'pending' | 'posted' | 'reviewed';
+  /** Where the row came from (absent until the manual-transactions migration lands). */
+  source?: 'sync' | 'import' | 'manual';
   accountId: string;
   accountName: string;
   amountMinor: string;
@@ -294,6 +305,10 @@ export type RichTransactionRow = {
   categoryLedgerAccountId: string | null;
   categoryName: string | null;
   categoryKind: 'income' | 'expense' | null;
+  /** Stable key for system categories (rename-proof "Uncategorized" checks). */
+  categoryPfcKey?: string | null;
+  /** Present (non-null) only for multi-split transactions. */
+  splits?: TransactionSplit[] | null;
   /** Present when this transaction is one side of a suggested/confirmed transfer pair. */
   transferStatus?: 'suggested' | 'confirmed' | null;
 };
@@ -303,6 +318,11 @@ export type CategoryRow = {
   name: string;
   kind: 'income' | 'expense';
   entityId: string;
+  /** Parent category for one-level nesting (absent pre-migration). */
+  parentLedgerAccountId?: string | null;
+  /** Seeded system category (renameable but key-stable). */
+  isSystem?: boolean;
+  pfcKey?: string | null;
 };
 
 /** Categories (ledger accounts flagged is_category) for the re-categorize picker. */
@@ -412,6 +432,8 @@ export type BudgetRow = {
   categoryLedgerAccountId: string;
   categoryName: string;
   currency: string;
+  /** Parent category for one-level nesting (absent pre-migration). */
+  parentLedgerAccountId?: string | null;
   budgetMinor: string | null;
   spentMinor: string;
 };
@@ -448,16 +470,57 @@ export async function copyBudgets(householdId: string, monthIso: string): Promis
   return typeof res.copied === 'number' ? res.copied : 0;
 }
 
-/** Create a custom category (create-only; rename/archive deferred). */
+/** Create a custom category, optionally nested one level under a parent. */
 export async function createCategory(input: {
   householdId: string;
   name: string;
   kind: 'expense' | 'income';
+  parentLedgerAccountId?: string | null;
 }): Promise<unknown> {
   return invoke('api/categories/create', {
     householdId: input.householdId,
     name: input.name,
     kind: input.kind,
+    parentLedgerAccountId: input.parentLedgerAccountId ?? null,
+  });
+}
+
+/** Rename any live category (system names are display-only; keys are stable). */
+export async function renameCategory(input: {
+  householdId: string;
+  categoryLedgerAccountId: string;
+  name: string;
+}): Promise<unknown> {
+  return invoke('api/categories/rename', {
+    householdId: input.householdId,
+    categoryLedgerAccountId: input.categoryLedgerAccountId,
+    name: input.name,
+  });
+}
+
+/** Archive (soft-hide) a category; optionally reassign its overlays/rules/budgets. */
+export async function archiveCategory(input: {
+  householdId: string;
+  categoryLedgerAccountId: string;
+  reassignTo?: string | null;
+}): Promise<unknown> {
+  return invoke('api/categories/archive', {
+    householdId: input.householdId,
+    categoryLedgerAccountId: input.categoryLedgerAccountId,
+    reassignTo: input.reassignTo ?? null,
+  });
+}
+
+/** Nest a category under a parent (or null to promote to top level). */
+export async function reparentCategory(input: {
+  householdId: string;
+  categoryLedgerAccountId: string;
+  parentLedgerAccountId: string | null;
+}): Promise<unknown> {
+  return invoke('api/categories/reparent', {
+    householdId: input.householdId,
+    categoryLedgerAccountId: input.categoryLedgerAccountId,
+    parentLedgerAccountId: input.parentLedgerAccountId,
   });
 }
 
@@ -662,6 +725,57 @@ export async function createManualAccount(input: {
   });
 }
 
+/** Create a manual transaction (splits are real balanced postings). */
+export async function createManualTransaction(input: {
+  householdId: string;
+  userId: string;
+  accountId: string;
+  description: string;
+  effectiveDate: string;
+  /** Signed minor units on the account: negative = money out. */
+  amountMinor: string;
+  status?: 'pending' | 'posted';
+  splits: { categoryLedgerAccountId: string; amountMinor: string }[];
+}): Promise<CommandResult> {
+  const commandId = newId();
+  return keelCommand({
+    commandId,
+    command: 'transactions.manual_create',
+    economicEventKey: `manual:${commandId}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: {
+      accountId: input.accountId,
+      description: input.description,
+      effectiveDate: input.effectiveDate,
+      amountMinor: input.amountMinor,
+      status: input.status ?? 'posted',
+      splits: input.splits,
+    },
+  });
+}
+
+/** Void a manual transaction (reversal batch + revision record; undoable truth). */
+export async function voidManualTransaction(input: {
+  householdId: string;
+  userId: string;
+  transactionId: string;
+  reason: string;
+}): Promise<CommandResult> {
+  const commandId = newId();
+  return keelCommand({
+    commandId,
+    command: 'transactions.manual_void',
+    economicEventKey: `manual-void:${input.transactionId}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: {
+      transactionId: input.transactionId,
+      reason: input.reason,
+    },
+  });
+}
+
 /** The entity's Opening Balances equity ledger account (for starting balances). */
 export async function fetchOpeningBalancesLedgerId(
   householdId: string,
@@ -672,7 +786,7 @@ export async function fetchOpeningBalancesLedgerId(
     .select('id')
     .eq('household_id', householdId)
     .eq('entity_id', entityId)
-    .eq('name', 'Opening Balances')
+    .eq('pfc_key', 'opening_balances')
     .is('archived_at', null)
     .limit(1);
   if (error) throw error;

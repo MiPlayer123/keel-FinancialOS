@@ -91,7 +91,18 @@ function BudgetsBody() {
     );
   }
 
-  const list = rows ?? [];
+  // Children sort directly under their parent (one-level tree).
+  const raw = rows ?? [];
+  const nameById = new Map(raw.map((r) => [r.categoryLedgerAccountId, r.categoryName]));
+  const groupOf = (r: BudgetRow) =>
+    r.parentLedgerAccountId ? (nameById.get(r.parentLedgerAccountId) ?? '') : r.categoryName;
+  const depthOf = (r: BudgetRow) => (r.parentLedgerAccountId ? 1 : 0);
+  const list = [...raw].sort(
+    (a, b) =>
+      groupOf(a).localeCompare(groupOf(b)) ||
+      depthOf(a) - depthOf(b) ||
+      a.categoryName.localeCompare(b.categoryName),
+  );
   const budgeted = list.filter((r) => r.budgetMinor !== null);
   const unbudgeted = list.filter(
     (r) => r.budgetMinor === null && r.spentMinor !== '0',
@@ -271,7 +282,13 @@ function BudgetLine({
   return (
     <div className={`px-4 py-3 ${first ? '' : 'border-t border-border'}`}>
       <div className="flex items-center justify-between gap-3">
-        <p className="min-w-0 flex-1 truncate text-sm font-medium">{row.categoryName}</p>
+        <p
+          className={`min-w-0 flex-1 truncate text-sm font-medium ${
+            row.parentLedgerAccountId ? 'pl-4' : ''
+          }`}
+        >
+          {row.categoryName}
+        </p>
         <div className="flex shrink-0 items-center gap-3 text-sm">
           <span className="text-muted-foreground">
             <Money amountMinor={row.spentMinor} className="text-foreground" /> spent

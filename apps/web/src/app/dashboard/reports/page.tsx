@@ -66,27 +66,38 @@ type CategoryReportRow = {
 function buildMatrix(rows: RichTransactionRow[], months: string[]): CategoryReportRow[] {
   const monthSet = new Set(months);
   const byCategory = new Map<string, CategoryReportRow>();
-  for (const t of rows) {
-    if (t.transferStatus === 'confirmed') continue;
-    if (t.categoryKind !== 'expense') continue;
-    const mk = monthKey(t.effectiveDate);
-    if (!monthSet.has(mk)) continue;
-    const key = t.categoryLedgerAccountId ?? 'uncategorized';
+  const add = (categoryId: string | null, name: string, mk: string, spend: bigint) => {
+    const key = categoryId ?? 'uncategorized';
     const entry =
       byCategory.get(key) ??
       ({
-        categoryId: t.categoryLedgerAccountId,
-        name: t.categoryName ?? 'Uncategorized',
+        categoryId,
+        name,
         byMonth: new Map<string, CategoryMonthCell>(),
         total: 0n,
       } satisfies CategoryReportRow);
-    // Cash amount is negative for money out; spending = -amount (net).
-    const spend = -BigInt(t.amountMinor || '0');
     const cell = entry.byMonth.get(mk) ?? { total: 0n };
     cell.total += spend;
     entry.byMonth.set(mk, cell);
     entry.total += spend;
     byCategory.set(key, entry);
+  };
+  for (const t of rows) {
+    if (t.transferStatus === 'confirmed') continue;
+    const mk = monthKey(t.effectiveDate);
+    if (!monthSet.has(mk)) continue;
+    // Split transactions: attribute each expense share to its own category
+    // (debit-positive split amounts ARE net spend).
+    if (t.splits && t.splits.length > 0) {
+      for (const s of t.splits) {
+        if (s.kind !== 'expense') continue;
+        add(s.categoryLedgerAccountId, s.name, mk, BigInt(s.amountMinor || '0'));
+      }
+      continue;
+    }
+    if (t.categoryKind !== 'expense') continue;
+    // Cash amount is negative for money out; spending = -amount (net).
+    add(t.categoryLedgerAccountId, t.categoryName ?? 'Uncategorized', mk, -BigInt(t.amountMinor || '0'));
   }
   return [...byCategory.values()].sort((a, b) => (b.total > a.total ? 1 : b.total < a.total ? -1 : 0));
 }
