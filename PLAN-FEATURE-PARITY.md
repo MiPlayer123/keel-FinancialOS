@@ -109,3 +109,33 @@ preview-only. Every mutation audited; postings append-only (overlays or
 reversal batches, never UPDATE). User edits beat rules beat PFC. Money =
 BIGINT minor strings. Red = negative money only; status adjacent to its
 number. 390px usable. Graceful degradation for every new query/route.
+
+## Audit outcomes (2026-07-13, two adversarial agents — full reports in session)
+
+Feasibility: statement CLOSE is one-shot per statement and needs a ledger
+figure the client can't read pre-close → DEFERRED entirely. Paycheck form v1
+restricts destination kinds to direct_deposit (others demand full txn
+matching). Reimbursement settle v1 = single-claim allocation. StatementRow
+type bug (differenceMinor is session-nested) fixed in wave 1.
+
+Law/architecture (all wave-2 items SOUND-WITH-CHANGES; changes adopted):
+- W2.1: rule renames get their OWN layer (rule_renames table) — a single
+  source column on transaction_overrides lets a note-save destroy a rule
+  rename and vice versa. Category writes: ON CONFLICT DO UPDATE ... WHERE
+  source <> 'user' (rules beat plaid_pfc, never user). Retroactive apply is
+  two-phase (preview count → confirm) per BC-v2.1 §3. Rules match the
+  IMMUTABLE ct.description; winner chosen set-wise by (priority, id);
+  rule_id provenance on written rows; LIKE-escape patterns; export ruling +
+  008_export column updates (incl. any transaction_overrides change).
+- W2.2: budgets carry currency; spent = ONE pinned SQL formula (overlay
+  coalesce, expense kind, confirmed-transfer-excluded, net signed sum,
+  voided excluded) with formulaVersion; spendingMix aligned to it.
+- W2.3: DEFERRED this sprint — PFC autocategorize joins categories BY NAME,
+  so rename needs a stable system-category key first (pfc_primary/is_system
+  column + rekeyed joins). Designed, not built.
+- W2.4: DEFERRED this sprint — needs command-envelope idempotency and a
+  split-aware rich read model (N offsets currently multiply rows × full
+  amount). Designed, not built.
+- W2.5: forecast needs scope/asOf/formulaVersion envelope, cash-subtype
+  account scope (manual property/vehicle accounts must NOT enter runway),
+  transfer-series exclusion, confirmed-only series. Build if time allows.
