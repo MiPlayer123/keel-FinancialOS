@@ -235,6 +235,41 @@ export async function fetchFirstEntityId(householdId: string): Promise<string | 
   return (data as { id: string }[] | null)?.[0]?.id ?? null;
 }
 
+/** A financial entity (personal books, an LLC, a trust, …) within a household. */
+export type EntityKind =
+  | 'personal'
+  | 'sole_prop'
+  | 'llc_single'
+  | 'llc_multi'
+  | 's_corp'
+  | 'trust'
+  | 'other';
+
+export type EntityRow = {
+  entityId: string;
+  name: string;
+  kind: EntityKind;
+};
+
+/** All (non-archived) entities for a household, for the entity picker. */
+export async function fetchEntities(householdId: string): Promise<EntityRow[]> {
+  const data = await invoke<EntityRow[]>('api/queries', { query: 'entities.list', householdId });
+  return Array.isArray(data) ? data : [];
+}
+
+/** Create a second (or subsequent) entity — e.g. an LLC alongside personal books. */
+export async function createEntity(input: {
+  householdId: string;
+  name: string;
+  kind: EntityKind;
+}): Promise<{ entityId?: string }> {
+  return invoke('api/entities/create', {
+    householdId: input.householdId,
+    name: input.name,
+    kind: input.kind,
+  });
+}
+
 /** Link a (Sandbox) institution. Backend performs the full server-side link. */
 export async function linkConnection(input: {
   householdId: string;
