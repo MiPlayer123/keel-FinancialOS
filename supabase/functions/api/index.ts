@@ -841,12 +841,14 @@ export default {
         const targetMinor = input['targetMinor'];
         const targetDate = input['targetDate'] ?? null;
         const accountId = input['accountId'] ?? null;
+        const kind = input['kind'] ?? 'savings';
         if (
           (goalId !== null && (typeof goalId !== 'string' || !uuidReGoal.test(goalId))) ||
           typeof name !== 'string' || name.trim().length === 0 || name.length > 80 ||
           typeof targetMinor !== 'string' || !/^\d{1,18}$/.test(targetMinor) ||
           (targetDate !== null && (typeof targetDate !== 'string' || !dateReGoal.test(targetDate))) ||
-          (accountId !== null && (typeof accountId !== 'string' || !uuidReGoal.test(accountId)))
+          (accountId !== null && (typeof accountId !== 'string' || !uuidReGoal.test(accountId))) ||
+          (kind !== 'savings' && kind !== 'debt')
         ) {
           return json(400, { code: 'invalid_command', message: 'Goal request failed validation.', details: {} });
         }
@@ -857,6 +859,7 @@ export default {
           p_target_minor: targetMinor,
           p_target_date: targetDate,
           p_account_id: accountId,
+          p_kind: kind,
         });
         if (error) return mapDbError(error);
         return json(200, { goalId: data });

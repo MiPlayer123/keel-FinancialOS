@@ -698,8 +698,14 @@ export type GoalRow = {
   accountId: string | null;
   currency: string;
   status: 'active' | 'reached' | 'archived';
-  /** Σ contributions (earmarked, never posted — money doesn't move). */
+  /** 'savings' (default) or 'debt'. */
+  kind: 'savings' | 'debt';
+  /** Σ contributions (earmarked, never posted — money doesn't move). Debt goals: always '0'. */
   savedMinor: string;
+  /** Debt goals only: start_balance_minor - current balance magnitude, floored at 0 — derived from the ledger. */
+  paidMinor?: string;
+  /** Debt goals only: current liability balance magnitude, live from journal_postings. */
+  currentBalanceMinor?: string;
 };
 
 export async function fetchGoals(householdId: string): Promise<GoalRow[]> {
@@ -707,7 +713,7 @@ export async function fetchGoals(householdId: string): Promise<GoalRow[]> {
   return Array.isArray(data) ? data : [];
 }
 
-/** Create (no goalId) or update a savings goal. */
+/** Create (no goalId) or update a savings/debt goal. */
 export async function saveGoal(input: {
   householdId: string;
   goalId?: string;
@@ -715,6 +721,7 @@ export async function saveGoal(input: {
   targetMinor: string;
   targetDate: string | null;
   accountId: string | null;
+  kind?: 'savings' | 'debt';
 }): Promise<{ goalId?: string }> {
   return invoke('api/goals/save', {
     householdId: input.householdId,
@@ -723,6 +730,7 @@ export async function saveGoal(input: {
     targetMinor: input.targetMinor,
     targetDate: input.targetDate,
     accountId: input.accountId,
+    kind: input.kind ?? 'savings',
   });
 }
 
