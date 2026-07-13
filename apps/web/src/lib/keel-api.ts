@@ -309,6 +309,8 @@ export type RichTransactionRow = {
   categoryPfcKey?: string | null;
   /** Present (non-null) only for multi-split transactions. */
   splits?: TransactionSplit[] | null;
+  /** User labels, orthogonal to categories (absent pre-tags-migration). */
+  tags?: { tagId: string; name: string }[];
   /** Present when this transaction is one side of a suggested/confirmed transfer pair. */
   transferStatus?: 'suggested' | 'confirmed' | null;
 };
@@ -530,6 +532,46 @@ export async function reparentCategory(input: {
     householdId: input.householdId,
     categoryLedgerAccountId: input.categoryLedgerAccountId,
     parentLedgerAccountId: input.parentLedgerAccountId,
+  });
+}
+
+/** One user label (orthogonal to categories). */
+export type TagRow = { tagId: string; name: string; usageCount: number };
+
+export async function fetchTags(householdId: string): Promise<TagRow[]> {
+  const data = await invoke<TagRow[]>('api/queries', { query: 'tags.list', householdId });
+  return Array.isArray(data) ? data : [];
+}
+
+/** Create (no tagId) or rename a tag. */
+export async function saveTag(input: {
+  householdId: string;
+  tagId?: string;
+  name: string;
+}): Promise<{ tagId?: string }> {
+  return invoke('api/tags/save', {
+    householdId: input.householdId,
+    ...(input.tagId ? { tagId: input.tagId } : {}),
+    name: input.name,
+  });
+}
+
+export async function deleteTag(householdId: string, tagId: string): Promise<unknown> {
+  return invoke('api/tags/delete', { householdId, tagId });
+}
+
+/** Add or remove one tag on one transaction (idempotent both ways). */
+export async function assignTag(input: {
+  householdId: string;
+  transactionId: string;
+  tagId: string;
+  assigned: boolean;
+}): Promise<unknown> {
+  return invoke('api/tags/assign', {
+    householdId: input.householdId,
+    transactionId: input.transactionId,
+    tagId: input.tagId,
+    assigned: input.assigned,
   });
 }
 

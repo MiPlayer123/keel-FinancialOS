@@ -232,6 +232,30 @@ function buildFlow(rows: RichTransactionRow[], categories: CategoryRow[]): FlowG
   };
 }
 
+/** Net cash by tag over the trailing months (confirmed transfers excluded). */
+function tagTotals(
+  rows: RichTransactionRow[],
+  months: string[],
+): { tagId: string; name: string; count: number; netMinor: bigint }[] {
+  const monthSet = new Set(months);
+  const byTag = new Map<string, { tagId: string; name: string; count: number; netMinor: bigint }>();
+  for (const t of rows) {
+    if (t.transferStatus === 'confirmed') continue;
+    if (!t.tags || t.tags.length === 0) continue;
+    if (!monthSet.has(monthKey(t.effectiveDate))) continue;
+    const cash = BigInt(t.amountMinor || '0');
+    for (const tag of t.tags) {
+      const e = byTag.get(tag.tagId) ?? { tagId: tag.tagId, name: tag.name, count: 0, netMinor: 0n };
+      e.count += 1;
+      e.netMinor += cash;
+      byTag.set(tag.tagId, e);
+    }
+  }
+  return [...byTag.values()].sort((a, b) =>
+    a.netMinor < b.netMinor ? -1 : a.netMinor > b.netMinor ? 1 : 0,
+  );
+}
+
 function ReportsBody() {
   const { householdId, ready } = useHousehold();
   const txns = useKeelQuery<RichTransactionRow>('transactions.rich', householdId);
@@ -259,6 +283,7 @@ function ReportsBody() {
   const [view, setView] = useState<'expense' | 'income'>('expense');
   const flow = useMemo(() => buildFlow(txns.rows, categories), [txns.rows, categories]);
   const months = useMemo(() => lastMonths(MONTHS_SHOWN), []);
+  const tags = useMemo(() => tagTotals(txns.rows, months), [txns.rows, months]);
   const matrix = useMemo(
     () => buildMatrix(txns.rows, months, view),
     [txns.rows, months, view],
@@ -458,6 +483,35 @@ function ReportsBody() {
         </CardContent>
       </Card>
 
+
+      {tags.length > 0 ? (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              By tag · last {MONTHS_SHOWN} months
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {tags.map((t) => (
+              <div key={t.tagId} className="flex items-center gap-3 text-sm">
+                <span className="min-w-0 flex-1 truncate">#{t.name}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {String(t.count)} txn{t.count === 1 ? '' : 's'}
+                </span>
+                <Money
+                  amountMinor={t.netMinor.toString()}
+                  signed
+                  className="w-28 shrink-0 text-right text-sm"
+                />
+              </div>
+            ))}
+            <p className="pt-1 text-xs text-muted-foreground">
+              Net cash for tagged transactions — tag things like tax-deductible or a
+              trip, then read the total here.
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
       {comparison.length > 0 ? (
         <Card>
           <CardHeader className="pb-2">

@@ -84,6 +84,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'transfers.list': 'keel_list_transfers',
   'rules.list': 'keel_list_rules',
   'budgets.list': 'keel_list_budgets',
+  'tags.list': 'keel_list_tags',
   'dashboard.cash_flow_forecast': 'keel_cash_flow_forecast',
 };
 
@@ -739,6 +740,62 @@ export default {
         p_month: month,
         p_amount_minor: amountMinor === null ? null : amountMinor,
         p_rollover: typeof rollover === 'boolean' ? rollover : null,
+      });
+      if (error) return mapDbError(error);
+      return json(200, { ok: true });
+    }
+
+    if (path === '/tags/save' || path === '/tags/delete' || path === '/tags/assign') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const uuidReTag = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!householdId.success) {
+        return json(400, { code: 'invalid_command', message: 'Tag request failed validation.', details: {} });
+      }
+      if (path === '/tags/save') {
+        const tagId = input['tagId'];
+        const name = input['name'];
+        if (
+          (tagId !== undefined && tagId !== null && (typeof tagId !== 'string' || !uuidReTag.test(tagId))) ||
+          typeof name !== 'string' || name.trim().length === 0 || name.length > 40
+        ) {
+          return json(400, { code: 'invalid_command', message: 'Tag request failed validation.', details: {} });
+        }
+        const { data, error } = await ctx.supabase.rpc('keel_tag_save', {
+          p_household_id: householdId.data,
+          p_tag_id: typeof tagId === 'string' ? tagId : null,
+          p_name: name,
+        });
+        if (error) return mapDbError(error);
+        return json(200, { tagId: data });
+      }
+      if (path === '/tags/delete') {
+        const tagId = input['tagId'];
+        if (typeof tagId !== 'string' || !uuidReTag.test(tagId)) {
+          return json(400, { code: 'invalid_command', message: 'Tag request failed validation.', details: {} });
+        }
+        const { error } = await ctx.supabase.rpc('keel_tag_delete', {
+          p_household_id: householdId.data,
+          p_tag_id: tagId,
+        });
+        if (error) return mapDbError(error);
+        return json(200, { ok: true });
+      }
+      const txnId = input['transactionId'];
+      const tagId = input['tagId'];
+      const assigned = input['assigned'];
+      if (
+        typeof txnId !== 'string' || !uuidReTag.test(txnId) ||
+        typeof tagId !== 'string' || !uuidReTag.test(tagId) ||
+        typeof assigned !== 'boolean'
+      ) {
+        return json(400, { code: 'invalid_command', message: 'Tag request failed validation.', details: {} });
+      }
+      const { error } = await ctx.supabase.rpc('keel_tag_assign', {
+        p_household_id: householdId.data,
+        p_txn_id: txnId,
+        p_tag_id: tagId,
+        p_assigned: assigned,
       });
       if (error) return mapDbError(error);
       return json(200, { ok: true });

@@ -25,12 +25,16 @@ import { useKeelQuery } from '@/lib/use-keel-query';
 import {
   fetchAccounts,
   fetchCategories,
+  fetchTags,
+  assignTag,
+  saveTag,
   categorizeTransaction,
   overrideTransaction,
   voidManualTransaction,
   type AccountRow,
   type RichTransactionRow,
   type CategoryRow,
+  type TagRow,
 } from '@/lib/keel-api';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
 import { ImportCsvDialog } from '@/components/keel/import-csv-dialog';
@@ -159,11 +163,13 @@ function LedgerTable() {
   );
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
+  const [tags, setTags] = useState<TagRow[]>([]);
   const [query, setQuery] = useState('');
   const [grouping, setGrouping] = useState<Grouping>('none');
   const [datePreset, setDatePreset] = useState<DatePreset>('all');
   const [accountFilter, setAccountFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
+  const [tagFilter, setTagFilter] = useState('all');
   const [sort, setSort] = useState<SortKey>('date_desc');
 
   // Deep links (Reports drill-down, ⌘K actions):
@@ -187,7 +193,7 @@ function LedgerTable() {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-  }, [query, datePreset, accountFilter, categoryFilter, sort, grouping]);
+  }, [query, datePreset, accountFilter, categoryFilter, tagFilter, sort, grouping]);
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -203,6 +209,11 @@ function LedgerTable() {
       .then(setAccounts)
       .catch(() => {
         setAccounts([]);
+      });
+    void fetchTags(householdId)
+      .then(setTags)
+      .catch(() => {
+        setTags([]);
       });
   }, [householdId]);
 
@@ -222,6 +233,9 @@ function LedgerTable() {
         t.categoryLedgerAccountId !== categoryFilter &&
         !(t.splits ?? []).some((s) => s.categoryLedgerAccountId === categoryFilter)
       ) {
+        return false;
+      }
+      if (tagFilter !== 'all' && !(t.tags ?? []).some((x) => x.tagId === tagFilter)) {
         return false;
       }
       if (
@@ -254,7 +268,7 @@ function LedgerTable() {
       }
     });
     return out;
-  }, [rows, query, datePreset, accountFilter, categoryFilter, sort]);
+  }, [rows, query, datePreset, accountFilter, categoryFilter, tagFilter, sort]);
 
   const totals = useMemo(() => {
     let inflow = 0n;
@@ -460,6 +474,30 @@ function LedgerTable() {
             ))}
           </SelectContent>
         </Select>
+        {tags.length > 0 ? (
+          <Select
+            value={tagFilter}
+            items={{
+              all: 'All tags',
+              ...Object.fromEntries(tags.map((t) => [t.tagId, `#${t.name}`])),
+            }}
+            onValueChange={(v) => {
+              if (v) setTagFilter(v);
+            }}
+          >
+            <SelectTrigger className="h-9 w-36">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All tags</SelectItem>
+              {tags.map((t) => (
+                <SelectItem key={t.tagId} value={t.tagId}>
+                  #{t.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null}
         <Select
           value={sort}
           items={{
@@ -616,6 +654,15 @@ function LedgerTable() {
         householdId={householdId}
         userId={userId}
         categories={categories}
+        allTags={tags}
+        onTagsMutated={() => {
+          void refetch();
+          if (householdId) {
+            void fetchTags(householdId)
+              .then(setTags)
+              .catch(() => undefined);
+          }
+        }}
         onClose={() => {
           setEditing(null);
         }}
@@ -900,6 +947,12 @@ function TxnList({
                   {t.note.length > 40 ? `${t.note.slice(0, 40)}…` : t.note}
                 </span>
               ) : null}
+              {(t.tags ?? []).slice(0, 2).map((x) => (
+                <span key={x.tagId} className="text-muted-foreground/80"> #{x.name}</span>
+              ))}
+              {(t.tags?.length ?? 0) > 2 ? (
+                <span className="text-muted-foreground/60"> +{String((t.tags?.length ?? 0) - 2)}</span>
+              ) : null}
             </p>
           </button>
           {t.transferStatus === 'confirmed' ? (
@@ -1005,6 +1058,8 @@ function TxnEditDialog({
   householdId,
   userId,
   categories,
+  allTags,
+  onTagsMutated,
   onClose,
   onSaved,
   onRecategorize,
@@ -1013,6 +1068,8 @@ function TxnEditDialog({
   householdId: string | null;
   userId: string | null;
   categories: CategoryRow[];
+  allTags: TagRow[];
+  onTagsMutated: () => void;
   onClose: () => void;
   onSaved: () => void;
   onRecategorize: (txnId: string, categoryId: string) => void;
@@ -1021,13 +1078,60 @@ function TxnEditDialog({
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [voiding, setVoiding] = useState(false);
+  // Optimistic tag state for THIS row; parent data refreshes on close.
+  const [rowTags, setRowTags] = useState<{ tagId: string; name: string }[]>([]);
+  const [createdTags, setCreatedTags] = useState<TagRow[]>([]);
+  const [newTag, setNewTag] = useState('');
+  const [tagsDirty, setTagsDirty] = useState(false);
+  const [tagBusy, setTagBusy] = useState(false);
 
   useEffect(() => {
     if (!row) return;
     setName(row.description);
     setNote(row.note ?? '');
     setVoiding(false);
+    setRowTags(row.tags ?? []);
+    setCreatedTags([]);
+    setNewTag('');
+    setTagsDirty(false);
   }, [row]);
+
+  async function toggleTag(tag: { tagId: string; name: string }) {
+    if (!row || !householdId) return;
+    const assigned = !rowTags.some((x) => x.tagId === tag.tagId);
+    const prev = rowTags;
+    setRowTags(assigned ? [...prev, tag] : prev.filter((x) => x.tagId !== tag.tagId));
+    setTagsDirty(true);
+    setTagBusy(true);
+    try {
+      await assignTag({ householdId, transactionId: row.transactionId, tagId: tag.tagId, assigned });
+    } catch (err) {
+      setRowTags(prev);
+      toast.error(err instanceof Error ? err.message : 'Could not update the tag.');
+    } finally {
+      setTagBusy(false);
+    }
+  }
+
+  async function createAndAssignTag() {
+    if (!row || !householdId || newTag.trim().length === 0) return;
+    setTagBusy(true);
+    try {
+      const res = await saveTag({ householdId, name: newTag.trim() });
+      if (typeof res.tagId === 'string') {
+        const tag = { tagId: res.tagId, name: newTag.trim() };
+        setCreatedTags((prevTags) => [...prevTags, { ...tag, usageCount: 1 }]);
+        await assignTag({ householdId, transactionId: row.transactionId, tagId: tag.tagId, assigned: true });
+        setRowTags((prevTags) => [...prevTags, tag]);
+        setTagsDirty(true);
+        setNewTag('');
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not create the tag.');
+    } finally {
+      setTagBusy(false);
+    }
+  }
 
   async function voidTxn() {
     if (!row || !householdId || !userId) return;
@@ -1081,7 +1185,10 @@ function TxnEditDialog({
     <Dialog
       open={row !== null}
       onOpenChange={(open) => {
-        if (!open) onClose();
+        if (!open) {
+          if (tagsDirty) onTagsMutated();
+          onClose();
+        }
       }}
     >
       <DialogContent className="sm:max-w-md">
@@ -1162,6 +1269,45 @@ function TxnEditDialog({
                 </Select>
               </div>
             ) : null}
+            <div className="space-y-1.5">
+              <Label>Tags</Label>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {[...allTags, ...createdTags.filter((c) => !allTags.some((a) => a.tagId === c.tagId))].map(
+                  (t) => {
+                    const active = rowTags.some((x) => x.tagId === t.tagId);
+                    return (
+                      <button
+                        key={t.tagId}
+                        type="button"
+                        disabled={tagBusy}
+                        className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
+                          active
+                            ? 'border-foreground/40 bg-secondary text-foreground'
+                            : 'border-dashed border-border text-muted-foreground hover:text-foreground'
+                        }`}
+                        onClick={() => {
+                          void toggleTag({ tagId: t.tagId, name: t.name });
+                        }}
+                      >
+                        #{t.name}
+                      </button>
+                    );
+                  },
+                )}
+                <Input
+                  className="h-7 w-28 text-xs"
+                  placeholder="New tag"
+                  maxLength={40}
+                  value={newTag}
+                  onChange={(e) => {
+                    setNewTag(e.target.value);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void createAndAssignTag();
+                  }}
+                />
+              </div>
+            </div>
             <div className="space-y-1.5">
               <Label htmlFor="txn-note">Note</Label>
               <Textarea
