@@ -81,6 +81,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'accounts.balance_daily': 'keel_account_balance_daily',
   'transfers.list': 'keel_list_transfers',
   'rules.list': 'keel_list_rules',
+  'budgets.list': 'keel_list_budgets',
 };
 
 // deno-lint-ignore no-explicit-any
@@ -622,6 +623,44 @@ export default {
       return json(200, { ok: true });
     }
 
+    if (path === '/budgets/set' || path === '/budgets/copy') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const month = input['month'];
+      if (
+        !householdId.success ||
+        typeof month !== 'string' ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(month)
+      ) {
+        return json(400, { code: 'invalid_command', message: 'Budget request failed validation.', details: {} });
+      }
+      if (path === '/budgets/copy') {
+        const { data, error } = await ctx.supabase.rpc('keel_copy_budgets', {
+          p_household_id: householdId.data,
+          p_month: month,
+        });
+        if (error) return mapDbError(error);
+        return json(200, { copied: data ?? 0 });
+      }
+      const categoryId = input['categoryLedgerAccountId'];
+      const amountMinor = input['amountMinor'];
+      if (
+        typeof categoryId !== 'string' || !uuidRe.test(categoryId) ||
+        (amountMinor !== null && (typeof amountMinor !== 'string' || !/^\d+$/.test(amountMinor)))
+      ) {
+        return json(400, { code: 'invalid_command', message: 'Budget request failed validation.', details: {} });
+      }
+      const { error } = await ctx.supabase.rpc('keel_set_budget', {
+        p_household_id: householdId.data,
+        p_category_ledger_account_id: categoryId,
+        p_month: month,
+        p_amount_minor: amountMinor === null ? null : amountMinor,
+      });
+      if (error) return mapDbError(error);
+      return json(200, { ok: true });
+    }
+
     if (path === '/rules/save' || path === '/rules/delete' || path === '/rules/apply') {
       // Deterministic user-authored rules (Law 1). Apply supports dryRun for
       // the preview-before-retroactive contract (BC-v2.1 §3); membership is
@@ -1015,6 +1054,9 @@ export default {
         rpcArgs.p_account_id = db.accountId;
         rpcArgs.p_from = isoDate(db.from) ?? past.toISOString().slice(0, 10);
         rpcArgs.p_to = isoDate(db.to) ?? todayIso;
+      } else if (query.query === 'budgets.list') {
+        const db = body as { month?: unknown };
+        rpcArgs.p_month = isoDate(db.month) ?? `${todayIso.slice(0, 7)}-01`;
       } else if (query.query === 'dashboard.net_worth') {
         const db = body as { asOf?: unknown };
         rpcArgs.p_as_of = isoDate(db.asOf) ?? todayIso;

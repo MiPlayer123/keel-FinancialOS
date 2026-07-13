@@ -365,6 +365,47 @@ export async function decideTransfer(input: {
   });
 }
 
+/** One expense category's budget + pinned spent for a month. */
+export type BudgetRow = {
+  categoryLedgerAccountId: string;
+  categoryName: string;
+  currency: string;
+  budgetMinor: string | null;
+  spentMinor: string;
+};
+
+export async function fetchBudgets(householdId: string, monthIso: string): Promise<BudgetRow[]> {
+  const res = await invoke<QueryResult<BudgetRow>>('api/queries', {
+    query: 'budgets.list',
+    householdId,
+    month: monthIso,
+  });
+  return res.rows;
+}
+
+export async function setBudget(input: {
+  householdId: string;
+  categoryLedgerAccountId: string;
+  monthIso: string;
+  /** Non-negative minor units, or null to clear. */
+  amountMinor: string | null;
+}): Promise<unknown> {
+  return invoke('api/budgets/set', {
+    householdId: input.householdId,
+    categoryLedgerAccountId: input.categoryLedgerAccountId,
+    month: input.monthIso,
+    amountMinor: input.amountMinor,
+  });
+}
+
+export async function copyBudgets(householdId: string, monthIso: string): Promise<number> {
+  const res = await invoke<{ copied?: number }>('api/budgets/copy', {
+    householdId,
+    month: monthIso,
+  });
+  return typeof res.copied === 'number' ? res.copied : 0;
+}
+
 /** One user-authored categorization/rename rule. */
 export type RuleRow = {
   ruleId: string;

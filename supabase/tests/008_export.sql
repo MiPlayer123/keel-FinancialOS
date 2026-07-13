@@ -50,6 +50,8 @@ insert into expected_export_tables(table_name, allowed_columns, omitted_columns)
   ('category_rules', array['id','household_id','entity_id','matcher','pattern','category_ledger_account_id','rename_to','priority','active','created_at','updated_at'], '{}'),
   ('rule_renames', array['canonical_transaction_id','household_id','rule_id','display_name','created_at','updated_at'], '{}');
 insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
+  ('budgets', array['household_id','category_ledger_account_id','month','amount_minor','currency','created_at','updated_at'], '{}');
+insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
   ('employers',array['id','household_id','name','created_at'],'{}'),
   ('payroll_provider_imports',array['id','household_id','provider','source_ref','content_hash','imported_at'],'{}'),
   ('paychecks',array['id','household_id','employer_id','pay_date','gross_minor','net_minor','currency','status','formula_version','created_by','created_at','updated_at'],'{}'),
