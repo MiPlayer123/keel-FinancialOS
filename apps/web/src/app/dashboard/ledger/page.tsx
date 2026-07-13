@@ -71,6 +71,8 @@ type Grouping = 'none' | 'date' | 'account' | 'category';
 type SortKey = 'date_desc' | 'date_asc' | 'amount_desc' | 'amount_asc';
 type DatePreset = 'this_month' | 'last_month' | '30d' | '90d' | 'ytd' | 'all';
 
+const PAGE_SIZE = 120;
+
 const DATE_PRESETS: { key: DatePreset; label: string }[] = [
   { key: 'this_month', label: 'This month' },
   { key: 'last_month', label: 'Last month' },
@@ -149,15 +151,24 @@ function LedgerTable() {
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [sort, setSort] = useState<SortKey>('date_desc');
 
-  // Deep links (e.g. from Reports): /dashboard/ledger?category=<id|uncategorized>.
+  // Deep links (Reports drill-down, ⌘K actions):
+  // /dashboard/ledger?category=<id|uncategorized> and ?add=1.
   // Applied post-mount to avoid a server/client hydration mismatch.
   useEffect(() => {
-    const param = new URLSearchParams(window.location.search).get('category');
-    if (param) setCategoryFilter(param);
+    const params = new URLSearchParams(window.location.search);
+    const category = params.get('category');
+    if (category) setCategoryFilter(category);
+    if (params.get('add') === '1') setAdding(true);
   }, []);
   const [editing, setEditing] = useState<RichTransactionRow | null>(null);
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
+  // Render cap (quality bar: interactions <100ms without virtualization).
+  // Totals always compute over the FULL filtered set.
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [query, datePreset, accountFilter, categoryFilter, sort, grouping]);
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -521,17 +532,33 @@ function LedgerTable() {
       ) : null}
 
       {grouping === 'none' ? (
-        <TxnList
-          rows={filtered}
-          categories={categories}
-          onRecategorize={(id, cat) => {
-            void recategorize(id, cat);
-          }}
-          onEdit={setEditing}
-          selecting={selecting}
-          selected={selected}
-          onToggle={toggleSelected}
-        />
+        <>
+          <TxnList
+            rows={filtered.slice(0, visibleCount)}
+            categories={categories}
+            onRecategorize={(id, cat) => {
+              void recategorize(id, cat);
+            }}
+            onEdit={setEditing}
+            selecting={selecting}
+            selected={selected}
+            onToggle={toggleSelected}
+          />
+          {filtered.length > visibleCount ? (
+            <div className="flex justify-center">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setVisibleCount((c) => c + PAGE_SIZE);
+                }}
+              >
+                Show {String(Math.min(PAGE_SIZE, filtered.length - visibleCount))} more of{' '}
+                {String(filtered.length - visibleCount)}
+              </Button>
+            </div>
+          ) : null}
+        </>
       ) : (
         <GroupedList
           rows={filtered}

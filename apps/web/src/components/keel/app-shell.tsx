@@ -32,6 +32,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { KeelLogo, KeelMark } from '@/components/keel/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { HouseholdProvider } from '@/components/keel/household-context';
+import { QuickNav } from '@/components/keel/quick-nav';
 import { ReviewBadge } from '@/components/keel/review-badge';
 
 type NavItem = { label: string; href: string; icon: LucideIcon };
@@ -267,7 +268,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         </header>
 
         <main className="min-w-0 flex-1">
-          <HouseholdProvider>{children}</HouseholdProvider>
+          <HouseholdProvider>
+            <QuickNav />
+            {children}
+          </HouseholdProvider>
         </main>
       </div>
     </div>
