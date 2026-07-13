@@ -267,6 +267,9 @@ function SuggestionCard({
     setBusy(kind);
     const effectiveDate = today();
     try {
+      // Payload is exactly {seriesId, effectiveDate(, horizonDays)} — the
+      // contracts schemas are .strict(); the candidateVersionHash we used to
+      // send made every confirm/reject a 400.
       await keelCommand({
         commandId: newId(),
         command,
@@ -275,7 +278,6 @@ function SuggestionCard({
         householdId,
         payload: {
           seriesId: series.seriesId,
-          candidateVersionHash: series.candidateVersionHash,
           effectiveDate,
           ...(command === 'recurring.confirm' ? { horizonDays: 90 } : {}),
         },
