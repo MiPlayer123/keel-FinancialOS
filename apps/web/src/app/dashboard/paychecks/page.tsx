@@ -1,7 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { Banknote, Plus, Loader2, ChevronRight, Trash2, Undo2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Banknote, Plus, Loader2, ChevronRight, Trash2, Undo2, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { AppShell } from '@/components/keel/app-shell';
@@ -9,9 +9,14 @@ import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery } from '@/lib/use-keel-query';
-import { keelCommand, newId, type RichTransactionRow } from '@/lib/keel-api';
+import {
+  keelCommand,
+  newId,
+  type RecurringSeriesRow,
+  type RichTransactionRow,
+} from '@/lib/keel-api';
 import { TxnPicker } from '@/components/keel/txn-picker';
-import { sha256Hex, parseSignedDollars } from '@/lib/hash';
+import { sha256Hex, parseSignedDollars, minorToDollars } from '@/lib/hash';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -77,6 +82,28 @@ const KIND_LABELS: Record<string, string> = {
 
 type DraftComponent = { kind: string; amount: string };
 
+type PaycheckPrefill = { employer: string; netDollars: string; depositTxnId: string | null };
+
+/** Human cadence label from the gaps between expected occurrence dates. */
+function cadenceLabel(dates: string[]): string {
+  if (dates.length < 2) return 'recurring';
+  const sorted = [...dates].sort();
+  const gaps: number[] = [];
+  for (let i = 1; i < sorted.length; i++) {
+    const a = new Date(sorted[i - 1] ?? '');
+    const b = new Date(sorted[i] ?? '');
+    // Dates are civil midnights; the gap is an exact whole number of days.
+    gaps.push(Math.trunc((b.getTime() - a.getTime()) / 86400000));
+  }
+  gaps.sort((x, y) => x - y);
+  const g = gaps[Math.floor(gaps.length / 2)] ?? 30;
+  if (g <= 8) return 'weekly';
+  if (g <= 15) return 'every two weeks';
+  if (g <= 17) return 'twice a month';
+  if (g <= 32) return 'monthly';
+  return `about every ${String(g)} days`;
+}
+
 export default function PaychecksPage() {
   return (
     <AppShell>
@@ -98,8 +125,20 @@ function PaychecksBody() {
     householdId,
   );
   const txns = useKeelQuery<RichTransactionRow>('transactions.rich', householdId);
+  const recurring = useKeelQuery<RecurringSeriesRow>('recurring.list', householdId);
   const [creating, setCreating] = useState(false);
+  const [prefill, setPrefill] = useState<PaycheckPrefill | null>(null);
   const [openDetail, setOpenDetail] = useState<string | null>(null);
+
+  // Detected income = recurring INFLOW series (the detector already found
+  // the payday cadence); recording stays explicit (suggest→approve).
+  const detectedIncome = useMemo(
+    () =>
+      recurring.rows.filter(
+        (r) => r.sign === 'inflow' && (r.status === 'confirmed' || r.status === 'suggested'),
+      ),
+    [recurring.rows],
+  );
 
   if (!ready || loading) {
     return (
@@ -139,6 +178,72 @@ function PaychecksBody() {
         </Button>
       </div>
 
+      {detectedIncome.length > 0 ? (
+        <section className="space-y-2">
+          <h2 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+            <Sparkles className="size-4" />
+            Detected income
+          </h2>
+          <div className="space-y-2">
+            {detectedIncome.map((series) => {
+              const upcoming = series.occurrences
+                .filter((o) => o.status === 'expected')
+                .sort((a, b) => a.expectedDate.localeCompare(b.expectedDate));
+              const next = upcoming.find(
+                (o) => o.expectedDate >= new Date().toISOString().slice(0, 10),
+              );
+              const amount = next ?? upcoming[0];
+              return (
+                <div
+                  key={series.seriesId}
+                  className="flex flex-col gap-3 rounded-lg border border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{series.counterpartyKey}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Pays {cadenceLabel(series.occurrences.map((o) => o.expectedDate))}
+                      {amount ? (
+                        <>
+                          {' · '}
+                          <Money
+                            amountMinor={amount.expectedAmountMinor}
+                            currency={amount.currency}
+                            className="text-xs"
+                          />
+                          {next ? (
+                            <>
+                              {' '}next on <span className="font-mono">{next.expectedDate}</span>
+                            </>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const netMinor = amount?.expectedAmountMinor ?? '';
+                      const match = txns.rows.find(
+                        (t) => netMinor !== '' && t.amountMinor === netMinor,
+                      );
+                      setPrefill({
+                        employer: series.counterpartyKey,
+                        netDollars: netMinor ? minorToDollars(netMinor) : '',
+                        depositTxnId: match?.transactionId ?? null,
+                      });
+                      setCreating(true);
+                    }}
+                  >
+                    Record this paycheck
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
       {rows.length === 0 ? (
         <EmptyState
           icon={<Banknote className="size-6" />}
@@ -168,13 +273,16 @@ function PaychecksBody() {
       <CreatePaycheckDialog
         open={creating}
         txns={txns.rows}
+        prefill={prefill}
         householdId={householdId}
         userId={userId}
         onClose={() => {
           setCreating(false);
+          setPrefill(null);
         }}
         onCreated={() => {
           setCreating(false);
+          setPrefill(null);
           void refetch();
         }}
       />
@@ -332,6 +440,7 @@ function sumMinor(items: DraftComponent[], kinds: readonly string[]): bigint {
 function CreatePaycheckDialog({
   open,
   txns,
+  prefill,
   householdId,
   userId,
   onClose,
@@ -339,6 +448,7 @@ function CreatePaycheckDialog({
 }: {
   open: boolean;
   txns: RichTransactionRow[];
+  prefill: PaycheckPrefill | null;
   householdId: string | null;
   userId: string | null;
   onClose: () => void;
@@ -352,6 +462,16 @@ function CreatePaycheckDialog({
   ]);
   const [depositTxnId, setDepositTxnId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Prefill from a detected income series when the dialog opens.
+  useEffect(() => {
+    if (!open || !prefill) return;
+    setEmployer(prefill.employer);
+    setDepositTxnId(prefill.depositTxnId);
+    const deposit = txns.find((t) => t.transactionId === prefill.depositTxnId);
+    if (deposit) setPayDate(deposit.effectiveDate);
+    // Keyed on `open` only by design: apply the prefill once per open.
+  }, [open, prefill, txns]);
 
   // Server equations (keel_paycheck_create): gross = Σ earnings;
   // net = gross + reimbursements − deductions; Σ direct_deposit = net.
