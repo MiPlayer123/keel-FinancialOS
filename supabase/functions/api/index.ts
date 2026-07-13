@@ -18,6 +18,7 @@ import {
   CommandEnvelopeSchema,
   ConnectionIdSchema,
   EntityIdSchema,
+  EntityKindSchema,
   HouseholdIdSchema,
   ExportSecretError,
   isWithinInlineExportLimit,
@@ -87,6 +88,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'tags.list': 'keel_list_tags',
   'schedules.list': 'keel_list_schedules',
   'goals.list': 'keel_list_goals',
+  'entities.list': 'keel_list_entities',
   'dashboard.cash_flow_forecast': 'keel_cash_flow_forecast',
 };
 
@@ -627,6 +629,27 @@ export default {
       });
       if (ovError) return mapDbError(ovError);
       return json(200, { ok: true });
+    }
+
+    if (path === '/entities/create') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const name = input['name'];
+      const kind = EntityKindSchema.safeParse(input['kind']);
+      if (
+        !householdId.success ||
+        typeof name !== 'string' || name.trim().length === 0 || name.length > 200 ||
+        !kind.success
+      ) {
+        return json(400, { code: 'invalid_command', message: 'Entity request failed validation.', details: {} });
+      }
+      const { data, error } = await ctx.supabase.rpc('keel_create_entity', {
+        p_household_id: householdId.data,
+        p_name: name,
+        p_kind: kind.data,
+      });
+      if (error) return mapDbError(error);
+      return json(200, { entityId: data });
     }
 
     if (path === '/categories/create') {

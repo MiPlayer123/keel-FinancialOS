@@ -33,13 +33,20 @@ const seedPositiveKey = async (
   jwk: jose.JWK,
   expiredAt: string | null = null,
 ): Promise<void> => {
-  const { error } = await serviceClient().rpc('keel_webhook_key_put_positive', {
-    p_kid: kid,
-    p_jwk: { ...publicOnly(jwk), kid, alg: 'ES256', use: 'sig' },
-    p_key_created_at: new Date(0).toISOString(),
-    p_key_expired_at: expiredAt,
-  });
-  if (error) throw new Error(`key seed failed: ${error.message}`);
+  // Retries transient PostgREST errors (seen under CI load as "An invalid
+  // response was received from the upstream server") rather than failing the
+  // whole suite on infrastructure noise unrelated to the test's assertions.
+  for (let attempt = 0; ; attempt++) {
+    const { error } = await serviceClient().rpc('keel_webhook_key_put_positive', {
+      p_kid: kid,
+      p_jwk: { ...publicOnly(jwk), kid, alg: 'ES256', use: 'sig' },
+      p_key_created_at: new Date(0).toISOString(),
+      p_key_expired_at: expiredAt,
+    });
+    if (!error) return;
+    if (attempt >= 2) throw new Error(`key seed failed: ${error.message}`);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 };
 
 const signBody = async (
@@ -317,7 +324,19 @@ describe('webhook-provider verification (test 11)', () => {
     expect((await postWebhook(body, jwt)).status).toBe(401);
     expect((await postWebhook(body, jwt)).status).toBe(401);
     expect(await tableCount('plaid_webhook_key_test_responses', { kid })).toBe(1);
-    const { data: cached } = await serviceClient().rpc('keel_webhook_key_get', { p_kid: kid });
+    // Destructuring only `data` turned a transient PostgREST error into a
+    // baffling "expected null to match object" CI flake; retry errors, but a
+    // clean null (row genuinely missing) still fails immediately.
+    let cached: unknown;
+    for (let attempt = 0; ; attempt++) {
+      const { data, error } = await serviceClient().rpc('keel_webhook_key_get', { p_kid: kid });
+      if (!error) {
+        cached = data;
+        break;
+      }
+      if (attempt >= 2) throw new Error(`keel_webhook_key_get failed: ${error.message}`);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
     expect(cached).toMatchObject({ notFound: true, stale: false });
   });
 

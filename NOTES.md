@@ -1275,3 +1275,65 @@ plus the usual ACL restatement. Verified on scratch keel9d with the mask
 removed (`revoke usage on schema auth from public, keel_api`) as role
 authenticated: schedule save/status/advance/enter and goal
 save/contribute/set_status all pass with no auth-schema access.
+
+## 2026-07-13 — Batch 10: transfer counterparty, TanStack Query cache, multi-entity
+
+Three parallel Sonnet worktree agents, following the audit findings from the
+feature-completeness review requested this session:
+
+**Transfer counterparty display** (`20260713220000_transfer_counterparty.sql`):
+`keel_list_transactions_rich` now returns `counterpartyAccountId`/
+`counterpartyAccountName`/`counterpartyTransactionId` for confirmed transfer
+legs, via a lateral join through `transfer_links` to the other leg's cash
+account. Only populated when `tl.status = 'confirmed'` — a `suggested`
+pairing stays silent, matching Review-page semantics. Ledger rows now read
+"Transfer → Chase Savings" instead of a bare "Transfer" badge; the edit
+dialog gets a read-only counterparty section. Verified against a real
+scratch Postgres with a hand-built two-leg fixture (confirmed pairing shows
+the counterparty; flipping back to `suggested` correctly nulls it).
+
+**TanStack Query caching** (`apps/web/src/lib/use-keel-query.ts`,
+`apps/web/src/components/query-provider.tsx`): dashboard pages were doing
+plain `useEffect`+fetch with zero caching — every tab switch re-fetched and
+re-showed full skeletons. `useKeelQuery`/`useKeelQuerySilent` now run on
+`useQuery` under the hood (45s staleTime, `refetchOnWindowFocus`), keyed by
+`['keel-query', query, householdId, ...]`, with the external hook contract
+byte-for-byte unchanged so none of the 11 call sites needed touching.
+`refetch()` now invalidates every `keel-query`-prefixed cache entry
+app-wide, so a save on one page can't leave a stale balance cached on an
+unmounted page.
+
+**Multi-entity create + picker** (`20260713210000_entity_management.sql`):
+the `entities` table and `entity_kind` enum (personal/llc/s_corp/trust/etc.)
+already existed, but nothing let a user create a second entity — every
+account silently attached to whichever entity was seeded first
+(`fetchFirstEntityId`). Added `keel_create_entity`/`keel_list_entities`
+(GUC uid pattern, not auth.uid() — house rule from the definer_uid_fix
+migration) and an entity picker in `add-account-dialog.tsx` that stays
+invisible for single-entity households and only forces a choice once a
+second entity exists.
+
+**Flagged, not fixed, this batch** (confirmed still true by the integration
+review, tracked as follow-up):
+- Several read-model procs (`keel_net_worth_as_of`, `keel_cash_flow`,
+  `keel_trial_balance`, `keel_list_transactions_rich`, and the list procs
+  for budgets/goals/schedules/rules) aggregate/list at `household_id`
+  granularity with no `entity_id` filter. Once a second entity exists, its
+  numbers blend into the first entity's dashboard views with no visual
+  distinction — a real gap before multi-entity is usable end-to-end, not a
+  new bug from this batch.
+- `apps/web/src/components/keel/plaid-link-button.tsx` still calls
+  `fetchFirstEntityId` unconditionally — only manually-added accounts can
+  be assigned to a second entity today; Plaid-linked accounts always land
+  on entity #1.
+
+Gates: `pnpm -w typecheck` clean, `pnpm vitest run` 451/451, `pnpm test`
+(12 deno suites) green, `cd apps/web && pnpm build` clean (19 routes).
+Sonnet adversarial review of the integrated 3-stream diff found no
+correctness bugs in the new SQL or the query rewrite; the two items above
+were its only findings, both pre-flagged as out of scope by the
+implementing agents.
+
+Also merged into this batch: `3398996` (test-hygiene fix from the previous
+cycle — retry transient PostgREST errors in the webhook negative-cache
+assertion, never opened its own PR).
