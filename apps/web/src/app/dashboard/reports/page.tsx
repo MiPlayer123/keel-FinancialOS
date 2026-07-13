@@ -232,15 +232,29 @@ function buildFlow(rows: RichTransactionRow[], categories: CategoryRow[]): FlowG
   };
 }
 
-/** Net cash by tag over the trailing months (confirmed transfers excluded). */
+/**
+ * Net cash by tag over the trailing months (confirmed transfers excluded).
+ * Sums are single-currency: restricted to the household's dominant currency,
+ * which is returned so the card formats with it.
+ */
 function tagTotals(
   rows: RichTransactionRow[],
   months: string[],
-): { tagId: string; name: string; count: number; netMinor: bigint }[] {
+): {
+  currency: string;
+  totals: { tagId: string; name: string; count: number; netMinor: bigint }[];
+} {
+  const currencyCounts = new Map<string, number>();
+  for (const t of rows) {
+    currencyCounts.set(t.currency, (currencyCounts.get(t.currency) ?? 0) + 1);
+  }
+  const currency =
+    [...currencyCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'USD';
   const monthSet = new Set(months);
   const byTag = new Map<string, { tagId: string; name: string; count: number; netMinor: bigint }>();
   for (const t of rows) {
     if (t.transferStatus === 'confirmed') continue;
+    if (t.currency !== currency) continue;
     if (!t.tags || t.tags.length === 0) continue;
     if (!monthSet.has(monthKey(t.effectiveDate))) continue;
     const cash = BigInt(t.amountMinor || '0');
@@ -251,9 +265,12 @@ function tagTotals(
       byTag.set(tag.tagId, e);
     }
   }
-  return [...byTag.values()].sort((a, b) =>
-    a.netMinor < b.netMinor ? -1 : a.netMinor > b.netMinor ? 1 : 0,
-  );
+  return {
+    currency,
+    totals: [...byTag.values()].sort((a, b) =>
+      a.netMinor < b.netMinor ? -1 : a.netMinor > b.netMinor ? 1 : 0,
+    ),
+  };
 }
 
 function ReportsBody() {
@@ -283,7 +300,8 @@ function ReportsBody() {
   const [view, setView] = useState<'expense' | 'income'>('expense');
   const flow = useMemo(() => buildFlow(txns.rows, categories), [txns.rows, categories]);
   const months = useMemo(() => lastMonths(MONTHS_SHOWN), []);
-  const tags = useMemo(() => tagTotals(txns.rows, months), [txns.rows, months]);
+  const tagReport = useMemo(() => tagTotals(txns.rows, months), [txns.rows, months]);
+  const tags = tagReport.totals;
   const matrix = useMemo(
     () => buildMatrix(txns.rows, months, view),
     [txns.rows, months, view],
@@ -500,6 +518,7 @@ function ReportsBody() {
                 </span>
                 <Money
                   amountMinor={t.netMinor.toString()}
+                  currency={tagReport.currency}
                   signed
                   className="w-28 shrink-0 text-right text-sm"
                 />

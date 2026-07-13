@@ -309,10 +309,16 @@ function OccurrenceCalendar({ rows }: { rows: RecurringSeriesRow[] }) {
   const nowIso = now.toISOString().slice(0, 10);
   const monthKey = nowIso.slice(0, 7);
 
-  const byDay = new Map<number, { name: string; signedMinor: string; currency: string }[]>();
+  const byDay = new Map<
+    number,
+    { name: string; signedMinor: string; currency: string; paid: boolean }[]
+  >();
   for (const s of rows) {
     if (s.status !== 'confirmed') continue;
     for (const o of s.occurrences) {
+      // Upcoming (expected) and already-paid (matched) only; a missed
+      // occurrence at its expected amount would read as a bill still due.
+      if (o.status !== 'expected' && o.status !== 'matched') continue;
       if (!o.expectedDate.startsWith(monthKey)) continue;
       const day = Number(o.expectedDate.slice(8, 10));
       const list = byDay.get(day) ?? [];
@@ -321,6 +327,7 @@ function OccurrenceCalendar({ rows }: { rows: RecurringSeriesRow[] }) {
         signedMinor:
           s.sign === 'outflow' ? `-${o.expectedAmountMinor}` : o.expectedAmountMinor,
         currency: o.currency,
+        paid: o.status === 'matched',
       });
       byDay.set(day, list);
     }
@@ -369,8 +376,10 @@ function OccurrenceCalendar({ rows }: { rows: RecurringSeriesRow[] }) {
                   {items.slice(0, 2).map((item, idx) => (
                     <p
                       key={`${item.name}-${String(idx)}`}
-                      className="truncate text-[11px] leading-tight"
-                      title={item.name}
+                      className={`truncate text-[11px] leading-tight ${
+                        item.paid ? 'text-muted-foreground/70 line-through decoration-border' : ''
+                      }`}
+                      title={item.paid ? `${item.name} — paid` : item.name}
                     >
                       {item.name}
                       <span className="text-muted-foreground">

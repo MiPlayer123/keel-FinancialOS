@@ -158,6 +158,8 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  v_changed integer;
 begin
   if auth.uid() is null then
     raise exception 'KEEL_NOT_AUTHENTICATED' using errcode = 'P0004';
@@ -188,11 +190,15 @@ begin
     delete from public.transaction_tags
       where canonical_transaction_id = p_txn_id and tag_id = p_tag_id;
   end if;
+  get diagnostics v_changed = row_count;
 
-  insert into public.audit_log (household_id, actor, action, object_type, object_id, after)
-  values (p_household_id, jsonb_build_object('kind', 'user', 'userId', auth.uid()),
-          case when p_assigned then 'transaction.tag' else 'transaction.untag' end,
-          'canonical_transaction', p_txn_id, jsonb_build_object('tagId', p_tag_id));
+  -- Idempotent replays change nothing; audit only mutations that happened (Law 2).
+  if v_changed > 0 then
+    insert into public.audit_log (household_id, actor, action, object_type, object_id, after)
+    values (p_household_id, jsonb_build_object('kind', 'user', 'userId', auth.uid()),
+            case when p_assigned then 'transaction.tag' else 'transaction.untag' end,
+            'canonical_transaction', p_txn_id, jsonb_build_object('tagId', p_tag_id));
+  end if;
 end;
 $$;
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ReceiptText,
@@ -243,6 +243,7 @@ function LedgerTable() {
       if (
         q &&
         !t.description.toLowerCase().includes(q) &&
+        !(t.originalDescription ?? '').toLowerCase().includes(q) &&
         !t.accountName.toLowerCase().includes(q) &&
         !(t.categoryName ?? '').toLowerCase().includes(q) &&
         // "12.34" or "1234" finds the amount, sign-agnostic.
@@ -1095,6 +1096,26 @@ function TxnEditDialog({
   const [newTag, setNewTag] = useState('');
   const [tagsDirty, setTagsDirty] = useState(false);
   const [tagBusy, setTagBusy] = useState(false);
+  // Latest in-flight tag write; the close-flush waits on it so a refetch can't
+  // race a write that hasn't committed yet. tagBusy serializes writes, so one
+  // slot is enough.
+  const pendingTagWrite = useRef<Promise<unknown> | null>(null);
+
+  // Every close path funnels here: tag writes commit immediately, so the parent
+  // must refresh even on "Cancel" — nothing is discarded.
+  function flushTagsAndClose() {
+    if (tagsDirty) {
+      const pending = pendingTagWrite.current;
+      if (pending) {
+        void pending.finally(() => {
+          onTagsMutated();
+        });
+      } else {
+        onTagsMutated();
+      }
+    }
+    onClose();
+  }
 
   useEffect(() => {
     if (!row) return;
@@ -1115,7 +1136,14 @@ function TxnEditDialog({
     setTagsDirty(true);
     setTagBusy(true);
     try {
-      await assignTag({ householdId, transactionId: row.transactionId, tagId: tag.tagId, assigned });
+      const write = assignTag({
+        householdId,
+        transactionId: row.transactionId,
+        tagId: tag.tagId,
+        assigned,
+      });
+      pendingTagWrite.current = write;
+      await write;
     } catch (err) {
       setRowTags(prev);
       toast.error(err instanceof Error ? err.message : 'Could not update the tag.');
@@ -1125,16 +1153,38 @@ function TxnEditDialog({
   }
 
   async function createAndAssignTag() {
-    if (!row || !householdId || newTag.trim().length === 0) return;
+    if (!row || !householdId || tagBusy) return;
+    const trimmed = newTag.trim();
+    if (trimmed.length === 0) return;
+    // Typing an existing tag's name assigns it instead of erroring on the
+    // household-unique index.
+    const existing = [...allTags, ...createdTags].find(
+      (t) => t.name.toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (existing) {
+      setNewTag('');
+      if (!rowTags.some((x) => x.tagId === existing.tagId)) {
+        await toggleTag({ tagId: existing.tagId, name: existing.name });
+      }
+      return;
+    }
     setTagBusy(true);
     try {
-      const res = await saveTag({ householdId, name: newTag.trim() });
+      const res = await saveTag({ householdId, name: trimmed });
       if (typeof res.tagId === 'string') {
-        const tag = { tagId: res.tagId, name: newTag.trim() };
-        setCreatedTags((prevTags) => [...prevTags, { ...tag, usageCount: 1 }]);
-        await assignTag({ householdId, transactionId: row.transactionId, tagId: tag.tagId, assigned: true });
-        setRowTags((prevTags) => [...prevTags, tag]);
+        const tag = { tagId: res.tagId, name: trimmed };
+        // The tag exists server-side from here on, even if the assign fails.
         setTagsDirty(true);
+        setCreatedTags((prevTags) => [...prevTags, { ...tag, usageCount: 1 }]);
+        const write = assignTag({
+          householdId,
+          transactionId: row.transactionId,
+          tagId: tag.tagId,
+          assigned: true,
+        });
+        pendingTagWrite.current = write;
+        await write;
+        setRowTags((prevTags) => [...prevTags, tag]);
         setNewTag('');
       }
     } catch (err) {
@@ -1196,10 +1246,7 @@ function TxnEditDialog({
     <Dialog
       open={row !== null}
       onOpenChange={(open) => {
-        if (!open) {
-          if (tagsDirty) onTagsMutated();
-          onClose();
-        }
+        if (!open) flushTagsAndClose();
       }}
     >
       <DialogContent className="sm:max-w-md">
@@ -1221,9 +1268,10 @@ function TxnEditDialog({
               type="button"
               className="text-xs text-muted-foreground underline-offset-2 hover:underline"
               onClick={() => {
-                if (tagsDirty) onTagsMutated();
-                onClose();
-                onMerchantSearch(row.description);
+                flushTagsAndClose();
+                // Renamed rows keep matching their siblings via the bank's
+                // original description.
+                onMerchantSearch(row.originalDescription ?? row.description);
               }}
             >
               See everything from this merchant
@@ -1373,7 +1421,7 @@ function TxnEditDialog({
             <span />
           )}
           <span className="flex gap-2">
-            <Button variant="outline" onClick={onClose} disabled={saving}>
+            <Button variant="outline" onClick={flushTagsAndClose} disabled={saving}>
               Cancel
             </Button>
             <Button

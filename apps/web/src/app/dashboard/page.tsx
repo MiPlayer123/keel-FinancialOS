@@ -141,6 +141,15 @@ function buildInsights(rows: RichTransactionRow[]): Insight[] {
   weekAgo.setUTCDate(weekAgo.getUTCDate() - 7);
   const weekAgoIso = weekAgo.toISOString().slice(0, 10);
 
+  // BigInt sums are only meaningful within one currency; aggregate the
+  // household's dominant currency and format with it.
+  const currencyCounts = new Map<string, number>();
+  for (const t of rows) {
+    currencyCounts.set(t.currency, (currencyCounts.get(t.currency) ?? 0) + 1);
+  }
+  const domCurrency =
+    [...currencyCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'USD';
+
   let biggest: RichTransactionRow | null = null;
   let mtd = 0n;
   let prevToSameDay = 0n;
@@ -148,6 +157,7 @@ function buildInsights(rows: RichTransactionRow[]): Insight[] {
 
   for (const t of rows) {
     if (t.transferStatus === 'confirmed') continue;
+    if (t.currency !== domCurrency) continue;
     const cash = BigInt(t.amountMinor || '0');
     if (cash >= 0n) continue; // outflows only
     if (t.effectiveDate >= weekAgoIso) {
@@ -168,7 +178,7 @@ function buildInsights(rows: RichTransactionRow[]): Insight[] {
   if (biggest) {
     out.push({
       label: 'Biggest purchase · 7 days',
-      value: formatMoney(biggest.amountMinor.replace('-', '')),
+      value: formatMoney(biggest.amountMinor.replace('-', ''), { currency: biggest.currency }),
       detail: biggest.description.slice(0, 40),
     });
   }
@@ -177,7 +187,7 @@ function buildInsights(rows: RichTransactionRow[]): Insight[] {
     out.push({
       label: 'Spending pace vs last month',
       value: `${deltaPct >= 0 ? '+' : ''}${String(deltaPct)}%`,
-      detail: `${formatMoney(mtd.toString())} so far vs ${formatMoney(prevToSameDay.toString())} by day ${String(dayOfMonth)}`,
+      detail: `${formatMoney(mtd.toString(), { currency: domCurrency })} so far vs ${formatMoney(prevToSameDay.toString(), { currency: domCurrency })} by day ${String(dayOfMonth)}`,
     });
   }
   const topMerchant = [...merchants.entries()].sort((a, b) =>
@@ -186,7 +196,7 @@ function buildInsights(rows: RichTransactionRow[]): Insight[] {
   if (topMerchant && topMerchant[1] > 0n) {
     out.push({
       label: 'Top merchant this month',
-      value: formatMoney(topMerchant[1].toString()),
+      value: formatMoney(topMerchant[1].toString(), { currency: domCurrency }),
       detail: topMerchant[0].slice(0, 40),
     });
   }

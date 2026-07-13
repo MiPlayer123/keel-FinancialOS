@@ -879,3 +879,35 @@ batched-push policy). Findings fixed pre-push:
   at scale; carry assumes single-currency budgets (both latent, USD-only);
   grouped ledger mode renders uncapped (pre-existing; paging covers the
   default flat view).
+
+## 2026-07-13 — Batch 3 review round + ship-to-main
+
+Owner asked mid-review to ship what's working to main; the two batch-3 commits
+went up, review agent findings (no P0s) landed as a follow-up commit:
+- P1 Cancel-button bypass: tag writes commit immediately, but the Cancel path
+  skipped the tagsDirty flush → stale chips/filter after committed writes. All
+  three close paths (onOpenChange, Cancel, merchant jump) now funnel through
+  one flushTagsAndClose().
+- P1 flush/write race: closing right after a toggle could refetch before the
+  in-flight assign committed → permanently stale row. Latest write promise is
+  kept in a ref; the flush awaits it (tagBusy serializes writes, one slot
+  suffices).
+- Double-Enter in "New tag" hit the CI-unique index (P0009 → generic toast):
+  tagBusy guard + typing an existing tag's name now assigns it instead.
+- Recurring calendar showed matched/missed occurrences as if still due — now
+  expected+matched only, matched muted with strikethrough.
+- Insights strip + Reports by-tag card summed BigInt across currencies with $
+  formatting: both now aggregate the dominant currency only and format with
+  it (whole-page multi-currency treatment stays on the backlog with the
+  pre-existing ledger totals bar).
+- Merchant jump keys on originalDescription (renamed one-offs find their
+  siblings); ledger search also matches the bank's original description.
+- keel_tag_assign audited no-op replays (Law 2 wants real mutations only):
+  GET DIAGNOSTICS row_count now gates the audit insert. Verified on scratch
+  keel8: tag +1, replay +0, untag +1, replay +0.
+- Deferred to batch 4: tag rename/delete management UI (procs + routes are
+  live; keel_list_tags.usageCount exists for the delete confirm), UTC "today"
+  convention (taste pass), server-side distinct-transaction reconcile check.
+
+Prod deploy remains owner-gated (Law 12): supabase db push + functions deploy
+api worker for the 20260713* chain; frontend degrades gracefully until then.
