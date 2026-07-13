@@ -1241,3 +1241,37 @@ rather than treating the dry run as a substitute proof.
 passing (up from 444 pre-batch-8 — no new suite added on the vitest side,
 the delta is the previously-failing worker suite now building its vendor
 bundle). `pnpm -w typecheck`: clean, no errors. No web changes.
+
+## 2026-07-13 — auth-schema discovery: keel_api-owned definers may not call auth.uid() (20260713200000)
+
+PR #6 CI failed twice on 014_schedules. Run 1: pgTAP `is()` has no
+(smallint, integer) overload — fixed by casting `anchor_day::int` (9bd60f6).
+Run 2: `42501: permission denied for schema auth` inside
+`keel_schedule_advance` during "statement block local variable
+initialization" — i.e. `v_uid uuid := auth.uid();`.
+
+Root cause: SECURITY DEFINER runs with the OWNER's privileges, and the
+schedule/goal procs are owned by keel_api (batch-7/8 ownership hardening so
+they can write via the definer policies). keel_api has no USAGE on the auth
+schema. On scratch this was masked because the pgtest shim grants auth to
+PUBLIC; in prod, granting keel_api USAGE is impossible for us — the auth
+schema is owned by supabase_auth_admin, and postgres (not superuser in
+managed Supabase) issuing the grant NO-OPs (has_schema_privilege stays
+false). A direct `grant execute on function auth.uid() to keel_api` also
+landed in prod but is useless without schema USAGE.
+
+House rule from here: **keel_api-owned SECURITY DEFINER functions must not
+touch the auth schema.** Resolve the caller uid via the request GUCs
+instead — `coalesce(nullif(current_setting('request.jwt.claim.sub', true),
+''), nullif(current_setting('request.jwt.claims', true), '')::jsonb ->>
+'sub')::uuid` — which is exactly what auth.uid() reads, without the schema
+reference. postgres-owned definers (the rest of the API surface) may keep
+auth.uid().
+
+20260713200000_definer_uid_fix.sql re-creates all 7 keel_api-owned procs
+(keel_schedule_save/set_status/advance/enter, keel_goal_save/contribute/
+set_status) from their latest shipped bodies with only that substitution,
+plus the usual ACL restatement. Verified on scratch keel9d with the mask
+removed (`revoke usage on schema auth from public, keel_api`) as role
+authenticated: schedule save/status/advance/enter and goal
+save/contribute/set_status all pass with no auth-schema access.
