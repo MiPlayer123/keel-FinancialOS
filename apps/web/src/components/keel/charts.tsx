@@ -9,6 +9,7 @@
  * string (Law 4); no ledger arithmetic happens here (Law 1).
  */
 
+import { useId } from 'react';
 import {
   Area,
   AreaChart,
@@ -56,7 +57,9 @@ function TooltipShell({ children }: { children: React.ReactNode }) {
 
 export type BalancePoint = { date: string; balanceMinor: string; currency: string };
 
-/** Single-series balance/net-worth trend. One hue, crosshair tooltip. */
+/** Single-series balance/net-worth trend. One hue, crosshair tooltip.
+ *  Segments below zero render red — negative money only (Law 8): the
+ *  stroke/fill gradients flip color exactly at the zero crossing. */
 export function BalanceTrendChart({ points, height = 200 }: { points: BalancePoint[]; height?: number }) {
   const data = points.map((p) => ({
     date: p.date,
@@ -64,15 +67,30 @@ export function BalanceTrendChart({ points, height = 200 }: { points: BalancePoi
     minor: p.balanceMinor,
     currency: p.currency,
   }));
+  // Gradient offset where the series crosses zero (0 = top of plot, 1 = bottom).
+  const max = Math.max(...data.map((d) => d.value), 0);
+  const min = Math.min(...data.map((d) => d.value), 0);
+  const zeroOffset = max <= 0 ? 0 : min >= 0 ? 1 : max / (max - min);
+  const NEGATIVE = 'var(--destructive)';
+  // Unique per instance: two charts on one page must not share gradient ids.
+  const gid = useId();
+  const fillId = `keel-balance-fill-${gid}`;
+  const strokeId = `keel-balance-stroke-${gid}`;
 
   return (
     <div style={{ height }} className="w-full">
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 8 }}>
           <defs>
-            <linearGradient id="keel-balance-fill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.18} />
-              <stop offset="100%" stopColor="var(--chart-1)" stopOpacity={0.02} />
+            <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset={0} stopColor="var(--chart-1)" stopOpacity={0.18} />
+              <stop offset={zeroOffset} stopColor="var(--chart-1)" stopOpacity={0.02} />
+              <stop offset={zeroOffset} stopColor={NEGATIVE} stopOpacity={0.06} />
+              <stop offset={1} stopColor={NEGATIVE} stopOpacity={0.16} />
+            </linearGradient>
+            <linearGradient id={strokeId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset={zeroOffset} stopColor="var(--chart-1)" />
+              <stop offset={zeroOffset} stopColor={NEGATIVE} />
             </linearGradient>
           </defs>
           <CartesianGrid stroke={GRID} strokeDasharray="0" vertical={false} />
@@ -110,9 +128,9 @@ export function BalanceTrendChart({ points, height = 200 }: { points: BalancePoi
           <Area
             type="monotone"
             dataKey="value"
-            stroke="var(--chart-1)"
+            stroke={`url(#${strokeId})`}
             strokeWidth={2}
-            fill="url(#keel-balance-fill)"
+            fill={`url(#${fillId})`}
             dot={false}
             activeDot={{ r: 4 }}
             isAnimationActive={false}

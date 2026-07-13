@@ -109,7 +109,7 @@ export function CategoriesCard() {
   }
 
   return (
-    <Card>
+    <Card id="categories" className="scroll-mt-6">
       <CardHeader>
         <CardTitle className="flex items-center justify-between gap-2 text-base">
           <span className="flex items-center gap-2">

@@ -31,7 +31,8 @@ import { Sheet, SheetContent, SheetTrigger, SheetTitle } from '@/components/ui/s
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { KeelLogo, KeelMark } from '@/components/keel/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { HouseholdProvider } from '@/components/keel/household-context';
+import { HouseholdProvider, useHousehold } from '@/components/keel/household-context';
+import { fetchAccounts, fetchLedgerKinds, type AccountRow } from '@/lib/keel-api';
 import { QuickNav } from '@/components/keel/quick-nav';
 import { ReviewBadge } from '@/components/keel/review-badge';
 
@@ -84,7 +85,14 @@ function NavLinks({
             {!collapsed && href === '/dashboard/review' ? <ReviewBadge /> : null}
           </Link>
         );
-        if (!collapsed) return link;
+        const withSubnav =
+          !collapsed && href === '/dashboard/accounts' ? (
+            <div key={href}>
+              {link}
+              <SidebarAccounts pathname={pathname} onNavigate={onNavigate} />
+            </div>
+          ) : null;
+        if (!collapsed) return withSubnav ?? link;
         return (
           <Tooltip key={href}>
             <TooltipTrigger render={link} />
@@ -93,6 +101,89 @@ function NavLinks({
         );
       })}
     </nav>
+  );
+}
+
+/**
+ * Accounts inline in the nav, grouped assets / liabilities — the Quicken
+ * left rail. Names only (balances stay on the pages); caps keep the rail calm.
+ */
+function SidebarAccounts({
+  pathname,
+  onNavigate,
+}: {
+  pathname: string;
+  onNavigate?: (() => void) | undefined;
+}) {
+  const { householdId } = useHousehold();
+  const [accounts, setAccounts] = useState<AccountRow[]>([]);
+  const [kinds, setKinds] = useState<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    if (!householdId) return;
+    let active = true;
+    void Promise.all([fetchAccounts(householdId), fetchLedgerKinds(householdId)])
+      .then(([a, k]) => {
+        if (!active) return;
+        setAccounts(a);
+        setKinds(k);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [householdId]);
+
+  if (accounts.length === 0) return null;
+  const assets = accounts.filter((a) => kinds.get(a.ledgerAccountId) !== 'liability');
+  const liabilities = accounts.filter((a) => kinds.get(a.ledgerAccountId) === 'liability');
+  const CAP = 6;
+
+  const group = (title: string, rows: AccountRow[]) => {
+    if (rows.length === 0) return null;
+    return (
+      <div className="mt-1">
+        <p className="px-3 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+          {title}
+        </p>
+        {rows.slice(0, CAP).map((a) => {
+          const href = `/dashboard/accounts/${a.id}`;
+          const active = pathname === href;
+          return (
+            <Link
+              key={a.id}
+              href={href}
+              onClick={() => onNavigate?.()}
+              className={cn(
+                'block truncate rounded-md py-1 pl-6 pr-3 text-xs transition-colors',
+                active
+                  ? 'bg-secondary text-foreground'
+                  : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
+              )}
+              title={a.name}
+            >
+              {a.name}
+            </Link>
+          );
+        })}
+        {rows.length > CAP ? (
+          <Link
+            href="/dashboard/accounts"
+            onClick={() => onNavigate?.()}
+            className="block rounded-md py-1 pl-6 pr-3 text-xs text-muted-foreground/70 hover:text-foreground"
+          >
+            +{String(rows.length - CAP)} more
+          </Link>
+        ) : null}
+      </div>
+    );
+  };
+
+  return (
+    <div className="mb-1">
+      {group('Assets', assets)}
+      {group('Liabilities', liabilities)}
+    </div>
   );
 }
 
@@ -236,6 +327,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   return (
+    <HouseholdProvider>
     <div className="flex min-h-dvh">
       {/* Desktop sidebar — pinned to the viewport, fixed height, scrolls
           internally so a tall page never stretches the nav. */}
@@ -268,12 +360,11 @@ export function AppShell({ children }: { children: ReactNode }) {
         </header>
 
         <main className="min-w-0 flex-1">
-          <HouseholdProvider>
-            <QuickNav />
-            {children}
-          </HouseholdProvider>
+          <QuickNav />
+          {children}
         </main>
       </div>
     </div>
+    </HouseholdProvider>
   );
 }

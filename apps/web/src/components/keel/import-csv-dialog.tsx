@@ -6,12 +6,14 @@ import { toast } from 'sonner';
 
 import {
   createManualTransaction,
+  overrideTransaction,
   type AccountRow,
   type CategoryRow,
   type CommandResult,
 } from '@/lib/keel-api';
 import { sha256Hex } from '@/lib/hash';
 import { parseCsv, parseCsvAmount, parseCsvDate, guessColumns } from '@/lib/csv';
+import { looksLikeQif, parseQif, type QifSplit } from '@/lib/qif';
 import { Money } from '@/components/keel/money';
 import { Button } from '@/components/ui/button';
 import {
@@ -37,15 +39,20 @@ type ParsedRow = {
   amountMinor: string;
   description: string;
   key: string; // content-hash idempotency key (dedupes across re-imports)
+  /** QIF extras — memo becomes the note, L/S lines map to categories by name. */
+  memo?: string | null;
+  categoryName?: string | null;
+  splits?: QifSplit[];
 };
 
 /**
- * CSV import, Quicken-style but idempotent: every row rides the
+ * CSV + QIF import, Quicken-style but idempotent: every row rides the
  * transactions.manual_create envelope with a content-hash economic key, so
  * re-importing the same file REPLAYS instead of duplicating (invariant 3).
- * Rows land on the Uncategorized pads; the rules engine files them within
- * minutes (same path as synced transactions). Source preserved: the CSV's
- * description is the immutable canonical description.
+ * CSV rows land on the Uncategorized pads (rules file them within minutes);
+ * QIF rows carry Quicken's own categories and splits, matched by name where
+ * one exists. Source preserved: the file's description is the immutable
+ * canonical description; QIF memos become notes.
  */
 export function ImportCsvDialog({
   open,
@@ -74,7 +81,12 @@ export function ImportCsvDialog({
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
-  const grid = useMemo(() => (text.trim() ? parseCsv(text) : []), [text]);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const isQif = useMemo(
+    () => (text.trim() ? looksLikeQif(text, fileName ?? undefined) : false),
+    [text, fileName],
+  );
+  const grid = useMemo(() => (text.trim() && !isQif ? parseCsv(text) : []), [text, isQif]);
   const header = grid[0] ?? [];
   const guessed = useMemo(() => guessColumns(header), [header]);
   const cDate = touched ? dateCol : (dateCol ?? guessed.date);
@@ -89,6 +101,23 @@ export function ImportCsvDialog({
   }, [grid, cDate]);
 
   const parsed = useMemo(() => {
+    if (isQif) {
+      const q = parseQif(text);
+      const rows: Omit<ParsedRow, 'key'>[] = q.rows.map((r) => {
+        const flip = (m: string) => (m.startsWith('-') ? m.slice(1) : `-${m}`);
+        return {
+          date: r.date,
+          amountMinor: flipSigns ? flip(r.amountMinor) : r.amountMinor,
+          description: r.description.slice(0, 500),
+          memo: r.memo,
+          categoryName: r.categoryName,
+          splits: flipSigns
+            ? r.splits.map((sp) => ({ ...sp, amountMinor: flip(sp.amountMinor) }))
+            : r.splits,
+        };
+      });
+      return { rows, skipped: q.skipped };
+    }
     if (cDate === null || cAmount === null || cDesc === null) {
       return { rows: [] as Omit<ParsedRow, 'key'>[], skipped: 0 };
     }
@@ -108,7 +137,7 @@ export function ImportCsvDialog({
       rows.push({ date, amountMinor, description });
     }
     return { rows, skipped };
-  }, [dataRows, cDate, cAmount, cDesc, flipSigns]);
+  }, [isQif, text, dataRows, cDate, cAmount, cDesc, flipSigns]);
 
   const account = accounts.find((a) => a.id === accountId);
 
@@ -119,6 +148,21 @@ export function ImportCsvDialog({
       categories.find((c) => c.entityId === account?.entityId && c.pfcKey === wantKey) ??
       categories.find((c) => c.entityId === account?.entityId && c.name === wantName)
     );
+  }
+
+  /** Quicken category names ("Auto:Fuel") matched to KEEL categories: full
+   *  name first, then the leaf. Same entity + correct side only. */
+  function categoryByName(name: string | null | undefined, sign: 'expense' | 'income') {
+    if (!name) return undefined;
+    const find = (n: string) =>
+      categories.find(
+        (c) =>
+          c.entityId === account?.entityId &&
+          c.kind === sign &&
+          c.name.toLowerCase() === n.toLowerCase(),
+      );
+    const leaf = name.includes(':') ? name.split(':').at(-1) : null;
+    return find(name) ?? (leaf ? find(leaf) : undefined);
   }
 
   async function runImport() {
@@ -144,8 +188,33 @@ export function ImportCsvDialog({
       try {
         const key = await sha256Hex(`import|${tuple}|${String(nth)}`);
         const outflow = row.amountMinor.startsWith('-');
-        const cat = outflow ? expenseCat : incomeCat;
-        const negated = outflow ? row.amountMinor.slice(1) : `-${row.amountMinor}`;
+        const fallback = outflow ? expenseCat : incomeCat;
+        // QIF splits become REAL splits when they add up; each maps by name.
+        let payloadSplits: { categoryLedgerAccountId: string; amountMinor: string }[] | null =
+          null;
+        if (row.splits && row.splits.length > 1) {
+          const sum = row.splits.reduce((a, sp) => a + BigInt(sp.amountMinor), 0n);
+          if (sum === BigInt(row.amountMinor)) {
+            payloadSplits = row.splits.map((sp) => {
+              const spOut = sp.amountMinor.startsWith('-');
+              const cat =
+                categoryByName(sp.categoryName, spOut ? 'expense' : 'income') ??
+                (spOut ? expenseCat : incomeCat);
+              return {
+                categoryLedgerAccountId: cat.ledgerAccountId,
+                amountMinor: (-BigInt(sp.amountMinor)).toString(),
+              };
+            });
+          }
+        }
+        if (!payloadSplits) {
+          const cat =
+            categoryByName(row.categoryName, outflow ? 'expense' : 'income') ?? fallback;
+          const negated = outflow ? row.amountMinor.slice(1) : `-${row.amountMinor}`;
+          payloadSplits = [
+            { categoryLedgerAccountId: cat.ledgerAccountId, amountMinor: negated },
+          ];
+        }
         const result: CommandResult = await createManualTransaction({
           householdId,
           userId,
@@ -154,11 +223,23 @@ export function ImportCsvDialog({
           effectiveDate: row.date,
           amountMinor: row.amountMinor,
           status: 'posted',
-          splits: [{ categoryLedgerAccountId: cat.ledgerAccountId, amountMinor: negated }],
+          splits: payloadSplits,
           attemptKey: `csv-${key}`,
         });
         if (result.idempotentReplay) replayed++;
-        else imported++;
+        else {
+          imported++;
+          // Quicken memos become notes (best-effort; the row itself is safe).
+          const txnId = result.effects['canonicalTransactionId'];
+          if (row.memo && typeof txnId === 'string') {
+            await overrideTransaction({
+              householdId,
+              transactionId: txnId,
+              displayDescription: '',
+              note: row.memo,
+            }).catch(() => undefined);
+          }
+        }
       } catch {
         failed++;
       }
@@ -189,10 +270,11 @@ export function ImportCsvDialog({
     >
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Import CSV</DialogTitle>
+          <DialogTitle>Import CSV or QIF</DialogTitle>
           <DialogDescription>
-            Paste a bank CSV export (or open the file and copy it). Importing the same
-            file twice never duplicates — rows are keyed by their content.
+            Paste a bank CSV export or a Quicken QIF file (or pick the file).
+            Importing the same file twice never duplicates — rows are keyed by
+            their content. QIF categories and splits come along by name.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -225,15 +307,16 @@ export function ImportCsvDialog({
                 className="flex h-9 cursor-pointer items-center gap-2 rounded-md border border-dashed border-border px-3 text-sm text-muted-foreground hover:border-foreground/40 hover:text-foreground"
               >
                 <FileUp className="size-4" />
-                Choose .csv
+                Choose .csv / .qif
                 <input
                   id="csv-file"
                   type="file"
-                  accept=".csv,text/csv"
+                  accept=".csv,.qif,text/csv"
                   className="sr-only"
                   onChange={(e) => {
                     const f = e.target.files?.[0];
                     if (!f) return;
+                    setFileName(f.name);
                     void f.text().then(setText);
                     e.target.value = '';
                   }}
@@ -243,7 +326,7 @@ export function ImportCsvDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="csv-text">CSV</Label>
+            <Label htmlFor="csv-text">CSV / QIF</Label>
             <Textarea
               id="csv-text"
               value={text}
@@ -337,8 +420,9 @@ export function ImportCsvDialog({
                 ) : null}
               </div>
               <p className="text-xs text-muted-foreground">
-                Rows land as Uncategorized; your rules file them automatically within a
-                few minutes.
+                {isQif
+                  ? 'Categories and splits from the QIF are matched by name; anything unmatched lands as Uncategorized.'
+                  : 'Rows land as Uncategorized; your rules file them automatically within a few minutes.'}
               </p>
             </div>
           ) : null}
