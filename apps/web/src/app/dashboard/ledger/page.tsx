@@ -32,6 +32,7 @@ import {
   type CategoryRow,
 } from '@/lib/keel-api';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
+import { ImportCsvDialog } from '@/components/keel/import-csv-dialog';
 import { Money } from '@/components/keel/money';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -156,6 +157,7 @@ function LedgerTable() {
   }, []);
   const [editing, setEditing] = useState<RichTransactionRow | null>(null);
   const [adding, setAdding] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -492,6 +494,16 @@ function LedgerTable() {
           <Plus className="size-4" />
           Add
         </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9"
+          onClick={() => {
+            setImporting(true);
+          }}
+        >
+          Import
+        </Button>
       </div>
 
       {selecting ? (
@@ -581,6 +593,21 @@ function LedgerTable() {
         }}
         onSaved={() => {
           setAdding(false);
+          void refetch();
+        }}
+      />
+
+      <ImportCsvDialog
+        open={importing}
+        householdId={householdId}
+        userId={userId}
+        accounts={accounts}
+        categories={categories}
+        onClose={() => {
+          setImporting(false);
+        }}
+        onDone={() => {
+          setImporting(false);
           void refetch();
         }}
       />
