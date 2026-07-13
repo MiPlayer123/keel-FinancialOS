@@ -10,7 +10,7 @@ import {
   type CategoryRow,
   type RichTransactionRow,
 } from '@/lib/keel-api';
-import { parseSignedDollars } from '@/lib/hash';
+import { parseSignedDollars, minorToDollars } from '@/lib/hash';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -81,10 +81,6 @@ function buildPayeeMemory(history: RichTransactionRow[]): PayeeMemory[] {
   return [...byName.values()];
 }
 
-function minorToDollars(minor: string): string {
-  const m = BigInt(minor);
-  return `${(m / 100n).toString()}.${(m % 100n).toString().padStart(2, '0')}`;
-}
 
 /**
  * Add a manual transaction: one account, signed cash amount, one category or
@@ -349,7 +345,10 @@ export function AddTransactionDialog({
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Escape') setSuggestOpen(false);
-                  if (e.key === 'Tab' && suggestOpen && suggestions[0]) {
+                  // Enter applies the top suggestion; Tab keeps normal focus
+                  // movement (hijacking Tab clobbers a half-typed description).
+                  if (e.key === 'Enter' && suggestOpen && suggestions[0]) {
+                    e.preventDefault();
                     applySuggestion(suggestions[0]);
                   }
                 }}

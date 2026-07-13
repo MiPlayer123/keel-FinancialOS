@@ -552,7 +552,7 @@ function ProjectedCash({
       if (sc.currency !== currency) continue;
       let due = sc.nextDueDate;
       let guard = 0;
-      while (due <= endIso && guard < 40) {
+      while (due <= endIso && guard < 200) {
         if (due > startIso) {
           deltaByDate.set(due, (deltaByDate.get(due) ?? 0n) + BigInt(sc.amountMinor || '0'));
         }
@@ -592,7 +592,8 @@ function ProjectedCash({
         <BalanceTrendChart points={projection.points} height={180} />
         <p className="mt-2 text-xs text-muted-foreground">
           Today&apos;s asset balances rolled forward through confirmed recurring bills,
-          income, and your schedules. Lowest point:{' '}
+          income, and your schedules (if a schedule duplicates a detected series,
+          it counts twice — pause one). Lowest point:{' '}
           <Money
             amountMinor={projection.low.toString()}
             currency={projection.currency}
@@ -681,6 +682,17 @@ function ScheduledSection({
     }
     setBusyId(s.scheduleId);
     try {
+      // Re-read before posting: another tab may have Skipped or Entered this
+      // occurrence. The envelope key makes double-POSTING impossible either
+      // way; this check keeps a stale tab from posting a skipped occurrence.
+      const fresh = (await fetchSchedules(householdId)).find(
+        (x) => x.scheduleId === s.scheduleId,
+      );
+      if (!fresh || fresh.status !== 'active' || fresh.nextDueDate !== s.nextDueDate) {
+        toast.info('This occurrence changed elsewhere — refreshed instead of posting.');
+        onChanged();
+        return;
+      }
       // Splits offset the cash leg exactly: Σ splits = -amount (invariant 3).
       await createManualTransaction({
         householdId,
@@ -698,17 +710,30 @@ function ScheduledSection({
         ],
         attemptKey: `sched:${s.scheduleId}:${s.nextDueDate}`,
       });
-      await advanceSchedule({
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not enter the transaction.');
+      setBusyId(null);
+      return;
+    }
+    // The transaction IS posted from here on — say so even if the roll fails.
+    try {
+      const res = await advanceSchedule({
         householdId,
         scheduleId: s.scheduleId,
         fromDueDate: s.nextDueDate,
         reason: 'entered',
       });
-      toast.success(`Entered ${s.description} — it's in the ledger now.`);
-      onChanged();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not enter the transaction.');
+      if (res.advanced === false) {
+        toast.info(`Entered ${s.description}; the due date had already moved on.`);
+      } else {
+        toast.success(`Entered ${s.description} — it's in the ledger now.`);
+      }
+    } catch {
+      toast.warning(
+        `Entered ${s.description}, but the due date didn't roll — use Skip to advance it.`,
+      );
     } finally {
+      onChanged();
       setBusyId(null);
     }
   }
@@ -768,6 +793,9 @@ function ScheduledSection({
         <div className="overflow-hidden rounded-lg border border-border">
           {schedules.map((s, i) => {
             const isDue = s.status === 'active' && s.nextDueDate <= today;
+            // The manual-transaction envelope rejects dates > today + 1 year.
+            const tooFarOut =
+              (Date.parse(s.nextDueDate) - Date.parse(today)) / 86400000 > 365;
             const dueSoon =
               s.status === 'active' &&
               !isDue &&
@@ -805,8 +833,12 @@ function ScheduledSection({
                         variant="ghost"
                         size="icon-sm"
                         aria-label={`Enter ${s.description}`}
-                        title="Enter into the ledger"
-                        disabled={busyId === s.scheduleId}
+                        title={
+                          tooFarOut
+                            ? 'Too far out to post — the ledger takes dates up to a year ahead'
+                            : 'Enter into the ledger'
+                        }
+                        disabled={busyId === s.scheduleId || tooFarOut}
                         onClick={() => {
                           void enter(s);
                         }}

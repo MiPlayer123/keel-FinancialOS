@@ -952,3 +952,37 @@ Built this batch:
 Scratch keel8 verified end-to-end for both migrations (validation errors,
 advance fencing, once→ended, status idempotency, list emission, export DTOs,
 proacl clean). Gates: typecheck, 442 vitest, 12 deno suites, web build.
+
+## 2026-07-13 — Batch 4 adversarial review round (pre-push, no P0s)
+
+Fixed:
+- P1 schedule currency went stale when moved to a different-currency account
+  (UPDATE branch now refreshes currency from the account; amount_minor is
+  denominated in the posting account's currency). Verified on scratch.
+- P1 validation raises misused P0002 (mapped to 422 "Journal batch does not
+  balance") — all validation errors in tax-lines + schedules procs now P0009
+  (invalid_command, 400). P0002 stays reserved for genuine imbalance.
+- P1 Tax Schedule silently dropped history on archived categories (archive
+  "leave in place" keeps txns pointing at them): the report now builds its
+  tax-line map from ledger_accounts directly, archived included.
+- P1 stale-tab Enter could post an occurrence another tab had just Skipped:
+  Enter re-reads the schedule first and refuses if due date/status moved;
+  the advance result is now inspected ({advanced:false} → info toast) and a
+  posted-but-not-rolled failure says exactly that instead of a generic error.
+- P2s: QuickFill applies on Enter, never on Tab (Tab was clobbering typed
+  input incl. Shift+Tab); duplicate minorToDollars removed in favor of
+  lib/hash's negative-safe one; ManageTags Escape no longer closes the whole
+  dialog; Enter disabled for dues >1y out (envelope date cap); projection
+  guard 40→200 steps; double-count caveat in the projection caption;
+  schedule audit after-image includes accountId/categoryLedgerAccountId.
+- Documented product choice (reviewer): month-end drift — a bill due the 31st
+  becomes the 28th after February and stays there (Postgres interval
+  semantics, mirrored client-side). Quicken anchors day-of-month; if that
+  matters an anchor_day column is the fix. Deferred with the server-side
+  single-proc Enter (keel_schedule_enter) as hardening candidates.
+
+Reviewer verified clean: ACLs/proacl (no PUBLIC/anon), export chain live-run
+as service_role (65 arrays, all real columns), cross-tenant probes (P0006),
+advance fence + envelope unique index make double-post impossible, stepDue ↔
+Postgres parity incl. leap years, taxSchedule sign convention vs rich list,
+no stale count pins.

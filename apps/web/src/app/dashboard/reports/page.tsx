@@ -12,6 +12,7 @@ import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
 import {
   fetchCategories,
+  fetchCategoryTaxLines,
   type CategoryRow,
   type MonthlyCashFlowRow,
   type RichTransactionRow,
@@ -240,17 +241,13 @@ function buildFlow(rows: RichTransactionRow[], categories: CategoryRow[]): FlowG
  */
 function taxSchedule(
   rows: RichTransactionRow[],
-  categories: CategoryRow[],
+  taxByCategory: Map<string, string>,
 ): {
   currency: string;
   year: string;
   groups: { schedule: string; lines: { line: string; count: number; netMinor: bigint }[] }[];
 } {
   const year = new Date().toISOString().slice(0, 4);
-  const taxByCategory = new Map<string, string>();
-  for (const c of categories) {
-    if (c.taxLine) taxByCategory.set(c.ledgerAccountId, c.taxLine);
-  }
   const currencyCounts = new Map<string, number>();
   for (const t of rows) {
     currencyCounts.set(t.currency, (currencyCounts.get(t.currency) ?? 0) + 1);
@@ -369,7 +366,17 @@ function ReportsBody() {
   const months = useMemo(() => lastMonths(MONTHS_SHOWN), []);
   const tagReport = useMemo(() => tagTotals(txns.rows, months), [txns.rows, months]);
   const tags = tagReport.totals;
-  const taxReport = useMemo(() => taxSchedule(txns.rows, categories), [txns.rows, categories]);
+  // Includes archived categories: their history stays on the tax schedule.
+  const [taxLines, setTaxLines] = useState<Map<string, string>>(new Map());
+  useEffect(() => {
+    if (!householdId) return;
+    void fetchCategoryTaxLines(householdId)
+      .then(setTaxLines)
+      .catch(() => {
+        setTaxLines(new Map());
+      });
+  }, [householdId]);
+  const taxReport = useMemo(() => taxSchedule(txns.rows, taxLines), [txns.rows, taxLines]);
   const matrix = useMemo(
     () => buildMatrix(txns.rows, months, view),
     [txns.rows, months, view],

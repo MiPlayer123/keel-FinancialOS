@@ -72,7 +72,7 @@ begin
     if not exists (
       select 1 from unnest(enum_range(null::public.tax_line)) e where e::text = p_tax_line
     ) then
-      raise exception 'KEEL_INVALID_TAX_LINE: %', p_tax_line using errcode = 'P0002';
+      raise exception 'KEEL_INVALID_TAX_LINE: %', p_tax_line using errcode = 'P0009';
     end if;
     v_new := p_tax_line::public.tax_line;
   end if;

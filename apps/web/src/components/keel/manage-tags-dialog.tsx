@@ -111,7 +111,10 @@ export function ManageTagsDialog({
                     }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') void rename(t);
-                      if (e.key === 'Escape') setEditingId(null);
+                      if (e.key === 'Escape') {
+                        e.stopPropagation();
+                        setEditingId(null);
+                      }
                     }}
                   />
                   <Button

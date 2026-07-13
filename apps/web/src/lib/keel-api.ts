@@ -206,6 +206,23 @@ export async function fetchLedgerKinds(householdId: string): Promise<Map<string,
   return new Map(rows.map((r) => [r.id, r.kind]));
 }
 
+/**
+ * Tax-line map INCLUDING archived categories: history can permanently
+ * reference an archived category ("leave in place" archive), and a tax
+ * report that silently drops it is the worst failure mode.
+ */
+export async function fetchCategoryTaxLines(householdId: string): Promise<Map<string, string>> {
+  const { data, error } = await getSupabaseBrowserClient()
+    .from('ledger_accounts')
+    .select('id, tax_line')
+    .eq('household_id', householdId)
+    .eq('is_category', true)
+    .not('tax_line', 'is', null);
+  if (error) throw error;
+  const rows = (data as { id: string; tax_line: string }[] | null) ?? [];
+  return new Map(rows.map((r) => [r.id, r.tax_line]));
+}
+
 /** First entity of a household (needed to scope a new connection). */
 export async function fetchFirstEntityId(householdId: string): Promise<string | null> {
   const { data, error } = await getSupabaseBrowserClient()

@@ -89,25 +89,25 @@ begin
   end if;
   if p_description is null or char_length(trim(p_description)) = 0
      or char_length(p_description) > 140 then
-    raise exception 'KEEL_INVALID_DESCRIPTION' using errcode = 'P0002';
+    raise exception 'KEEL_INVALID_DESCRIPTION' using errcode = 'P0009';
   end if;
   if p_amount_minor is null or p_amount_minor = 0 then
-    raise exception 'KEEL_INVALID_AMOUNT' using errcode = 'P0002';
+    raise exception 'KEEL_INVALID_AMOUNT' using errcode = 'P0009';
   end if;
   if p_frequency is null or not exists (
     select 1 from unnest(enum_range(null::public.schedule_frequency)) f
     where f::text = p_frequency
   ) then
     raise exception 'KEEL_INVALID_FREQUENCY: %', coalesce(p_frequency, '<null>')
-      using errcode = 'P0002';
+      using errcode = 'P0009';
   end if;
   if p_next_due_date is null
      or p_next_due_date < date '1900-01-01'
      or p_next_due_date > (current_date + interval '5 years')::date then
-    raise exception 'KEEL_INVALID_DUE_DATE' using errcode = 'P0002';
+    raise exception 'KEEL_INVALID_DUE_DATE' using errcode = 'P0009';
   end if;
   if p_auto_enter_days is not null and (p_auto_enter_days < 0 or p_auto_enter_days > 30) then
-    raise exception 'KEEL_INVALID_AUTO_ENTER' using errcode = 'P0002';
+    raise exception 'KEEL_INVALID_AUTO_ENTER' using errcode = 'P0009';
   end if;
   if p_category_ledger_account_id is not null then
     select kind::text into v_kind from public.ledger_accounts
@@ -121,7 +121,7 @@ begin
     -- Sign must agree with the category side: bills → expense, income → income.
     if (p_amount_minor < 0 and v_kind <> 'expense')
        or (p_amount_minor > 0 and v_kind <> 'income') then
-      raise exception 'KEEL_CATEGORY_SIGN_MISMATCH' using errcode = 'P0002';
+      raise exception 'KEEL_CATEGORY_SIGN_MISMATCH' using errcode = 'P0009';
     end if;
   end if;
 
@@ -137,6 +137,9 @@ begin
   else
     update public.scheduled_transactions
       set account_id = p_account_id,
+          -- The account may have changed; amount_minor is denominated in the
+          -- posting account's currency, so it must follow.
+          currency = (select a.currency from public.accounts a where a.id = p_account_id),
           description = trim(p_description),
           amount_minor = p_amount_minor,
           category_ledger_account_id = p_category_ledger_account_id,
@@ -156,6 +159,7 @@ begin
           'scheduled_transaction', v_id,
           jsonb_build_object(
             'description', trim(p_description), 'amountMinor', p_amount_minor::text,
+            'accountId', p_account_id, 'categoryLedgerAccountId', p_category_ledger_account_id,
             'frequency', p_frequency, 'nextDueDate', p_next_due_date,
             'autoEnterDays', p_auto_enter_days));
   return v_id;
@@ -193,7 +197,7 @@ begin
     where st::text = p_status
   ) then
     raise exception 'KEEL_INVALID_STATUS: %', coalesce(p_status, '<null>')
-      using errcode = 'P0002';
+      using errcode = 'P0009';
   end if;
 
   select status into v_before from public.scheduled_transactions
@@ -251,7 +255,7 @@ begin
     raise exception 'KEEL_NOT_FOUND' using errcode = 'P0006';
   end if;
   if p_reason is null or p_reason not in ('entered', 'skipped') then
-    raise exception 'KEEL_INVALID_REASON' using errcode = 'P0002';
+    raise exception 'KEEL_INVALID_REASON' using errcode = 'P0009';
   end if;
 
   select * into v_row from public.scheduled_transactions
