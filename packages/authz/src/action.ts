@@ -23,6 +23,8 @@ export const WRITE_ACTIONS = [
   'statements.create',
   'reconciliations.close',
   'reconciliations.reopen',
+  'transactions.manual_create',
+  'transactions.manual_void',
 ] as const satisfies readonly CommandName[];
 
 export const EXPORT_ACTIONS = ['admin.export_all'] as const satisfies readonly CommandName[];
@@ -67,6 +69,8 @@ export const ACTION_MINIMUM_ROLES = {
   'reimbursements.reverse_settlement':'partner',
   'reimbursements.reverse_claim':'partner',
   'statements.create':'partner','reconciliations.close':'partner','reconciliations.reopen':'partner',
+  'transactions.manual_create': 'partner',
+  'transactions.manual_void': 'partner',
   'ledger.trial_balance': 'viewer',
   'transactions.list': 'viewer',
   'recurring.list': 'viewer',

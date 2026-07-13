@@ -173,6 +173,51 @@ export const CloseReconciliationPayloadSchema=z.object({statementId:StatementIdS
  adjustments:z.array(z.object({kind:ResolutionSchema.exclude(['matched_transaction']),amountMinor:MinorUnitsStringSchema,explanation:z.string().min(1).max(500)}).strict()).max(100)}).strict();
 export const ReopenReconciliationPayloadSchema=z.object({sessionId:ReconciliationSessionIdSchema,reason:z.string().min(1).max(500)}).strict();
 
+/** One split of a manual transaction: a category and its debit-positive share. */
+export const ManualTransactionSplitSchema = z.object({
+  categoryLedgerAccountId: LedgerAccountIdSchema,
+  amountMinor: MinorUnitsStringSchema,
+}).strict();
+
+/**
+ * Manual (user-entered) transaction. Splits are REAL offset postings; they
+ * must sum to exactly -amountMinor so the batch balances (Law 3). Arithmetic
+ * here is BigInt on integer strings — never floats (Law 4).
+ */
+export const ManualTransactionPayloadSchema = z.object({
+  accountId: AccountIdSchema,
+  description: z.string().min(1).max(500),
+  effectiveDate: IsoDateSchema,
+  amountMinor: MinorUnitsStringSchema,
+  status: z.enum(['pending', 'posted']),
+  splits: z.array(ManualTransactionSplitSchema).min(1).max(30),
+}).strict().superRefine((value, ctx) => {
+  if (BigInt(value.amountMinor) === 0n) {
+    ctx.addIssue({ code: 'custom', path: ['amountMinor'], message: 'amount cannot be zero' });
+    return;
+  }
+  let sum = 0n;
+  for (const split of value.splits) {
+    if (BigInt(split.amountMinor) === 0n) {
+      ctx.addIssue({ code: 'custom', path: ['splits'], message: 'split amounts cannot be zero' });
+      return;
+    }
+    sum += BigInt(split.amountMinor);
+  }
+  if (sum !== -BigInt(value.amountMinor)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['splits'],
+      message: `splits must sum to ${(-BigInt(value.amountMinor)).toString()} (got ${sum.toString()})`,
+    });
+  }
+});
+
+export const ManualVoidPayloadSchema = z.object({
+  transactionId: CanonicalTransactionIdSchema,
+  reason: z.string().min(1).max(500),
+}).strict();
+
 export const COMMAND_PAYLOAD_SCHEMAS = {
   'accounts.create': CreateAccountPayloadSchema,
   'ingest.record_raw_event': RecordRawEventPayloadSchema,
@@ -194,6 +239,8 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'statements.create':CreateStatementPayloadSchema,
   'reconciliations.close':CloseReconciliationPayloadSchema,
   'reconciliations.reopen':ReopenReconciliationPayloadSchema,
+  'transactions.manual_create': ManualTransactionPayloadSchema,
+  'transactions.manual_void': ManualVoidPayloadSchema,
 } as const;
 export type CommandProcedureName = keyof typeof COMMAND_PAYLOAD_SCHEMAS;
 export type CommandName =

@@ -62,6 +62,8 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'reimbursements.reverse_settlement':'keel_reimbursement_reverse_settlement',
   'reimbursements.reverse_claim':'keel_reimbursement_reverse_claim',
   'statements.create':'keel_statement_create','reconciliations.close':'keel_reconciliation_close','reconciliations.reopen':'keel_reconciliation_reopen',
+  'transactions.manual_create': 'keel_cmd_manual_transaction',
+  'transactions.manual_void': 'keel_cmd_manual_void',
 };
 
 const QUERY_TO_PROC: Record<string, string> = {
@@ -629,10 +631,14 @@ export default {
       const householdId = HouseholdIdSchema.safeParse(input['householdId']);
       const name = input['name'];
       const kind = input['kind'];
+      const parent = input['parentLedgerAccountId'];
+      const uuidReCat = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (
         !householdId.success ||
         typeof name !== 'string' || name.trim().length === 0 || name.length > 80 ||
-        (kind !== 'expense' && kind !== 'income')
+        (kind !== 'expense' && kind !== 'income') ||
+        (parent !== undefined && parent !== null &&
+          (typeof parent !== 'string' || !uuidReCat.test(parent)))
       ) {
         return json(400, { code: 'invalid_command', message: 'Category request failed validation.', details: {} });
       }
@@ -640,9 +646,59 @@ export default {
         p_household_id: householdId.data,
         p_name: name,
         p_kind: kind,
+        p_parent_ledger_account_id: typeof parent === 'string' ? parent : null,
       });
       if (error) return mapDbError(error);
       return json(200, { ledgerAccountId: data });
+    }
+
+    if (path === '/categories/rename' || path === '/categories/archive' || path === '/categories/reparent') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const uuidReCat = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const categoryId = input['categoryLedgerAccountId'];
+      if (!householdId.success || typeof categoryId !== 'string' || !uuidReCat.test(categoryId)) {
+        return json(400, { code: 'invalid_command', message: 'Category request failed validation.', details: {} });
+      }
+      if (path === '/categories/rename') {
+        const name = input['name'];
+        if (typeof name !== 'string' || name.trim().length === 0 || name.length > 80) {
+          return json(400, { code: 'invalid_command', message: 'Category request failed validation.', details: {} });
+        }
+        const { error } = await ctx.supabase.rpc('keel_rename_category', {
+          p_household_id: householdId.data,
+          p_category_ledger_account_id: categoryId,
+          p_name: name,
+        });
+        if (error) return mapDbError(error);
+        return json(200, { ok: true });
+      }
+      if (path === '/categories/archive') {
+        const reassignTo = input['reassignTo'];
+        if (reassignTo !== undefined && reassignTo !== null &&
+            (typeof reassignTo !== 'string' || !uuidReCat.test(reassignTo))) {
+          return json(400, { code: 'invalid_command', message: 'Category request failed validation.', details: {} });
+        }
+        const { data, error } = await ctx.supabase.rpc('keel_archive_category', {
+          p_household_id: householdId.data,
+          p_category_ledger_account_id: categoryId,
+          p_reassign_to: typeof reassignTo === 'string' ? reassignTo : null,
+        });
+        if (error) return mapDbError(error);
+        return json(200, data ?? { ok: true });
+      }
+      const parentId = input['parentLedgerAccountId'];
+      if (parentId !== undefined && parentId !== null &&
+          (typeof parentId !== 'string' || !uuidReCat.test(parentId))) {
+        return json(400, { code: 'invalid_command', message: 'Category request failed validation.', details: {} });
+      }
+      const { error } = await ctx.supabase.rpc('keel_reparent_category', {
+        p_household_id: householdId.data,
+        p_category_ledger_account_id: categoryId,
+        p_parent_ledger_account_id: typeof parentId === 'string' ? parentId : null,
+      });
+      if (error) return mapDbError(error);
+      return json(200, { ok: true });
     }
 
     if (path === '/budgets/set' || path === '/budgets/copy') {
