@@ -1174,3 +1174,70 @@ Follow-ups (batch 8): re-own the keel_schedule_* family to keel_api
 (currently migration-owner, superuser locally — bigger definer blast radius
 than the envelope procs); pgTAP suite for enter/advance/anchor semantics
 (scratch DO-block smoke exists, CI coverage doesn't).
+
+## 2026-07-13 — Batch 8: schedule proc ownership hardening + pgTAP 014
+
+`20260713170000_schedule_ownership.sql` closes both batch-7 follow-ups.
+
+Re-owned `keel_schedule_save/set_status/advance/enter` and
+`keel_list_schedules` from the migration-runner superuser to `keel_api`
+(same definer role as every other user-facing command proc — BC-v2.1 §9.1
+scope-safe calculation: no proc should carry more privilege than its body
+needs). Investigated on scratch (keel9a) before writing anything:
+`household_memberships`, `accounts`, `ledger_accounts`, `audit_log` already
+had `keel_api` table grants AND a `keel_api` definer_all RLS policy from
+20260710210500's do-block — nothing to add there. `scheduled_transactions`
+(created 20260713140000, after that grants pass) had NEITHER — relacl was
+`postgres=arwdDxt,authenticated=r,keel_export=r` with only
+`scheduled_transactions_member_read` (authenticated) and
+`scheduled_transactions_export` (keel_export) policies. Re-owning the procs
+without fixing this would have broken every one of them on the first
+non-superuser call. Added `grant select, insert, update on
+scheduled_transactions to keel_api` (no delete — no proc ever deletes a
+schedule row, Law 2: ended schedules are soft-state via `status`) plus a
+`scheduled_transactions_definer_all` policy matching the
+`recurring_series_definer_all` / `transaction_categories_definer_all`
+house pattern. `keel_cmd_manual_transaction` (nested call inside
+`keel_schedule_enter`) was already keel_api-owned, so keel_api already had
+implicit EXECUTE on it as owner; restated the grant explicitly anyway
+(house style — matches the belt-and-suspenders comment already in
+20260713160000 for the postgres case). Confirmed `ALTER FUNCTION ... OWNER
+TO` does not touch ACL rows — every `grant execute ... to authenticated`
+(and `to service_role` for the list) survived the ownership change
+unchanged; restated them explicitly anyway per house style.
+
+Tested every proc end to end on scratch after re-owning, not just the happy
+path: unauthenticated call (P0004), non-member household (P0006), invalid
+frequency and category-sign-mismatch validation (both P0009, confirming
+they are NOT misfiled as P0002 — the balanced-postings code), anchor-day
+stepping (31 → Feb 28 clamp → Mar 31 recovery, anchor_day untouched through
+the clamp), save echoing an unchanged/clamped due date (anchor_day
+preserved — the batch-7 P1 fix, re-verified under the new ownership),
+advance fenced on stale from_due (idempotent no-op, no mutation), enter
+with stale from_due (`entered:false`, zero transactions posted), enter on
+the correct from_due (`entered:true`, one canonical_transactions row under
+`manual:sched:{id}:{date}`, schedule advanced atomically), re-entering the
+same occurrence (`entered:false`, transaction count still exactly one),
+enter with no category (P0009), set_status pause, and list_schedules
+surfacing the row. All passed under `keel_api` ownership exactly as they
+did under the superuser owner — see the session's scratch transcript for
+the raw psql output.
+
+Added `supabase/tests/014_schedules.sql` (pgTAP, `plan(54)`): schema/column
+existence, ownership-is-keel_api for all five procs, EXECUTE ACL
+(anon-denied/authenticated-allowed) for all five, table-grant denial
+(anon/authenticated get no direct INSERT/UPDATE/DELETE on
+scheduled_transactions), the auth/membership/validation gates above, the
+full anchor-day + enter/re-enter/no-category flow above, and set_status +
+list. pgTAP isn't installed in this environment (no local Supabase stack),
+so the suite couldn't be run directly; every assertion's underlying SQL was
+adapted into a plain `select`/`DO` dry run and executed against scratch
+(keel9a) instead — all 54 checks evaluated true / raised the expected
+sqlstate. Real pgTAP execution (`supabase test db`) remains a CI-only
+verification for this suite; flagging per the task's own instructions
+rather than treating the dry run as a substitute proof.
+
+`pnpm build:functions` (deno at ~/.deno/bin) then `pnpm vitest run`: 451/451
+passing (up from 444 pre-batch-8 — no new suite added on the vitest side,
+the delta is the previously-failing worker suite now building its vendor
+bundle). `pnpm -w typecheck`: clean, no errors. No web changes.
