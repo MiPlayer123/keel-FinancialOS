@@ -314,6 +314,22 @@ export async function fetchLatestBalances(householdId: string): Promise<LatestBa
   return Array.isArray(data) ? data : [];
 }
 
+/** One point of a deterministic daily balance/net-worth series. */
+export type DailyBalanceRow = {
+  date: string;
+  currency: string;
+  balanceMinor: string;
+};
+
+/** One month of transfer-excluded cash flow. */
+export type MonthlyCashFlowRow = {
+  month: string;
+  currency: string;
+  inflowMinor: string;
+  outflowMinor: string;
+  netMinor: string;
+};
+
 /** One detected transfer pair (out side → in side). */
 export type TransferLinkRow = {
   linkId: string;

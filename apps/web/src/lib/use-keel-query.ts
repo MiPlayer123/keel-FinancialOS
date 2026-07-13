@@ -44,3 +44,39 @@ export function useKeelQuery<Row>(query: string, householdId: string | null) {
 
   return { ...state, refetch: run };
 }
+
+/**
+ * Silent variant for progressive sections (charts, mixes): `null` while
+ * loading, `[]` on error or empty — the section simply doesn't render until
+ * the backend supports the query. Extra params are serialized for identity.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- Row is caller-specified and types the returned rows
+export function useKeelQuerySilent<Row>(
+  query: string,
+  householdId: string | null,
+  extra?: Record<string, unknown>,
+): Row[] | null {
+  const [rows, setRows] = useState<Row[] | null>(null);
+  const extraKey = JSON.stringify(extra ?? {});
+
+  useEffect(() => {
+    if (!householdId) {
+      setRows([]);
+      return;
+    }
+    let active = true;
+    setRows(null);
+    keelQuery<Row>(query, householdId, JSON.parse(extraKey) as Record<string, unknown>)
+      .then((res) => {
+        if (active) setRows(res.rows);
+      })
+      .catch(() => {
+        if (active) setRows([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [query, householdId, extraKey]);
+
+  return rows;
+}

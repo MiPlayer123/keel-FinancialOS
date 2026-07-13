@@ -76,6 +76,9 @@ const QUERY_TO_PROC: Record<string, string> = {
   'statements.list':'keel_list_statements',
   'dashboard.cash_flow': 'keel_cash_flow',
   'dashboard.net_worth': 'keel_net_worth_as_of',
+  'dashboard.net_worth_daily': 'keel_net_worth_daily',
+  'dashboard.cash_flow_monthly': 'keel_cash_flow_monthly',
+  'accounts.balance_daily': 'keel_account_balance_daily',
   'transfers.list': 'keel_list_transfers',
 };
 
@@ -924,6 +927,30 @@ export default {
         const db = body as { from?: unknown; to?: unknown };
         const past = new Date();
         past.setUTCDate(past.getUTCDate() - 30);
+        rpcArgs.p_from = isoDate(db.from) ?? past.toISOString().slice(0, 10);
+        rpcArgs.p_to = isoDate(db.to) ?? todayIso;
+      } else if (query.query === 'dashboard.net_worth_daily') {
+        const db = body as { from?: unknown; to?: unknown };
+        const past = new Date();
+        past.setUTCDate(past.getUTCDate() - 90);
+        rpcArgs.p_from = isoDate(db.from) ?? past.toISOString().slice(0, 10);
+        rpcArgs.p_to = isoDate(db.to) ?? todayIso;
+      } else if (query.query === 'dashboard.cash_flow_monthly') {
+        const db = body as { from?: unknown; to?: unknown };
+        const past = new Date();
+        past.setUTCMonth(past.getUTCMonth() - 11);
+        past.setUTCDate(1);
+        rpcArgs.p_from = isoDate(db.from) ?? past.toISOString().slice(0, 10);
+        rpcArgs.p_to = isoDate(db.to) ?? todayIso;
+      } else if (query.query === 'accounts.balance_daily') {
+        const db = body as { accountId?: unknown; from?: unknown; to?: unknown };
+        const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (typeof db.accountId !== 'string' || !uuidRe.test(db.accountId)) {
+          return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });
+        }
+        const past = new Date();
+        past.setUTCDate(past.getUTCDate() - 90);
+        rpcArgs.p_account_id = db.accountId;
         rpcArgs.p_from = isoDate(db.from) ?? past.toISOString().slice(0, 10);
         rpcArgs.p_to = isoDate(db.to) ?? todayIso;
       } else if (query.query === 'dashboard.net_worth') {

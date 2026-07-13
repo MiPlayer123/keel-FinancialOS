@@ -1,15 +1,29 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { Wallet } from 'lucide-react';
 
 import { AppShell } from '@/components/keel/app-shell';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
-import { useKeelQuery } from '@/lib/use-keel-query';
-import { fetchAccounts, type AccountRow, type TrialBalanceRow } from '@/lib/keel-api';
+import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
+import {
+  fetchAccounts,
+  type AccountRow,
+  type DailyBalanceRow,
+  type MonthlyCashFlowRow,
+  type RichTransactionRow,
+  type TrialBalanceRow,
+} from '@/lib/keel-api';
 import { CashFlowCard } from '@/components/keel/cash-flow-card';
+import {
+  BalanceTrendChart,
+  CashFlowMonthlyChart,
+  CategoryBarList,
+} from '@/components/keel/charts';
+import { spendingMix } from '@/lib/spending';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 
@@ -27,6 +41,15 @@ export default function HomePage() {
 function HomeBody() {
   const { householdId, ready } = useHousehold();
   const balances = useKeelQuery<TrialBalanceRow>('ledger.trial_balance', householdId);
+  const netWorthTrend = useKeelQuerySilent<DailyBalanceRow>(
+    'dashboard.net_worth_daily',
+    householdId,
+  );
+  const monthlyFlow = useKeelQuerySilent<MonthlyCashFlowRow>(
+    'dashboard.cash_flow_monthly',
+    householdId,
+  );
+  const richTxns = useKeelQuerySilent<RichTransactionRow>('transactions.rich', householdId);
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
 
   useEffect(() => {
@@ -74,6 +97,11 @@ function HomeBody() {
     return acc + BigInt(b);
   }, 0n);
 
+  const spending = spendingMix(richTxns ?? []);
+  const showMonthlyFlow =
+    monthlyFlow !== null &&
+    monthlyFlow.some((m) => m.inflowMinor !== '0' || m.outflowMinor !== '0');
+
   return (
     <>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -94,6 +122,46 @@ function HomeBody() {
         <CashFlowCard householdId={householdId} />
       </div>
 
+      {netWorthTrend !== null && netWorthTrend.length > 1 ? (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Net worth · last 90 days
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <BalanceTrendChart points={netWorthTrend} />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {showMonthlyFlow ? (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Cash flow by month
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <CashFlowMonthlyChart rows={monthlyFlow} />
+            </CardContent>
+          </Card>
+        ) : null}
+        {spending.length > 0 ? (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Spending · last 30 days
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <CategoryBarList items={spending} />
+            </CardContent>
+          </Card>
+        ) : null}
+      </div>
+
       <section className="space-y-3">
         <h2 className="text-sm font-medium text-muted-foreground">Accounts</h2>
         {accountList.length === 0 ? (
@@ -105,9 +173,10 @@ function HomeBody() {
         ) : (
           <div className="overflow-hidden rounded-lg border border-border">
             {accountList.map((a, i) => (
-              <div
+              <Link
                 key={a.id}
-                className={`flex items-center justify-between px-4 py-3 ${
+                href={`/dashboard/accounts/${a.id}`}
+                className={`flex items-center justify-between px-4 py-3 transition-colors hover:bg-secondary/50 ${
                   i > 0 ? 'border-t border-border' : ''
                 }`}
               >
@@ -122,7 +191,7 @@ function HomeBody() {
                   currency={a.currency}
                   className="text-sm"
                 />
-              </div>
+              </Link>
             ))}
           </div>
         )}

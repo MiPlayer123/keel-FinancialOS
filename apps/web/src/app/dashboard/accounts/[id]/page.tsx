@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { ArrowLeft, ReceiptText } from 'lucide-react';
@@ -9,30 +9,20 @@ import { AppShell } from '@/components/keel/app-shell';
 import { EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
-import { useKeelQuery } from '@/lib/use-keel-query';
+import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
 import {
   fetchAccounts,
   fetchLedgerKinds,
   type AccountRow,
+  type DailyBalanceRow,
+  type RichTransactionRow,
   type TrialBalanceRow,
-  type TransactionRow,
 } from '@/lib/keel-api';
+import { BalanceTrendChart, CategoryBarList } from '@/components/keel/charts';
+import { spendingMix } from '@/lib/spending';
 import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-
-const STATUS_LABEL: Record<TransactionRow['status'], string> = {
-  pending: 'Pending',
-  posted: 'Posted',
-  reviewed: 'Reviewed',
-};
 
 export default function AccountDetailPage() {
   const params = useParams<{ id: string }>();
@@ -46,7 +36,10 @@ export default function AccountDetailPage() {
 function AccountDetailBody({ accountId }: { accountId: string }) {
   const { householdId, ready } = useHousehold();
   const balances = useKeelQuery<TrialBalanceRow>('ledger.trial_balance', householdId);
-  const txns = useKeelQuery<TransactionRow>('transactions.list', householdId);
+  const txns = useKeelQuery<RichTransactionRow>('transactions.rich', householdId);
+  const trend = useKeelQuerySilent<DailyBalanceRow>('accounts.balance_daily', householdId, {
+    accountId,
+  });
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
   const [kinds, setKinds] = useState<Map<string, string> | null>(null);
 
@@ -73,6 +66,12 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
     };
   }, [householdId]);
 
+  const accountTxns = useMemo(
+    () => txns.rows.filter((t) => t.accountId === accountId),
+    [txns.rows, accountId],
+  );
+  const spending = useMemo(() => spendingMix(accountTxns), [accountTxns]);
+
   const loading = !ready || balances.loading || accounts === null || kinds === null;
   if (loading) {
     return (
@@ -97,7 +96,6 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
   const balanceByLedger = new Map(balances.rows.map((r) => [r.ledgerAccountId, r.balanceMinor]));
   const balanceMinor = balanceByLedger.get(account.ledgerAccountId) ?? '0';
   const kind = kinds.get(account.ledgerAccountId) ?? 'asset';
-  const rows = txns.rows.filter((t) => t.accountId === accountId);
 
   return (
     <div className="space-y-6 p-6">
@@ -121,41 +119,82 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
         </div>
       </div>
 
-      <section className="space-y-2">
-        <h2 className="text-sm font-medium text-muted-foreground">Transactions</h2>
-        {rows.length === 0 ? (
-          <EmptyState
-            icon={<ReceiptText className="size-6" />}
-            title="No transactions yet"
-            description="Transactions for this account will appear here once it syncs."
-          />
-        ) : (
-          <div className="overflow-hidden rounded-lg border border-border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-32">Date</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead className="w-28 text-right">Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((t) => (
-                  <TableRow key={t.transactionId}>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      {t.effectiveDate}
-                    </TableCell>
-                    <TableCell className="font-medium">{t.description}</TableCell>
-                    <TableCell className="text-right">
-                      <Badge variant="secondary">{STATUS_LABEL[t.status]}</Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </section>
+      {trend !== null && trend.length > 1 ? (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Balance · last 90 days
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <BalanceTrendChart points={trend} />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <section className="space-y-2 lg:col-span-2">
+          <h2 className="text-sm font-medium text-muted-foreground">
+            Transactions{accountTxns.length > 0 ? ` (${String(accountTxns.length)})` : ''}
+          </h2>
+          {accountTxns.length === 0 ? (
+            <EmptyState
+              icon={<ReceiptText className="size-6" />}
+              title="No transactions yet"
+              description="Transactions for this account will appear here once it syncs."
+            />
+          ) : (
+            <div className="overflow-hidden rounded-lg border border-border">
+              {accountTxns.map((t, i) => (
+                <div
+                  key={t.transactionId}
+                  className={`flex items-center gap-3 px-4 py-2.5 ${
+                    i > 0 ? 'border-t border-border' : ''
+                  }`}
+                >
+                  <span className="w-14 shrink-0 font-mono text-xs text-muted-foreground">
+                    {t.effectiveDate.slice(5)}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium" title={t.description}>
+                      {t.description}
+                    </p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {t.transferStatus === 'confirmed' ? 'Transfer' : (t.categoryName ?? '—')}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {t.status === 'pending' ? (
+                      <Badge variant="outline" className="hidden text-[10px] uppercase sm:inline-flex">
+                        Pending
+                      </Badge>
+                    ) : null}
+                    <Money
+                      amountMinor={t.amountMinor}
+                      currency={t.currency}
+                      signed
+                      className="min-w-24 text-right text-sm tabular-nums"
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {spending.length > 0 ? (
+          <section className="space-y-2">
+            <h2 className="text-sm font-medium text-muted-foreground">
+              Spending mix · last 30 days
+            </h2>
+            <Card>
+              <CardContent className="pt-5">
+                <CategoryBarList items={spending} />
+              </CardContent>
+            </Card>
+          </section>
+        ) : null}
+      </div>
     </div>
   );
 }
