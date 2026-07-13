@@ -317,7 +317,19 @@ describe('webhook-provider verification (test 11)', () => {
     expect((await postWebhook(body, jwt)).status).toBe(401);
     expect((await postWebhook(body, jwt)).status).toBe(401);
     expect(await tableCount('plaid_webhook_key_test_responses', { kid })).toBe(1);
-    const { data: cached } = await serviceClient().rpc('keel_webhook_key_get', { p_kid: kid });
+    // Destructuring only `data` turned a transient PostgREST error into a
+    // baffling "expected null to match object" CI flake; retry errors, but a
+    // clean null (row genuinely missing) still fails immediately.
+    let cached: unknown;
+    for (let attempt = 0; ; attempt++) {
+      const { data, error } = await serviceClient().rpc('keel_webhook_key_get', { p_kid: kid });
+      if (!error) {
+        cached = data;
+        break;
+      }
+      if (attempt >= 2) throw new Error(`keel_webhook_key_get failed: ${error.message}`);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
     expect(cached).toMatchObject({ notFound: true, stale: false });
   });
 
