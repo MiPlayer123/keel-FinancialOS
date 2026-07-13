@@ -14,7 +14,8 @@ create or replace function public.keel_cash_flow_forecast(
 language plpgsql
 security definer
 set search_path = public
-stable
+-- volatile (default): the proc materializes a temp table; CREATE TEMP TABLE
+-- is not allowed in a STABLE function. It performs no durable writes.
 as $$
 declare
   v_uid uuid := coalesce(
