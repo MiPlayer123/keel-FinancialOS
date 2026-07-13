@@ -33,13 +33,20 @@ const seedPositiveKey = async (
   jwk: jose.JWK,
   expiredAt: string | null = null,
 ): Promise<void> => {
-  const { error } = await serviceClient().rpc('keel_webhook_key_put_positive', {
-    p_kid: kid,
-    p_jwk: { ...publicOnly(jwk), kid, alg: 'ES256', use: 'sig' },
-    p_key_created_at: new Date(0).toISOString(),
-    p_key_expired_at: expiredAt,
-  });
-  if (error) throw new Error(`key seed failed: ${error.message}`);
+  // Retries transient PostgREST errors (seen under CI load as "An invalid
+  // response was received from the upstream server") rather than failing the
+  // whole suite on infrastructure noise unrelated to the test's assertions.
+  for (let attempt = 0; ; attempt++) {
+    const { error } = await serviceClient().rpc('keel_webhook_key_put_positive', {
+      p_kid: kid,
+      p_jwk: { ...publicOnly(jwk), kid, alg: 'ES256', use: 'sig' },
+      p_key_created_at: new Date(0).toISOString(),
+      p_key_expired_at: expiredAt,
+    });
+    if (!error) return;
+    if (attempt >= 2) throw new Error(`key seed failed: ${error.message}`);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 };
 
 const signBody = async (

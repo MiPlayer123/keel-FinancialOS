@@ -8,7 +8,21 @@
 -- Follows the definer_uid_fix.sql pattern (this file's header): these procs
 -- end up owned by keel_api, so the caller id is read from the JWT claim GUCs,
 -- never auth.uid() (keel_api has no USAGE on the auth schema).
-
+--
+-- Codex review (PR #8) caught two real breaks in the first cut, both fixed
+-- here:
+--   1. This only checked household membership, not write role — every other
+--      mutating proc gates through keel_assert_member_write (owner/partner
+--      only), so a viewer/professional could create durable entity rows.
+--   2. entity_memberships was never populated for the new entity. The TS
+--      authorizer (packages/authz/src/authorize.ts) requires a matching
+--      entity_memberships row whenever a command's resource carries an
+--      entityId — accounts.create does exactly that — so the creator's very
+--      next "add account to this entity" call was rejected as a household
+--      scope violation (404), making the picker this migration ships
+--      unusable end to end. The creator is granted membership on their own
+--      new entity; extending that to other household roles automatically is
+--      a separate product decision, not bundled in here.
 create or replace function public.keel_create_entity(
   p_household_id uuid,
   p_name text,
@@ -25,15 +39,7 @@ declare
   )::uuid;
   v_id uuid;
 begin
-  if v_uid is null then
-    raise exception 'KEEL_NOT_AUTHENTICATED' using errcode = 'P0004';
-  end if;
-  if not exists (
-    select 1 from public.household_memberships
-    where household_id = p_household_id and user_id = v_uid
-  ) then
-    raise exception 'KEEL_NOT_FOUND' using errcode = 'P0006';
-  end if;
+  perform public.keel_assert_member_write(p_household_id);
   if p_name is null or char_length(trim(p_name)) = 0 or char_length(p_name) > 200 then
     raise exception 'KEEL_INVALID_NAME' using errcode = 'P0009';
   end if;
@@ -48,6 +54,9 @@ begin
   insert into public.entities (household_id, name, kind)
   values (p_household_id, trim(p_name), p_kind::public.entity_kind)
   returning id into v_id;
+
+  insert into public.entity_memberships (entity_id, user_id)
+  values (v_id, v_uid);
 
   insert into public.audit_log (household_id, actor, action, object_type, object_id, after)
   values (p_household_id, jsonb_build_object('kind', 'user', 'userId', v_uid),
