@@ -12,6 +12,8 @@ import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
 import {
   fetchAccounts,
   fetchCashFlowForecast,
+  fetchConnections,
+  syncConnection,
   type AccountRow,
   type DailyBalanceRow,
   type ForecastBill,
@@ -29,6 +31,9 @@ import {
 import { spendingMix } from '@/lib/spending';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Button } from '@/components/ui/button';
+import { RefreshCw, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 
 export default function HomePage() {
   return (
@@ -39,6 +44,81 @@ export default function HomePage() {
       </div>
     </AppShell>
   );
+}
+
+/**
+ * "Do I have to sync manually?" — no: KEEL syncs itself every few minutes
+ * (a 3-minute drain cron plus a 15-minute scheduler). This shows when data
+ * last landed and offers an immediate refresh for the impatient moment.
+ */
+function SyncStatus({ householdId }: { householdId: string }) {
+  const [lastSync, setLastSync] = useState<string | null>(null);
+  const [connectionId, setConnectionId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    fetchConnections(householdId)
+      .then((conns) => {
+        if (!active) return;
+        const synced = conns
+          .filter((c) => c.lastSuccessfulSyncAt !== null)
+          .sort((a, b) => (b.lastSuccessfulSyncAt ?? '').localeCompare(a.lastSuccessfulSyncAt ?? ''));
+        setLastSync(synced[0]?.lastSuccessfulSyncAt ?? null);
+        setConnectionId(conns[0]?.id ?? null);
+      })
+      .catch(() => {
+        if (active) setLastSync(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [householdId]);
+
+  if (!connectionId) return null;
+
+  const ago = lastSync ? agoLabel(lastSync) : null;
+
+  async function syncNow() {
+    if (!connectionId) return;
+    setBusy(true);
+    try {
+      await syncConnection({ householdId, connectionId });
+      toast.success('Sync started — new transactions land within a minute or two.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Sync failed to start.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <span className="flex items-center gap-2 text-xs text-muted-foreground">
+      {ago ? `Updated ${ago}` : 'Syncs automatically'}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-6 px-1.5 text-xs"
+        disabled={busy}
+        onClick={() => {
+          void syncNow();
+        }}
+      >
+        {busy ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
+        Sync
+      </Button>
+    </span>
+  );
+}
+
+function agoLabel(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  const mins = Math.trunc(ms / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${String(mins)}m ago`;
+  const hours = Math.trunc(mins / 60);
+  if (hours < 24) return `${String(hours)}h ago`;
+  return `${String(Math.trunc(hours / 24))}d ago`;
 }
 
 function HomeBody() {
@@ -226,7 +306,10 @@ function HomeBody() {
       </div>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-medium text-muted-foreground">Accounts</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-medium text-muted-foreground">Accounts</h2>
+          <SyncStatus householdId={householdId} />
+        </div>
         {accountList.length === 0 ? (
           <EmptyState
             icon={<Wallet className="size-6" />}

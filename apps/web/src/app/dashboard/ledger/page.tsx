@@ -694,7 +694,11 @@ function TxnList({
                 <span className="sm:hidden"> · {t.categoryName}</span>
               ) : null}
               {t.note ? (
-                <StickyNote className="ml-1 inline size-3 align-[-1px]" aria-label="Has note" />
+                <span className="text-muted-foreground/80">
+                  {' '}
+                  <StickyNote className="inline size-3 align-[-1px]" aria-label="Note" />{' '}
+                  {t.note.length > 40 ? `${t.note.slice(0, 40)}…` : t.note}
+                </span>
               ) : null}
             </p>
           </button>
