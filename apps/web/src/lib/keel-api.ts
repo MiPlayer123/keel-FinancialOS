@@ -330,6 +330,11 @@ export type RichTransactionRow = {
   tags?: { tagId: string; name: string }[];
   /** Present when this transaction is one side of a suggested/confirmed transfer pair. */
   transferStatus?: 'suggested' | 'confirmed' | null;
+  /** Other leg's account, present only once the pairing is CONFIRMED (absent pre-migration). */
+  counterpartyAccountId?: string | null;
+  counterpartyAccountName?: string | null;
+  /** Other leg's transaction id, for a future "jump to" affordance. */
+  counterpartyTransactionId?: string | null;
 };
 
 export type CategoryRow = {

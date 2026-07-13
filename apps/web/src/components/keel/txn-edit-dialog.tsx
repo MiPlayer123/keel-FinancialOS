@@ -150,9 +150,22 @@ export function TxnList({
             </p>
           </button>
           {t.transferStatus === 'confirmed' ? (
-            <Badge variant="secondary" className="hidden shrink-0 gap-1 sm:inline-flex">
-              <ArrowLeftRight className="size-3" />
-              Transfer
+            <Badge
+              variant="secondary"
+              className="hidden max-w-40 shrink-0 gap-1 sm:inline-flex"
+              title={
+                t.counterpartyAccountName
+                  ? `Transfer ${BigInt(t.amountMinor) < 0n ? 'to' : 'from'} ${t.counterpartyAccountName}`
+                  : 'Transfer'
+              }
+            >
+              <ArrowLeftRight className="size-3 shrink-0" />
+              <span className="truncate">
+                Transfer
+                {t.counterpartyAccountName
+                  ? ` ${BigInt(t.amountMinor) < 0n ? '→' : '←'} ${t.counterpartyAccountName}`
+                  : ''}
+              </span>
             </Badge>
           ) : t.splits && t.splits.length > 0 ? (
             <Badge
@@ -514,6 +527,22 @@ export function TxnEditDialog({
                 <p className="text-xs text-muted-foreground">
                   Split transactions are categorized by their splits. To change them,
                   void and re-enter.
+                </p>
+              </div>
+            ) : null}
+            {row.transferStatus === 'confirmed' ? (
+              <div className="space-y-1.5">
+                <Label>Transfer</Label>
+                <div className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
+                  <ArrowLeftRight className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 truncate">
+                    {BigInt(row.amountMinor) < 0n ? 'To ' : 'From '}
+                    {row.counterpartyAccountName ?? 'another account'}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Confirmed as a transfer on the Review page — excluded from
+                  income/expense totals. Not editable here.
                 </p>
               </div>
             ) : null}
