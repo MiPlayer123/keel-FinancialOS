@@ -73,7 +73,7 @@ function LedgerTable() {
     if (!householdId) return;
     try {
       await categorizeTransaction({ householdId, transactionId: txnId, categoryLedgerAccountId });
-      refetch();
+      await refetch();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not update category.');
     }
@@ -144,13 +144,17 @@ function LedgerTable() {
       </div>
 
       {grouping === 'none' ? (
-        <TxnList rows={filtered} categories={categories} onRecategorize={recategorize} />
+        <TxnList rows={filtered} categories={categories} onRecategorize={(id, cat) => {
+          void recategorize(id, cat);
+        }} />
       ) : (
         <GroupedList
           rows={filtered}
           categories={categories}
           groupBy={grouping}
-          onRecategorize={recategorize}
+          onRecategorize={(id, cat) => {
+          void recategorize(id, cat);
+        }}
         />
       )}
     </div>
