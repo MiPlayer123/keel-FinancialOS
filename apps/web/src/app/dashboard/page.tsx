@@ -11,12 +11,15 @@ import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
 import {
   fetchAccounts,
+  fetchCashFlowForecast,
   type AccountRow,
   type DailyBalanceRow,
+  type ForecastBill,
   type MonthlyCashFlowRow,
   type RichTransactionRow,
   type TrialBalanceRow,
 } from '@/lib/keel-api';
+import { Badge } from '@/components/ui/badge';
 import { CashFlowCard } from '@/components/keel/cash-flow-card';
 import {
   BalanceTrendChart,
@@ -51,6 +54,21 @@ function HomeBody() {
   );
   const richTxns = useKeelQuerySilent<RichTransactionRow>('transactions.rich', householdId);
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
+  const [forecast, setForecast] = useState<{
+    rows: DailyBalanceRow[];
+    bills: ForecastBill[];
+  } | null>(null);
+
+  useEffect(() => {
+    if (!householdId) return;
+    let active = true;
+    void fetchCashFlowForecast(householdId, 30).then((f) => {
+      if (active) setForecast(f);
+    });
+    return () => {
+      active = false;
+    };
+  }, [householdId]);
 
   useEffect(() => {
     if (!householdId) return;
@@ -121,6 +139,51 @@ function HomeBody() {
         </Card>
         <CashFlowCard householdId={householdId} />
       </div>
+
+      {forecast !== null && forecast.rows.length > 1 ? (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+              Projected cash · next 30 days
+              <Badge variant="outline" className="text-[10px] uppercase">
+                Projection
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <BalanceTrendChart points={forecast.rows} height={160} />
+            {forecast.bills.length > 0 ? (
+              <div className="space-y-1">
+                {forecast.bills.slice(0, 5).map((b) => (
+                  <div
+                    key={`${b.seriesId}-${b.date}`}
+                    className="flex items-center gap-3 text-sm"
+                  >
+                    <span className="w-14 shrink-0 font-mono text-xs text-muted-foreground">
+                      {b.date.slice(5)}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{b.name}</span>
+                    <Money
+                      amountMinor={b.sign === 'outflow' ? `-${b.amountMinor}` : b.amountMinor}
+                      currency={b.currency}
+                      signed
+                      className="shrink-0 text-sm"
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                No confirmed recurring bills in the window yet — confirm suggestions on the
+                Recurring page to project them here.
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              A preview from your confirmed recurring bills — not a statement of record.
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {netWorthTrend !== null && netWorthTrend.length > 1 ? (
         <Card>

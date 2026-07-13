@@ -365,6 +365,31 @@ export async function decideTransfer(input: {
   });
 }
 
+/** Class-C cash projection (preview-only): daily series + upcoming bills. */
+export type ForecastBill = {
+  date: string;
+  seriesId: string;
+  name: string;
+  sign: 'inflow' | 'outflow';
+  amountMinor: string;
+  currency: string;
+};
+
+export async function fetchCashFlowForecast(
+  householdId: string,
+  days = 30,
+): Promise<{ rows: DailyBalanceRow[]; bills: ForecastBill[] } | null> {
+  try {
+    const res = await invoke<{ rows?: DailyBalanceRow[]; bills?: ForecastBill[] }>(
+      'api/queries',
+      { query: 'dashboard.cash_flow_forecast', householdId, days },
+    );
+    return { rows: res.rows ?? [], bills: res.bills ?? [] };
+  } catch {
+    return null;
+  }
+}
+
 /** One expense category's budget + pinned spent for a month. */
 export type BudgetRow = {
   categoryLedgerAccountId: string;

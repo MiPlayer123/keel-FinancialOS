@@ -82,6 +82,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'transfers.list': 'keel_list_transfers',
   'rules.list': 'keel_list_rules',
   'budgets.list': 'keel_list_budgets',
+  'dashboard.cash_flow_forecast': 'keel_cash_flow_forecast',
 };
 
 // deno-lint-ignore no-explicit-any
@@ -1054,6 +1055,10 @@ export default {
         rpcArgs.p_account_id = db.accountId;
         rpcArgs.p_from = isoDate(db.from) ?? past.toISOString().slice(0, 10);
         rpcArgs.p_to = isoDate(db.to) ?? todayIso;
+      } else if (query.query === 'dashboard.cash_flow_forecast') {
+        const db = body as { days?: unknown };
+        const days = typeof db.days === 'number' ? Math.trunc(db.days) : 30;
+        rpcArgs.p_days = Math.min(Math.max(days, 1), 120);
       } else if (query.query === 'budgets.list') {
         const db = body as { month?: unknown };
         rpcArgs.p_month = isoDate(db.month) ?? `${todayIso.slice(0, 7)}-01`;
