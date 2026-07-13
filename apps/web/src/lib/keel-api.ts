@@ -206,6 +206,23 @@ export async function fetchLedgerKinds(householdId: string): Promise<Map<string,
   return new Map(rows.map((r) => [r.id, r.kind]));
 }
 
+/**
+ * Tax-line map INCLUDING archived categories: history can permanently
+ * reference an archived category ("leave in place" archive), and a tax
+ * report that silently drops it is the worst failure mode.
+ */
+export async function fetchCategoryTaxLines(householdId: string): Promise<Map<string, string>> {
+  const { data, error } = await getSupabaseBrowserClient()
+    .from('ledger_accounts')
+    .select('id, tax_line')
+    .eq('household_id', householdId)
+    .eq('is_category', true)
+    .not('tax_line', 'is', null);
+  if (error) throw error;
+  const rows = (data as { id: string; tax_line: string }[] | null) ?? [];
+  return new Map(rows.map((r) => [r.id, r.tax_line]));
+}
+
 /** First entity of a household (needed to scope a new connection). */
 export async function fetchFirstEntityId(householdId: string): Promise<string | null> {
   const { data, error } = await getSupabaseBrowserClient()
@@ -325,7 +342,22 @@ export type CategoryRow = {
   /** Seeded system category (renameable but key-stable). */
   isSystem?: boolean;
   pfcKey?: string | null;
+  /** Optional IRS line for the tax schedule (absent pre-migration). */
+  taxLine?: string | null;
 };
+
+/** Map a category to an IRS tax line (null clears). User-set only. */
+export async function setCategoryTaxLine(input: {
+  householdId: string;
+  categoryLedgerAccountId: string;
+  taxLine: string | null;
+}): Promise<unknown> {
+  return invoke('api/categories/set-tax-line', {
+    householdId: input.householdId,
+    categoryLedgerAccountId: input.categoryLedgerAccountId,
+    taxLine: input.taxLine,
+  });
+}
 
 /** Categories (ledger accounts flagged is_category) for the re-categorize picker. */
 export async function fetchCategories(householdId: string): Promise<CategoryRow[]> {
@@ -656,6 +688,84 @@ export type TrialBalanceRow = {
   currency: string;
   balanceMinor: string;
 };
+
+export type ScheduleRow = {
+  scheduleId: string;
+  accountId: string;
+  description: string;
+  /** Signed minor units: negative = bill, positive = income. */
+  amountMinor: string;
+  currency: string;
+  categoryLedgerAccountId: string | null;
+  categoryName: string | null;
+  frequency: 'once' | 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'semiannual' | 'annual';
+  nextDueDate: string;
+  autoEnterDays: number | null;
+  status: 'active' | 'paused';
+};
+
+export async function fetchSchedules(householdId: string): Promise<ScheduleRow[]> {
+  const data = await invoke<ScheduleRow[]>('api/queries', {
+    query: 'schedules.list',
+    householdId,
+  });
+  return Array.isArray(data) ? data : [];
+}
+
+/** Create (no scheduleId) or update a scheduled bill/income. */
+export async function saveSchedule(input: {
+  householdId: string;
+  scheduleId?: string;
+  accountId: string;
+  description: string;
+  amountMinor: string;
+  categoryLedgerAccountId: string | null;
+  frequency: ScheduleRow['frequency'];
+  nextDueDate: string;
+  autoEnterDays: number | null;
+}): Promise<{ scheduleId?: string }> {
+  return invoke('api/schedules/save', {
+    householdId: input.householdId,
+    scheduleId: input.scheduleId ?? null,
+    accountId: input.accountId,
+    description: input.description,
+    amountMinor: input.amountMinor,
+    categoryLedgerAccountId: input.categoryLedgerAccountId,
+    frequency: input.frequency,
+    nextDueDate: input.nextDueDate,
+    autoEnterDays: input.autoEnterDays,
+  });
+}
+
+export async function setScheduleStatus(input: {
+  householdId: string;
+  scheduleId: string;
+  status: 'active' | 'paused' | 'ended';
+}): Promise<unknown> {
+  return invoke('api/schedules/set-status', {
+    householdId: input.householdId,
+    scheduleId: input.scheduleId,
+    status: input.status,
+  });
+}
+
+/**
+ * Roll the due date past one occurrence. Fenced on the exact due date, so
+ * double-clicks and retries no-op ({advanced: false}).
+ */
+export async function advanceSchedule(input: {
+  householdId: string;
+  scheduleId: string;
+  fromDueDate: string;
+  reason: 'entered' | 'skipped';
+}): Promise<{ advanced?: boolean; nextDueDate?: string; status?: string }> {
+  return invoke('api/schedules/advance', {
+    householdId: input.householdId,
+    scheduleId: input.scheduleId,
+    fromDueDate: input.fromDueDate,
+    reason: input.reason,
+  });
+}
 
 export type RecurringOccurrence = {
   occurrenceId: string;

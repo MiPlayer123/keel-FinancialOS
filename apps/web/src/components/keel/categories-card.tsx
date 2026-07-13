@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Tags, Plus, Loader2, Pencil, Archive, CornerDownRight, Check, X } from 'lucide-react';
+import { Tags, Plus, Loader2, Pencil, Archive, CornerDownRight, Check, X, Landmark } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { useHousehold } from '@/components/keel/household-context';
@@ -11,8 +11,10 @@ import {
   fetchCategories,
   renameCategory,
   reparentCategory,
+  setCategoryTaxLine,
   type CategoryRow,
 } from '@/lib/keel-api';
+import { TAX_LINES, taxLineLabel } from '@/lib/tax-lines';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -356,8 +358,9 @@ function CategoryManageRow({
   first: boolean;
   onChanged: () => void;
 }) {
-  const [mode, setMode] = useState<'idle' | 'rename' | 'archive' | 'nest'>('idle');
+  const [mode, setMode] = useState<'idle' | 'rename' | 'archive' | 'nest' | 'tax'>('idle');
   const [value, setValue] = useState(category.name);
+  const [taxLine, setTaxLine] = useState<string | null>(category.taxLine ?? null);
   const [reassignTo, setReassignTo] = useState<string | null>(null);
   const [nestUnder, setNestUnder] = useState<string | null>(
     category.parentLedgerAccountId ?? null,
@@ -434,6 +437,11 @@ function CategoryManageRow({
             System
           </Badge>
         ) : null}
+        {category.taxLine && mode === 'idle' ? (
+          <Badge variant="outline" className="shrink-0 text-[10px]" title="Tax line">
+            {taxLineLabel(category.taxLine)}
+          </Badge>
+        ) : null}
       </span>
 
       {mode === 'idle' ? (
@@ -460,6 +468,20 @@ function CategoryManageRow({
               }}
             >
               <CornerDownRight className="size-3.5" />
+            </Button>
+          ) : null}
+          {!isLandingPad ? (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Tax line for ${category.name}`}
+              title="Tax line"
+              onClick={() => {
+                setTaxLine(category.taxLine ?? null);
+                setMode('tax');
+              }}
+            >
+              <Landmark className="size-3.5" />
             </Button>
           ) : null}
           {!isLandingPad && !hasChildren ? (
@@ -556,6 +578,64 @@ function CategoryManageRow({
             variant="ghost"
             size="icon-sm"
             aria-label="Cancel nesting"
+            disabled={busy}
+            onClick={() => {
+              setMode('idle');
+            }}
+          >
+            <X className="size-3.5" />
+          </Button>
+        </span>
+      ) : mode === 'tax' ? (
+        <span className="flex shrink-0 flex-wrap items-center gap-1.5">
+          <span className="text-xs text-muted-foreground">Tax line</span>
+          <Select
+            value={taxLine ?? 'none'}
+            items={{
+              none: 'Not tax-related',
+              ...Object.fromEntries(TAX_LINES.map((t) => [t.value, t.label])),
+            }}
+            onValueChange={(v) => {
+              setTaxLine(v === 'none' ? null : v);
+            }}
+          >
+            <SelectTrigger className="h-7 w-44 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">Not tax-related</SelectItem>
+              {TAX_LINES.map((t) => (
+                <SelectItem key={t.value} value={t.value}>
+                  {t.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Save tax line"
+            disabled={busy}
+            onClick={() => {
+              void run(
+                () =>
+                  setCategoryTaxLine({
+                    householdId,
+                    categoryLedgerAccountId: category.ledgerAccountId,
+                    taxLine,
+                  }),
+                taxLine
+                  ? 'Mapped — it shows on the tax schedule now.'
+                  : 'Cleared from the tax schedule.',
+              );
+            }}
+          >
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Cancel tax line"
             disabled={busy}
             onClick={() => {
               setMode('idle');

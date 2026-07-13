@@ -911,3 +911,78 @@ went up, review agent findings (no P0s) landed as a follow-up commit:
 
 Prod deploy remains owner-gated (Law 12): supabase db push + functions deploy
 api worker for the 20260713* chain; frontend degrades gracefully until then.
+
+## 2026-07-13 — Batch 4 (post-merge, research-driven)
+
+Deep research on Quicken Classic + Copilot Money (5 agent streams: official
+docs ×2, user sentiment ×2, comparisons/workflows) → synthesized shortlist.
+Built this batch:
+1. QuickFill payee autofill (Quicken memorized payees): add-transaction
+   dialog suggests from history; Tab/click fills direction/amount/category.
+   Pure client-side over the rich list (Law 1 — deterministic).
+2. Projected cash (Quicken Projected Balances): recurring page rolls today's
+   asset balances 60 days forward through expected recurring occurrences AND
+   user schedules; lowest point flagged. Dominant-currency, BigInt.
+3. Manage-tags dialog: rename/delete with usageCount as blast radius
+   (batch-3 review deferral closed).
+4. Tax-line mapping (20260713130000): tax_line enum on ledger_accounts,
+   keel_set_category_tax_line (audited on change only), list emits taxLine,
+   export wrapper link _pre_tax_lines (ledger_accounts DTO is explicit —
+   to_jsonb shortcut would have silently missed Law 6), manifest + 008
+   allowlist. Reports gains "Tax schedule · YTD" grouped by IRS line;
+   categories manager gains a Landmark button + badge. No backfill —
+   a wrong tax mapping is worse than none.
+5. Scheduled transactions (20260713140000, Quicken reminders): table with
+   fail-closed ACLs + member-read RLS; keel_schedule_save (sign must match
+   category kind), keel_schedule_set_status (idempotent, no-op ≠ audit),
+   keel_schedule_advance (fenced on the exact from-due date — replays return
+   advanced:false instead of double-rolling; 'once' → ended),
+   keel_list_schedules; export wrapper link _pre_schedules with explicit DTO
+   (amount_minor::text), manifest 64→65, 008 counts + allowlist. Enter posts
+   through the EXISTING manual envelope with economicEventKey
+   manual:sched:{id}:{due} → the same occurrence cannot post twice even if
+   Enter+advance race or retry (idempotent economics). Skip advances only.
+   UI: "Bills & scheduled" section (Enter/Skip/pause/end, Due badges), add
+   dialog (category required so Enter can always post), projection includes
+   schedules via clamped month stepping that mirrors Postgres intervals.
+   DEFERRED deliberately: unattended auto-enter (worker/pg_cron path) — the
+   auto_enter_days column today means "show as due N days early"; posting
+   without a human click needs the autonomy-policy design pass first (Law 2).
+
+Scratch keel8 verified end-to-end for both migrations (validation errors,
+advance fencing, once→ended, status idempotency, list emission, export DTOs,
+proacl clean). Gates: typecheck, 442 vitest, 12 deno suites, web build.
+
+## 2026-07-13 — Batch 4 adversarial review round (pre-push, no P0s)
+
+Fixed:
+- P1 schedule currency went stale when moved to a different-currency account
+  (UPDATE branch now refreshes currency from the account; amount_minor is
+  denominated in the posting account's currency). Verified on scratch.
+- P1 validation raises misused P0002 (mapped to 422 "Journal batch does not
+  balance") — all validation errors in tax-lines + schedules procs now P0009
+  (invalid_command, 400). P0002 stays reserved for genuine imbalance.
+- P1 Tax Schedule silently dropped history on archived categories (archive
+  "leave in place" keeps txns pointing at them): the report now builds its
+  tax-line map from ledger_accounts directly, archived included.
+- P1 stale-tab Enter could post an occurrence another tab had just Skipped:
+  Enter re-reads the schedule first and refuses if due date/status moved;
+  the advance result is now inspected ({advanced:false} → info toast) and a
+  posted-but-not-rolled failure says exactly that instead of a generic error.
+- P2s: QuickFill applies on Enter, never on Tab (Tab was clobbering typed
+  input incl. Shift+Tab); duplicate minorToDollars removed in favor of
+  lib/hash's negative-safe one; ManageTags Escape no longer closes the whole
+  dialog; Enter disabled for dues >1y out (envelope date cap); projection
+  guard 40→200 steps; double-count caveat in the projection caption;
+  schedule audit after-image includes accountId/categoryLedgerAccountId.
+- Documented product choice (reviewer): month-end drift — a bill due the 31st
+  becomes the 28th after February and stays there (Postgres interval
+  semantics, mirrored client-side). Quicken anchors day-of-month; if that
+  matters an anchor_day column is the fix. Deferred with the server-side
+  single-proc Enter (keel_schedule_enter) as hardening candidates.
+
+Reviewer verified clean: ACLs/proacl (no PUBLIC/anon), export chain live-run
+as service_role (65 arrays, all real columns), cross-tenant probes (P0006),
+advance fence + envelope unique index make double-post impossible, stepDue ↔
+Postgres parity incl. leap years, taxSchedule sign convention vs rich list,
+no stale count pins.
