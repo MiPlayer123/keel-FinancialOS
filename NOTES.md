@@ -589,3 +589,90 @@ test db` + `scripts/dev/itest.sh` — run both before cloud apply.**
    --project-ref yrbteeownwjhcushwaga`.
 4. Merge branch `claude/keel-engineering-handoff-a81ndc` → main for the Vercel deploy
    (frontend is safe to deploy first; new sections degrade until 2-3 land).
+
+## 2026-07-13 — Autonomous feature-parity sprint (branch only; nothing pushed to main)
+
+Owner directive: ~10h autonomous, purely additive, cover competitor parity
+(Copilot/Monarch/Quicken-Simplifi) end to end. Method: 3 research agents
+(repo docs digest, backend↔frontend inventory, live competitor research) →
+PLAN-FEATURE-PARITY.md → 2 adversarial audit agents (law/architecture +
+feasibility/payload-extraction) → build. Full audit outcomes in the plan
+file. Branch: claude/keel-engineering-handoff-a81ndc.
+
+**Inventory finding that reshaped the plan:** all 1D write commands
+(paychecks/reimbursements/statements/reconciliations, recurring
+pause/resume/cancel) were deployed but UNREACHABLE — the pages were
+read-only shells. Most value was pure frontend.
+
+**Two live production bugs found & fixed:**
+1. Recurring confirm/reject 400'd in prod: the Review page sent
+   candidateVersionHash but the contracts transition schemas are .strict()
+   ({seriesId, effectiveDate(, horizonDays)}). Both surfaces now share
+   lib/recurring.ts.
+2. Statements page rendered undefined for every difference: proc returns
+   differenceMinor nested under session, page read it top-level.
+
+**Wave 1 — live-backend frontend (works the moment main deploys):**
+- Recurring page (+nav): coming-up list, confirm/pause/resume/cancel/reject.
+- Ledger: date presets, account/category filters (incl. Uncategorized/
+  Transfers pseudo-filters), amount/date sort, BigInt totals footer,
+  multi-select bulk categorize, category picker in the edit dialog (mobile
+  previously had NO recategorize path).
+- Reimbursements: create claim / settle (single-allocation) / reverse flows.
+- Paychecks: paystub entry with live gross/net equations mirroring the
+  server, deposit reconciliation via txn picker, sha-256 source hash,
+  reverse/restore. Destination kinds beyond direct_deposit deferred (audit).
+- Statements: create (live opening+lines=ending check, sha-256 sourceHash),
+  detail, audited reopen. CLOSE deferred — one-shot per statement and needs
+  a pre-close ledger figure the client can't read (audit).
+- Manual accounts (accounts.create) with optional Opening Balances starting
+  entry via journal.post_batch; Add-account on the Accounts page.
+- Account register: running-balance column tied to the header balance;
+  provider available-balance via balances.latest.
+- Review nav badge (pending count); Settings Activity card (first
+  audit_log viewer).
+
+**Wave 2 — additive backend, dormant until migrations + function deploy:**
+- 20260713040000 rules engine: category_rules + rule_renames (SEPARATE
+  rename layer per audit — one source column on transaction_overrides would
+  let a note-save destroy a rule rename), transaction_categories.rule_id
+  provenance, keel_apply_rules (set-wise deterministic winner, matches
+  immutable ct.description, kind-safe, upsert WHERE source <> 'user' — the
+  lattice user > rule > plaid_pfc is mechanical), p_dry_run preview per
+  BC-v2.1 §3, worker runs rules before PFC. Settings Rules card with
+  two-phase apply. DEVIATION (BC-v2.1 §3): rule versioning + simulation
+  beyond dry-run-preview deferred to rules v2 — logged here.
+- 20260713050000 budgets: month×expense-category bigint amounts, currency
+  pinned from the category; keel_list_budgets computes spent under ONE
+  pinned formula (budget-spent-v1-transfer-excluded: net signed expense-side
+  postings, overlay-first category, confirmed transfers + voided excluded);
+  set/clear/copy audited. /dashboard/budgets page (+nav). NOTE: client-side
+  spendingMix (dashboard mix card) intentionally remains a display-only
+  gross-spend mix; the budgets page is the authoritative monthly figure —
+  the two carry different formula versions by design.
+- 20260713060000 cash-flow forecast (Law 10 Class C, preview-only read
+  model): cash-subtype accounts only, confirmed recurring occurrences of the
+  current candidate version, transfer-linked series excluded; envelope pins
+  scope/exclusions/formulaVersion + per-bill seriesId evidence. Home
+  'Projected cash' card labeled Projection.
+- 20260713070000 custom categories, CREATE-ONLY: rename/archive deferred
+  because keel_autocategorize_household and the picker filter join system
+  categories BY NAME (audit) — needs a stable system key first. Settings
+  Categories card.
+
+**Deferred with designs on file (PLAN-FEATURE-PARITY.md):** statement
+line-by-line close; W2.3 category rename/archive + subcategory hierarchy;
+W2.4 manual transactions + splits (needs command-envelope idempotency and a
+split-aware rich read model — N offsets currently multiply rows); non-
+deposit paycheck destinations; multi-claim settlements.
+
+**Gate evidence (this container, per commit and re-run at end):**
+typecheck + lint clean; 438 vitest; 12 Deno suites/56 steps; apps/web build
+green every commit. NOT run (no Docker): supabase test db + itest — run
+before cloud apply; export manifest now 62 INCLUDE (rules ×2, budgets,
+overlays ×2 earlier) with pgTAP expected-columns updated in step.
+
+**Deploy runbook for this sprint:** frontend is safe to merge alone (every
+new backend consumer degrades gracefully). Backend: apply migrations
+20260713010000→070000 in order via psql, rebuild vendor bundle, deploy
+api + worker functions. Then rules/budgets/forecast/categories light up.
