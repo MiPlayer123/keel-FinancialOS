@@ -249,12 +249,23 @@ function BudgetLine({
 
   const spent = useMemo(() => BigInt(row.spentMinor), [row.spentMinor]);
   const budget = row.budgetMinor !== null ? BigInt(row.budgetMinor) : null;
-  const remaining = budget !== null ? budget - spent : null;
+  // Rollover months measure against budget + carry ("available").
+  const rollover = row.rollover === true;
+  const available =
+    budget !== null
+      ? rollover && row.availableMinor != null
+        ? BigInt(row.availableMinor)
+        : budget
+      : null;
+  const remaining = available !== null ? available - spent : null;
 
-  async function save() {
+  async function save(nextRollover?: boolean) {
     const trimmed = value.trim();
     let amountMinor: string | null = null;
-    if (trimmed.length > 0) {
+    if (nextRollover !== undefined) {
+      // Toggling the flag keeps the existing amount.
+      amountMinor = row.budgetMinor;
+    } else if (trimmed.length > 0) {
       const minor = parseSignedDollars(trimmed);
       if (minor === null || minor.startsWith('-')) {
         toast.error('Enter a non-negative amount.');
@@ -269,6 +280,7 @@ function BudgetLine({
         categoryLedgerAccountId: row.categoryLedgerAccountId,
         monthIso,
         amountMinor,
+        ...(nextRollover !== undefined ? { rollover: nextRollover } : {}),
       });
       setEditing(false);
       onSaved();
@@ -339,27 +351,47 @@ function BudgetLine({
           )}
         </div>
       </div>
-      {budget !== null ? (
+      {budget !== null && available !== null ? (
         <>
-          <ProgressBar spent={spent} budget={budget} />
-          {remaining !== null ? (
-            <p className="mt-1 text-xs text-muted-foreground">
-              {remaining < 0n ? (
+          <ProgressBar spent={spent} budget={available > 0n ? available : budget} />
+          <div className="mt-1 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+            <p>
+              {remaining !== null && remaining < 0n ? (
                 <>
-                  Over by{' '}
-                  <Money
-                    amountMinor={remaining.toString()}
-                    className="text-xs"
-                  />
+                  Over by <Money amountMinor={remaining.toString()} className="text-xs" />
                 </>
-              ) : (
+              ) : remaining !== null ? (
                 <>
                   <Money amountMinor={remaining.toString()} className="text-xs text-foreground" />{' '}
                   left
+                  {rollover && row.carryMinor != null && row.carryMinor !== '0' ? (
+                    <>
+                      {' '}
+                      (incl.{' '}
+                      <Money amountMinor={row.carryMinor} signed className="text-xs" /> carried)
+                    </>
+                  ) : null}
                 </>
-              )}
+              ) : null}
             </p>
-          ) : null}
+            {row.rollover !== undefined ? (
+              <button
+                type="button"
+                disabled={busy}
+                className={`shrink-0 rounded-full border px-2 py-0.5 transition-colors ${
+                  rollover
+                    ? 'border-foreground/30 text-foreground'
+                    : 'border-dashed border-border hover:text-foreground'
+                }`}
+                title="Carry unspent budget (or overspend) into next month"
+                onClick={() => {
+                  void save(!rollover);
+                }}
+              >
+                {rollover ? 'Rollover on' : 'Rollover'}
+              </button>
+            ) : null}
+          </div>
         </>
       ) : null}
     </div>

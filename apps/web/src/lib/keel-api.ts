@@ -435,6 +435,12 @@ export type BudgetRow = {
   /** Parent category for one-level nesting (absent pre-migration). */
   parentLedgerAccountId?: string | null;
   budgetMinor: string | null;
+  /** Carry-forward budgeting (absent pre-rollover-migration). */
+  rollover?: boolean;
+  /** Signed carry from prior rollover months; null unless rollover is on. */
+  carryMinor?: string | null;
+  /** budget + carry when rollover is on, else the budget itself. */
+  availableMinor?: string | null;
   spentMinor: string;
 };
 
@@ -453,12 +459,15 @@ export async function setBudget(input: {
   monthIso: string;
   /** Non-negative minor units, or null to clear. */
   amountMinor: string | null;
+  /** Omit to leave the carry-forward flag unchanged. */
+  rollover?: boolean;
 }): Promise<unknown> {
   return invoke('api/budgets/set', {
     householdId: input.householdId,
     categoryLedgerAccountId: input.categoryLedgerAccountId,
     month: input.monthIso,
     amountMinor: input.amountMinor,
+    ...(input.rollover !== undefined ? { rollover: input.rollover } : {}),
   });
 }
 

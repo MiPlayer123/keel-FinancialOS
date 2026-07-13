@@ -729,11 +729,16 @@ export default {
       ) {
         return json(400, { code: 'invalid_command', message: 'Budget request failed validation.', details: {} });
       }
+      const rollover = input['rollover'];
+      if (rollover !== undefined && rollover !== null && typeof rollover !== 'boolean') {
+        return json(400, { code: 'invalid_command', message: 'Budget request failed validation.', details: {} });
+      }
       const { error } = await ctx.supabase.rpc('keel_set_budget', {
         p_household_id: householdId.data,
         p_category_ledger_account_id: categoryId,
         p_month: month,
         p_amount_minor: amountMinor === null ? null : amountMinor,
+        p_rollover: typeof rollover === 'boolean' ? rollover : null,
       });
       if (error) return mapDbError(error);
       return json(200, { ok: true });
