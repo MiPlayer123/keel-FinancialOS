@@ -17,14 +17,14 @@ const assertEquals = (actual: unknown, expected: unknown): void => {
 };
 
 Deno.test('C6 Plaid client meters and reserves at the network boundary', async (test) => {
-  await test.step('construction rejects every non-sandbox Plaid environment', () => {
-    for (const env of ['development', 'production', '', 'SANDBOX']) {
+  await test.step('construction rejects every env outside sandbox|production', () => {
+    for (const env of ['development', '', 'SANDBOX', 'PRODUCTION', 'prod']) {
       try {
         createPlaidClient({ rpc: () => Promise.resolve({ data: null, error: null }) }, { env });
-        throw new Error('expected sandbox-only construction failure');
+        throw new Error('expected env allowlist construction failure');
       } catch (error) {
         assert(error instanceof Error);
-        assertEquals(error.message, 'Plaid client requires sandbox environment');
+        assertEquals(error.message, 'Plaid client env must be sandbox or production');
       }
     }
   });
