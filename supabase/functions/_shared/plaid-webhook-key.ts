@@ -109,7 +109,13 @@ export const fetchWebhookVerificationKey = async (
     clientId: Deno.env.get('PLAID_CLIENT_ID'),
     secret: Deno.env.get('PLAID_SECRET'),
   };
-  if (config.plaidEnv !== 'sandbox' || !config.clientId || !config.secret) {
+  // Same env allowlist as plaid-sync.ts/plaid-client.ts: sandbox|production
+  // only, host derived from the env. Anything else fails closed as an outage.
+  if (
+    (config.plaidEnv !== 'sandbox' && config.plaidEnv !== 'production') ||
+    !config.clientId ||
+    !config.secret
+  ) {
     return { status: 'outage' };
   }
 
@@ -133,7 +139,7 @@ export const fetchWebhookVerificationKey = async (
   let response: Response;
   try {
     response = await (deps.fetchImpl ?? fetch)(
-      'https://sandbox.plaid.com/webhook_verification_key/get',
+      `https://${config.plaidEnv}.plaid.com/webhook_verification_key/get`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },

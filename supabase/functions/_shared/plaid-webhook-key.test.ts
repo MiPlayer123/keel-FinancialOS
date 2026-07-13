@@ -147,7 +147,7 @@ Deno.test("dedicated webhook verification-key fetch", async (test) => {
     };
     assertEquals(
       (await fetchWebhookVerificationKey(admin, "kid-key-unit", {
-        config: { plaidEnv: "production", clientId: "client", secret: "secret" },
+        config: { plaidEnv: "development", clientId: "client", secret: "secret" },
         fetchImpl,
       })).status,
       "outage",
@@ -160,6 +160,25 @@ Deno.test("dedicated webhook verification-key fetch", async (test) => {
       "outage",
     );
     assertEquals(calls, 0);
+  });
+
+  await test.step("host follows PLAID_ENV: production fetches production.plaid.com", async () => {
+    const admin = adminWith((name) => ({
+      data: name === "keel_provider_budget_reserve" ? true : null,
+      error: null,
+    }));
+    let requestedUrl = "";
+    const result = await fetchWebhookVerificationKey(admin, "kid-key-unit", {
+      config: { plaidEnv: "production", clientId: "client", secret: "secret" },
+      fetchImpl: (input) => {
+        requestedUrl = String(input);
+        return Promise.resolve(new Response(JSON.stringify({
+          key: { ...keys.publicJwk, created_at: 100, expired_at: null },
+        }), { status: 200 }));
+      },
+    });
+    assertEquals(result.status, "ok");
+    assertEquals(requestedUrl, "https://production.plaid.com/webhook_verification_key/get");
   });
 
   await test.step("open provider budget is distinct, metered, and never fetches", async () => {
