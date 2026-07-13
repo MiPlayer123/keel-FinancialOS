@@ -24,24 +24,30 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
+    // Optimistically adopt the saved household id so every page can fire its
+    // queries immediately instead of waiting a full round trip for the
+    // membership list (cold-start waterfall). Reconciled below: RLS + the
+    // procs' own membership checks make a stale id fail safe, and the
+    // corrected id triggers a refetch.
+    const saved = window.localStorage.getItem(KEY);
+    if (saved) {
+      setHouseholdIdState(saved);
+      setReady(true);
+    }
     // Never let a slow/unavailable backend hang the shell on a spinner.
     const guard = setTimeout(() => {
       if (active) setReady(true);
     }, 8000);
     void (async () => {
-      const { data } = await getSupabaseBrowserClient().auth.getSession();
+      const [{ data }, list] = await Promise.all([
+        getSupabaseBrowserClient().auth.getSession(),
+        fetchHouseholds().catch((): HouseholdMembership[] => []),
+      ]);
       const uid = data.session?.user.id ?? null;
-      let list: HouseholdMembership[] = [];
-      try {
-        list = await fetchHouseholds();
-      } catch {
-        list = [];
-      }
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- flag flips in cleanup
       if (!active) return;
       setUserId(uid);
       setHouseholds(list);
-      const saved = window.localStorage.getItem(KEY);
       const chosen = list.find((h) => h.householdId === saved) ?? list[0];
       setHouseholdIdState(chosen?.householdId ?? null);
       setReady(true);

@@ -254,9 +254,19 @@ function TxnList({
           <span className="w-14 shrink-0 font-mono text-xs text-muted-foreground">
             {t.effectiveDate.slice(5)}
           </span>
+          {/* min-w-0 + truncate: the description can never push into the
+              category picker or the amount, no matter how long the memo is. */}
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium">{t.description}</p>
-            <p className="truncate text-xs text-muted-foreground">{t.accountName}</p>
+            <p className="truncate text-sm font-medium" title={t.description}>
+              {t.description}
+            </p>
+            <p className="truncate text-xs text-muted-foreground">
+              {t.accountName}
+              {/* The picker is hidden below sm — keep the category visible. */}
+              {t.categoryName ? (
+                <span className="sm:hidden"> · {t.categoryName}</span>
+              ) : null}
+            </p>
           </div>
           <CategoryPicker
             row={t}
@@ -265,12 +275,19 @@ function TxnList({
               onRecategorize(t.transactionId, catId);
             }}
           />
-          <Money
-            amountMinor={t.amountMinor}
-            currency={t.currency}
-            signed
-            className="w-24 shrink-0 text-right text-sm tabular-nums"
-          />
+          <div className="flex shrink-0 items-center justify-end gap-2">
+            {t.status === 'pending' ? (
+              <Badge variant="outline" className="hidden text-[10px] uppercase sm:inline-flex">
+                Pending
+              </Badge>
+            ) : null}
+            <Money
+              amountMinor={t.amountMinor}
+              currency={t.currency}
+              signed
+              className="min-w-24 text-right text-sm tabular-nums"
+            />
+          </div>
         </div>
       ))}
     </div>
