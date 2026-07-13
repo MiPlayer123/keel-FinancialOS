@@ -66,7 +66,7 @@ export default function LedgerPage() {
   );
 }
 
-type Grouping = 'none' | 'account' | 'category';
+type Grouping = 'none' | 'date' | 'account' | 'category';
 type SortKey = 'date_desc' | 'date_asc' | 'amount_desc' | 'amount_asc';
 type DatePreset = 'this_month' | 'last_month' | '30d' | '90d' | 'ytd' | 'all';
 
@@ -114,6 +114,19 @@ function presetRange(preset: DatePreset): [string | null, string | null] {
  * the migration has landed, the seeded name as a fallback until then. Split
  * transactions are categorized by their splits — never "uncategorized".
  */
+/** Amount search: "12.34" or "1234" matches ±1234 minor units (string ops only). */
+function amountMatches(amountMinor: string, q: string): boolean {
+  if (!/^\d+(\.\d{1,2})?$/.test(q)) return false;
+  const abs = amountMinor.startsWith('-') ? amountMinor.slice(1) : amountMinor;
+  const dollars = abs.length > 2 ? abs.slice(0, -2) : '0';
+  const cents = abs.padStart(3, '0').slice(-2);
+  if (q.includes('.')) {
+    const [qd = '', qc = ''] = q.split('.');
+    return dollars === String(Number(qd)) && cents.startsWith(qc);
+  }
+  return dollars === q || abs === q;
+}
+
 function isUncategorized(t: RichTransactionRow): boolean {
   if (t.splits && t.splits.length > 0) return false;
   if (t.categoryPfcKey != null) return t.categoryPfcKey.startsWith('uncategorized');
@@ -183,7 +196,9 @@ function LedgerTable() {
         q &&
         !t.description.toLowerCase().includes(q) &&
         !t.accountName.toLowerCase().includes(q) &&
-        !(t.categoryName ?? '').toLowerCase().includes(q)
+        !(t.categoryName ?? '').toLowerCase().includes(q) &&
+        // "12.34" or "1234" finds the amount, sign-agnostic.
+        !amountMatches(t.amountMinor, q)
       ) {
         return false;
       }
@@ -439,7 +454,7 @@ function LedgerTable() {
           <span className="text-muted-foreground">Group by</span>
           <Select
             value={grouping}
-            items={{ none: 'None', account: 'Account', category: 'Category' }}
+            items={{ none: 'None', date: 'Date', account: 'Account', category: 'Category' }}
             onValueChange={(v) => {
               if (v) setGrouping(v);
             }}
@@ -449,6 +464,7 @@ function LedgerTable() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="none">None</SelectItem>
+              <SelectItem value="date">Date</SelectItem>
               <SelectItem value="account">Account</SelectItem>
               <SelectItem value="category">Category</SelectItem>
             </SelectContent>
@@ -632,6 +648,19 @@ function BulkBar({
   );
 }
 
+/** Friendly date header: Today / Yesterday / "Jul 10" / "Jul 10, 2025". */
+function dateLabel(iso: string): string {
+  const todayIso = new Date().toISOString().slice(0, 10);
+  if (iso === todayIso) return 'Today';
+  const y = new Date();
+  y.setUTCDate(y.getUTCDate() - 1);
+  if (iso === y.toISOString().slice(0, 10)) return 'Yesterday';
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const [yy = '', mm = '', dd = ''] = iso.split('-');
+  const label = `${months[Number(mm) - 1] ?? mm} ${String(Number(dd))}`;
+  return yy === todayIso.slice(0, 4) ? label : `${label}, ${yy}`;
+}
+
 function groupRows(rows: RichTransactionRow[], by: Grouping): Map<string, RichTransactionRow[]> {
   const map = new Map<string, RichTransactionRow[]>();
   const push = (key: string, row: RichTransactionRow) => {
@@ -648,7 +677,12 @@ function groupRows(rows: RichTransactionRow[], by: Grouping): Map<string, RichTr
       }
       continue;
     }
-    const key = by === 'account' ? t.accountName : (t.categoryName ?? 'Uncategorized');
+    const key =
+      by === 'account'
+        ? t.accountName
+        : by === 'date'
+          ? dateLabel(t.effectiveDate)
+          : (t.categoryName ?? 'Uncategorized');
     push(key, t);
   }
   return map;
