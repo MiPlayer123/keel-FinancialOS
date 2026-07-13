@@ -18,7 +18,7 @@
 -- without this, every single-split manual transaction fails with
 -- "permission denied for table transaction_categories".)
 -- ---------------------------------------------------------------------------
-grant select, insert, update, delete on public.transaction_categories to keel_api, keel_worker;
+grant select, insert, update on public.transaction_categories to keel_api, keel_worker;
 drop policy if exists transaction_categories_definer_all on public.transaction_categories;
 create policy transaction_categories_definer_all on public.transaction_categories
   for all to keel_api, keel_worker using (true) with check (true);
