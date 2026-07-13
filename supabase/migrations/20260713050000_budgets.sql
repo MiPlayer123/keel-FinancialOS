@@ -179,6 +179,11 @@ begin
       from public.canonical_transactions ct
       join public.journal_batches jb
         on jb.canonical_transaction_id = ct.id and jb.reverses_batch_id is null
+       -- Live batch only: a sync revision leaves the superseded original as a
+       -- second non-reversal batch; without this a revised charge double-counts.
+       and not exists (
+         select 1 from public.journal_revisions rev where rev.original_batch_id = jb.id
+       )
       join public.journal_postings offp on offp.batch_id = jb.id
       join public.ledger_accounts offcat
         on offcat.id = offp.ledger_account_id and offcat.is_category = true

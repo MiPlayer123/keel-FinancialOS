@@ -62,3 +62,12 @@ export function nextOccurrence(series: RecurringSeriesRow, todayIso: string) {
     .filter((o) => o.status === 'expected' && o.expectedDate >= todayIso)
     .sort((a, b) => a.expectedDate.localeCompare(b.expectedDate))[0];
 }
+
+/**
+ * The state machine requires each transition's effective date to be STRICTLY
+ * later than the previous one — a second change on the same day is rejected
+ * by the server (P0009). Detect it so the UI can explain instead of erroring.
+ */
+export function changedToday(series: RecurringSeriesRow, todayIso: string): boolean {
+  return series.statusEvents.some((e) => e.effectiveDate >= todayIso);
+}

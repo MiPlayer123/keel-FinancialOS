@@ -94,6 +94,8 @@ begin
 end;
 $$;
 
+revoke all on function public.keel_set_transaction_override(uuid, uuid, text, text)
+  from public, anon;
 grant execute on function public.keel_set_transaction_override(uuid, uuid, text, text)
   to authenticated, service_role;
 

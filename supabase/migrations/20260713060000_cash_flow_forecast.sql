@@ -34,10 +34,11 @@ begin
   ) then
     raise exception 'KEEL_SCOPE_VIOLATION' using errcode = 'P0006';
   end if;
-  if p_days < 1 or p_days > 120 then
+  if p_days is null or p_days < 1 or p_days > 120 then
     raise exception 'KEEL_INVALID_RANGE' using errcode = 'P0001';
   end if;
 
+  drop table if exists _fc_bills;
   create temporary table _fc_bills on commit drop as
   select ro.expected_date, ro.expected_amount_minor, ro.currency,
          rs.sign, rs.id as series_id, rs.counterparty_key

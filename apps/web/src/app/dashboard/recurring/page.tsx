@@ -14,6 +14,7 @@ import {
   RECURRING_ACTIONS,
   recurringTransition,
   nextOccurrence,
+  changedToday,
   type RecurringCommand,
 } from '@/lib/recurring';
 import { Badge } from '@/components/ui/badge';
@@ -227,6 +228,7 @@ function SeriesCard({
 }) {
   const [busy, setBusy] = useState<RecurringCommand | null>(null);
   const next = nextOccurrence(series, todayIso());
+  const lockedToday = series.status !== 'suggested' && changedToday(series, todayIso());
   const actions = RECURRING_ACTIONS[series.status];
 
   async function act(command: RecurringCommand) {
@@ -265,20 +267,26 @@ function SeriesCard({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {actions.map(({ command, label }, i) => (
-            <Button
-              key={command}
-              variant={i === 0 ? 'default' : 'outline'}
-              size="sm"
-              disabled={busy !== null}
-              onClick={() => {
-                void act(command);
-              }}
-            >
-              {busy === command ? <Loader2 className="size-4 animate-spin" /> : null}
-              {label}
-            </Button>
-          ))}
+          {lockedToday ? (
+            <span className="text-xs text-muted-foreground">
+              Changed today — next change available tomorrow.
+            </span>
+          ) : (
+            actions.map(({ command, label }, i) => (
+              <Button
+                key={command}
+                variant={i === 0 ? 'default' : 'outline'}
+                size="sm"
+                disabled={busy !== null}
+                onClick={() => {
+                  void act(command);
+                }}
+              >
+                {busy === command ? <Loader2 className="size-4 animate-spin" /> : null}
+                {label}
+              </Button>
+            ))
+          )}
         </div>
       </CardContent>
     </Card>

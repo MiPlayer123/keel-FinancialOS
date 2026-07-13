@@ -52,8 +52,12 @@ export function RulesCard() {
       .then((r) => {
         if (active) setRules(r);
       })
-      .catch(() => {
-        if (active) setAvailable(false);
+      .catch((err: unknown) => {
+        if (!active) return;
+        const msg = err instanceof Error ? err.message : '';
+        // Missing backend hides the card; transient errors just leave it empty.
+        if (/unknown query|does not exist|not_found/i.test(msg)) setAvailable(false);
+        else setRules([]);
       });
     fetchCategories(householdId)
       .then((c) => {

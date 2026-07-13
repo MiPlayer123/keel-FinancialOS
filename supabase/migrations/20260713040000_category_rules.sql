@@ -287,6 +287,7 @@ begin
     raise exception 'KEEL_NOT_FOUND' using errcode = 'P0006';
   end if;
 
+  drop table if exists _rule_winners;
   create temporary table _rule_winners on commit drop as
   with matches as (
     select ct.id as txn_id, r.id as rule_id,
@@ -306,6 +307,13 @@ begin
       left join public.ledger_accounts rulecat on rulecat.id = r.category_ledger_account_id
       where ct.household_id = p_household_id
         and ct.voided_at is null
+        -- Live batch only (sync revisions leave a superseded non-reversal batch).
+        and not exists (
+          select 1 from public.journal_revisions rev where rev.original_batch_id = jb.id
+        )
+        -- Same-entity invariant: a rule's category may only classify
+        -- transactions of that category's entity (matches keel_categorize).
+        and (r.category_ledger_account_id is null or rulecat.entity_id = offp.entity_id)
   )
   select distinct on (txn_id)
          txn_id, rule_id, category_ledger_account_id, rename_to, txn_kind, rule_kind
@@ -334,13 +342,15 @@ begin
   select w.txn_id, p_household_id, w.category_ledger_account_id, 'rule', w.rule_id
     from _rule_winners w
     where w.category_ledger_account_id is not null and w.rule_kind = w.txn_kind
+  -- Predicate matches the dry-run count EXACTLY (preview integrity, BC §3):
+  -- only rows whose category actually changes, never user rows. A plaid_pfc
+  -- row already holding the same category keeps its provenance untouched.
   on conflict (canonical_transaction_id) do update
     set category_ledger_account_id = excluded.category_ledger_account_id,
         source = 'rule', rule_id = excluded.rule_id, updated_at = now()
     where transaction_categories.source <> 'user'
-      and (transaction_categories.category_ledger_account_id
-             <> excluded.category_ledger_account_id
-           or transaction_categories.source <> 'rule');
+      and transaction_categories.category_ledger_account_id
+            <> excluded.category_ledger_account_id;
   get diagnostics v_categorized = row_count;
 
   insert into public.rule_renames
@@ -417,6 +427,9 @@ begin
       from public.canonical_transactions ct
       join public.journal_batches jb
         on jb.canonical_transaction_id = ct.id and jb.reverses_batch_id is null
+       and not exists (
+         select 1 from public.journal_revisions rev where rev.original_batch_id = jb.id
+       )
       join public.journal_postings cashp on cashp.batch_id = jb.id
       join public.ledger_accounts cashla
         on cashla.id = cashp.ledger_account_id and cashla.is_category = false
@@ -432,6 +445,7 @@ begin
         on (tl.txn_out = ct.id or tl.txn_in = ct.id)
        and tl.status in ('suggested', 'confirmed')
       where ct.household_id = p_household_id
+        and ct.voided_at is null
     ) t;
 
   return jsonb_build_object(
@@ -442,6 +456,7 @@ begin
 end;
 $$;
 
+revoke all on function public.keel_list_transactions_rich(uuid) from public, anon;
 grant execute on function public.keel_list_transactions_rich(uuid) to authenticated, service_role;
 
 -- Law 6 export ruling: both rule tables are durable user configuration /

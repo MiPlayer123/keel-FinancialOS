@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeftRight, Plus, Loader2, ChevronRight, Undo2 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -557,6 +557,13 @@ function SettleDialog({
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // Never carry claim A's draft into claim B's dialog.
+  useEffect(() => {
+    setTxnId(null);
+    setAmount('');
+    setNote('');
+  }, [claim?.claimId]);
 
   async function settle() {
     if (!householdId || !userId || !claim || !txnId) return;

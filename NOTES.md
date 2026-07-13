@@ -676,3 +676,31 @@ overlays ×2 earlier) with pgTAP expected-columns updated in step.
 new backend consumer degrades gracefully). Backend: apply migrations
 20260713010000→070000 in order via psql, rebuild vendor bundle, deploy
 api + worker functions. Then rules/budgets/forecast/categories light up.
+
+## 2026-07-13 — Adversarial review round (2 agents; one stood up a scratch PG and reproduced findings)
+
+All findings fixed on the branch same-session. Highlights:
+- SECURITY (pre-existing, live in prod since 2026-07-12): keel_latest_balances
+  and keel_list_categories had NO membership check — any authenticated user
+  could read another household's balances/taxonomy. Fixed in migration
+  20260713080000 (guards inside the definer procs). Zero practical exposure
+  (single-user prod) but MUST ship with the next migration batch.
+- Reproduced money-math bug: sync REVISIONS leave the superseded original as
+  a second non-reversal batch → budgets spent double-counted, transfer
+  detection paired stale amounts, rich list/transfer list duplicated rows.
+  Live-batch predicate (no journal_revisions.original_batch_id) added to all
+  four read paths.
+- Rules: cross-entity category writes blocked (same-entity gate); temp-table
+  re-entry (drop if exists) in apply+forecast; preview count now exactly
+  equals apply count.
+- Transfers: a REJECTED pair no longer permanently suppresses the
+  second-best candidate (explicit already-tried exclusion).
+- pgTAP 008: "57 included tables" literals → 62.
+- Frontend: statement sourceHash now covers opening/ending (a corrected
+  re-entry is no longer a permanent idempotency 409); recurring UI explains
+  the one-transition-per-day state machine instead of erroring; auto-selected
+  household id persisted (review badge was dead for single-household users);
+  add-account partial failure can no longer duplicate accounts on retry;
+  error toasts now surface the server's typed message instead of
+  "non-2xx status code"; budget "0" is a real zero budget; leading-dot
+  amounts parse; settle dialog resets between claims.

@@ -11,8 +11,25 @@ export type QueryResult<Row> = {
 async function invoke<T>(fn: string, body: Record<string, unknown>): Promise<T> {
   const { data, error } = (await getSupabaseBrowserClient().functions.invoke<T>(fn, {
     body,
-  })) as { data: T | null; error: Error | null };
-  if (error) throw error;
+  })) as { data: T | null; error: (Error & { context?: Response }) | null };
+  if (error) {
+    // Surface the server's typed error body instead of the generic
+    // "non-2xx status code" — every toast in the app relies on this.
+    const ctx = error.context;
+    if (ctx && typeof ctx.json === 'function') {
+      try {
+        const detail = (await ctx.clone().json()) as { message?: string; code?: string };
+        if (detail.message) {
+          throw new Error(detail.code ? `${detail.message} (${detail.code})` : detail.message);
+        }
+      } catch (parseErr) {
+        if (parseErr instanceof Error && parseErr.message !== error.message && !(parseErr instanceof SyntaxError)) {
+          throw parseErr;
+        }
+      }
+    }
+    throw error;
+  }
   if (data === null) throw new Error('Empty response from KEEL API.');
   return data;
 }

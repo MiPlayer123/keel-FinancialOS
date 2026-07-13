@@ -96,8 +96,8 @@ select ok(
 select is(
   (select count(*)::int from expected_export_tables
     where has_table_privilege('keel_export', format('public.%I', table_name), 'SELECT')),
-  57,
-  'keel_export can SELECT all 57 included tables'
+  62,
+  'keel_export can SELECT all 62 included tables'
 );
 select is(
   (select count(*)::int
@@ -228,8 +228,8 @@ reset role;
 select is(
   (select count(*)::int from jsonb_object_keys(
     public.keel_export_household('00000000-0000-4000-8000-00000000a001')->'tables')),
-  57,
-  'snapshot contains all 57 included table arrays'
+  62,
+  'snapshot contains all 62 included table arrays'
 );
 select is(
   (select count(*)::int from excluded_export_tables e

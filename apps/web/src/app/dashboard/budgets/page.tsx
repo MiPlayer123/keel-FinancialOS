@@ -53,8 +53,16 @@ function BudgetsBody() {
     if (!householdId) return;
     try {
       setRows(await fetchBudgets(householdId, monthIso));
-    } catch {
-      setAvailable(false);
+    } catch (err) {
+      // Only a missing backend (unknown query / missing proc) means "not
+      // deployed yet" — transient failures show a toast and keep the page.
+      const msg = err instanceof Error ? err.message : '';
+      if (/unknown query|does not exist|not_found/i.test(msg)) {
+        setAvailable(false);
+      } else {
+        setRows([]);
+        toast.error(msg || 'Could not load budgets.');
+      }
     }
   }, [householdId, monthIso]);
 
@@ -241,7 +249,7 @@ function BudgetLine({
         toast.error('Enter a non-negative amount.');
         return;
       }
-      amountMinor = minor === '0' ? null : minor;
+      amountMinor = minor;
     }
     setBusy(true);
     try {

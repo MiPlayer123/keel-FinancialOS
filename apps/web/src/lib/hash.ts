@@ -8,7 +8,7 @@ export async function sha256Hex(input: string): Promise<string> {
 /** Parse user-entered dollars into SIGNED minor units string, or null. */
 export function parseSignedDollars(input: string): string | null {
   const cleaned = input.replace(/[$,\s]/g, '');
-  if (!/^-?\d+(\.\d{1,2})?$/.test(cleaned)) return null;
+  if (!/^-?(\d+(\.\d{1,2})?|\.\d{1,2})$/.test(cleaned)) return null;
   const negative = cleaned.startsWith('-');
   const [whole = '0', frac = ''] = cleaned.replace('-', '').split('.');
   const minor = BigInt(whole) * 100n + BigInt(frac.padEnd(2, '0') || '0');

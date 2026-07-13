@@ -193,6 +193,7 @@ function StatementCard({
       });
       toast.success('Reconciliation reopened; the period is unlocked.');
       setReopening(false);
+      setReason('');
       onChanged();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not reopen.');
@@ -385,8 +386,17 @@ function CreateStatementDialog({
         amountMinor: parseSignedDollars(l.amount) ?? '0',
         description: l.description.trim() || `Line ${String(i + 1)}`,
       }));
+      // Hash the FULL statement body: a corrected re-entry (same lines,
+      // fixed balances) must produce a new identity, not an idempotency 409.
       const sourceHash = await sha256Hex(
-        JSON.stringify({ accountId, periodStart, periodEnd, lines: payloadLines }),
+        JSON.stringify({
+          accountId,
+          periodStart,
+          periodEnd,
+          openingMinor: check.openingMinor,
+          endingMinor: check.endingMinor,
+          lines: payloadLines,
+        }),
       );
       await keelCommand({
         commandId: newId(),

@@ -84,23 +84,33 @@ export function AddAccountDialog({ onCreated }: { onCreated: () => void }) {
       const ledgerAccountId = (result.effects as { ledgerAccountId?: string }).ledgerAccountId;
 
       const minor = balance.trim() ? dollarsToMinorString(balance) : null;
+      let balanceNote = '';
       if (balance.trim() && minor === null) {
-        toast.warning('Account created, but the starting balance was not a valid amount.');
+        balanceNote = ' The starting balance was not a valid amount — set it later.';
       } else if (minor && minor !== '0' && ledgerAccountId) {
-        const openingLedgerId = await fetchOpeningBalancesLedgerId(householdId, entityId);
-        if (openingLedgerId) {
-          // Debit-positive: assets hold +value, debts hold −value.
-          await postOpeningBalance({
-            householdId,
-            userId,
-            accountLedgerId: ledgerAccountId,
-            openingLedgerId,
-            amountMinor: spec.kind === 'liability' ? `-${minor}` : minor,
-            accountName: name.trim(),
-          });
+        try {
+          const openingLedgerId = await fetchOpeningBalancesLedgerId(householdId, entityId);
+          if (!openingLedgerId) {
+            balanceNote = ' Starting balance skipped (no Opening Balances account).';
+          } else {
+            // Debit-positive: assets hold +value, debts hold −value.
+            await postOpeningBalance({
+              householdId,
+              userId,
+              accountLedgerId: ledgerAccountId,
+              openingLedgerId,
+              amountMinor: spec.kind === 'liability' ? `-${minor}` : minor,
+              accountName: name.trim(),
+            });
+          }
+        } catch {
+          // The account exists — never leave the dialog open where a retry
+          // would create a duplicate.
+          balanceNote = ' Starting balance failed to book — set it later.';
         }
       }
-      toast.success(`Added ${name.trim()}.`);
+      if (balanceNote) toast.warning(`Added ${name.trim()}.${balanceNote}`);
+      else toast.success(`Added ${name.trim()}.`);
       setOpen(false);
       setName('');
       setBalance('');

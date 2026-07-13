@@ -1082,6 +1082,9 @@ export default {
         rpcArgs.p_days = Math.min(Math.max(days, 1), 120);
       } else if (query.query === 'budgets.list') {
         const db = body as { month?: unknown };
+        if (db.month !== undefined && isoDate(db.month) === null) {
+          return json(400, { code: 'invalid_command', message: 'Invalid month.', details: {} });
+        }
         rpcArgs.p_month = isoDate(db.month) ?? `${todayIso.slice(0, 7)}-01`;
       } else if (query.query === 'dashboard.net_worth') {
         const db = body as { asOf?: unknown };

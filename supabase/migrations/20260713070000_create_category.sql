@@ -4,6 +4,11 @@
 -- NEW user categories is safe: they can never collide with the seeded
 -- system taxonomy (case-insensitive uniqueness enforced here).
 
+-- Race-proof the case-insensitive name check (concurrent creates).
+create unique index if not exists ledger_accounts_category_name_ci
+  on public.ledger_accounts (entity_id, lower(name))
+  where is_category = true and archived_at is null;
+
 create or replace function public.keel_create_category(
   p_household_id uuid,
   p_name text,
@@ -51,6 +56,7 @@ begin
 
   select currency into v_currency from public.ledger_accounts
     where entity_id = v_entity and is_category = true and archived_at is null
+    order by created_at, id
     limit 1;
 
   insert into public.ledger_accounts

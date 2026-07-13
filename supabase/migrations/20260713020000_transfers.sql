@@ -36,6 +36,11 @@ begin
       from public.canonical_transactions ct
       join public.journal_batches jb
         on jb.canonical_transaction_id = ct.id and jb.reverses_batch_id is null
+       -- Live batch only: sync revisions leave the superseded original as a
+       -- second non-reversal batch (stale amounts must not pair or render).
+       and not exists (
+         select 1 from public.journal_revisions rev where rev.original_batch_id = jb.id
+       )
       join public.journal_postings p on p.batch_id = jb.id
       join public.ledger_accounts la
         on la.id = p.ledger_account_id and la.is_category = false
@@ -63,6 +68,13 @@ begin
       where o.amount_minor < 0
         and not exists (select 1 from linked l where l.txn = o.txn_id)
         and not exists (select 1 from linked l where l.txn = i.txn_id)
+        -- A REJECTED pair must not keep outranking valid alternatives: it
+        -- would win the greedy pick every run and then no-op on conflict,
+        -- permanently suppressing the second-best candidate.
+        and not exists (
+          select 1 from public.transfer_links tl
+          where tl.txn_out = o.txn_id and tl.txn_in = i.txn_id
+        )
   ),
   best_out as (
     select txn_out, txn_in, day_gap,
@@ -129,6 +141,9 @@ begin
       from public.canonical_transactions ct
       join public.journal_batches jb
         on jb.canonical_transaction_id = ct.id and jb.reverses_batch_id is null
+       and not exists (
+         select 1 from public.journal_revisions rev where rev.original_batch_id = jb.id
+       )
       join public.journal_postings p on p.batch_id = jb.id
       join public.ledger_accounts la
         on la.id = p.ledger_account_id and la.is_category = false

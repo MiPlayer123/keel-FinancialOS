@@ -50,6 +50,11 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
       setHouseholds(list);
       const chosen = list.find((h) => h.householdId === saved) ?? list[0];
       setHouseholdIdState(chosen?.householdId ?? null);
+      // Persist the auto-selection too — consumers outside the provider
+      // (nav badge) read the saved id directly.
+      if (chosen && chosen.householdId !== saved) {
+        window.localStorage.setItem(KEY, chosen.householdId);
+      }
       setReady(true);
     })();
     return () => {
