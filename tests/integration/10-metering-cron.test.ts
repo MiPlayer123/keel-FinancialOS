@@ -1,7 +1,7 @@
 /** C6: provider metering, atomic breakers, cadence claims, and pure-SQL cron. */
 import { createHash } from 'node:crypto';
 import { execFileSync, execSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import * as jose from 'jose';
@@ -21,7 +21,9 @@ type SigningKey = Parameters<jose.SignJWT['sign']>[0];
 
 const DAILY_LIMIT = 10_000;
 const ROOT = join(import.meta.dirname, '..', '..');
-const PSQL = '/Library/PostgreSQL/17/bin/psql';
+const PSQL = existsSync('/Library/PostgreSQL/17/bin/psql')
+  ? '/Library/PostgreSQL/17/bin/psql'
+  : 'psql'; // CI/Linux: client on PATH
 let alexToken: string;
 let privateKey: SigningKey;
 let publicJwk: jose.JWK;
