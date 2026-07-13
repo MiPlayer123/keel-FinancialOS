@@ -9,13 +9,15 @@
  * string (Law 4); no ledger arithmetic happens here (Law 1).
  */
 
-import { useId } from 'react';
+import { useId, useMemo } from 'react';
 import {
   Area,
   AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Sankey,
   Tooltip,
@@ -265,6 +267,156 @@ export function CategoryBarList({ items }: { items: CategorySpend[] }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Spending donut: top-N categories + an "Everything else" fold. Colors reuse
+// the five existing --chart-N hues (KEEL has no dedicated 8-hue categorical
+// theme yet) in fixed slot order; a 6th+ slot repeats a hue at a lower
+// opacity step rather than inventing a new hue ("calm sequence", not
+// rainbow). "Everything else" always wears a neutral ink tone — it is an
+// aggregate, not an entity, so it never borrows a real category's color.
+// Red is never used here (Law 8: red = negative money only).
+// ---------------------------------------------------------------------------
+
+export type CategoryDonutSlice = { name: string; amountMinor: string };
+
+const DONUT_HUES = [
+  'var(--chart-1)',
+  'var(--chart-2)',
+  'var(--chart-3)',
+  'var(--chart-4)',
+  'var(--chart-5)',
+];
+const DONUT_OTHER = 'var(--muted-foreground)';
+
+/** Slot color for the Nth (0-based) real category slice: cycles the five
+ * hues, stepping opacity down each time round so a 6th+ slice reads as a
+ * calmer repeat rather than a fresh, potentially colliding, identity. */
+function donutSliceStyle(index: number): { fill: string; fillOpacity: number } {
+  const round = Math.floor(index / DONUT_HUES.length);
+  const opacity = round === 0 ? 1 : Math.max(0.35, 1 - round * 0.35);
+  const hue = DONUT_HUES[index % DONUT_HUES.length] ?? 'var(--chart-1)';
+  return { fill: hue, fillOpacity: opacity };
+}
+
+/**
+ * Donut chart for spending mix: top N categories by magnitude, remainder
+ * folded into "Everything else". Center label shows the plotted total
+ * (formatted from the BIGINT minor string, Law 4); legend lists each slice's
+ * exact amount + percent share. Geometry (angles, radii) uses Number — no
+ * ledger arithmetic happens here (Law 1). Wraps to a stacked layout <640px.
+ */
+export function CategoryDonut({
+  items,
+  currency = 'USD',
+  height = 220,
+  topN = 6,
+}: {
+  items: CategoryDonutSlice[];
+  currency?: string;
+  height?: number;
+  topN?: number;
+}) {
+  const { slices, totalMinor } = useMemo(() => {
+    const sorted = [...items]
+      .filter((i) => BigInt(i.amountMinor || '0') > 0n)
+      .sort((a, b) => {
+        const av = BigInt(a.amountMinor);
+        const bv = BigInt(b.amountMinor);
+        return bv > av ? 1 : bv < av ? -1 : 0;
+      });
+    const top = sorted.slice(0, topN);
+    const rest = sorted.slice(topN);
+    const out: (CategoryDonutSlice & { isOther: boolean })[] = top.map((i) => ({
+      ...i,
+      isOther: false,
+    }));
+    if (rest.length > 0) {
+      const restTotal = rest.reduce((acc, i) => acc + BigInt(i.amountMinor), 0n);
+      out.push({ name: 'Everything else', amountMinor: restTotal.toString(), isOther: true });
+    }
+    const total = out.reduce((acc, i) => acc + BigInt(i.amountMinor), 0n);
+    return { slices: out, totalMinor: total.toString() };
+  }, [items, topN]);
+
+  if (slices.length === 0 || BigInt(totalMinor) === 0n) return null;
+
+  const total = BigInt(totalMinor);
+  // Cell is deprecated in recharts 3.9 — per-slice color is set directly on
+  // each datum instead (`fill`/`fillOpacity`), which Pie reads without it.
+  const data = slices.map((s, index) => {
+    const pct = Number((BigInt(s.amountMinor) * 1000n) / total) / 10;
+    const style = s.isOther ? { fill: DONUT_OTHER, fillOpacity: 0.45 } : donutSliceStyle(index);
+    return {
+      name: s.name,
+      amountMinor: s.amountMinor,
+      value: toGeometry(s.amountMinor),
+      pct,
+      isOther: s.isOther,
+      fill: style.fill,
+      fillOpacity: style.fillOpacity,
+    };
+  });
+
+  return (
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+      <div className="relative mx-auto w-full max-w-[240px] shrink-0" style={{ height }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
+            <Tooltip
+              content={({ active, payload }) => {
+                const p = payload[0]?.payload as (typeof data)[number] | undefined;
+                if (!active || !p) return null;
+                return (
+                  <TooltipShell>
+                    <p className="font-medium">{p.name}</p>
+                    <p className="font-mono tabular-nums">
+                      {formatMoney(p.amountMinor, { currency })} · {String(p.pct)}%
+                    </p>
+                  </TooltipShell>
+                );
+              }}
+            />
+            <Pie
+              data={data}
+              dataKey="value"
+              nameKey="name"
+              innerRadius="60%"
+              outerRadius="90%"
+              paddingAngle={1}
+              stroke="var(--card)"
+              strokeWidth={2}
+              isAnimationActive={false}
+            />
+          </PieChart>
+        </ResponsiveContainer>
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Total</span>
+          <span className="font-mono text-lg font-semibold tabular-nums">
+            {formatMoney(totalMinor, { currency })}
+          </span>
+        </div>
+      </div>
+      <div className="min-w-0 flex-1 space-y-1.5">
+        {data.map((d) => (
+          <div key={d.name} className="flex items-center gap-2 text-sm">
+            <span
+              className="size-2.5 shrink-0 rounded-[3px]"
+              style={{ background: d.fill, opacity: d.fillOpacity }}
+            />
+            <span className="min-w-0 flex-1 truncate">{d.name}</span>
+            <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
+              {String(d.pct)}%
+            </span>
+            <span className="w-20 shrink-0 text-right font-mono text-xs tabular-nums">
+              {formatMoney(d.amountMinor, { currency })}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
