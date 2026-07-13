@@ -447,3 +447,29 @@ Founder provided a Plaid production secret via chat. Stored as `PLAID_SECRET_PRO
 - Integration statement balances are derived from canonical export bigint strings and summed with `BigInt`; earlier suites intentionally create values beyond JS safe integers, so no test or implementation routes minor units through `Number`.
 - **Final gate evidence for gates 7–8:** `pnpm -w typecheck && pnpm -w lint && pnpm -w test` green (438 Vitest; 12 Deno suites/55 steps); clean-reset `supabase test db` green (352 assertions); `bash scripts/dev/itest.sh` green (104/104 across 15 files; Plaid fetch-spy 0). One earlier integration run had infrastructure-only HTTP 502 cold-start failures; its real Gate-8 fixture issue was fixed, and the final clean wrapper run was fully green.
 - **Deviations/incomplete:** none for mandatory gates 7 or 8. Statement ingestion/provider adapters remain additive because BC-v2.1 specifies the durable statement/close proof, not a provider-specific parser. No UI and no class-D money movement were implemented.
+
+## 2026-07-12 — Production Plaid live sync end-to-end (real bank data)
+
+Context: operator linked a real Chase Item on the live cloud project but no
+transactions/balances appeared. Root-caused a chain of cloud-only gaps; the sync
+pipeline had only ever been exercised on local Docker (itest drives the worker).
+
+1. **Worker undrivable on cloud.** `worker`/`scheduled` use `withSupabase({auth:'secret:automations'})`, which uses the matched secret's value as BOTH the inbound gate AND the admin DB credential (see `bootstrap.ts` + `provision-local-env.mjs`: locally the automations secret IS the stack `sb_secret_` key). Cloud had no `automations` key set, and the project's `sb_secret_` value isn't retrievable in full. Set `KEEL_SUPABASE_SECRET_KEYS={"automations": <legacy service_role JWT>}` — retrievable in full, valid at the edge gateway, maps to service_role. Redeployed worker/scheduled.
+2. **Nothing drained the queue.** `keel_cron_enqueue_active_syncs` (every 15m) only *enqueues*; no cron consumed `sync_events`. Enabled `pg_net`, stored the automations key + functions base URL in Vault, added `keel_cron_drain_sync()` (SECURITY DEFINER, guards on Vault secrets so it is a no-op locally) and `cron.schedule('keel-drain-sync','*/3 * * * *', ...)`. Verified HTTP 200 / depth 0.
+3. **Live sync path was Sandbox-only** (`plaid-sync.ts`): `liveGateEnabled()` required `PLAID_ENV==='sandbox'` and `defaultPlaidPost` hard-coded `sandbox.plaid.com`. Deviation vs CLAUDE.md Law 12 ⚑ "Plaid Sandbox-only until a human production checkpoint": operator has explicitly crossed the checkpoint (same crossing already applied to `plaid-client.ts` link-token/exchange). Allowed `sandbox|production`, host now `https://${PLAID_ENV}.plaid.com`. Set `KEEL_LIVE_SYNC_ENABLED=true`. (Still Sandbox-only for other users until the secret is rotated pre-launch.)
+   - **Outstanding:** `plaid-webhook-key.ts:136` still fetches the webhook verification key from `sandbox.plaid.com` — must become env-driven when webhook-driven auto-sync is wired.
+4. **No default categories for real entities.** Promotion resolves the double-entry offset by name per entity ('Uncategorized Expense'/'Income'); these existed only in `seed.sql` for fixture entities, so real onboarded entities failed with "offset category missing". Migration `20260712170000_entity_default_categories.sql`: AFTER INSERT trigger on `entities` seeds the 3 defaults (skips the fixed-id fixture entities so demo/test ids stay deterministic) + one-time backfill. seed.sql runs on local resets only; no test creates entities.
+
+Result: 120 real Chase transactions synced, 240 balanced postings, "sync complete". Displayed balances are currently the **sum of synced transactions**, not reconciled to Plaid's reported current balance — opening-balance booking (capture `balance_snapshots` from accountsGet + book an equity opening entry) is the follow-up before balances read as "real".
+
+## 2026-07-12 — Connection UX (name / sync-now / rename)
+
+Migration `20260712180000_connection_sync_ux.sql`: `connections.display_name`;
+`keel_request_connection_sync` (membership + connection-in-household checks, sets
+`next_sync_eligible_at=now()`, enqueues one sync_notification); `keel_rename_connection`;
+`keel_cron_drain_sync` (also captured here for reproducibility). api routes
+`/connections/sync` (enqueue + immediate `keel_cron_drain_sync` drive, 3-min cron
+fallback) and `/connections/rename`, both behind `connections.link` authz + the
+procs' own membership checks. Link now records the Plaid Link `metadata.institution.name`
+as `display_name`. Frontend: name display + inline rename + "Sync now" on the
+Connections page. Verified both routes return `{ok:true}` for a real user session.

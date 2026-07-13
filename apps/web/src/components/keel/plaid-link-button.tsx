@@ -25,7 +25,7 @@ export function PlaidLinkButton({
   const [shouldOpen, setShouldOpen] = useState(false);
 
   const onSuccess = useCallback<PlaidLinkOnSuccess>(
-    (publicToken) => {
+    (publicToken, metadata) => {
       void (async () => {
         try {
           const entityId = await fetchFirstEntityId(householdId);
@@ -33,8 +33,14 @@ export function PlaidLinkButton({
             toast.error('No entity to attach the connection to.');
             return;
           }
-          await exchangePublicToken({ householdId, entityId, publicToken });
-          toast.success('Bank connected.');
+          const institutionName = metadata.institution?.name;
+          await exchangePublicToken({
+            householdId,
+            entityId,
+            publicToken,
+            ...(institutionName ? { institutionName } : {}),
+          });
+          toast.success(institutionName ? `${institutionName} connected.` : 'Bank connected.');
           onLinked();
         } catch (err) {
           toast.error(err instanceof Error ? err.message : 'Could not finish linking.');

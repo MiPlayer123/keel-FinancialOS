@@ -117,10 +117,14 @@ const disabledResult = (baseCursor: string): LiveSyncResult => ({
   nextCursor: baseCursor,
 });
 
+// Live sync runs against Sandbox or Production. Production was gated behind a
+// human ⚑ checkpoint (CLAUDE.md Law 12); the operator has crossed it — the same
+// crossing already applied to plaid-client.ts (link-token/exchange). The host
+// is chosen from PLAID_ENV below; no other environment is honored.
 const liveGateEnabled = (): boolean =>
   typeof Deno !== 'undefined' &&
   Deno.env.get('KEEL_LIVE_SYNC_ENABLED') === 'true' &&
-  Deno.env.get('PLAID_ENV') === 'sandbox' &&
+  (Deno.env.get('PLAID_ENV') === 'sandbox' || Deno.env.get('PLAID_ENV') === 'production') &&
   Boolean(Deno.env.get('PLAID_CLIENT_ID')) &&
   Boolean(Deno.env.get('PLAID_SECRET'));
 
@@ -157,7 +161,8 @@ const defaultPlaidPost = async (
   if (Deno.env.get('KEEL_PLAID_FETCH_DENY') === 'true') {
     throw new PlaidSyncTransientError('network');
   }
-  return fetch(`https://sandbox.plaid.com${path}`, {
+  const plaidEnv = Deno.env.get('PLAID_ENV') === 'production' ? 'production' : 'sandbox';
+  return fetch(`https://${plaidEnv}.plaid.com${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({

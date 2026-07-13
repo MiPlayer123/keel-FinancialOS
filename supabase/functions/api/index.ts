@@ -530,7 +530,89 @@ export default {
         });
         return internalFailure();
       }
+
+      // Record the institution's human name (from Plaid Link metadata) so the
+      // connection reads as "Chase" rather than "plaid". Best-effort: a naming
+      // failure must not fail an otherwise-successful link.
+      const institutionName = input['institutionName'];
+      const finalizedConnectionId = (finalized as { connectionId?: string } | null)?.connectionId;
+      if (
+        typeof institutionName === 'string' &&
+        institutionName.trim().length > 0 &&
+        finalizedConnectionId
+      ) {
+        await ctx.supabase.rpc('keel_rename_connection', {
+          p_household_id: householdId.data,
+          p_connection_id: finalizedConnectionId,
+          p_display_name: institutionName.trim().slice(0, 80),
+        });
+      }
       return json(200, finalized);
+    }
+
+    if (path === '/connections/sync') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const connectionId = ConnectionIdSchema.safeParse(input['connectionId']);
+      if (!householdId.success || !connectionId.success) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Connection sync request failed validation.',
+          details: {},
+        });
+      }
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'connections.link', {
+        householdId: householdId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+      const { error: reqError } = await ctx.supabase.rpc('keel_request_connection_sync', {
+        p_household_id: householdId.data,
+        p_connection_id: connectionId.data,
+      });
+      if (reqError) return mapDbError(reqError);
+      // Drive the worker immediately for responsive UX; the 3-minute cron is the
+      // background fallback. Best-effort: the queue is drained either way.
+      await ctx.supabaseAdmin.rpc('keel_cron_drain_sync', {});
+      return json(200, { ok: true });
+    }
+
+    if (path === '/connections/rename') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const connectionId = ConnectionIdSchema.safeParse(input['connectionId']);
+      const displayName = input['displayName'];
+      if (
+        !householdId.success ||
+        !connectionId.success ||
+        typeof displayName !== 'string'
+      ) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Connection rename request failed validation.',
+          details: {},
+        });
+      }
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'connections.link', {
+        householdId: householdId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+      const { error: renameError } = await ctx.supabase.rpc('keel_rename_connection', {
+        p_household_id: householdId.data,
+        p_connection_id: connectionId.data,
+        p_display_name: displayName,
+      });
+      if (renameError) return mapDbError(renameError);
+      return json(200, { ok: true });
     }
 
     if (path === '/connections/disconnect') {

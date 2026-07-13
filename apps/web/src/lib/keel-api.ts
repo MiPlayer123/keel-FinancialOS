@@ -124,6 +124,7 @@ export type ConnectionRow = {
   id: string;
   provider: string;
   status: string;
+  displayName: string | null;
   institutionId: string | null;
   lastSuccessfulSyncAt: string | null;
 };
@@ -131,7 +132,7 @@ export type ConnectionRow = {
 export async function fetchConnections(householdId: string): Promise<ConnectionRow[]> {
   const { data, error } = await getSupabaseBrowserClient()
     .from('connections')
-    .select('id, provider, status, institution_id, last_successful_sync_at')
+    .select('id, provider, status, display_name, institution_id, last_successful_sync_at')
     .eq('household_id', householdId)
     .order('created_at', { ascending: false });
   if (error) throw error;
@@ -139,6 +140,7 @@ export async function fetchConnections(householdId: string): Promise<ConnectionR
     id: string;
     provider: string;
     status: string;
+    display_name: string | null;
     institution_id: string | null;
     last_successful_sync_at: string | null;
   };
@@ -146,9 +148,34 @@ export async function fetchConnections(householdId: string): Promise<ConnectionR
     id: r.id,
     provider: r.provider,
     status: r.status,
+    displayName: r.display_name,
     institutionId: r.institution_id,
     lastSuccessfulSyncAt: r.last_successful_sync_at,
   }));
+}
+
+/** Trigger an immediate sync for one connection (also drained by the 3-min cron). */
+export async function syncConnection(input: {
+  householdId: string;
+  connectionId: string;
+}): Promise<unknown> {
+  return invoke('api/connections/sync', {
+    householdId: input.householdId,
+    connectionId: input.connectionId,
+  });
+}
+
+/** Rename a connection (empty string clears the custom name). */
+export async function renameConnection(input: {
+  householdId: string;
+  connectionId: string;
+  displayName: string;
+}): Promise<unknown> {
+  return invoke('api/connections/rename', {
+    householdId: input.householdId,
+    connectionId: input.connectionId,
+    displayName: input.displayName,
+  });
 }
 
 /** Map of ledger_account_id → kind (asset/liability/income/expense/equity), RLS-scoped. */
@@ -199,12 +226,14 @@ export async function exchangePublicToken(input: {
   householdId: string;
   entityId: string;
   publicToken: string;
-}): Promise<unknown> {
+  institutionName?: string;
+}): Promise<{ connectionId?: string; accountIds?: string[] }> {
   return invoke('api/connections/link', {
     commandId: newId(),
     householdId: input.householdId,
     entityId: input.entityId,
     publicToken: input.publicToken,
+    ...(input.institutionName ? { institutionName: input.institutionName } : {}),
   });
 }
 
