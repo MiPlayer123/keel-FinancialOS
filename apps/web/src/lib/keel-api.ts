@@ -445,13 +445,37 @@ export type ReimbursementRow = {
   kind: string;
 };
 
+export type StatementLine = {
+  lineId: string;
+  lineKey: string;
+  date: string;
+  amountMinor: string;
+  description: string;
+};
+
+export type ReconciliationSession = {
+  sessionId: string;
+  ledgerEndingMinor: string;
+  differenceMinor: string;
+  status: string;
+  closedAt: string | null;
+  reopenedAt: string | null;
+  items: { lineId: string; resolution: string; transactionId: string | null; explanation: string }[];
+  adjustments: { kind: string; amountMinor: string; explanation: string }[];
+};
+
 export type StatementRow = {
   statementId: string;
   accountId: string;
   periodStart: string;
   periodEnd: string;
-  differenceMinor: string;
-  status: string;
+  openingMinor: string;
+  endingMinor: string;
+  currency: string;
+  status: 'open' | 'closed' | 'reopened';
+  lines: StatementLine[];
+  /** Present only after a close; differenceMinor lives HERE, not top-level. */
+  session: ReconciliationSession | null;
 };
 
 /** Full household export (Law 6). Returns every format inline. */
@@ -465,6 +489,122 @@ export type ExportBundle = {
 
 export function exportHousehold(householdId: string): Promise<ExportBundle> {
   return invoke<ExportBundle>('api/admin/export', { householdId });
+}
+
+/** Create a manual (non-Plaid) account via the accounts.create command. */
+export async function createManualAccount(input: {
+  householdId: string;
+  entityId: string;
+  userId: string;
+  name: string;
+  kind: 'asset' | 'liability';
+  subtype: string;
+  currency?: string;
+}): Promise<CommandResult> {
+  const commandId = newId();
+  return keelCommand({
+    commandId,
+    command: 'accounts.create',
+    economicEventKey: `accounts.create:${commandId}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: {
+      entityId: input.entityId,
+      name: input.name,
+      kind: input.kind,
+      subtype: input.subtype,
+      currency: input.currency ?? 'USD',
+    },
+  });
+}
+
+/** The entity's Opening Balances equity ledger account (for starting balances). */
+export async function fetchOpeningBalancesLedgerId(
+  householdId: string,
+  entityId: string,
+): Promise<string | null> {
+  const { data, error } = await getSupabaseBrowserClient()
+    .from('ledger_accounts')
+    .select('id')
+    .eq('household_id', householdId)
+    .eq('entity_id', entityId)
+    .eq('name', 'Opening Balances')
+    .is('archived_at', null)
+    .limit(1);
+  if (error) throw error;
+  return (data as { id: string }[] | null)?.[0]?.id ?? null;
+}
+
+/**
+ * Book a starting balance for a manual account: balanced batch against the
+ * entity's Opening Balances equity account (debit-positive convention).
+ */
+export async function postOpeningBalance(input: {
+  householdId: string;
+  userId: string;
+  accountLedgerId: string;
+  openingLedgerId: string;
+  /** Signed minor units: positive = asset value, negative = amount owed. */
+  amountMinor: string;
+  currency?: string;
+  accountName: string;
+}): Promise<CommandResult> {
+  const commandId = newId();
+  const currency = input.currency ?? 'USD';
+  const negated = input.amountMinor.startsWith('-')
+    ? input.amountMinor.slice(1)
+    : `-${input.amountMinor}`;
+  return keelCommand({
+    commandId,
+    command: 'journal.post_batch',
+    economicEventKey: `journal.post_batch:opening:${commandId}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: {
+      description: `Opening balance — ${input.accountName}`,
+      effectiveDate: new Date().toISOString().slice(0, 10),
+      postings: [
+        { ledgerAccountId: input.accountLedgerId, amountMinor: input.amountMinor, currency },
+        { ledgerAccountId: input.openingLedgerId, amountMinor: negated, currency },
+      ],
+    },
+  });
+}
+
+/** Recent audit-log entries (RLS-scoped; append-only trail, Law 2). */
+export type AuditLogRow = {
+  id: number;
+  action: string;
+  objectType: string;
+  objectId: string | null;
+  actor: { kind?: string; userId?: string; source?: string } | null;
+  at: string;
+};
+
+export async function fetchAuditLog(householdId: string, limit = 25): Promise<AuditLogRow[]> {
+  const { data, error } = await getSupabaseBrowserClient()
+    .from('audit_log')
+    .select('id, action, object_type, object_id, actor, at')
+    .eq('household_id', householdId)
+    .order('at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  type Row = {
+    id: number;
+    action: string;
+    object_type: string;
+    object_id: string | null;
+    actor: AuditLogRow['actor'];
+    at: string;
+  };
+  return ((data as Row[] | null) ?? []).map((r) => ({
+    id: r.id,
+    action: r.action,
+    objectType: r.object_type,
+    objectId: r.object_id,
+    actor: r.actor,
+    at: r.at,
+  }));
 }
 
 /** Generate a browser-side UUID for command ids. */

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Download, Loader2, KeyRound } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -8,7 +8,12 @@ import { AppShell } from '@/components/keel/app-shell';
 import { PageHeader } from '@/components/keel/page-header';
 import { useHousehold } from '@/components/keel/household-context';
 import { getSupabaseBrowserClient } from '@/lib/supabase';
-import { exportHousehold, type ExportBundle } from '@/lib/keel-api';
+import {
+  exportHousehold,
+  fetchAuditLog,
+  type AuditLogRow,
+  type ExportBundle,
+} from '@/lib/keel-api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -39,6 +44,7 @@ export default function SettingsPage() {
         <HouseholdCard />
         <PasswordCard />
         <ExportCard />
+        <ActivityCard />
       </div>
     </AppShell>
   );
@@ -181,6 +187,77 @@ function ExportCard() {
               )}
               {f.label}
             </Button>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Human labels for audit actions; unknown actions fall back to the raw name. */
+const ACTION_LABELS: Record<string, string> = {
+  'transaction.categorize': 'Changed a category',
+  'transaction.override': 'Renamed a transaction / edited a note',
+  'transactions.autocategorize': 'Auto-categorized new transactions',
+  'transfers.detect': 'Suggested transfer matches',
+  'transfers.decide': 'Decided a transfer match',
+  'accounts.created': 'Created an account',
+  'journal.batch_posted': 'Posted a journal entry',
+};
+
+function actorLabel(actor: AuditLogRow['actor']): string {
+  if (!actor) return '';
+  if (actor.kind === 'system') return 'KEEL (automatic)';
+  if (actor.kind === 'user') return 'You';
+  return actor.kind ?? '';
+}
+
+/**
+ * Recent audit-log entries — every mutation, human or automatic, is in the
+ * append-only trail (Law 2). This is the visible slice of that trust surface.
+ */
+function ActivityCard() {
+  const { householdId } = useHousehold();
+  const [rows, setRows] = useState<AuditLogRow[] | null>(null);
+
+  useEffect(() => {
+    if (!householdId) return;
+    let active = true;
+    fetchAuditLog(householdId, 20)
+      .then((r) => {
+        if (active) setRows(r);
+      })
+      .catch(() => {
+        if (active) setRows([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [householdId]);
+
+  if (rows === null || rows.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Recent activity</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p className="mb-3 text-sm text-muted-foreground">
+          Every change — yours or KEEL&apos;s — is recorded in an append-only audit
+          trail. The most recent entries:
+        </p>
+        <div className="space-y-2">
+          {rows.map((r) => (
+            <div key={r.id} className="flex items-baseline justify-between gap-3 text-sm">
+              <span className="min-w-0 truncate">
+                {ACTION_LABELS[r.action] ?? r.action}
+                <span className="text-muted-foreground"> · {actorLabel(r.actor)}</span>
+              </span>
+              <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                {r.at.slice(0, 16).replace('T', ' ')}
+              </span>
+            </div>
           ))}
         </div>
       </CardContent>

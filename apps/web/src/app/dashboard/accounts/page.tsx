@@ -16,6 +16,7 @@ import {
   type TrialBalanceRow,
 } from '@/lib/keel-api';
 import { Skeleton } from '@/components/ui/skeleton';
+import { AddAccountDialog } from '@/components/keel/add-account-dialog';
 
 type Enriched = AccountRow & { kind: string; balanceMinor: string };
 
@@ -39,6 +40,7 @@ function AccountsBody() {
   const balances = useKeelQuery<TrialBalanceRow>('ledger.trial_balance', householdId);
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
   const [kinds, setKinds] = useState<Map<string, string> | null>(null);
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     if (!householdId) {
@@ -61,7 +63,7 @@ function AccountsBody() {
     return () => {
       active = false;
     };
-  }, [householdId]);
+  }, [householdId, reload]);
 
   const loading = !ready || balances.loading || accounts === null || kinds === null;
   if (loading) {
@@ -82,11 +84,21 @@ function AccountsBody() {
 
   if (enriched.length === 0) {
     return (
-      <EmptyState
-        icon={<Wallet className="size-6" />}
-        title="No accounts yet"
-        description="Connect a bank or add an account to start tracking balances."
-      />
+      <div className="space-y-4">
+        <EmptyState
+          icon={<Wallet className="size-6" />}
+          title="No accounts yet"
+          description="Connect a bank or add an account to start tracking balances."
+        />
+        <div className="flex justify-center">
+          <AddAccountDialog
+            onCreated={() => {
+              setReload((n) => n + 1);
+              void balances.refetch();
+            }}
+          />
+        </div>
+      </div>
     );
   }
 
@@ -97,9 +109,17 @@ function AccountsBody() {
 
   return (
     <div className="space-y-8">
-      <div className="rounded-lg border border-border bg-card px-5 py-4">
-        <p className="text-sm text-muted-foreground">Net worth</p>
-        <Money amountMinor={netMinor} className="text-3xl font-semibold" muteZero={false} />
+      <div className="flex items-start justify-between gap-4 rounded-lg border border-border bg-card px-5 py-4">
+        <div>
+          <p className="text-sm text-muted-foreground">Net worth</p>
+          <Money amountMinor={netMinor} className="text-3xl font-semibold" muteZero={false} />
+        </div>
+        <AddAccountDialog
+          onCreated={() => {
+            setReload((n) => n + 1);
+            void balances.refetch();
+          }}
+        />
       </div>
 
       <AccountGroup title="Assets" rows={assets} />

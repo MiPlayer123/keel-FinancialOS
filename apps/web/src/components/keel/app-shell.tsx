@@ -30,6 +30,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { KeelLogo, KeelMark } from '@/components/keel/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { HouseholdProvider } from '@/components/keel/household-context';
+import { ReviewBadge } from '@/components/keel/review-badge';
 
 type NavItem = { label: string; href: string; icon: LucideIcon };
 
@@ -75,6 +76,7 @@ function NavLinks({
           >
             <Icon className="size-4 shrink-0" />
             {collapsed ? null : label}
+            {!collapsed && href === '/dashboard/review' ? <ReviewBadge /> : null}
           </Link>
         );
         if (!collapsed) return link;
