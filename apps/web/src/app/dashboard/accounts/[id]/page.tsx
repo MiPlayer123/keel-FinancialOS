@@ -13,8 +13,10 @@ import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
 import {
   fetchAccounts,
   fetchLedgerKinds,
+  fetchLatestBalances,
   type AccountRow,
   type DailyBalanceRow,
+  type LatestBalanceRow,
   type RichTransactionRow,
   type TrialBalanceRow,
 } from '@/lib/keel-api';
@@ -42,6 +44,7 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
   });
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
   const [kinds, setKinds] = useState<Map<string, string> | null>(null);
+  const [provider, setProvider] = useState<LatestBalanceRow | null>(null);
 
   useEffect(() => {
     if (!householdId) {
@@ -61,16 +64,46 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
         setAccounts([]);
         setKinds(new Map());
       });
+    void fetchLatestBalances(householdId)
+      .then((rows) => {
+        if (active) setProvider(rows.find((r) => r.accountId === accountId) ?? null);
+      })
+      .catch(() => {
+        if (active) setProvider(null);
+      });
     return () => {
       active = false;
     };
-  }, [householdId]);
+  }, [householdId, accountId]);
 
   const accountTxns = useMemo(
     () => txns.rows.filter((t) => t.accountId === accountId),
     [txns.rows, accountId],
   );
   const spending = useMemo(() => spendingMix(accountTxns), [accountTxns]);
+
+  const balanceByLedgerMap = useMemo(
+    () => new Map(balances.rows.map((r) => [r.ledgerAccountId, r.balanceMinor])),
+    [balances.rows],
+  );
+  // Quicken-register running balance: walk newest→oldest from the account's
+  // CURRENT ledger balance so the top row always ties to the header number.
+  const runningByTxn = useMemo(() => {
+    const map = new Map<string, string>();
+    const ledgerId = accounts?.find((a) => a.id === accountId)?.ledgerAccountId;
+    if (!ledgerId) return map;
+    let running = BigInt(balanceByLedgerMap.get(ledgerId) ?? '0');
+    const sorted = [...accountTxns].sort(
+      (a, b) =>
+        b.effectiveDate.localeCompare(a.effectiveDate) ||
+        a.transactionId.localeCompare(b.transactionId),
+    );
+    for (const t of sorted) {
+      map.set(t.transactionId, running.toString());
+      running -= BigInt(t.amountMinor || '0');
+    }
+    return map;
+  }, [accountTxns, accounts, accountId, balanceByLedgerMap]);
 
   const loading = !ready || balances.loading || accounts === null || kinds === null;
   if (loading) {
@@ -116,6 +149,16 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
             className="text-2xl font-semibold"
             muteZero={false}
           />
+          {provider?.availableMinor ? (
+            <p className="text-xs text-muted-foreground">
+              <Money
+                amountMinor={provider.availableMinor}
+                currency={account.currency}
+                className="text-xs"
+              />{' '}
+              available at the bank
+            </p>
+          ) : null}
         </div>
       </div>
 
@@ -175,6 +218,13 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
                       signed
                       className="min-w-24 text-right text-sm tabular-nums"
                     />
+                    {runningByTxn.has(t.transactionId) ? (
+                      <Money
+                        amountMinor={runningByTxn.get(t.transactionId) ?? '0'}
+                        currency={t.currency}
+                        className="hidden min-w-24 text-right text-xs text-muted-foreground lg:inline"
+                      />
+                    ) : null}
                   </div>
                 </div>
               ))}
