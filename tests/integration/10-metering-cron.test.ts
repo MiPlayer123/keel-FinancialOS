@@ -11,6 +11,7 @@ import {
   callFunction,
   drainQueue,
   serviceClient,
+  serviceRpcWithRetry,
   SEED,
   signIn,
   stackEnv,
@@ -413,13 +414,12 @@ describe('C6 metering + breakers + pg_cron', () => {
     expect(await countRows('webhook_rejections')).toBe(beforeRejections);
 
     const staleKid = `c6-stale-${crypto.randomUUID()}`;
-    const { error: staleError } = await serviceClient().rpc('keel_webhook_key_put_positive', {
+    await serviceRpcWithRetry('keel_webhook_key_put_positive', {
       p_kid: staleKid,
       p_jwk: { ...publicJwk, kid: staleKid, alg: 'ES256', use: 'sig' },
       p_key_created_at: new Date(0).toISOString(),
       p_key_expired_at: null,
     });
-    if (staleError) throw new Error(staleError.message);
     dbCommand(`update public.plaid_webhook_keys
       set fetched_at = now() - interval '73 hours',
           refresh_after = now() - interval '49 hours'
@@ -432,13 +432,14 @@ describe('C6 metering + breakers + pg_cron', () => {
     expect(await countRows('webhook_rejections')).toBe(beforeRejections);
 
     const freshKid = `c6-fresh-${crypto.randomUUID()}`;
-    const { error } = await serviceClient().rpc('keel_webhook_key_put_positive', {
+    // Fixture planting; retried — the local gateway occasionally answers
+    // "invalid response from upstream server" under CI load.
+    await serviceRpcWithRetry('keel_webhook_key_put_positive', {
       p_kid: freshKid,
       p_jwk: { ...publicJwk, kid: freshKid, alg: 'ES256', use: 'sig' },
       p_key_created_at: new Date(0).toISOString(),
       p_key_expired_at: null,
     });
-    if (error) throw new Error(error.message);
     const { data: budgetBeforeFresh } = await serviceClient().from('provider_call_budget')
       .select('call_count')
       .eq('budget_date', today())
