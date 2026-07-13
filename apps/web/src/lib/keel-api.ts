@@ -736,12 +736,17 @@ export async function createManualTransaction(input: {
   amountMinor: string;
   status?: 'pending' | 'posted';
   splits: { categoryLedgerAccountId: string; amountMinor: string }[];
+  /**
+   * Idempotency handle: mint ONE per user attempt (e.g. per dialog open) so
+   * a retry after a timeout replays instead of double-posting (invariant 3).
+   */
+  attemptKey: string;
 }): Promise<CommandResult> {
   const commandId = newId();
   return keelCommand({
     commandId,
     command: 'transactions.manual_create',
-    economicEventKey: `manual:${commandId}`,
+    economicEventKey: `manual:${input.attemptKey}`,
     actor: { kind: 'user', userId: input.userId },
     householdId: input.householdId,
     payload: {

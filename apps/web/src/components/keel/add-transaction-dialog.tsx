@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Loader2, Split, X } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -62,6 +62,12 @@ export function AddTransactionDialog({
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [splits, setSplits] = useState<SplitDraft[]>([{ categoryId: null, amount: '' }]);
   const [busy, setBusy] = useState(false);
+  // One idempotency key per dialog open: a retry after a timeout REPLAYS the
+  // same economic event instead of posting a duplicate (invariant 3).
+  const [attemptKey, setAttemptKey] = useState(() => crypto.randomUUID());
+  useEffect(() => {
+    if (open) setAttemptKey(crypto.randomUUID());
+  }, [open]);
 
   const options = useMemo(
     () => categories.filter((c) => c.kind === direction),
@@ -151,6 +157,7 @@ export function AddTransactionDialog({
         amountMinor: cashMinor,
         status: 'posted',
         splits: payloadSplits,
+        attemptKey,
       });
       toast.success('Transaction added.');
       reset();

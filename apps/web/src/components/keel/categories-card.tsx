@@ -462,7 +462,7 @@ function CategoryManageRow({
               <CornerDownRight className="size-3.5" />
             </Button>
           ) : null}
-          {!isLandingPad ? (
+          {!isLandingPad && !hasChildren ? (
             <Button
               variant="ghost"
               size="icon-sm"

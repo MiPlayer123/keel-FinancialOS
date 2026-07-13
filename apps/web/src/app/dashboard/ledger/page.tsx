@@ -528,7 +528,11 @@ function LedgerTable() {
           onRecategorize={(id, cat) => {
             void recategorize(id, cat);
           }}
-          onEdit={setEditing}
+          onEdit={(row) => {
+            // Category grouping fans split rows with per-share amounts; the
+            // edit dialog must always show the REAL transaction.
+            setEditing(rows.find((r) => r.transactionId === row.transactionId) ?? row);
+          }}
           selecting={selecting}
           selected={selected}
           onToggle={toggleSelected}
@@ -769,7 +773,9 @@ function TxnList({
     >
       {rows.map((t, i) => (
         <div
-          key={t.transactionId}
+          // Index suffix: category-grouped split fanning can place two shares
+          // of one transaction (or same-named categories) in one list.
+          key={`${t.transactionId}:${String(i)}`}
           className={`flex items-center gap-3 px-4 py-2.5 ${i > 0 ? 'border-t border-border' : ''}`}
         >
           {selecting ? (

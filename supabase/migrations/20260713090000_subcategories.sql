@@ -112,6 +112,15 @@ security definer
 set search_path = public
 as $$
 begin
+  -- Fail closed on a forged pairing: the entity must belong to the household
+  -- (adversarial-review finding — this proc previously trusted its args).
+  if not exists (
+    select 1 from public.entities e
+    where e.id = p_entity_id and e.household_id = p_household_id
+  ) then
+    raise exception 'KEEL_SCOPE_VIOLATION: entity not in household' using errcode = 'P0006';
+  end if;
+
   insert into public.ledger_accounts
     (household_id, entity_id, name, kind, currency, is_category, pfc_key, is_system)
   select p_household_id, p_entity_id, d.name, d.kind::public.ledger_account_kind,
@@ -178,6 +187,11 @@ begin
       from public.canonical_transactions ct
       join public.journal_batches jb
         on jb.canonical_transaction_id = ct.id and jb.reverses_batch_id is null
+       -- Live batch only: a sign-flipping sync revision must not let the
+       -- superseded batch's kind race the replacement's.
+       and not exists (
+         select 1 from public.journal_revisions rev where rev.original_batch_id = jb.id
+       )
       join public.journal_postings jp on jp.batch_id = jb.id
       join public.ledger_accounts la on la.id = jp.ledger_account_id and la.is_category = true
       join public.transaction_source_links tsl on tsl.canonical_transaction_id = ct.id
@@ -650,8 +664,11 @@ begin
     raise exception 'KEEL_INVALID_COMMAND: category has subcategories and cannot be nested' using errcode = 'P0009';
   end if;
 
+  -- Key-share the parent so a concurrent "nest the parent under X" commits
+  -- strictly before or after this row's check, not interleaved.
   select * into v_parent from public.ledger_accounts
-    where id = new.parent_ledger_account_id;
+    where id = new.parent_ledger_account_id
+    for key share;
   if not found
      or v_parent.entity_id <> new.entity_id
      or v_parent.kind <> new.kind
@@ -1057,3 +1074,33 @@ grant create on schema public to keel_export;
 alter function public.keel_export_household(uuid,timestamptz) owner to keel_export;
 revoke create on schema public from keel_export;
 grant execute on function public.keel_export_household(uuid,timestamptz) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- 12. SECURITY: functions created with grant-only statements keep PostgreSQL's
+-- default PUBLIC EXECUTE — so several SECURITY DEFINER procs were callable by
+-- anon/any-authenticated via PostgREST RPC (adversarial-review P0; worst:
+-- keel_apply_account_balance could book an opening-balance batch into another
+-- household). Fail closed: strip PUBLIC/anon everywhere, strip authenticated
+-- from service-only procs, then re-grant exactly the intended callers.
+-- ---------------------------------------------------------------------------
+-- Service-only (worker paths; user surfaces never call these directly):
+revoke all on function public.keel_apply_account_balance(uuid, uuid, bigint, bigint, text, timestamptz)
+  from public, anon, authenticated;
+grant execute on function public.keel_apply_account_balance(uuid, uuid, bigint, bigint, text, timestamptz)
+  to service_role;
+revoke all on function public.keel_seed_entity_categories(uuid, uuid)
+  from public, anon, authenticated;
+grant execute on function public.keel_seed_entity_categories(uuid, uuid) to service_role;
+revoke all on function public.keel_autocategorize_household(uuid)
+  from public, anon, authenticated;
+grant execute on function public.keel_autocategorize_household(uuid) to service_role;
+
+-- User read/write procs: keep authenticated (they gate membership in-body),
+-- but anon must not be able to reach them at all.
+revoke all on function public.keel_list_categories(uuid) from public, anon;
+grant execute on function public.keel_list_categories(uuid) to authenticated, service_role;
+revoke all on function public.keel_latest_balances(uuid) from public, anon;
+grant execute on function public.keel_latest_balances(uuid) to authenticated, service_role;
+revoke all on function public.keel_categorize_transaction(uuid, uuid, uuid) from public, anon;
+grant execute on function public.keel_categorize_transaction(uuid, uuid, uuid)
+  to authenticated, service_role;

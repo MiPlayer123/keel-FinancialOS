@@ -23,6 +23,12 @@ drop policy if exists transaction_categories_definer_all on public.transaction_c
 create policy transaction_categories_definer_all on public.transaction_categories
   for all to keel_api, keel_worker using (true) with check (true);
 
+-- Schema-level invariant the correction model already implies: a batch is
+-- revised AT MOST once (after its first revision it is no longer live on any
+-- path). Backstops the manual-void race alongside the FOR UPDATE below.
+create unique index if not exists journal_revisions_original_once
+  on public.journal_revisions (original_batch_id);
+
 -- ---------------------------------------------------------------------------
 -- 1. transactions.manual_create — full command envelope (modeled on
 -- keel_cmd_post_batch / keel_cmd_promote_event).
@@ -108,6 +114,11 @@ begin
     raise exception 'KEEL_INVALID_COMMAND: effective_date must be YYYY-MM-DD' using errcode = 'P0009';
   end if;
   v_date := (p_payload->>'effective_date')::date;
+  -- Sanity bounds: typos like year 0206 or 9999 would silently distort every
+  -- report; a year of forward-dating covers real prepayments.
+  if v_date < date '1900-01-01' or v_date > current_date + interval '1 year' then
+    raise exception 'KEEL_INVALID_COMMAND: effective_date out of range' using errcode = 'P0009';
+  end if;
   if v_status not in ('pending', 'posted') then
     raise exception 'KEEL_INVALID_COMMAND: status must be pending or posted' using errcode = 'P0009';
   end if;
@@ -286,10 +297,14 @@ begin
     raise exception 'KEEL_INVALID_COMMAND: reason must be 1-500 characters' using errcode = 'P0009';
   end if;
 
+  -- FOR UPDATE: two concurrent voids with DIFFERENT client keys would both
+  -- see voided_at null on a snapshot and double-reverse (adversarial-review
+  -- P1). The row lock serializes them; the second then sees voided_at set.
   select * into v_txn
     from public.canonical_transactions
     where id = (p_payload->>'transaction_id')::uuid
-      and household_id = p_household_id;
+      and household_id = p_household_id
+    for update;
   if not found then
     raise exception 'KEEL_SCOPE_VIOLATION: transaction not in household' using errcode = 'P0006';
   end if;

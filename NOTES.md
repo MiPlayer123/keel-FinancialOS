@@ -781,3 +781,41 @@ matters), rebuild vendor bundle (pnpm build:functions), deploy api + worker,
 deploy web. Web is skew-safe in both directions: pfc_key reads fall back by
 name until the migration lands; new dialogs surface typed server errors if
 procs are missing.
+
+## 2026-07-13 — Session 3 adversarial round (scratch-PG replay + code review, 2 agents)
+
+Scratch cluster replayed the FULL 40-migration chain + seed on Postgres 16
+(fresh and upgrade paths) and ran 29 functional proc checks. All findings
+fixed and re-verified on the cluster same-session:
+- P0 (found by replay): single-split manual transactions died with
+  "permission denied for table transaction_categories" — the overlay table
+  predates the definer-grants pass and keel_cmd_manual_transaction is
+  keel_api-owned. House-pattern grant + definer_all policy added.
+- P0 (found by review): functions created with grant-only statements keep
+  PostgreSQL's default PUBLIC EXECUTE — keel_apply_account_balance,
+  keel_seed_entity_categories, keel_autocategorize_household,
+  keel_list_categories, keel_latest_balances, keel_categorize_transaction
+  were callable by anon via PostgREST RPC; worst case booked an
+  opening-balance batch into another household. 20260713090000 §12 strips
+  PUBLIC/anon (+authenticated on service-only procs) and re-grants exactly
+  the intended callers; seed fn now also validates entity∈household.
+  ACLs verified on the cluster: no `=X` PUBLIC entry remains.
+- P1: fresh `db reset` runs seed after migrations → fixture taxonomy had no
+  pfc_key (worker offsets P0009). seed.sql now stamps the mapping.
+- P1: two concurrent manual voids with DIFFERENT client keys double-reversed
+  (snapshot read). Fix: FOR UPDATE on the canonical row + new schema
+  invariant `journal_revisions_original_once` (a batch is revised at most
+  once). Verified: second void P0001, same-key replay idempotentReplay=true.
+- P2: autocategorize now uses the live-batch predicate (sign-flip revision
+  race); tree trigger key-shares the parent row; manual effective_date
+  bounded 1900-01-01..today+1y; Add-transaction mints ONE idempotency key
+  per dialog open (timeout retry replays instead of double-posting);
+  Archive hidden for parents with children; category-grouped split shares
+  open the REAL transaction in the edit dialog.
+- Review false positive rejected with evidence: "category name uniqueness
+  has no unique index" — ledger_accounts_category_name_ci exists
+  (20260713070000), confirmed in pg_indexes on the cluster.
+- Deploy-order ruling for the runbook: apply BOTH migrations before
+  deploying the worker function (it queries pfc_key; jobs would fail-retry,
+  self-healing but noisy). Web before migrations is degraded-not-broken
+  (name fallback for opening balances; typed 400s for the new dialogs).
