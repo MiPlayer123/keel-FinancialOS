@@ -159,3 +159,38 @@ insert into public.approval_policies (id, household_id, risk_class, autonomy, cr
   ('00000000-0000-4000-8000-00000000b502', '00000000-0000-4000-8000-00000000b001', 'B', 'suggest', now()),
   ('00000000-0000-4000-8000-00000000b503', '00000000-0000-4000-8000-00000000b001', 'C', 'off', now()),
   ('00000000-0000-4000-8000-00000000b504', '00000000-0000-4000-8000-00000000b001', 'D', 'off', now());
+
+-- Stamp stable system-category keys on the fixture taxonomy. Migration
+-- 20260713090000's backfill runs at migration time, but on a fresh local
+-- `db reset` this seed runs AFTER migrations — without the stamp, worker
+-- offset lookups (pfc_key = 'uncategorized_*') and opening-balance booking
+-- would raise P0009 against the fixture entities. Idempotent; mirrors the
+-- migration's mapping exactly.
+update public.ledger_accounts la
+   set pfc_key = m.key, is_system = true
+  from (values
+    ('Uncategorized Expense',  'expense', 'uncategorized_expense'),
+    ('Uncategorized Income',   'income',  'uncategorized_income'),
+    ('Opening Balances',       'equity',  'opening_balances'),
+    ('Fees',                   'expense', 'fees'),
+    ('Entertainment',          'expense', 'entertainment'),
+    ('Food & Drink',           'expense', 'food_drink'),
+    ('Shopping',               'expense', 'shopping'),
+    ('Services',               'expense', 'services'),
+    ('Government & Nonprofit', 'expense', 'government_nonprofit'),
+    ('Home',                   'expense', 'home'),
+    ('Loan Payments',          'expense', 'loan_payments'),
+    ('Medical',                'expense', 'medical'),
+    ('Personal Care',          'expense', 'personal_care'),
+    ('Bills & Utilities',      'expense', 'bills_utilities'),
+    ('Transportation',         'expense', 'transportation'),
+    ('Travel',                 'expense', 'travel'),
+    ('Transfers',              'expense', 'transfers'),
+    ('Other',                  'expense', 'other'),
+    ('Income',                 'income',  'income'),
+    ('Other Income',           'income',  'other_income')
+  ) m(name, kind, key)
+ where la.name = m.name
+   and la.kind = m.kind::public.ledger_account_kind
+   and la.archived_at is null
+   and la.pfc_key is null;

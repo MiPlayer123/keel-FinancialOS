@@ -9,6 +9,21 @@
 -- row per batch, so any multi-offset batch rendered as N duplicate rows.
 
 -- ---------------------------------------------------------------------------
+-- 0. transaction_categories was created after the Stage-1A definer-grants
+-- pass, with SELECT-only access for readers — no keel_api write path. The
+-- overlay writers so far were owned by the migration role (RLS-exempt), but
+-- keel_cmd_manual_transaction below is keel_api-owned and writes the
+-- single-split overlay row. House pattern (20260710210500): grant + a
+-- definer_all policy for the definer roles. (Scratch-PG replay finding:
+-- without this, every single-split manual transaction fails with
+-- "permission denied for table transaction_categories".)
+-- ---------------------------------------------------------------------------
+grant select, insert, update, delete on public.transaction_categories to keel_api, keel_worker;
+drop policy if exists transaction_categories_definer_all on public.transaction_categories;
+create policy transaction_categories_definer_all on public.transaction_categories
+  for all to keel_api, keel_worker using (true) with check (true);
+
+-- ---------------------------------------------------------------------------
 -- 1. transactions.manual_create — full command envelope (modeled on
 -- keel_cmd_post_batch / keel_cmd_promote_event).
 -- Payload (post-toSnakeKeys):

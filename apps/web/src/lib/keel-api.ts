@@ -781,7 +781,8 @@ export async function fetchOpeningBalancesLedgerId(
   householdId: string,
   entityId: string,
 ): Promise<string | null> {
-  const { data, error } = await getSupabaseBrowserClient()
+  const client = getSupabaseBrowserClient();
+  const { data, error } = await client
     .from('ledger_accounts')
     .select('id')
     .eq('household_id', householdId)
@@ -789,7 +790,20 @@ export async function fetchOpeningBalancesLedgerId(
     .eq('pfc_key', 'opening_balances')
     .is('archived_at', null)
     .limit(1);
-  if (error) throw error;
+  if (error) {
+    // Deploy skew: web shipped before the subcategories migration added
+    // pfc_key. Fall back to the seeded name until the column exists.
+    const { data: byName, error: nameError } = await client
+      .from('ledger_accounts')
+      .select('id')
+      .eq('household_id', householdId)
+      .eq('entity_id', entityId)
+      .eq('name', 'Opening Balances')
+      .is('archived_at', null)
+      .limit(1);
+    if (nameError) throw error;
+    return (byName as { id: string }[] | null)?.[0]?.id ?? null;
+  }
   return (data as { id: string }[] | null)?.[0]?.id ?? null;
 }
 
