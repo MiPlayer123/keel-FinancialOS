@@ -337,6 +337,180 @@ function tagTotals(
   };
 }
 
+type MonthReviewCategory = {
+  categoryId: string | null;
+  name: string;
+  amountMinor: bigint;
+  deltaMinor: bigint;
+};
+
+export type MonthReview = {
+  month: string;
+  prevMonth: string;
+  currency: string;
+  incomeMinor: bigint;
+  incomeDeltaMinor: bigint;
+  spendingMinor: bigint;
+  spendingDeltaMinor: bigint;
+  netMinor: bigint;
+  netDeltaMinor: bigint;
+  topCategories: MonthReviewCategory[];
+  biggestPurchase: { description: string; amountMinor: bigint } | null;
+  merchantCount: number;
+  transactionCount: number;
+  /** Integer percent (BigInt division, truncated); null when income <= 0. */
+  savingsRatePct: number | null;
+};
+
+/** The calendar month immediately before `key` (YYYY-MM), UTC, no DST edge cases. */
+function prevMonthKey(key: string): string {
+  const [y, m] = key.split('-').map(Number);
+  const d = new Date(Date.UTC(y ?? 1970, (m ?? 1) - 2, 1));
+  return d.toISOString().slice(0, 7);
+}
+
+/**
+ * Income total, expense-category totals (net of refunds, split-aware — same
+ * convention as buildMatrix), for one month in the dominant currency.
+ * Confirmed transfers excluded.
+ */
+function monthIncomeAndSpending(
+  rows: RichTransactionRow[],
+  month: string,
+  currency: string,
+): {
+  incomeMinor: bigint;
+  categories: Map<string, { name: string; amountMinor: bigint }>;
+} {
+  let incomeMinor = 0n;
+  const categories = new Map<string, { name: string; amountMinor: bigint }>();
+  const bumpCategory = (key: string, name: string, spend: bigint) => {
+    const e = categories.get(key) ?? { name, amountMinor: 0n };
+    e.amountMinor += spend;
+    categories.set(key, e);
+  };
+  for (const t of rows) {
+    if (t.transferStatus === 'confirmed') continue;
+    if (t.currency !== currency) continue;
+    if (monthKey(t.effectiveDate) !== month) continue;
+    if (t.splits && t.splits.length > 0) {
+      for (const s of t.splits) {
+        const share = BigInt(s.amountMinor || '0');
+        if (s.kind === 'expense') {
+          bumpCategory(s.categoryLedgerAccountId, s.name, share);
+        } else {
+          incomeMinor += -share;
+        }
+      }
+      continue;
+    }
+    const cash = BigInt(t.amountMinor || '0');
+    if (t.categoryKind === 'expense') {
+      bumpCategory(t.categoryLedgerAccountId ?? 'uncategorized', t.categoryName ?? 'Uncategorized', -cash);
+    } else if (t.categoryKind === 'income') {
+      incomeMinor += cash;
+    }
+  }
+  return { incomeMinor, categories };
+}
+
+/**
+ * Biggest single purchase, distinct-merchant count, and transaction count for
+ * one month in the dominant currency. "Purchase" = any non-transfer row whose
+ * cash amount is money out, regardless of category (Uncategorized counts).
+ */
+function monthActivity(
+  rows: RichTransactionRow[],
+  month: string,
+  currency: string,
+): {
+  biggestPurchase: { description: string; amountMinor: bigint } | null;
+  merchantCount: number;
+  transactionCount: number;
+} {
+  let transactionCount = 0;
+  let biggestPurchase: { description: string; amountMinor: bigint } | null = null;
+  const merchants = new Set<string>();
+  for (const t of rows) {
+    if (t.transferStatus === 'confirmed') continue;
+    if (t.currency !== currency) continue;
+    if (monthKey(t.effectiveDate) !== month) continue;
+    transactionCount += 1;
+    const cash = BigInt(t.amountMinor || '0');
+    if (cash < 0n) {
+      const spend = -cash;
+      merchants.add(t.description.trim().toLowerCase());
+      if (!biggestPurchase || spend > biggestPurchase.amountMinor) {
+        biggestPurchase = { description: t.description, amountMinor: spend };
+      }
+    }
+  }
+  return { biggestPurchase, merchantCount: merchants.size, transactionCount };
+}
+
+/**
+ * Copilot-style "Month in Review" recap for one month vs the prior month,
+ * dominant currency only, confirmed transfers excluded. Pure BigInt; the only
+ * Number() conversion is the display-only savings-rate percent.
+ */
+function buildMonthReview(
+  rows: RichTransactionRow[],
+  month: string,
+  currency: string,
+): MonthReview {
+  const prevMonth = prevMonthKey(month);
+  const curr = monthIncomeAndSpending(rows, month, currency);
+  const prev = monthIncomeAndSpending(rows, prevMonth, currency);
+  const activity = monthActivity(rows, month, currency);
+
+  const currSpendingMinor = [...curr.categories.values()].reduce((acc, c) => acc + c.amountMinor, 0n);
+  const prevSpendingMinor = [...prev.categories.values()].reduce((acc, c) => acc + c.amountMinor, 0n);
+  const netMinor = curr.incomeMinor - currSpendingMinor;
+  const prevNetMinor = prev.incomeMinor - prevSpendingMinor;
+
+  const topCategories: MonthReviewCategory[] = [...curr.categories.entries()]
+    .map(([key, c]) => ({
+      categoryId: key === 'uncategorized' ? null : key,
+      name: c.name,
+      amountMinor: c.amountMinor,
+      deltaMinor: c.amountMinor - (prev.categories.get(key)?.amountMinor ?? 0n),
+    }))
+    .sort((a, b) => (b.amountMinor > a.amountMinor ? 1 : b.amountMinor < a.amountMinor ? -1 : 0))
+    .slice(0, 5);
+
+  const savingsRatePct = curr.incomeMinor > 0n ? Number((netMinor * 100n) / curr.incomeMinor) : null;
+
+  return {
+    month,
+    prevMonth,
+    currency,
+    incomeMinor: curr.incomeMinor,
+    incomeDeltaMinor: curr.incomeMinor - prev.incomeMinor,
+    spendingMinor: currSpendingMinor,
+    spendingDeltaMinor: currSpendingMinor - prevSpendingMinor,
+    netMinor,
+    netDeltaMinor: netMinor - prevNetMinor,
+    topCategories,
+    biggestPurchase: activity.biggestPurchase,
+    merchantCount: activity.merchantCount,
+    transactionCount: activity.transactionCount,
+    savingsRatePct,
+  };
+}
+
+/** Small "+$120 vs May" delta line; no color — a delta's sign isn't itself a loss/gain signal. */
+function DeltaLine({ deltaMinor, vsLabel }: { deltaMinor: bigint; vsLabel: string }) {
+  if (deltaMinor === 0n) {
+    return <p className="text-xs text-muted-foreground">No change vs {vsLabel}</p>;
+  }
+  return (
+    <p className="text-xs text-muted-foreground">
+      <Money amountMinor={deltaMinor.toString()} signed className="text-xs" muteZero={false} /> vs{' '}
+      {vsLabel}
+    </p>
+  );
+}
+
 function ReportsBody() {
   const { householdId, ready } = useHousehold();
   const txns = useKeelQuery<RichTransactionRow>('transactions.rich', householdId);
@@ -366,6 +540,14 @@ function ReportsBody() {
   const months = useMemo(() => lastMonths(MONTHS_SHOWN), []);
   const tagReport = useMemo(() => tagTotals(txns.rows, months), [txns.rows, months]);
   const tags = tagReport.totals;
+  // Default to the last FULL month — the current month (months[last]) is still in progress.
+  const [reviewMonth, setReviewMonth] = useState<string>(
+    () => months[months.length - 2] ?? months[months.length - 1] ?? '',
+  );
+  const monthReview = useMemo(
+    () => (reviewMonth ? buildMonthReview(txns.rows, reviewMonth, tagReport.currency) : null),
+    [txns.rows, reviewMonth, tagReport.currency],
+  );
   // Includes archived categories: their history stays on the tax schedule.
   const [taxLines, setTaxLines] = useState<Map<string, string>>(new Map());
   useEffect(() => {
@@ -425,6 +607,133 @@ function ReportsBody() {
 
   return (
     <>
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex flex-wrap items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
+            <span>Month in review</span>
+            <span className="flex flex-wrap gap-1">
+              {months.map((m) => (
+                <Button
+                  key={m}
+                  variant={reviewMonth === m ? 'secondary' : 'ghost'}
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => {
+                    setReviewMonth(m);
+                  }}
+                >
+                  {monthLabel(m)}
+                </Button>
+              ))}
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {monthReview && monthReview.transactionCount > 0 ? (
+            <>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div>
+                  <p className="text-xs text-muted-foreground">Income</p>
+                  <Money
+                    amountMinor={monthReview.incomeMinor.toString()}
+                    currency={monthReview.currency}
+                    className="text-lg font-semibold"
+                  />
+                  <DeltaLine
+                    deltaMinor={monthReview.incomeDeltaMinor}
+                    vsLabel={monthLabel(monthReview.prevMonth)}
+                  />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Spending</p>
+                  <Money
+                    amountMinor={monthReview.spendingMinor.toString()}
+                    currency={monthReview.currency}
+                    className="text-lg font-semibold"
+                  />
+                  <DeltaLine
+                    deltaMinor={monthReview.spendingDeltaMinor}
+                    vsLabel={monthLabel(monthReview.prevMonth)}
+                  />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Net</p>
+                  <Money
+                    amountMinor={monthReview.netMinor.toString()}
+                    currency={monthReview.currency}
+                    signed
+                    className="text-lg font-semibold"
+                  />
+                  <DeltaLine
+                    deltaMinor={monthReview.netDeltaMinor}
+                    vsLabel={monthLabel(monthReview.prevMonth)}
+                  />
+                </div>
+              </div>
+
+              {monthReview.topCategories.length > 0 ? (
+                <div>
+                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Top spending categories
+                  </p>
+                  <div className="space-y-2">
+                    {monthReview.topCategories.map((c) => (
+                      <div key={c.categoryId ?? 'uncategorized'} className="flex items-center gap-3 text-sm">
+                        <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          <Money amountMinor={c.deltaMinor.toString()} signed className="text-xs" />{' '}
+                          vs {monthLabel(monthReview.prevMonth)}
+                        </span>
+                        <Money
+                          amountMinor={c.amountMinor.toString()}
+                          currency={monthReview.currency}
+                          className="w-24 shrink-0 text-right text-sm font-medium"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <p className="text-xs text-muted-foreground">Biggest single purchase</p>
+                  {monthReview.biggestPurchase ? (
+                    <p className="text-sm">
+                      <span className="truncate">{monthReview.biggestPurchase.description}</span>{' '}
+                      <Money
+                        amountMinor={monthReview.biggestPurchase.amountMinor.toString()}
+                        currency={monthReview.currency}
+                        className="font-medium"
+                      />
+                    </p>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No purchases this month.</p>
+                  )}
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Activity</p>
+                  <p className="text-sm">
+                    You spent at {monthReview.merchantCount} place
+                    {monthReview.merchantCount === 1 ? '' : 's'} across{' '}
+                    {monthReview.transactionCount} transaction
+                    {monthReview.transactionCount === 1 ? '' : 's'}.
+                    {monthReview.savingsRatePct !== null
+                      ? ` Savings rate: ${String(monthReview.savingsRatePct)}%.`
+                      : ''}
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {monthLabel(reviewMonth)}, dominant currency only, confirmed transfers excluded.
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">No activity in {monthLabel(reviewMonth)}.</p>
+          )}
+        </CardContent>
+      </Card>
+
       {flow ? (
         <Card>
           <CardHeader className="pb-2">
