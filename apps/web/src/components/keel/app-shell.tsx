@@ -228,10 +228,11 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-dvh">
-      {/* Desktop sidebar */}
+      {/* Desktop sidebar — pinned to the viewport, fixed height, scrolls
+          internally so a tall page never stretches the nav. */}
       <aside
         className={cn(
-          'hidden shrink-0 border-r border-border bg-sidebar transition-[width] duration-200 lg:block',
+          'sticky top-0 hidden h-dvh shrink-0 self-start overflow-y-auto border-r border-border bg-sidebar transition-[width] duration-200 lg:block',
           collapsed ? 'w-16' : 'w-60',
         )}
       >

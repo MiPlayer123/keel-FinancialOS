@@ -839,6 +839,107 @@ const processReapLinks = async (admin: AdminClient): Promise<Response> => {
   return json(200, { processed });
 };
 
+// Provider balances are 2-decimal fiat and arrive already JSON-parsed (no raw
+// lexeme available from accountsGet), so we anchor to minor units by rounding.
+// This is the opening-balance anchor only — per-transaction economics stay
+// lexeme-lossless. Safe for realistic magnitudes (well within 2^53).
+const dollarsToMinor = (value: unknown): number | null => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return Math.round(value * 100);
+};
+
+interface BalanceCredential {
+  credentialId: string;
+  householdId: string;
+  kekVersion: number;
+}
+
+const processRefreshBalances = async (admin: AdminClient): Promise<Response> => {
+  const { data: conns, error } = await admin
+    .from('connections')
+    .select('id, household_id')
+    .eq('provider', 'plaid')
+    .eq('status', 'active');
+  if (error) return mapDbError(error);
+
+  const results: Array<{ connectionId: string; accounts: number; error?: string }> = [];
+  for (const c of (conns ?? []) as Array<{ id: string; household_id: string }>) {
+    try {
+      const { data: envData } = await admin.rpc('keel_get_connection_credential_envelope', {
+        p_connection_id: c.id,
+      });
+      if (!envData) {
+        results.push({ connectionId: c.id, accounts: 0, error: 'no_credential' });
+        continue;
+      }
+      const envelope = envData as BalanceCredential & Record<string, unknown>;
+      const token = await decryptToken(
+        envelope as unknown as EncryptedRecord,
+        envelope.credentialId,
+        c.household_id,
+        'plaid',
+        getKek(envelope.kekVersion),
+      );
+      const plaid = createPlaidClient(admin, {
+        env: Deno.env.get('PLAID_ENV') ?? 'sandbox',
+        clientId: Deno.env.get('PLAID_CLIENT_ID'),
+        secret: Deno.env.get('PLAID_SECRET'),
+        householdId: c.household_id,
+      });
+      const body = (await plaid.accountsGet(c.id, { access_token: token })) as {
+        accounts?: Array<{
+          account_id?: string;
+          balances?: {
+            current?: unknown;
+            available?: unknown;
+            iso_currency_code?: unknown;
+          };
+        }>;
+      };
+      const { data: dbAccts } = await admin
+        .from('accounts')
+        .select('id, external_ref')
+        .eq('connection_id', c.id);
+      const byRef = new Map(
+        ((dbAccts ?? []) as Array<{ id: string; external_ref: string | null }>).map((a) => [
+          a.external_ref,
+          a.id,
+        ]),
+      );
+
+      let applied = 0;
+      for (const acct of body.accounts ?? []) {
+        const accountId = typeof acct.account_id === 'string' ? byRef.get(acct.account_id) : undefined;
+        if (!accountId) continue;
+        const currentMinor = dollarsToMinor(acct.balances?.current);
+        if (currentMinor === null) continue;
+        const availableMinor = dollarsToMinor(acct.balances?.available);
+        const currency =
+          typeof acct.balances?.iso_currency_code === 'string'
+            ? acct.balances.iso_currency_code
+            : 'USD';
+        const { error: applyErr } = await admin.rpc('keel_apply_account_balance', {
+          p_household_id: c.household_id,
+          p_account_id: accountId,
+          p_current_minor: currentMinor,
+          p_available_minor: availableMinor,
+          p_currency: currency,
+          p_as_of: new Date().toISOString(),
+        });
+        if (!applyErr) applied++;
+      }
+      results.push({ connectionId: c.id, accounts: applied });
+    } catch (e) {
+      results.push({
+        connectionId: c.id,
+        accounts: 0,
+        error: e instanceof Error ? e.message : 'error',
+      });
+    }
+  }
+  return json(200, { refreshed: results });
+};
+
 export default {
   fetch: withSupabase({ auth: 'secret:automations', env: keelSecretKeys() }, async (req, ctx) => {
     const url = new URL(req.url);
@@ -849,6 +950,9 @@ export default {
     }
     if (req.method === 'POST' && path === '/reap-links') {
       return processReapLinks(ctx.supabaseAdmin);
+    }
+    if (req.method === 'POST' && path === '/refresh-balances') {
+      return processRefreshBalances(ctx.supabaseAdmin);
     }
     if (req.method !== 'POST' || path !== '/drain') {
       return json(404, { code: 'not_found', message: 'Not found.', details: {} });
