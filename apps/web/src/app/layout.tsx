@@ -5,6 +5,7 @@ import './globals.css';
 import { Geist, Geist_Mono } from 'next/font/google';
 import { cn } from '@/lib/utils';
 import { ThemeProvider } from '@/components/theme-provider';
+import { QueryProvider } from '@/components/query-provider';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/sonner';
 
@@ -22,8 +23,10 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
     <html lang="en" suppressHydrationWarning className={cn(geist.variable, geistMono.variable)}>
       <body suppressHydrationWarning className="font-sans antialiased">
         <ThemeProvider>
-          <TooltipProvider delay={200}>{children}</TooltipProvider>
-          <Toaster />
+          <QueryProvider>
+            <TooltipProvider delay={200}>{children}</TooltipProvider>
+            <Toaster />
+          </QueryProvider>
         </ThemeProvider>
       </body>
     </html>
