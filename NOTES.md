@@ -986,3 +986,59 @@ as service_role (65 arrays, all real columns), cross-tenant probes (P0006),
 advance fence + envelope unique index make double-post impossible, stepDue ↔
 Postgres parity incl. leap years, taxSchedule sign convention vs rich list,
 no stale count pins.
+
+## 2026-07-13 — Batch 5 (owner feedback round, post PR #2 merge)
+
+Owner feedback verbatim → work items:
+1. Sidebar lists accounts grouped Assets/Liabilities under the Accounts nav
+   item (names only, cap 6 + "+n more"; collapsed rail unchanged).
+2. Balance/projection line charts render red below zero (Law 8 — negative
+   money): stroke+fill gradients flip at the zero crossing; gradient ids are
+   per-instance (useId) so multiple charts on one page don't collide.
+3. Account detail page: transactions full width via the SHARED TxnList
+   (notes, tag chips, split badges, category picker, click-to-edit, and the
+   Quicken running-balance column via new `running` prop); Spending mix moved
+   up beside the balance trend. TxnEditDialog/TxnList/CategoryPicker were
+   extracted from ledger/page.tsx into components/keel/txn-edit-dialog.tsx.
+4. "Can't edit ledger": editing = rename/note/category/tags overlay (amounts
+   and dates on bank rows are immutable by design — append-only spine);
+   affordance was invisible, so rows now show an explicit pencil button.
+   Manual rows void+re-enter as before.
+5. QIF import: lib/qif.ts parser (bank/cash/ccard types; D/T/U/P/M/L/S/$;
+   apostrophe dates; [Account] L-lines = transfer → uncategorized; !Account
+   and investment blocks skipped, never guessed) + unit tests; import dialog
+   auto-detects QIF, maps Quicken categories AND splits by name (full name
+   then leaf of "Parent:Child"), memos become notes via the override overlay,
+   same content-hash idempotent envelope as CSV. apps/web is now a vitest
+   project (src/lib pure-logic tests only).
+6. Favicon: app/icon.svg — the keel mark on the brand emerald tile.
+7. ⌘K gains "Manage categories" (anchors to the Home categories card).
+
+Subcategories/custom categories already shipped (Home → Categories →
+Manage); flagged to owner rather than rebuilt.
+
+## 2026-07-13 — Batch 5 review round (pre-push)
+
+Review agent found the flagship broken: P0 — the QIF Import button could
+NEVER enable (ready gate still demanded CSV column mappings that don't exist
+for QIF; parser-only unit tests couldn't catch a dialog gate). Fixed + P1s:
+- Stale fileName steered pasted CSV into the QIF parser after a .qif had
+  been chosen once (extension checked before content) — fileName now clears
+  on manual edits and after import.
+- DD/MM (UK/EU) files silently imported with transposed/missing dates —
+  file-level detection now flips the whole file to day-first when any
+  slashed date's first field exceeds 12 (one convention per file, never per
+  row), surfaced in the counts line ("dates read day-first").
+- Apostrophe-separator years are always 2000s (Quicken semantics); "+5"
+  amounts accepted; !Account metadata and investment records now count as
+  "non-cash records ignored" instead of lying "unparseable".
+- ⌘K → Manage categories now scrolls reliably cross-page (card self-scrolls
+  after data load; the anchor didn't exist at hash-scroll time).
+- householdId guards replace the '' fallback on the account page; dangling
+  doc comment removed.
+Documented as accepted (review P2s): area-fill color flip sits at data-range
+zero, a hair off when the y-axis pads below the data min (never red above
+zero — the safe direction); QIF re-imports keep KEEL categorization (never
+overwritten by Quicken-side edits — stated in dialog copy); sidebar accounts
+fetch per mount (module cache is a future nicety); SVG-only favicon (PNG
+fallback if unfurlers matter later).

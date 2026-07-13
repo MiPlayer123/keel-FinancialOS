@@ -112,6 +112,14 @@ export function QuickNav() {
             <Plus className="size-4" />
             Add transaction
           </CommandItem>
+          <CommandItem
+            onSelect={() => {
+              go('/dashboard#categories');
+            }}
+          >
+            <Tags className="size-4" />
+            Manage categories
+          </CommandItem>
         </CommandGroup>
         <CommandSeparator />
         <CommandGroup heading="Pages">
