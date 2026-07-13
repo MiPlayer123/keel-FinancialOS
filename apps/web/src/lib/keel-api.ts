@@ -325,7 +325,22 @@ export type CategoryRow = {
   /** Seeded system category (renameable but key-stable). */
   isSystem?: boolean;
   pfcKey?: string | null;
+  /** Optional IRS line for the tax schedule (absent pre-migration). */
+  taxLine?: string | null;
 };
+
+/** Map a category to an IRS tax line (null clears). User-set only. */
+export async function setCategoryTaxLine(input: {
+  householdId: string;
+  categoryLedgerAccountId: string;
+  taxLine: string | null;
+}): Promise<unknown> {
+  return invoke('api/categories/set-tax-line', {
+    householdId: input.householdId,
+    categoryLedgerAccountId: input.categoryLedgerAccountId,
+    taxLine: input.taxLine,
+  });
+}
 
 /** Categories (ledger accounts flagged is_category) for the re-categorize picker. */
 export async function fetchCategories(householdId: string): Promise<CategoryRow[]> {

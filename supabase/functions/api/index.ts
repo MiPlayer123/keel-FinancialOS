@@ -653,6 +653,30 @@ export default {
       return json(200, { ledgerAccountId: data });
     }
 
+    if (path === '/categories/set-tax-line') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const uuidReTax = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const categoryId = input['categoryLedgerAccountId'];
+      const taxLine = input['taxLine'] ?? null;
+      // The proc validates the enum value; here only shape.
+      if (
+        !householdId.success ||
+        typeof categoryId !== 'string' ||
+        !uuidReTax.test(categoryId) ||
+        (taxLine !== null && (typeof taxLine !== 'string' || taxLine.length > 40))
+      ) {
+        return json(400, { code: 'invalid_command', message: 'Tax line request failed validation.', details: {} });
+      }
+      const { error } = await ctx.supabase.rpc('keel_set_category_tax_line', {
+        p_household_id: householdId.data,
+        p_ledger_account_id: categoryId,
+        p_tax_line: taxLine,
+      });
+      if (error) return mapDbError(error);
+      return json(200, { ok: true });
+    }
+
     if (path === '/categories/rename' || path === '/categories/archive' || path === '/categories/reparent') {
       const input = body as Record<string, unknown>;
       const householdId = HouseholdIdSchema.safeParse(input['householdId']);

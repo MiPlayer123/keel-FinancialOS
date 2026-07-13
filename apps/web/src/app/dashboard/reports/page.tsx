@@ -7,6 +7,7 @@ import { BarChart3, ArrowDownRight, ArrowUpRight } from 'lucide-react';
 import { AppShell } from '@/components/keel/app-shell';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
+import { taxLineLabel, taxLineSchedule } from '@/lib/tax-lines';
 import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
 import {
@@ -233,6 +234,72 @@ function buildFlow(rows: RichTransactionRow[], categories: CategoryRow[]): FlowG
 }
 
 /**
+ * Actuals grouped by IRS tax line (Quicken's Tax Schedule report). A category
+ * carries an optional taxLine; splits attribute their own share. Net cash per
+ * line in the dominant currency, current calendar year to date.
+ */
+function taxSchedule(
+  rows: RichTransactionRow[],
+  categories: CategoryRow[],
+): {
+  currency: string;
+  year: string;
+  groups: { schedule: string; lines: { line: string; count: number; netMinor: bigint }[] }[];
+} {
+  const year = new Date().toISOString().slice(0, 4);
+  const taxByCategory = new Map<string, string>();
+  for (const c of categories) {
+    if (c.taxLine) taxByCategory.set(c.ledgerAccountId, c.taxLine);
+  }
+  const currencyCounts = new Map<string, number>();
+  for (const t of rows) {
+    currencyCounts.set(t.currency, (currencyCounts.get(t.currency) ?? 0) + 1);
+  }
+  const currency =
+    [...currencyCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'USD';
+
+  const byLine = new Map<string, { count: number; netMinor: bigint }>();
+  const bump = (line: string, minor: bigint) => {
+    const e = byLine.get(line) ?? { count: 0, netMinor: 0n };
+    e.count += 1;
+    e.netMinor += minor;
+    byLine.set(line, e);
+  };
+  for (const t of rows) {
+    if (t.transferStatus === 'confirmed') continue;
+    if (t.currency !== currency) continue;
+    if (!t.effectiveDate.startsWith(year)) continue;
+    if (t.splits && t.splits.length > 0) {
+      for (const sp of t.splits) {
+        const line = taxByCategory.get(sp.categoryLedgerAccountId);
+        // Split amounts offset the cash leg; negate to read as cash effect.
+        if (line) bump(line, -BigInt(sp.amountMinor || '0'));
+      }
+      continue;
+    }
+    const line = t.categoryLedgerAccountId
+      ? taxByCategory.get(t.categoryLedgerAccountId)
+      : undefined;
+    if (line) bump(line, BigInt(t.amountMinor || '0'));
+  }
+
+  const bySchedule = new Map<string, { line: string; count: number; netMinor: bigint }[]>();
+  for (const [line, e] of byLine) {
+    const sched = taxLineSchedule(line);
+    const list = bySchedule.get(sched) ?? [];
+    list.push({ line, count: e.count, netMinor: e.netMinor });
+    bySchedule.set(sched, list);
+  }
+  const groups = [...bySchedule.entries()]
+    .map(([schedule, lines]) => ({
+      schedule,
+      lines: lines.sort((a, b) => a.line.localeCompare(b.line)),
+    }))
+    .sort((a, b) => a.schedule.localeCompare(b.schedule));
+  return { currency, year, groups };
+}
+
+/**
  * Net cash by tag over the trailing months (confirmed transfers excluded).
  * Sums are single-currency: restricted to the household's dominant currency,
  * which is returned so the card formats with it.
@@ -302,6 +369,7 @@ function ReportsBody() {
   const months = useMemo(() => lastMonths(MONTHS_SHOWN), []);
   const tagReport = useMemo(() => tagTotals(txns.rows, months), [txns.rows, months]);
   const tags = tagReport.totals;
+  const taxReport = useMemo(() => taxSchedule(txns.rows, categories), [txns.rows, categories]);
   const matrix = useMemo(
     () => buildMatrix(txns.rows, months, view),
     [txns.rows, months, view],
@@ -527,6 +595,42 @@ function ReportsBody() {
             <p className="pt-1 text-xs text-muted-foreground">
               Net cash for tagged transactions — tag things like tax-deductible or a
               trip, then read the total here.
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
+      {taxReport.groups.length > 0 ? (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Tax schedule · {taxReport.year} YTD
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {taxReport.groups.map((g) => (
+              <div key={g.schedule} className="space-y-1">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {g.schedule}
+                </p>
+                {g.lines.map((l) => (
+                  <div key={l.line} className="flex items-center gap-3 text-sm">
+                    <span className="min-w-0 flex-1 truncate">{taxLineLabel(l.line)}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {String(l.count)} txn{l.count === 1 ? '' : 's'}
+                    </span>
+                    <Money
+                      amountMinor={l.netMinor.toString()}
+                      currency={taxReport.currency}
+                      signed
+                      className="w-28 shrink-0 text-right text-sm"
+                    />
+                  </div>
+                ))}
+              </div>
+            ))}
+            <p className="pt-1 text-xs text-muted-foreground">
+              Actual cash per IRS line, from the tax lines you set on categories
+              (Home → Categories → Manage). Bookkeeping, not tax advice.
             </p>
           </CardContent>
         </Card>
