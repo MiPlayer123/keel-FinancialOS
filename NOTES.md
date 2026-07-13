@@ -512,3 +512,80 @@ Audit of the live account found three "it's wrong" issues; fixed end-to-end.
 
 Verified live end-to-end: rich query, categories.list (19), and a user re-categorize
 (→ Shopping) all green.
+
+## 2026-07-13 — Handoff session (remote container): deploy verified, §5.2 UX, transfers, trends
+
+**Deploy verification (§5 step 1):** the `a2df045` Vercel deploy IS live — the served
+ledger chunk (`page-1624bfe8891def80.js`) contains "Every transaction, categorized.",
+"Search transactions", "Group by", and the `transactions.rich` call. Verified at the
+asset level from a credential-less environment (Law 12: no secrets exist here; the
+session's Supabase MCP is a different account and cannot see yrbteeownwjhcushwaga).
+
+**Fixed a broken-on-main test:** plaid-client.test.ts still asserted the pre-774e07
+sandbox-only error message; `pnpm -w test` failed on any fresh clone. Test now proves
+the sandbox|production allowlist.
+
+**§5.2 UX + perf (frontend):**
+- Household context adopts the saved household id optimistically (localStorage) and
+  fetches session+memberships in parallel — removes one full serial round trip from
+  every page load; stale ids fail safe via RLS/proc membership checks then reconcile.
+- Ledger rows: hover title, category in the mobile subtitle, Pending chip adjacent to
+  the amount, min-width amounts. Row click opens an edit dialog.
+
+**Editable name/note ("everything editable", migration 20260713010000):**
+`transaction_overrides` — same append-only-safe overlay pattern as
+transaction_categories (canonical description immutable; source preservation).
+`keel_set_transaction_override` (audited upsert/clear), rich read model returns
+description (override-first) + originalDescription + note; api route
+`/transactions/override`. **Law 6 ruling:** transaction_categories was created
+20260712200100 but never ruled into the export contract — both overlay tables are now
+INCLUDE (manifest 57→59 with tests), exported via the `_pre_overlays` wrapper chain,
+with keel_export grants/policies + pgTAP expected columns.
+
+**Transfers (migration 20260713020000; top gap in FEATURE-GAP-REPORT):**
+- `keel_detect_transfers`: deterministic pairing (Law 1) — exact opposite cash
+  amounts, same currency, different accounts, ≤3 days; one-to-one greedy by
+  (day gap, id) so replay reproduces identical pairs; rejected pairs never
+  re-suggest (unique + do-nothing). Suggestions only (Law 2).
+- `keel_decide_transfer`: audited confirm/reject (decided_by/decided_at).
+- `keel_cash_flow` → cash-flow-v2-transfer-excluded: confirmed pairs' offsets no
+  longer count as income/expense. Net worth was never affected (asset↔liability).
+- transactions.rich carries transferStatus; Review page grew a "Possible transfers"
+  confirm/reject section; confirmed rows show a Transfer badge in the ledger.
+- Worker refresh-balances cycle now ALSO runs keel_autocategorize_household +
+  keel_detect_transfers per household (best-effort): new synced transactions were
+  never re-categorized after the one manual backfill — that gap is closed.
+
+**Trends + graphs (migration 20260713030000):** keel_net_worth_daily,
+keel_account_balance_daily, keel_cash_flow_monthly (transfer-excluded) — all
+ledger-derived (bigint, per-currency, debit-positive; snapshots stay a
+reconciliation aid). Account detail page rebuilt (rich rows + 90d balance trend +
+30d spending mix; the Accounts list's row links previously 404'd). Home grew
+net-worth trend, monthly cash-flow bars, and spending-by-category. Chart sections
+use useKeelQuerySilent and hide until the backend supports the query, so the
+frontend can ship ahead of the migration.
+
+**Dataviz decisions:** single-hue emerald for single-series trends; the
+inflow/outflow pair is emerald/indigo — light #047857/#4f46e5, dark #059669/#6366f1 —
+validated with the dataviz six-checks script (lightness band, chroma, CVD ΔE≥84
+deutan, contrast) in BOTH modes; the emerald/stone pair FAILED deutan separation
+(ΔE 6.4) and was rejected. Red remains reserved for negative money (Law 8). Labels
+format from BIGINT minor strings; Number is used for pixel geometry only (Law 4).
+Rendered and eyeballed light/dark/390px via local dev + headless Chromium.
+
+**plaid-webhook-key.ts:** host now follows PLAID_ENV (sandbox|production, fail-closed
+otherwise) — was hardcoded sandbox.plaid.com, so production webhook signature
+verification could never succeed. Test proves the production host.
+
+**Gate evidence (this container):** `pnpm -w typecheck` + `lint` clean; 438 vitest;
+12 Deno suites/56 steps; `apps/web pnpm build` green (trap #1); root pnpm-lock.yaml
+committed with the recharts add (trap #2). **NOT run here (no Docker): `supabase
+test db` + `scripts/dev/itest.sh` — run both before cloud apply.**
+
+**Deploy runbook for these changes (owner):**
+1. `pnpm install` (recharts), `supabase test db` + `bash scripts/dev/itest.sh` locally.
+2. Apply migrations 20260713010000/020000/030000 via psql (in order) to cloud.
+3. `node scripts/build-functions.mjs` then `supabase functions deploy api worker
+   --project-ref yrbteeownwjhcushwaga`.
+4. Merge branch `claude/keel-engineering-handoff-a81ndc` → main for the Vercel deploy
+   (frontend is safe to deploy first; new sections degrade until 2-3 land).
