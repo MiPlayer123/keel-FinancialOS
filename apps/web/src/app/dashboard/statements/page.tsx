@@ -675,6 +675,8 @@ function CloseStatementDialog({
   onClosed: () => void;
 }) {
   const [txns, setTxns] = useState<RichTransactionRow[] | null>(null);
+  // null = fetch failed (server still verifies exactly); '0' = genuinely no
+  // postings ≤ period end, which is a real, closable state.
   const [ledgerAtEnd, setLedgerAtEnd] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, LineDraft>>({});
   const [adjustments, setAdjustments] = useState<AdjustmentDraft[]>([]);
@@ -698,16 +700,20 @@ function CloseStatementDialog({
     let active = true;
     void Promise.all([
       keelQuery<RichTransactionRow>('transactions.rich', householdId),
-      keelQuery<{ date: string; balanceMinor: string }>('accounts.balance_daily', householdId, {
-        accountId: s.accountId,
-        from: s.periodEnd,
-        to: s.periodEnd,
-      }),
+      keelQuery<{ date: string; currency: string; balanceMinor: string }>(
+        'accounts.balance_daily',
+        householdId,
+        { accountId: s.accountId, from: s.periodEnd, to: s.periodEnd },
+      ),
     ])
       .then(([rich, daily]) => {
         if (!active) return;
         setTxns(rich.rows);
-        setLedgerAtEnd(daily.rows[0]?.balanceMinor ?? null);
+        // Match the server's semantics exactly: Σ postings ≤ period end in
+        // the STATEMENT'S currency; no rows means the sum is genuinely 0.
+        setLedgerAtEnd(
+          daily.rows.find((r) => r.currency === s.currency)?.balanceMinor ?? '0',
+        );
       })
       .catch(() => {
         if (!active) return;
@@ -763,6 +769,9 @@ function CloseStatementDialog({
   const adjustmentSumMinor = useMemo(() => {
     let sum = 0n;
     for (const a of adjustments) {
+      // Blank rows are ignorable scaffolding (they're filtered from the
+      // payload) — only a NON-blank unparseable amount blocks the math.
+      if (a.amount.trim() === '') continue;
       const v = parseSignedDollars(a.amount);
       if (v === null) return null;
       sum += BigInt(v);
@@ -779,11 +788,14 @@ function CloseStatementDialog({
       (d.resolution !== 'matched_transaction' || d.transactionId !== null)
     );
   });
+  // When the balance fetch failed the client can't pre-check the exactness
+  // rule — don't dead-end the button; the server verifies and its typed
+  // error surfaces in the toast.
   const differenceExplained =
-    differenceMinor !== null &&
-    adjustmentSumMinor !== null &&
-    adjustmentSumMinor === differenceMinor &&
-    adjustments.every((a) => a.explanation.trim().length > 0 || a.amount.trim() === '');
+    differenceMinor === null ||
+    (adjustmentSumMinor !== null &&
+      adjustmentSumMinor === differenceMinor &&
+      adjustments.every((a) => a.explanation.trim().length > 0 || a.amount.trim() === ''));
 
   async function close() {
     if (!householdId || !userId || !allResolved) return;
@@ -833,6 +845,14 @@ function CloseStatementDialog({
     }));
   }
 
+  // A transaction may explain at most ONE line — hide picks made elsewhere.
+  const chosenElsewhere = (lineId: string): Set<string> => {
+    const out = new Set<string>();
+    for (const [id, d] of Object.entries(drafts)) {
+      if (id !== lineId && d.transactionId) out.add(d.transactionId);
+    }
+    return out;
+  };
   const candidateItems = Object.fromEntries(
     candidates.map((t) => [
       t.transactionId,
@@ -920,11 +940,17 @@ function CloseStatementDialog({
                             <SelectValue placeholder="Pick the transaction" />
                           </SelectTrigger>
                           <SelectContent>
-                            {candidates.map((t) => (
-                              <SelectItem key={t.transactionId} value={t.transactionId}>
-                                {t.effectiveDate.slice(5)} · {t.description.slice(0, 36)}
-                              </SelectItem>
-                            ))}
+                            {candidates
+                              .filter(
+                                (t) =>
+                                  !chosenElsewhere(l.lineId).has(t.transactionId) ||
+                                  t.transactionId === d.transactionId,
+                              )
+                              .map((t) => (
+                                <SelectItem key={t.transactionId} value={t.transactionId}>
+                                  {t.effectiveDate.slice(5)} · {t.description.slice(0, 36)}
+                                </SelectItem>
+                              ))}
                           </SelectContent>
                         </Select>
                       ) : null}

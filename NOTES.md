@@ -852,3 +852,30 @@ permissions, vendor bundle, workstation couplings — see the two CI-fix
 commits). Owner cost note: pushes are now batched (one reviewed push per
 work batch) since each push burns a Vercel preview build + four Actions
 jobs; adversarial review agents run locally before each push.
+
+## 2026-07-13 — Batch 2 (single reviewed push): close UI, rollover, palette
+
+Built locally, adversarially reviewed by an agent BEFORE pushing (new
+batched-push policy). Findings fixed pre-push:
+- Statement close could dead-end permanently when the daily-balance fetch
+  returned no rows (a zero-posting account IS closable — empty series means
+  Σ=0, matching the server's coalesce) or failed (now falls through to the
+  server's exactness verdict); client difference now selects the STATEMENT
+  currency row, mirroring the server's currency filter.
+- ⌘K "Add transaction"/category jumps no-op'd when already on the ledger
+  (same-segment navigation doesn't remount; mount-only effect never re-ran)
+  — now keyed on useSearchParams with ?add=1 stripped after opening.
+- One ledger transaction could "explain" two statement lines via manual
+  selection (client now hides picks made on other lines; a server-side
+  distinct-transaction check is queued for the next migration batch since
+  20260712150000 is live in prod).
+- Blank adjustment rows no longer block the close button; rollover toggle is
+  now a first-class rollover-only update in keel_set_budget (stale client
+  amounts can't revert concurrent edits; verified on scratch: toggle keeps
+  40000/flips flag, clear deletes, toggle-without-row raises P0009);
+  progress bar reads fully-over when carry eats the whole budget; cmdk
+  values carry id suffixes so same-named accounts can't collide.
+- Reviewer notes logged: monthly_spent wants a rollover-horizon lower bound
+  at scale; carry assumes single-currency budgets (both latent, USD-only);
+  grouped ledger mode renders uncapped (pre-existing; paging covers the
+  default flat view).

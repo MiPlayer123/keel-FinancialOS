@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ReceiptText,
   ChevronRight,
@@ -61,7 +62,19 @@ export default function LedgerPage() {
     <AppShell>
       <PageHeader title="Ledger" description="Every transaction, categorized." />
       <div className="p-6">
-        <LedgerTable />
+        {/* Suspense: useSearchParams in LedgerTable needs a boundary for the
+            static prerender. */}
+        <Suspense
+          fallback={
+            <div className="space-y-2">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <Skeleton key={i} className="h-11 w-full" />
+              ))}
+            </div>
+          }
+        >
+          <LedgerTable />
+        </Suspense>
       </div>
     </AppShell>
   );
@@ -138,6 +151,8 @@ function isUncategorized(t: RichTransactionRow): boolean {
 
 function LedgerTable() {
   const { householdId, userId, ready } = useHousehold();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { rows, loading, error, refetch } = useKeelQuery<RichTransactionRow>(
     'transactions.rich',
     householdId,
@@ -152,14 +167,18 @@ function LedgerTable() {
   const [sort, setSort] = useState<SortKey>('date_desc');
 
   // Deep links (Reports drill-down, ⌘K actions):
-  // /dashboard/ledger?category=<id|uncategorized> and ?add=1.
-  // Applied post-mount to avoid a server/client hydration mismatch.
+  // /dashboard/ledger?category=<id|uncategorized> and ?add=1. Keyed on the
+  // live search params so ledger→ledger navigations (same segment, no
+  // remount) still apply; ?add=1 is stripped after opening so refresh/back
+  // doesn't reopen the dialog and a repeat ⌘K action re-fires.
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const category = params.get('category');
+    const category = searchParams.get('category');
     if (category) setCategoryFilter(category);
-    if (params.get('add') === '1') setAdding(true);
-  }, []);
+    if (searchParams.get('add') === '1') {
+      setAdding(true);
+      router.replace('/dashboard/ledger', { scroll: false });
+    }
+  }, [searchParams, router]);
   const [editing, setEditing] = useState<RichTransactionRow | null>(null);
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);

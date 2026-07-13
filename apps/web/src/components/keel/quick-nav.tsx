@@ -134,7 +134,9 @@ export function QuickNav() {
               {accounts.map((a) => (
                 <CommandItem
                   key={a.id}
-                  value={`account ${a.name}`}
+                  // Id suffix: two same-named accounts must not collide in
+                  // cmdk's value-keyed selection.
+                  value={`account ${a.name} ${a.id}`}
                   onSelect={() => {
                     go(`/dashboard/accounts/${a.id}`);
                   }}
@@ -153,7 +155,7 @@ export function QuickNav() {
               {categories.map((c) => (
                 <CommandItem
                   key={c.ledgerAccountId}
-                  value={`category ${c.name}`}
+                  value={`category ${c.name} ${c.ledgerAccountId}`}
                   onSelect={() => {
                     go(`/dashboard/ledger?category=${c.ledgerAccountId}`);
                   }}

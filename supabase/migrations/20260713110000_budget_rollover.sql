@@ -62,7 +62,18 @@ begin
       and category_ledger_account_id = p_category_ledger_account_id
       and month = v_month;
 
-  if p_amount_minor is null then
+  if p_amount_minor is null and p_rollover is not null then
+    -- Rollover-only toggle: never touches the amount, so a concurrent
+    -- amount edit can't be reverted by a stale client value (review finding).
+    update public.budgets
+       set rollover = p_rollover, updated_at = now()
+     where household_id = p_household_id
+       and category_ledger_account_id = p_category_ledger_account_id
+       and month = v_month;
+    if not found then
+      raise exception 'KEEL_INVALID_COMMAND: no budget to toggle' using errcode = 'P0009';
+    end if;
+  elsif p_amount_minor is null then
     delete from public.budgets
       where household_id = p_household_id
         and category_ledger_account_id = p_category_ledger_account_id

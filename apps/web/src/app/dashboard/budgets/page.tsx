@@ -214,9 +214,15 @@ function BudgetsBody() {
 }
 
 function ProgressBar({ spent, budget }: { spent: bigint; budget: bigint }) {
-  const over = budget > 0n && spent > budget;
+  // budget ≤ 0 (carry ate it all) reads as fully over, matching the copy
+  // beside it — never a green empty bar under an "Over by…" label.
+  const over = budget > 0n ? spent > budget : budget < 0n || spent > 0n;
   const pct =
-    budget <= 0n ? 0 : Math.min(100, Number((spent * 100n) / (budget === 0n ? 1n : budget)));
+    budget <= 0n
+      ? over
+        ? 100
+        : 0
+      : Math.min(100, Number((spent * 100n) / budget));
   return (
     <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-secondary">
       <div
@@ -263,8 +269,9 @@ function BudgetLine({
     const trimmed = value.trim();
     let amountMinor: string | null = null;
     if (nextRollover !== undefined) {
-      // Toggling the flag keeps the existing amount.
-      amountMinor = row.budgetMinor;
+      // Rollover-only toggle: null amount + flag = "keep the amount"
+      // server-side, so a stale client value can never revert an edit.
+      amountMinor = null;
     } else if (trimmed.length > 0) {
       const minor = parseSignedDollars(trimmed);
       if (minor === null || minor.startsWith('-')) {
@@ -282,7 +289,8 @@ function BudgetLine({
         amountMinor,
         ...(nextRollover !== undefined ? { rollover: nextRollover } : {}),
       });
-      setEditing(false);
+      // A rollover toggle leaves any in-progress amount edit alone.
+      if (nextRollover === undefined) setEditing(false);
       onSaved();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not save the budget.');
@@ -353,7 +361,7 @@ function BudgetLine({
       </div>
       {budget !== null && available !== null ? (
         <>
-          <ProgressBar spent={spent} budget={available > 0n ? available : budget} />
+          <ProgressBar spent={spent} budget={available} />
           <div className="mt-1 flex items-center justify-between gap-3 text-xs text-muted-foreground">
             <p>
               {remaining !== null && remaining < 0n ? (
