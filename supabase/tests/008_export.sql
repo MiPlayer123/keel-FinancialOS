@@ -45,7 +45,8 @@ insert into expected_export_tables(table_name, allowed_columns, omitted_columns)
   ('recurring_status_events', array['household_id','id','series_id','candidate_version_id','transition','effective_date','actor','command_id','created_at'], '{}');
 insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
   ('tags', array['id','household_id','name','created_at'], '{}'),
-  ('transaction_tags', array['canonical_transaction_id','tag_id','household_id','created_at'], '{}');
+  ('transaction_tags', array['canonical_transaction_id','tag_id','household_id','created_at'], '{}'),
+  ('scheduled_transactions', array['id','household_id','account_id','description','amount_minor','currency','category_ledger_account_id','frequency','next_due_date','auto_enter_days','status','created_at'], '{}');
 insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
   ('transaction_categories', array['canonical_transaction_id','household_id','category_ledger_account_id','source','rule_id','created_at','updated_at'], '{}'),
   ('transaction_overrides', array['canonical_transaction_id','household_id','display_description','note','created_at','updated_at'], '{}');
@@ -99,8 +100,8 @@ select ok(
 select is(
   (select count(*)::int from expected_export_tables
     where has_table_privilege('keel_export', format('public.%I', table_name), 'SELECT')),
-  64,
-  'keel_export can SELECT all 64 included tables'
+  65,
+  'keel_export can SELECT all 65 included tables'
 );
 select is(
   (select count(*)::int
@@ -231,8 +232,8 @@ reset role;
 select is(
   (select count(*)::int from jsonb_object_keys(
     public.keel_export_household('00000000-0000-4000-8000-00000000a001')->'tables')),
-  64,
-  'snapshot contains all 64 included table arrays'
+  65,
+  'snapshot contains all 65 included table arrays'
 );
 select is(
   (select count(*)::int from excluded_export_tables e

@@ -672,6 +672,84 @@ export type TrialBalanceRow = {
   balanceMinor: string;
 };
 
+export type ScheduleRow = {
+  scheduleId: string;
+  accountId: string;
+  description: string;
+  /** Signed minor units: negative = bill, positive = income. */
+  amountMinor: string;
+  currency: string;
+  categoryLedgerAccountId: string | null;
+  categoryName: string | null;
+  frequency: 'once' | 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'semiannual' | 'annual';
+  nextDueDate: string;
+  autoEnterDays: number | null;
+  status: 'active' | 'paused';
+};
+
+export async function fetchSchedules(householdId: string): Promise<ScheduleRow[]> {
+  const data = await invoke<ScheduleRow[]>('api/queries', {
+    query: 'schedules.list',
+    householdId,
+  });
+  return Array.isArray(data) ? data : [];
+}
+
+/** Create (no scheduleId) or update a scheduled bill/income. */
+export async function saveSchedule(input: {
+  householdId: string;
+  scheduleId?: string;
+  accountId: string;
+  description: string;
+  amountMinor: string;
+  categoryLedgerAccountId: string | null;
+  frequency: ScheduleRow['frequency'];
+  nextDueDate: string;
+  autoEnterDays: number | null;
+}): Promise<{ scheduleId?: string }> {
+  return invoke('api/schedules/save', {
+    householdId: input.householdId,
+    scheduleId: input.scheduleId ?? null,
+    accountId: input.accountId,
+    description: input.description,
+    amountMinor: input.amountMinor,
+    categoryLedgerAccountId: input.categoryLedgerAccountId,
+    frequency: input.frequency,
+    nextDueDate: input.nextDueDate,
+    autoEnterDays: input.autoEnterDays,
+  });
+}
+
+export async function setScheduleStatus(input: {
+  householdId: string;
+  scheduleId: string;
+  status: 'active' | 'paused' | 'ended';
+}): Promise<unknown> {
+  return invoke('api/schedules/set-status', {
+    householdId: input.householdId,
+    scheduleId: input.scheduleId,
+    status: input.status,
+  });
+}
+
+/**
+ * Roll the due date past one occurrence. Fenced on the exact due date, so
+ * double-clicks and retries no-op ({advanced: false}).
+ */
+export async function advanceSchedule(input: {
+  householdId: string;
+  scheduleId: string;
+  fromDueDate: string;
+  reason: 'entered' | 'skipped';
+}): Promise<{ advanced?: boolean; nextDueDate?: string; status?: string }> {
+  return invoke('api/schedules/advance', {
+    householdId: input.householdId,
+    scheduleId: input.scheduleId,
+    fromDueDate: input.fromDueDate,
+    reason: input.reason,
+  });
+}
+
 export type RecurringOccurrence = {
   occurrenceId: string;
   expectedDate: string;

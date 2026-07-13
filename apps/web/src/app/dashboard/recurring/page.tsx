@@ -1,7 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { Repeat, Loader2, CalendarClock } from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
+import { Repeat, Loader2, CalendarClock, Plus, Pause, Play, CheckCircle2, SkipForward, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { AppShell } from '@/components/keel/app-shell';
@@ -11,10 +11,18 @@ import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
 import { BalanceTrendChart, type BalancePoint } from '@/components/keel/charts';
 import {
+  advanceSchedule,
+  createManualTransaction,
   fetchAccounts,
+  fetchCategories,
   fetchLedgerKinds,
+  fetchSchedules,
+  saveSchedule,
+  setScheduleStatus,
   type AccountRow,
+  type CategoryRow,
   type RecurringSeriesRow,
+  type ScheduleRow,
   type TrialBalanceRow,
 } from '@/lib/keel-api';
 import {
@@ -27,6 +35,24 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { parseSignedDollars } from '@/lib/hash';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useEffect } from 'react';
 
@@ -57,6 +83,17 @@ function RecurringBody() {
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
   const balanceRows = useKeelQuerySilent<TrialBalanceRow>('ledger.trial_balance', householdId);
   const [ledgerKinds, setLedgerKinds] = useState<Map<string, string>>(new Map());
+  const [categories, setCategories] = useState<CategoryRow[]>([]);
+  const [schedules, setSchedules] = useState<ScheduleRow[]>([]);
+
+  const reloadSchedules = useCallback(() => {
+    if (!householdId) return;
+    void fetchSchedules(householdId)
+      .then(setSchedules)
+      .catch(() => {
+        setSchedules([]);
+      });
+  }, [householdId]);
 
   useEffect(() => {
     if (!householdId) return;
@@ -70,7 +107,13 @@ function RecurringBody() {
       .catch(() => {
         setLedgerKinds(new Map());
       });
-  }, [householdId]);
+    void fetchCategories(householdId)
+      .then(setCategories)
+      .catch(() => {
+        setCategories([]);
+      });
+    reloadSchedules();
+  }, [householdId, reloadSchedules]);
 
   const accountName = useMemo(() => {
     const map = new Map(accounts.map((a) => [a.id, a.name]));
@@ -102,7 +145,7 @@ function RecurringBody() {
   const suggested = rows.filter((r) => r.status === 'suggested');
   const paused = rows.filter((r) => r.status === 'paused');
 
-  if (!householdId || rows.length === 0 || (active.length === 0 && suggested.length === 0 && paused.length === 0)) {
+  if (!householdId) {
     return (
       <EmptyState
         icon={<Repeat className="size-6" />}
@@ -111,6 +154,8 @@ function RecurringBody() {
       />
     );
   }
+  const nothingDetected =
+    active.length === 0 && suggested.length === 0 && paused.length === 0;
 
   const upcoming = active
     .flatMap((s) =>
@@ -123,6 +168,24 @@ function RecurringBody() {
 
   return (
     <div className="space-y-8">
+      <ScheduledSection
+        householdId={householdId}
+        userId={userId}
+        accounts={accounts}
+        categories={categories}
+        schedules={schedules}
+        today={today}
+        onChanged={reloadSchedules}
+      />
+
+      {nothingDetected ? (
+        <EmptyState
+          icon={<Repeat className="size-6" />}
+          title="No recurring activity detected yet"
+          description="As transactions sync, KEEL detects subscriptions and regular bills and suggests them here for your approval. Detection runs nightly."
+        />
+      ) : null}
+
       {upcoming.length > 0 ? (
         <section className="space-y-2">
           <h2 className="text-sm font-medium text-muted-foreground">Coming up</h2>
@@ -157,6 +220,7 @@ function RecurringBody() {
 
       <ProjectedCash
         series={active}
+        schedules={schedules}
         balances={balanceRows ?? []}
         accounts={accounts}
         ledgerKinds={ledgerKinds}
@@ -433,11 +497,13 @@ const PROJECTION_DAYS = 60;
 
 function ProjectedCash({
   series,
+  schedules,
   balances,
   accounts,
   ledgerKinds,
 }: {
   series: RecurringSeriesRow[];
+  schedules: ScheduleRow[];
   balances: TrialBalanceRow[];
   accounts: AccountRow[];
   ledgerKinds: Map<string, string>;
@@ -479,6 +545,22 @@ function ProjectedCash({
         deltaByDate.set(o.expectedDate, (deltaByDate.get(o.expectedDate) ?? 0n) + delta);
       }
     }
+    // User-declared schedules project too: expand active schedules' due dates
+    // through the horizon (stepDue mirrors the server's month clamping).
+    for (const sc of schedules) {
+      if (sc.status !== 'active') continue;
+      if (sc.currency !== currency) continue;
+      let due = sc.nextDueDate;
+      let guard = 0;
+      while (due <= endIso && guard < 40) {
+        if (due > startIso) {
+          deltaByDate.set(due, (deltaByDate.get(due) ?? 0n) + BigInt(sc.amountMinor || '0'));
+        }
+        if (sc.frequency === 'once') break;
+        due = stepDue(due, sc.frequency);
+        guard += 1;
+      }
+    }
     if (deltaByDate.size === 0) return null;
 
     const points: BalancePoint[] = [{ date: startIso, balanceMinor: base.toString(), currency }];
@@ -497,7 +579,7 @@ function ProjectedCash({
     }
     points.push({ date: endIso, balanceMinor: running.toString(), currency });
     return { points, low, lowDate, currency };
-  }, [series, balances, accounts, ledgerKinds]);
+  }, [series, schedules, balances, accounts, ledgerKinds]);
 
   if (!projection) return null;
 
@@ -509,8 +591,8 @@ function ProjectedCash({
       <div className="rounded-lg border border-border p-4">
         <BalanceTrendChart points={projection.points} height={180} />
         <p className="mt-2 text-xs text-muted-foreground">
-          Today&apos;s asset balances rolled forward through confirmed recurring bills and
-          income. Lowest point:{' '}
+          Today&apos;s asset balances rolled forward through confirmed recurring bills,
+          income, and your schedules. Lowest point:{' '}
           <Money
             amountMinor={projection.low.toString()}
             currency={projection.currency}
@@ -521,5 +603,520 @@ function ProjectedCash({
         </p>
       </div>
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled bills & income (Quicken reminders): user-declared schedules with
+// Enter/Skip. Enter posts a REAL manual transaction through the envelope with
+// attemptKey sched:{id}:{due} — the same occurrence can never post twice
+// (idempotent economics) — then rolls the due date forward; Skip only rolls.
+// ---------------------------------------------------------------------------
+const FREQUENCY_LABELS: Record<ScheduleRow['frequency'], string> = {
+  once: 'One time',
+  weekly: 'Weekly',
+  biweekly: 'Every 2 weeks',
+  monthly: 'Monthly',
+  quarterly: 'Quarterly',
+  semiannual: 'Every 6 months',
+  annual: 'Yearly',
+};
+
+/** Days-in-month-safe stepping (mirrors Postgres interval '1 month' clamping). */
+function stepDue(dateIso: string, frequency: ScheduleRow['frequency']): string {
+  const [y = 0, m = 0, d = 0] = dateIso.split('-').map(Number);
+  const addDays = (n: number) => {
+    const dt = new Date(Date.UTC(y, m - 1, d + n));
+    return dt.toISOString().slice(0, 10);
+  };
+  const addMonths = (n: number) => {
+    const lastDay = new Date(Date.UTC(y, m - 1 + n + 1, 0)).getUTCDate();
+    const dt = new Date(Date.UTC(y, m - 1 + n, Math.min(d, lastDay)));
+    return dt.toISOString().slice(0, 10);
+  };
+  switch (frequency) {
+    case 'weekly':
+      return addDays(7);
+    case 'biweekly':
+      return addDays(14);
+    case 'monthly':
+      return addMonths(1);
+    case 'quarterly':
+      return addMonths(3);
+    case 'semiannual':
+      return addMonths(6);
+    case 'annual':
+      return addMonths(12);
+    case 'once':
+      return dateIso;
+  }
+}
+
+function ScheduledSection({
+  householdId,
+  userId,
+  accounts,
+  categories,
+  schedules,
+  today,
+  onChanged,
+}: {
+  householdId: string;
+  userId: string | null;
+  accounts: AccountRow[];
+  categories: CategoryRow[];
+  schedules: ScheduleRow[];
+  today: string;
+  onChanged: () => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const accountNames = useMemo(() => new Map(accounts.map((a) => [a.id, a.name])), [accounts]);
+
+  async function enter(s: ScheduleRow) {
+    if (!userId) return;
+    if (!s.categoryLedgerAccountId) {
+      toast.error('Give this schedule a category first (edit it) so Enter can post.');
+      return;
+    }
+    setBusyId(s.scheduleId);
+    try {
+      // Splits offset the cash leg exactly: Σ splits = -amount (invariant 3).
+      await createManualTransaction({
+        householdId,
+        userId,
+        accountId: s.accountId,
+        description: s.description,
+        effectiveDate: s.nextDueDate,
+        amountMinor: s.amountMinor,
+        status: 'posted',
+        splits: [
+          {
+            categoryLedgerAccountId: s.categoryLedgerAccountId,
+            amountMinor: (-BigInt(s.amountMinor)).toString(),
+          },
+        ],
+        attemptKey: `sched:${s.scheduleId}:${s.nextDueDate}`,
+      });
+      await advanceSchedule({
+        householdId,
+        scheduleId: s.scheduleId,
+        fromDueDate: s.nextDueDate,
+        reason: 'entered',
+      });
+      toast.success(`Entered ${s.description} — it's in the ledger now.`);
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not enter the transaction.');
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function skip(s: ScheduleRow) {
+    setBusyId(s.scheduleId);
+    try {
+      await advanceSchedule({
+        householdId,
+        scheduleId: s.scheduleId,
+        fromDueDate: s.nextDueDate,
+        reason: 'skipped',
+      });
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not skip it.');
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function setStatus(s: ScheduleRow, status: 'active' | 'paused' | 'ended') {
+    setBusyId(s.scheduleId);
+    try {
+      await setScheduleStatus({ householdId, scheduleId: s.scheduleId, status });
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not update the schedule.');
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <section className="space-y-2">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-medium text-muted-foreground">Bills &amp; scheduled</h2>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 text-xs"
+          onClick={() => {
+            setAdding(true);
+          }}
+        >
+          <Plus className="size-3.5" />
+          Add
+        </Button>
+      </div>
+      {schedules.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-border px-4 py-3 text-xs text-muted-foreground">
+          Rent, insurance, a paycheck — anything you know is coming. KEEL shows it as
+          due, projects it into your balance curve, and one click enters it into the
+          ledger on the day.
+        </p>
+      ) : (
+        <div className="overflow-hidden rounded-lg border border-border">
+          {schedules.map((s, i) => {
+            const isDue = s.status === 'active' && s.nextDueDate <= today;
+            const dueSoon =
+              s.status === 'active' &&
+              !isDue &&
+              s.autoEnterDays !== null &&
+              s.autoEnterDays > 0 &&
+              (Date.parse(s.nextDueDate) - Date.parse(today)) / 86400000 <= s.autoEnterDays;
+            return (
+              <div
+                key={s.scheduleId}
+                className={`flex flex-wrap items-center gap-3 px-4 py-2.5 ${i > 0 ? 'border-t border-border' : ''} ${s.status === 'paused' ? 'opacity-60' : ''}`}
+              >
+                <span className="w-16 shrink-0 font-mono text-xs text-muted-foreground">
+                  {s.nextDueDate.slice(5)}
+                </span>
+                <p className="min-w-0 flex-1 truncate text-sm" title={s.description}>
+                  {s.description}
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    {FREQUENCY_LABELS[s.frequency]} · {accountNames.get(s.accountId) ?? ''}
+                    {s.categoryName ? ` · ${s.categoryName}` : ''}
+                  </span>
+                </p>
+                {isDue ? <Badge variant="secondary">Due</Badge> : null}
+                {dueSoon ? <Badge variant="outline">Due soon</Badge> : null}
+                {s.status === 'paused' ? <Badge variant="outline">Paused</Badge> : null}
+                <Money
+                  amountMinor={s.amountMinor}
+                  currency={s.currency}
+                  signed
+                  className="shrink-0 text-sm"
+                />
+                <span className="flex shrink-0 items-center gap-0.5">
+                  {s.status === 'active' ? (
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Enter ${s.description}`}
+                        title="Enter into the ledger"
+                        disabled={busyId === s.scheduleId}
+                        onClick={() => {
+                          void enter(s);
+                        }}
+                      >
+                        {busyId === s.scheduleId ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                          <CheckCircle2 className="size-3.5" />
+                        )}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Skip ${s.description}`}
+                        title="Skip this occurrence"
+                        disabled={busyId === s.scheduleId}
+                        onClick={() => {
+                          void skip(s);
+                        }}
+                      >
+                        <SkipForward className="size-3.5" />
+                      </Button>
+                    </>
+                  ) : null}
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={s.status === 'paused' ? 'Resume schedule' : 'Pause schedule'}
+                    title={s.status === 'paused' ? 'Resume' : 'Pause'}
+                    disabled={busyId === s.scheduleId}
+                    onClick={() => {
+                      void setStatus(s, s.status === 'paused' ? 'active' : 'paused');
+                    }}
+                  >
+                    {s.status === 'paused' ? (
+                      <Play className="size-3.5" />
+                    ) : (
+                      <Pause className="size-3.5" />
+                    )}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`End ${s.description}`}
+                    title="End this schedule"
+                    disabled={busyId === s.scheduleId}
+                    onClick={() => {
+                      void setStatus(s, 'ended');
+                    }}
+                  >
+                    <XCircle className="size-3.5" />
+                  </Button>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <AddScheduleDialog
+        open={adding}
+        householdId={householdId}
+        accounts={accounts}
+        categories={categories}
+        onClose={() => {
+          setAdding(false);
+        }}
+        onSaved={() => {
+          setAdding(false);
+          onChanged();
+        }}
+      />
+    </section>
+  );
+}
+
+function AddScheduleDialog({
+  open,
+  householdId,
+  accounts,
+  categories,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  householdId: string;
+  accounts: AccountRow[];
+  categories: CategoryRow[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [direction, setDirection] = useState<'bill' | 'income'>('bill');
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const [description, setDescription] = useState('');
+  const [amount, setAmount] = useState('');
+  const [categoryId, setCategoryId] = useState<string | null>(null);
+  const [frequency, setFrequency] = useState<ScheduleRow['frequency']>('monthly');
+  const [nextDue, setNextDue] = useState(() => todayIso());
+  const [dueEarly, setDueEarly] = useState<'0' | '3' | '7'>('3');
+  const [busy, setBusy] = useState(false);
+
+  const kind = direction === 'bill' ? 'expense' : 'income';
+  const categoryOptions = categories.filter((c) => c.kind === kind);
+
+  async function save() {
+    if (!accountId || !categoryId) return;
+    const minor = parseSignedDollars(amount);
+    if (minor === null || minor.startsWith('-') || minor === '0') {
+      toast.error('Enter a positive amount.');
+      return;
+    }
+    setBusy(true);
+    try {
+      await saveSchedule({
+        householdId,
+        accountId,
+        description: description.trim(),
+        amountMinor: direction === 'bill' ? `-${minor}` : minor,
+        categoryLedgerAccountId: categoryId,
+        frequency,
+        nextDueDate: nextDue,
+        autoEnterDays: Number(dueEarly),
+      });
+      toast.success('Scheduled. It shows as due ahead of time and projects into your cash curve.');
+      setDescription('');
+      setAmount('');
+      onSaved();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save the schedule.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) onClose();
+      }}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Schedule a bill or income</DialogTitle>
+          <DialogDescription>
+            KEEL reminds you when it&apos;s due; entering it posts a real transaction.
+            No money moves on its own.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="flex gap-2">
+            {(['bill', 'income'] as const).map((d) => (
+              <Button
+                key={d}
+                type="button"
+                variant={direction === d ? 'secondary' : 'outline'}
+                size="sm"
+                className="flex-1"
+                onClick={() => {
+                  setDirection(d);
+                  setCategoryId(null);
+                }}
+              >
+                {d === 'bill' ? 'Bill' : 'Income'}
+              </Button>
+            ))}
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Account</Label>
+              <Select
+                value={accountId ?? undefined}
+                items={Object.fromEntries(accounts.map((a) => [a.id, a.name]))}
+                onValueChange={(v) => {
+                  setAccountId(v);
+                }}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Account" />
+                </SelectTrigger>
+                <SelectContent>
+                  {accounts.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>
+                      {a.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="sched-amount">Amount</Label>
+              <Input
+                id="sched-amount"
+                inputMode="decimal"
+                placeholder="0.00"
+                value={amount}
+                onChange={(e) => {
+                  setAmount(e.target.value);
+                }}
+              />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="sched-desc">Description</Label>
+            <Input
+              id="sched-desc"
+              value={description}
+              maxLength={140}
+              placeholder="e.g. Rent"
+              onChange={(e) => {
+                setDescription(e.target.value);
+              }}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Category</Label>
+            <Select
+              value={categoryId ?? undefined}
+              items={Object.fromEntries(categoryOptions.map((c) => [c.ledgerAccountId, c.name]))}
+              onValueChange={(v) => {
+                setCategoryId(v);
+              }}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Category" />
+              </SelectTrigger>
+              <SelectContent>
+                {categoryOptions.map((c) => (
+                  <SelectItem key={c.ledgerAccountId} value={c.ledgerAccountId}>
+                    {c.parentLedgerAccountId ? <span className="pl-3">{c.name}</span> : c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label>Repeats</Label>
+              <Select
+                value={frequency}
+                items={FREQUENCY_LABELS}
+                onValueChange={(v) => {
+                  if (v) setFrequency(v);
+                }}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(FREQUENCY_LABELS).map(([k, label]) => (
+                    <SelectItem key={k} value={k}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="sched-due">Next due</Label>
+              <Input
+                id="sched-due"
+                type="date"
+                value={nextDue}
+                onChange={(e) => {
+                  setNextDue(e.target.value);
+                }}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Show as due</Label>
+              <Select
+                value={dueEarly}
+                items={{ '0': 'On the day', '3': '3 days early', '7': '7 days early' }}
+                onValueChange={(v) => {
+                  if (v) setDueEarly(v);
+                }}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0">On the day</SelectItem>
+                  <SelectItem value="3">3 days early</SelectItem>
+                  <SelectItem value="7">7 days early</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            disabled={
+              busy ||
+              !accountId ||
+              !categoryId ||
+              !amount.trim() ||
+              !nextDue ||
+              description.trim().length === 0
+            }
+            onClick={() => {
+              void save();
+            }}
+          >
+            {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+            Schedule
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

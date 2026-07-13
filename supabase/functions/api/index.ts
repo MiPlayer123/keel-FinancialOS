@@ -85,6 +85,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'rules.list': 'keel_list_rules',
   'budgets.list': 'keel_list_budgets',
   'tags.list': 'keel_list_tags',
+  'schedules.list': 'keel_list_schedules',
   'dashboard.cash_flow_forecast': 'keel_cash_flow_forecast',
 };
 
@@ -823,6 +824,86 @@ export default {
       });
       if (error) return mapDbError(error);
       return json(200, { ok: true });
+    }
+
+    if (path === '/schedules/save' || path === '/schedules/set-status' || path === '/schedules/advance') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const uuidReSched = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+      if (!householdId.success) {
+        return json(400, { code: 'invalid_command', message: 'Schedule request failed validation.', details: {} });
+      }
+      if (path === '/schedules/save') {
+        const scheduleId = input['scheduleId'] ?? null;
+        const accountId = input['accountId'];
+        const description = input['description'];
+        const amountMinor = input['amountMinor'];
+        const categoryId = input['categoryLedgerAccountId'] ?? null;
+        const frequency = input['frequency'];
+        const nextDueDate = input['nextDueDate'];
+        const autoEnterDays = input['autoEnterDays'] ?? null;
+        if (
+          (scheduleId !== null && (typeof scheduleId !== 'string' || !uuidReSched.test(scheduleId))) ||
+          typeof accountId !== 'string' || !uuidReSched.test(accountId) ||
+          typeof description !== 'string' || description.trim().length === 0 || description.length > 140 ||
+          typeof amountMinor !== 'string' || !/^-?\d{1,18}$/.test(amountMinor) ||
+          (categoryId !== null && (typeof categoryId !== 'string' || !uuidReSched.test(categoryId))) ||
+          typeof frequency !== 'string' || frequency.length > 20 ||
+          typeof nextDueDate !== 'string' || !dateRe.test(nextDueDate) ||
+          (autoEnterDays !== null && (typeof autoEnterDays !== 'number' || !Number.isInteger(autoEnterDays)))
+        ) {
+          return json(400, { code: 'invalid_command', message: 'Schedule request failed validation.', details: {} });
+        }
+        const { data, error } = await ctx.supabase.rpc('keel_schedule_save', {
+          p_household_id: householdId.data,
+          p_schedule_id: scheduleId,
+          p_account_id: accountId,
+          p_description: description,
+          p_amount_minor: amountMinor,
+          p_category_ledger_account_id: categoryId,
+          p_frequency: frequency,
+          p_next_due_date: nextDueDate,
+          p_auto_enter_days: autoEnterDays,
+        });
+        if (error) return mapDbError(error);
+        return json(200, { scheduleId: data });
+      }
+      if (path === '/schedules/set-status') {
+        const scheduleId = input['scheduleId'];
+        const status = input['status'];
+        if (
+          typeof scheduleId !== 'string' || !uuidReSched.test(scheduleId) ||
+          typeof status !== 'string' || status.length > 10
+        ) {
+          return json(400, { code: 'invalid_command', message: 'Schedule request failed validation.', details: {} });
+        }
+        const { error } = await ctx.supabase.rpc('keel_schedule_set_status', {
+          p_household_id: householdId.data,
+          p_schedule_id: scheduleId,
+          p_status: status,
+        });
+        if (error) return mapDbError(error);
+        return json(200, { ok: true });
+      }
+      const scheduleId = input['scheduleId'];
+      const fromDue = input['fromDueDate'];
+      const reason = input['reason'];
+      if (
+        typeof scheduleId !== 'string' || !uuidReSched.test(scheduleId) ||
+        typeof fromDue !== 'string' || !dateRe.test(fromDue) ||
+        (reason !== 'entered' && reason !== 'skipped')
+      ) {
+        return json(400, { code: 'invalid_command', message: 'Schedule request failed validation.', details: {} });
+      }
+      const { data, error } = await ctx.supabase.rpc('keel_schedule_advance', {
+        p_household_id: householdId.data,
+        p_schedule_id: scheduleId,
+        p_from_due: fromDue,
+        p_reason: reason,
+      });
+      if (error) return mapDbError(error);
+      return json(200, data ?? { ok: true });
     }
 
     if (path === '/rules/save' || path === '/rules/delete' || path === '/rules/apply') {

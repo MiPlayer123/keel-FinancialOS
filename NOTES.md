@@ -911,3 +911,44 @@ went up, review agent findings (no P0s) landed as a follow-up commit:
 
 Prod deploy remains owner-gated (Law 12): supabase db push + functions deploy
 api worker for the 20260713* chain; frontend degrades gracefully until then.
+
+## 2026-07-13 — Batch 4 (post-merge, research-driven)
+
+Deep research on Quicken Classic + Copilot Money (5 agent streams: official
+docs ×2, user sentiment ×2, comparisons/workflows) → synthesized shortlist.
+Built this batch:
+1. QuickFill payee autofill (Quicken memorized payees): add-transaction
+   dialog suggests from history; Tab/click fills direction/amount/category.
+   Pure client-side over the rich list (Law 1 — deterministic).
+2. Projected cash (Quicken Projected Balances): recurring page rolls today's
+   asset balances 60 days forward through expected recurring occurrences AND
+   user schedules; lowest point flagged. Dominant-currency, BigInt.
+3. Manage-tags dialog: rename/delete with usageCount as blast radius
+   (batch-3 review deferral closed).
+4. Tax-line mapping (20260713130000): tax_line enum on ledger_accounts,
+   keel_set_category_tax_line (audited on change only), list emits taxLine,
+   export wrapper link _pre_tax_lines (ledger_accounts DTO is explicit —
+   to_jsonb shortcut would have silently missed Law 6), manifest + 008
+   allowlist. Reports gains "Tax schedule · YTD" grouped by IRS line;
+   categories manager gains a Landmark button + badge. No backfill —
+   a wrong tax mapping is worse than none.
+5. Scheduled transactions (20260713140000, Quicken reminders): table with
+   fail-closed ACLs + member-read RLS; keel_schedule_save (sign must match
+   category kind), keel_schedule_set_status (idempotent, no-op ≠ audit),
+   keel_schedule_advance (fenced on the exact from-due date — replays return
+   advanced:false instead of double-rolling; 'once' → ended),
+   keel_list_schedules; export wrapper link _pre_schedules with explicit DTO
+   (amount_minor::text), manifest 64→65, 008 counts + allowlist. Enter posts
+   through the EXISTING manual envelope with economicEventKey
+   manual:sched:{id}:{due} → the same occurrence cannot post twice even if
+   Enter+advance race or retry (idempotent economics). Skip advances only.
+   UI: "Bills & scheduled" section (Enter/Skip/pause/end, Due badges), add
+   dialog (category required so Enter can always post), projection includes
+   schedules via clamped month stepping that mirrors Postgres intervals.
+   DEFERRED deliberately: unattended auto-enter (worker/pg_cron path) — the
+   auto_enter_days column today means "show as due N days early"; posting
+   without a human click needs the autonomy-policy design pass first (Law 2).
+
+Scratch keel8 verified end-to-end for both migrations (validation errors,
+advance fencing, once→ended, status idempotency, list emission, export DTOs,
+proacl clean). Gates: typecheck, 442 vitest, 12 deno suites, web build.
