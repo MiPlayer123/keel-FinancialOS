@@ -20,11 +20,13 @@ import {
 import {
   CashFlowMonthlyChart,
   CashFlowSankey,
+  CategoryDonut,
   type SankeyFlowLink,
   type SankeyFlowNode,
 } from '@/components/keel/charts';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 
 export default function ReportsPage() {
@@ -125,6 +127,110 @@ function buildMatrix(
     );
   }
   return [...byCategory.values()].sort((a, b) => (b.total > a.total ? 1 : b.total < a.total ? -1 : 0));
+}
+
+const RANGE_PRESETS = [
+  { key: 'this_month', label: 'This month' },
+  { key: 'last_month', label: 'Last month' },
+  { key: 'last_3', label: 'Last 3 months' },
+  { key: 'ytd', label: 'Year to date' },
+  { key: 'last_12', label: 'Last 12 months' },
+] as const;
+type RangePresetKey = (typeof RANGE_PRESETS)[number]['key'];
+
+function isoDate(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+/** Inclusive [from, to] calendar-day range for a preset chip, anchored on today. */
+function presetRange(key: RangePresetKey): { from: string; to: string } {
+  const now = new Date();
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+  const today = isoDate(now);
+  switch (key) {
+    case 'this_month':
+      return { from: isoDate(new Date(Date.UTC(y, m, 1))), to: today };
+    case 'last_month':
+      return {
+        from: isoDate(new Date(Date.UTC(y, m - 1, 1))),
+        to: isoDate(new Date(Date.UTC(y, m, 0))),
+      };
+    case 'last_3':
+      return { from: isoDate(new Date(Date.UTC(y, m - 2, 1))), to: today };
+    case 'ytd':
+      return { from: isoDate(new Date(Date.UTC(y, 0, 1))), to: today };
+    case 'last_12':
+      return { from: isoDate(new Date(Date.UTC(y, m - 11, 1))), to: today };
+  }
+}
+
+function rangeLabel(from: string, to: string): string {
+  return `${from} – ${to}`;
+}
+
+/**
+ * Net-signed expense totals per category over an arbitrary inclusive
+ * [from, to] calendar-day range — split-aware and confirmed-transfer-
+ * excluding, same convention as buildMatrix. Restricted to the dominant
+ * currency within the range (like tagTotals/taxSchedule) so the donut and
+ * its total format with one currency. Categories whose net is negative
+ * (refunds outweigh spend in-range) are returned separately so the pie only
+ * ever shows honest positive spend.
+ */
+function categoryRangeTotals(
+  rows: RichTransactionRow[],
+  from: string,
+  to: string,
+): {
+  currency: string;
+  positive: { categoryId: string | null; name: string; amountMinor: bigint }[];
+  negative: { categoryId: string | null; name: string; amountMinor: bigint }[];
+} {
+  const inRange = (dateIso: string) => {
+    const day = dateIso.slice(0, 10);
+    return day >= from && day <= to;
+  };
+  const currencyCounts = new Map<string, number>();
+  for (const t of rows) {
+    if (t.transferStatus === 'confirmed') continue;
+    if (!inRange(t.effectiveDate)) continue;
+    currencyCounts.set(t.currency, (currencyCounts.get(t.currency) ?? 0) + 1);
+  }
+  const currency = [...currencyCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'USD';
+
+  const byCategory = new Map<string, { categoryId: string | null; name: string; amountMinor: bigint }>();
+  const bump = (categoryId: string | null, name: string, spend: bigint) => {
+    const key = categoryId ?? 'uncategorized';
+    const e = byCategory.get(key) ?? { categoryId, name, amountMinor: 0n };
+    e.amountMinor += spend;
+    byCategory.set(key, e);
+  };
+  for (const t of rows) {
+    if (t.transferStatus === 'confirmed') continue;
+    if (t.currency !== currency) continue;
+    if (!inRange(t.effectiveDate)) continue;
+    if (t.splits && t.splits.length > 0) {
+      for (const s of t.splits) {
+        if (s.kind !== 'expense') continue;
+        bump(s.categoryLedgerAccountId, s.name, BigInt(s.amountMinor || '0'));
+      }
+      continue;
+    }
+    if (t.categoryKind !== 'expense') continue;
+    bump(
+      t.categoryLedgerAccountId,
+      t.categoryName ?? 'Uncategorized',
+      -BigInt(t.amountMinor || '0'),
+    );
+  }
+
+  const all = [...byCategory.values()];
+  return {
+    currency,
+    positive: all.filter((e) => e.amountMinor > 0n),
+    negative: all.filter((e) => e.amountMinor < 0n),
+  };
 }
 
 type FlowGraph = {
@@ -537,6 +643,28 @@ function ReportsBody() {
 
   const [view, setView] = useState<'expense' | 'income'>('expense');
   const flow = useMemo(() => buildFlow(txns.rows, categories), [txns.rows, categories]);
+
+  // Spending-by-category donut: preset chips fill the from/to inputs;
+  // editing either input directly switches the control to "custom" (the
+  // active preset chip un-highlights, but the inputs keep whatever the user
+  // typed — a fully custom range).
+  const [donutPreset, setDonutPreset] = useState<RangePresetKey | null>('this_month');
+  const [donutFrom, setDonutFrom] = useState<string>(() => presetRange('this_month').from);
+  const [donutTo, setDonutTo] = useState<string>(() => presetRange('this_month').to);
+  const applyDonutPreset = (key: RangePresetKey) => {
+    const r = presetRange(key);
+    setDonutFrom(r.from);
+    setDonutTo(r.to);
+    setDonutPreset(key);
+  };
+  const donutRange = useMemo(() => {
+    if (donutFrom && donutTo && donutFrom <= donutTo) return { from: donutFrom, to: donutTo };
+    return presetRange('this_month');
+  }, [donutFrom, donutTo]);
+  const donutReport = useMemo(
+    () => categoryRangeTotals(txns.rows, donutRange.from, donutRange.to),
+    [txns.rows, donutRange],
+  );
   const months = useMemo(() => lastMonths(MONTHS_SHOWN), []);
   const tagReport = useMemo(() => tagTotals(txns.rows, months), [txns.rows, months]);
   const tags = tagReport.totals;
@@ -731,6 +859,93 @@ function ReportsBody() {
           ) : (
             <p className="text-sm text-muted-foreground">No activity in {monthLabel(reviewMonth)}.</p>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-muted-foreground">
+            Spending by category
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="flex flex-wrap gap-1">
+              {RANGE_PRESETS.map((p) => (
+                <Button
+                  key={p.key}
+                  variant={donutPreset === p.key ? 'secondary' : 'ghost'}
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => {
+                    applyDonutPreset(p.key);
+                  }}
+                >
+                  {p.label}
+                </Button>
+              ))}
+            </span>
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Input
+                type="date"
+                value={donutFrom}
+                max={donutTo}
+                className="h-7 w-[9.5rem] text-xs"
+                onChange={(e) => {
+                  setDonutFrom(e.target.value);
+                  setDonutPreset(null);
+                }}
+              />
+              <span>to</span>
+              <Input
+                type="date"
+                value={donutTo}
+                min={donutFrom}
+                className="h-7 w-[9.5rem] text-xs"
+                onChange={(e) => {
+                  setDonutTo(e.target.value);
+                  setDonutPreset(null);
+                }}
+              />
+            </span>
+          </div>
+          {donutReport.positive.length > 0 ? (
+            <CategoryDonut
+              items={donutReport.positive.map((c) => ({
+                name: c.name,
+                amountMinor: c.amountMinor.toString(),
+              }))}
+              currency={donutReport.currency}
+            />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              No spending in {rangeLabel(donutRange.from, donutRange.to)}.
+            </p>
+          )}
+          {donutReport.negative.length > 0 ? (
+            <div className="border-t border-border pt-3">
+              <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Net refunds (excluded from the chart)
+              </p>
+              <div className="space-y-1">
+                {donutReport.negative.map((c) => (
+                  <div key={c.categoryId ?? c.name} className="flex items-center gap-3 text-sm">
+                    <span className="min-w-0 flex-1 truncate text-muted-foreground">{c.name}</span>
+                    <Money
+                      amountMinor={c.amountMinor.toString()}
+                      currency={donutReport.currency}
+                      signed
+                      className="text-xs"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          <p className="text-xs text-muted-foreground">
+            {rangeLabel(donutRange.from, donutRange.to)}, dominant currency only, confirmed
+            transfers excluded, net of refunds.
+          </p>
         </CardContent>
       </Card>
 

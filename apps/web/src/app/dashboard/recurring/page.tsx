@@ -30,6 +30,7 @@ import {
   recurringTransition,
   nextOccurrence,
   changedToday,
+  stepScheduleDue,
   type RecurringCommand,
 } from '@/lib/recurring';
 import { Badge } from '@/components/ui/badge';
@@ -557,7 +558,7 @@ function ProjectedCash({
           deltaByDate.set(due, (deltaByDate.get(due) ?? 0n) + BigInt(sc.amountMinor || '0'));
         }
         if (sc.frequency === 'once') break;
-        due = stepDue(due, sc.frequency, sc.anchorDay);
+        due = stepScheduleDue(due, sc.frequency, sc.anchorDay);
         guard += 1;
       }
     }
@@ -622,44 +623,6 @@ const FREQUENCY_LABELS: Record<ScheduleRow['frequency'], string> = {
   semiannual: 'Every 6 months',
   annual: 'Yearly',
 };
-
-/**
- * Days-in-month-safe stepping, anchored to the schedule's declared day of
- * month (mirrors keel_schedule_advance server-side): a bill due Jan 31 steps
- * to Feb 28, then recovers to Mar 31 once the target month is long enough
- * again — instead of Postgres's naive interval addition, which would clamp
- * to the 28th forever. Falls back to the source date's own day when
- * anchorDay is null (legacy rows before the anchor_day backfill).
- */
-function stepDue(dateIso: string, frequency: ScheduleRow['frequency'], anchorDay: number | null): string {
-  const [y = 0, m = 0, d = 0] = dateIso.split('-').map(Number);
-  const anchor = anchorDay ?? d;
-  const addDays = (n: number) => {
-    const dt = new Date(Date.UTC(y, m - 1, d + n));
-    return dt.toISOString().slice(0, 10);
-  };
-  const addMonths = (n: number) => {
-    const lastDay = new Date(Date.UTC(y, m - 1 + n + 1, 0)).getUTCDate();
-    const dt = new Date(Date.UTC(y, m - 1 + n, Math.min(anchor, lastDay)));
-    return dt.toISOString().slice(0, 10);
-  };
-  switch (frequency) {
-    case 'weekly':
-      return addDays(7);
-    case 'biweekly':
-      return addDays(14);
-    case 'monthly':
-      return addMonths(1);
-    case 'quarterly':
-      return addMonths(3);
-    case 'semiannual':
-      return addMonths(6);
-    case 'annual':
-      return addMonths(12);
-    case 'once':
-      return dateIso;
-  }
-}
 
 function ScheduledSection({
   householdId,
