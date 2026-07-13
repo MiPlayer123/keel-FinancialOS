@@ -46,7 +46,7 @@ insert into expected_export_tables(table_name, allowed_columns, omitted_columns)
 insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
   ('tags', array['id','household_id','name','created_at'], '{}'),
   ('transaction_tags', array['canonical_transaction_id','tag_id','household_id','created_at'], '{}'),
-  ('scheduled_transactions', array['id','household_id','account_id','description','amount_minor','currency','category_ledger_account_id','frequency','next_due_date','auto_enter_days','status','created_at'], '{}'),
+  ('scheduled_transactions', array['id','household_id','account_id','description','amount_minor','currency','category_ledger_account_id','frequency','next_due_date','auto_enter_days','status','created_at','anchor_day'], '{}'),
   ('savings_goals', array['id','household_id','name','target_minor','target_date','account_id','currency','status','created_at'], '{}'),
   ('goal_contributions', array['id','goal_id','household_id','amount_minor','contributed_on','created_at'], '{}');
 insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
