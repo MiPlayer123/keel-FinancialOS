@@ -136,6 +136,19 @@ export async function fetchAccounts(householdId: string): Promise<AccountRow[]> 
   }));
 }
 
+/** Rename a real-world account (checking, card, …). Plain metadata edit. */
+export async function renameAccount(input: {
+  householdId: string;
+  accountId: string;
+  name: string;
+}): Promise<unknown> {
+  return invoke('api/accounts/rename', {
+    householdId: input.householdId,
+    accountId: input.accountId,
+    name: input.name,
+  });
+}
+
 /** Connections for a household (RLS-scoped direct read; credentials never exposed). */
 export type ConnectionRow = {
   id: string;
