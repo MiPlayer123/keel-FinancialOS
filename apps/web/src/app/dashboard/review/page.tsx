@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import { BadgeCheck, Check, X, Loader2, ArrowRight, ArrowLeftRight } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { AppShell } from '@/components/keel/app-shell';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
@@ -29,12 +28,12 @@ function today(): string {
 
 export default function ReviewPage() {
   return (
-    <AppShell>
+    <>
       <PageHeader title="Review" description="Approve or dismiss what the AI suggests." />
       <div className="p-6">
         <ReviewBody />
       </div>
-    </AppShell>
+    </>
   );
 }
 

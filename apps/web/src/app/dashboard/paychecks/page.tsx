@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { Banknote, Plus, Loader2, ChevronRight, Trash2, Undo2, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { AppShell } from '@/components/keel/app-shell';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
@@ -106,7 +105,7 @@ function cadenceLabel(dates: string[]): string {
 
 export default function PaychecksPage() {
   return (
-    <AppShell>
+    <>
       <PageHeader
         title="Paychecks"
         description="Gross to net, every deduction accounted for, reconciled to the deposit."
@@ -114,7 +113,7 @@ export default function PaychecksPage() {
       <div className="p-6">
         <PaychecksBody />
       </div>
-    </AppShell>
+    </>
   );
 }
 
