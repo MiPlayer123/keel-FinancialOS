@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Plus, ReceiptText } from 'lucide-react';
+import { ArrowLeft, Plus, ReceiptText, Scale } from 'lucide-react';
 
 import { AppShell } from '@/components/keel/app-shell';
 import { EmptyState } from '@/components/keel/page-header';
@@ -29,6 +29,7 @@ import {
   type TrialBalanceRow,
 } from '@/lib/keel-api';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
+import { SetOpeningBalanceDialog } from '@/components/keel/set-opening-balance-dialog';
 import { TxnEditDialog, TxnList } from '@/components/keel/txn-edit-dialog';
 import { BalanceTrendChart, CategoryBarList } from '@/components/keel/charts';
 import { spendingMix } from '@/lib/spending';
@@ -62,6 +63,7 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
   const [goals, setGoals] = useState<GoalRow[]>([]);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<RichTransactionRow | null>(null);
+  const [settingBalance, setSettingBalance] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -203,6 +205,35 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
             accountId={accountId}
             balanceMinor={balanceMinor}
             currency={account.currency}
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="mt-1 h-7 text-xs text-muted-foreground"
+            onClick={() => {
+              setSettingBalance(true);
+            }}
+          >
+            <Scale className="size-3.5" />
+            Set opening balance
+          </Button>
+          <SetOpeningBalanceDialog
+            open={settingBalance}
+            householdId={householdId}
+            userId={userId}
+            accountId={accountId}
+            accountName={account.name}
+            accountKind={kind}
+            currency={account.currency}
+            onClose={() => {
+              setSettingBalance(false);
+            }}
+            onSaved={() => {
+              setSettingBalance(false);
+              void balances.refetch();
+              void txns.refetch();
+            }}
           />
         </div>
       </div>
