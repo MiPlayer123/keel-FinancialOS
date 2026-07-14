@@ -1162,6 +1162,39 @@ export async function postOpeningBalance(input: {
   });
 }
 
+/**
+ * Set (or correct) a synced account's opening balance: "as of [date], this
+ * account's balance was $X." Anchors the running balance for accounts whose
+ * transaction history doesn't reach back that far (Plaid only backfills
+ * ~30 days). balanceMinor is the REAL-WORLD magnitude — positive means money
+ * in the account for an asset, or amount owed for a liability; the server
+ * applies the debit-positive sign flip for liabilities. Re-submitting for the
+ * same account corrects it server-side (reverse + repost) — no separate
+ * "is this an edit" flag needed.
+ */
+export async function setAccountOpeningBalance(input: {
+  householdId: string;
+  userId: string;
+  accountId: string;
+  /** Non-negative real-world magnitude in minor units (see above). */
+  balanceMinor: string;
+  asOfDate: string;
+}): Promise<CommandResult> {
+  const commandId = newId();
+  return keelCommand({
+    commandId,
+    command: 'accounts.set_opening_balance',
+    economicEventKey: `accounts.set_opening_balance:${commandId}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: {
+      accountId: input.accountId,
+      balanceMinor: input.balanceMinor,
+      asOfDate: input.asOfDate,
+    },
+  });
+}
+
 /** Recent audit-log entries (RLS-scoped; append-only trail, Law 2). */
 export type AuditLogRow = {
   id: number;

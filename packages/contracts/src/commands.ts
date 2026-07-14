@@ -218,6 +218,21 @@ export const ManualVoidPayloadSchema = z.object({
   reason: z.string().min(1).max(500),
 }).strict();
 
+/**
+ * "As of [date], this account's balance was $X" — a one-time statement that
+ * anchors the running balance for a synced account whose transaction history
+ * doesn't reach back far enough. balanceMinor is the REAL-WORLD magnitude
+ * (positive = money in the account for an asset, or amount owed for a
+ * liability); the proc applies the debit-positive sign flip for liabilities.
+ * Re-submitting for the same account corrects it (reverse + repost), so this
+ * schema carries no special "is this a correction" flag — the server decides.
+ */
+export const SetOpeningBalancePayloadSchema = z.object({
+  accountId: AccountIdSchema,
+  balanceMinor: MinorUnitsStringSchema,
+  asOfDate: IsoDateSchema,
+}).strict();
+
 export const COMMAND_PAYLOAD_SCHEMAS = {
   'accounts.create': CreateAccountPayloadSchema,
   'ingest.record_raw_event': RecordRawEventPayloadSchema,
@@ -241,6 +256,7 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'reconciliations.reopen':ReopenReconciliationPayloadSchema,
   'transactions.manual_create': ManualTransactionPayloadSchema,
   'transactions.manual_void': ManualVoidPayloadSchema,
+  'accounts.set_opening_balance': SetOpeningBalancePayloadSchema,
 } as const;
 export type CommandProcedureName = keyof typeof COMMAND_PAYLOAD_SCHEMAS;
 export type CommandName =

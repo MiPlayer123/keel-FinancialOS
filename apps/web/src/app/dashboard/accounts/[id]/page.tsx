@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Pencil, Plus, ReceiptText } from 'lucide-react';
+import { ArrowLeft, Pencil, Plus, ReceiptText, Scale } from 'lucide-react';
 
 import { EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
@@ -29,6 +29,7 @@ import {
 } from '@/lib/keel-api';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
 import { RenameAccountDialog } from '@/components/keel/rename-account-dialog';
+import { SetOpeningBalanceDialog } from '@/components/keel/set-opening-balance-dialog';
 import { TxnEditDialog, TxnList } from '@/components/keel/txn-edit-dialog';
 import { BalanceTrendChart, CategoryBarList } from '@/components/keel/charts';
 import { spendingMix } from '@/lib/spending';
@@ -60,6 +61,7 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
   const [editing, setEditing] = useState<RichTransactionRow | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [accountReload, setAccountReload] = useState(0);
+  const [settingBalance, setSettingBalance] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -215,6 +217,35 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
             accountId={accountId}
             balanceMinor={balanceMinor}
             currency={account.currency}
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="mt-1 h-7 text-xs text-muted-foreground"
+            onClick={() => {
+              setSettingBalance(true);
+            }}
+          >
+            <Scale className="size-3.5" />
+            Set opening balance
+          </Button>
+          <SetOpeningBalanceDialog
+            open={settingBalance}
+            householdId={householdId}
+            userId={userId}
+            accountId={accountId}
+            accountName={account.name}
+            accountKind={kind}
+            currency={account.currency}
+            onClose={() => {
+              setSettingBalance(false);
+            }}
+            onSaved={() => {
+              setSettingBalance(false);
+              void balances.refetch();
+              void txns.refetch();
+            }}
           />
         </div>
       </div>

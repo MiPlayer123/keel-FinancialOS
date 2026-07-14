@@ -65,6 +65,7 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'statements.create':'keel_statement_create','reconciliations.close':'keel_reconciliation_close','reconciliations.reopen':'keel_reconciliation_reopen',
   'transactions.manual_create': 'keel_cmd_manual_transaction',
   'transactions.manual_void': 'keel_cmd_manual_void',
+  'accounts.set_opening_balance': 'keel_cmd_set_opening_balance',
 };
 
 const QUERY_TO_PROC: Record<string, string> = {
