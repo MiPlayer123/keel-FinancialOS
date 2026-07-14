@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { BarChart3, ArrowDownRight, ArrowUpRight } from 'lucide-react';
 
-import { AppShell } from '@/components/keel/app-shell';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { taxLineLabel, taxLineSchedule } from '@/lib/tax-lines';
@@ -31,7 +30,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 
 export default function ReportsPage() {
   return (
-    <AppShell>
+    <>
       <PageHeader
         title="Reports"
         description="Where the money went — by category, by month, exactly."
@@ -39,7 +38,7 @@ export default function ReportsPage() {
       <div className="space-y-6 p-6">
         <ReportsBody />
       </div>
-    </AppShell>
+    </>
   );
 }
 

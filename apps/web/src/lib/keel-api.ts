@@ -136,6 +136,19 @@ export async function fetchAccounts(householdId: string): Promise<AccountRow[]> 
   }));
 }
 
+/** Rename a real-world account (checking, card, …). Plain metadata edit. */
+export async function renameAccount(input: {
+  householdId: string;
+  accountId: string;
+  name: string;
+}): Promise<unknown> {
+  return invoke('api/accounts/rename', {
+    householdId: input.householdId,
+    accountId: input.accountId,
+    name: input.name,
+  });
+}
+
 /** Connections for a household (RLS-scoped direct read; credentials never exposed). */
 export type ConnectionRow = {
   id: string;
@@ -1145,6 +1158,39 @@ export async function postOpeningBalance(input: {
         { ledgerAccountId: input.accountLedgerId, amountMinor: input.amountMinor, currency },
         { ledgerAccountId: input.openingLedgerId, amountMinor: negated, currency },
       ],
+    },
+  });
+}
+
+/**
+ * Set (or correct) a synced account's opening balance: "as of [date], this
+ * account's balance was $X." Anchors the running balance for accounts whose
+ * transaction history doesn't reach back that far (Plaid only backfills
+ * ~30 days). balanceMinor is the REAL-WORLD magnitude — positive means money
+ * in the account for an asset, or amount owed for a liability; the server
+ * applies the debit-positive sign flip for liabilities. Re-submitting for the
+ * same account corrects it server-side (reverse + repost) — no separate
+ * "is this an edit" flag needed.
+ */
+export async function setAccountOpeningBalance(input: {
+  householdId: string;
+  userId: string;
+  accountId: string;
+  /** Non-negative real-world magnitude in minor units (see above). */
+  balanceMinor: string;
+  asOfDate: string;
+}): Promise<CommandResult> {
+  const commandId = newId();
+  return keelCommand({
+    commandId,
+    command: 'accounts.set_opening_balance',
+    economicEventKey: `accounts.set_opening_balance:${commandId}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: {
+      accountId: input.accountId,
+      balanceMinor: input.balanceMinor,
+      asOfDate: input.asOfDate,
     },
   });
 }

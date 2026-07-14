@@ -1337,3 +1337,100 @@ implementing agents.
 Also merged into this batch: `3398996` (test-hygiene fix from the previous
 cycle — retry transient PostgREST errors in the webhook negative-cache
 assertion, never opened its own PR).
+
+**Account rename gap fix** (`20260714100000_account_rename.sql`): `accounts`
+had a create path (`accounts.create`) but no way to correct a name
+afterward — `connections` and `ledger_accounts` categories both already had
+one (`keel_rename_connection`, `keel_rename_category`). Added
+`keel_rename_account(p_household_id, p_account_id, p_name)` following the
+newest house pattern (`20260713210000_entity_management.sql`):
+`keel_assert_member_write` for the auth+membership+write-role gate, GUC-based
+uid resolution (never `auth.uid()`) for the audit actor. Wired as a bespoke
+`/accounts/rename` route in `supabase/functions/api/index.ts`, same shape as
+`/entities/create`/`/categories/set-tax-line`/`/transactions/override` — a
+plain metadata edit gated entirely by the proc doesn't need an entry in
+`packages/contracts`'s `COMMAND_PAYLOAD_SCHEMAS` or `packages/authz`'s
+`Action` union (verified neither of those three existing bespoke routes
+appears in either file either).
+
+Deviation worth flagging: `20260710210500_grants_rls.sql` never granted
+`keel_api` UPDATE on `public.accounts` (only SELECT+INSERT, plus scoped
+UPDATE on a handful of other tables) — this is the first `accounts`-mutating
+proc to be `keel_api`-owned, so the migration adds
+`grant update (name) on public.accounts to keel_api;` alongside the ownership
+handoff. Without it the RLS `accounts_definer_all` policy would still permit
+the row, but the underlying UPDATE would fail closed with permission denied
+once the proc ran as `keel_api` instead of the migration role.
+
+Frontend: pencil icon next to the account name on the account-detail page
+opens `RenameAccountDialog` (`apps/web/src/components/keel/
+rename-account-dialog.tsx`), matching the small-dialog shape of
+`manage-tags-dialog.tsx`/`txn-edit-dialog.tsx`. On save, the page bumps a
+local reload counter (refetches `fetchAccounts` — that data isn't
+TanStack-cached, it's a plain per-page fetch like the accounts list page)
+and calls the existing `useKeelQuery` `refetch()` to invalidate the broader
+`keel-query` cache.
+
+Gates: `pnpm -w typecheck` clean, `pnpm vitest run` 451/451,
+`cd apps/web && pnpm build` clean (19 routes, unchanged route count — no new
+page, just a dialog on the existing account-detail route).
+
+## 2026-07-14 — Batch 11: opening balance, account rename, persistent dashboard layout
+
+Three parallel Sonnet worktree agents, from direct user feedback (Plaid sync
+only backfills recent history; no way to rename a Venmo-linked account;
+navigation "feels like a full page reload").
+
+**Opening balance** (`20260714120000_account_opening_balance.sql`): new
+`keel_cmd_set_opening_balance`, full command-envelope shape (idempotency,
+audit_log, domain_events) since it posts real money. Posts a balanced entry
+(account's cash leg + the entity's existing "Opening Balances" equity
+account, opposite signs, same sign convention as `keel_apply_account_balance`
+— debit-positive, liability negated) dated the user's chosen as-of date.
+Refuses (new code P0012) if the account already has a live transaction on or
+before that date — prevents double-counting real history. Re-submitting
+reverses every currently-live opening-balance marker batch via the existing
+reversal mechanism and posts a fresh one (Law 2 — never mutated in place),
+backstopped against a concurrent double-reversal by the
+`journal_revisions_original_once` unique index. Verified end-to-end against a
+real scratch Postgres (refusal, balanced posting, correction/reversal,
+liability sign flip, idempotent replay) — see the implementing agent's own
+notes for the exact scenarios run. Independent Sonnet adversarial review
+traced the arithmetic and confirmed no correctness bug.
+
+Known, accepted limitation (not a bug): the opening balance becomes the new
+baseline the running total walks forward from — it does not reconcile
+against real bank activity between the as-of date and today if there's a
+history gap (there will be one, since Plaid only backfills a recent window).
+That's the intended semantics of "opening balance," not full historical
+backfill; true backfill would need a different Plaid endpoint/product
+(`transactions/get` with a date range) than what this codebase calls
+(`transactions/sync` only) — flagged to the user as a separate, larger
+follow-up pending what their Plaid product access actually supports.
+
+**Account rename** (`20260714100000_account_rename.sql`): `keel_rename_account`,
+gated by `keel_assert_member_write` (owner/partner, not just membership),
+idempotent on unchanged name, audit_log before/after. Caught a real gap
+during implementation: `keel_api` had only ever held SELECT+INSERT on
+`accounts` (no proc had mutated an account row before this one) — added
+`grant update (name) on public.accounts to keel_api`, column-scoped rather
+than table-wide.
+
+**Persistent dashboard layout** (`apps/web/src/app/dashboard/layout.tsx`):
+the real fix for the "feels like a full reload" complaint — there was no
+shared layout for the dashboard route group, so every navigation between
+pages fully unmounted and remounted `AppShell` (sidebar, header) and
+`HouseholdProvider` (re-fetching the household list from scratch every
+time). All 14 dashboard pages had this removed from their individual
+`page.tsx` files. Reviewed trade-off: the auth-redirect-to-`/login` check
+that lived in `AppShell` now only fires once per dashboard-section entry
+instead of on every navigation — a stale session mid-browsing now surfaces
+as an API error rather than a clean redirect. Not a security issue (RLS/JWT
+still gate every server call) — flagged as a small follow-up polish item,
+not fixed in this batch.
+
+Gates: `pnpm -w typecheck` clean, `pnpm vitest run` 452/452, `pnpm test` (12
+deno suites) green, `cd apps/web && pnpm build` clean (19 routes). One
+merge conflict (both rename and opening-balance streams added UI to the same
+account-detail page) resolved as a clean union — reviewed and confirmed by
+the adversarial pass that nothing was dropped from either side.

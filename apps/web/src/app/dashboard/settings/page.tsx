@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import { Download, Loader2, KeyRound } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { AppShell } from '@/components/keel/app-shell';
 import { PageHeader } from '@/components/keel/page-header';
 import { useHousehold } from '@/components/keel/household-context';
 import { getSupabaseBrowserClient } from '@/lib/supabase';
@@ -42,7 +41,7 @@ function download(name: string, mime: string, content: string) {
 
 export default function SettingsPage() {
   return (
-    <AppShell>
+    <>
       <PageHeader title="Settings" description="Account, household and data export." />
       <div className="max-w-2xl space-y-6 p-6">
         <HouseholdCard />
@@ -52,7 +51,7 @@ export default function SettingsPage() {
         <ExportCard />
         <ActivityCard />
       </div>
-    </AppShell>
+    </>
   );
 }
 

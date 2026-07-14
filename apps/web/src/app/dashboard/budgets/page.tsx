@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { PiggyBank, ChevronLeft, ChevronRight, Copy, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { AppShell } from '@/components/keel/app-shell';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { RebalanceBudgetsDialog } from '@/components/keel/rebalance-budgets-dialog';
@@ -30,7 +29,7 @@ function monthTitle(monthIso: string): string {
 
 export default function BudgetsPage() {
   return (
-    <AppShell>
+    <>
       <PageHeader
         title="Budgets"
         description="A monthly amount per category — spending tracked against it, transfers excluded."
@@ -38,7 +37,7 @@ export default function BudgetsPage() {
       <div className="p-6">
         <BudgetsBody />
       </div>
-    </AppShell>
+    </>
   );
 }
 

@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { useQuery } from '@tanstack/react-query';
 import {
   LayoutDashboard,
   Wallet,
@@ -32,7 +33,7 @@ import { Sheet, SheetContent, SheetTrigger, SheetTitle } from '@/components/ui/s
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { KeelLogo, KeelMark } from '@/components/keel/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { HouseholdProvider, useHousehold } from '@/components/keel/household-context';
+import { useHousehold } from '@/components/keel/household-context';
 import { fetchAccounts, fetchLedgerKinds, type AccountRow } from '@/lib/keel-api';
 import { QuickNav } from '@/components/keel/quick-nav';
 import { ReviewBadge } from '@/components/keel/review-badge';
@@ -118,23 +119,25 @@ function SidebarAccounts({
   onNavigate?: (() => void) | undefined;
 }) {
   const { householdId } = useHousehold();
-  const [accounts, setAccounts] = useState<AccountRow[]>([]);
-  const [kinds, setKinds] = useState<Map<string, string>>(new Map());
-
-  useEffect(() => {
-    if (!householdId) return;
-    let active = true;
-    void Promise.all([fetchAccounts(householdId), fetchLedgerKinds(householdId)])
-      .then(([a, k]) => {
-        if (!active) return;
-        setAccounts(a);
-        setKinds(k);
-      })
-      .catch(() => undefined);
-    return () => {
-      active = false;
-    };
-  }, [householdId]);
+  // Queried under the shared 'keel-query' cache-key prefix (see
+  // use-keel-query.ts) purely so this list is swept up by every existing
+  // refetch()/invalidateQueries call in the app (rename, add account, link a
+  // new Plaid item, ...) without those call sites needing to know the sidebar
+  // exists. Now that AppShell is a persistent layout (not remounted per
+  // navigation — 2026-07-14), this component no longer refetches on its own;
+  // without a shared cache key it would show a stale account name/list until
+  // the household changed (Codex review, PR #9).
+  const { data } = useQuery({
+    queryKey: ['keel-query', 'sidebar-accounts', householdId],
+    queryFn: async () => {
+      if (!householdId) throw new Error('sidebar-accounts: disabled (no household)');
+      const [a, k] = await Promise.all([fetchAccounts(householdId), fetchLedgerKinds(householdId)]);
+      return { accounts: a, kinds: k };
+    },
+    enabled: householdId !== null,
+  });
+  const accounts = data?.accounts ?? [];
+  const kinds = data?.kinds ?? new Map<string, string>();
 
   if (accounts.length === 0) return null;
   const assets = accounts.filter((a) => kinds.get(a.ledgerAccountId) !== 'liability');
@@ -329,7 +332,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <HouseholdProvider>
     <div className="flex min-h-dvh">
       {/* Desktop sidebar — pinned to the viewport, fixed height, scrolls
           internally so a tall page never stretches the nav. */}
@@ -367,6 +369,5 @@ export function AppShell({ children }: { children: ReactNode }) {
         </main>
       </div>
     </div>
-    </HouseholdProvider>
   );
 }

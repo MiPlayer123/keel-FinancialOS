@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Wallet } from 'lucide-react';
 
-import { AppShell } from '@/components/keel/app-shell';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
@@ -42,12 +41,12 @@ import { toast } from 'sonner';
 
 export default function HomePage() {
   return (
-    <AppShell>
+    <>
       <PageHeader title="Home" description="Your financial position at a glance." />
       <div className="space-y-8 p-6">
         <HomeBody />
       </div>
-    </AppShell>
+    </>
   );
 }
 

@@ -3,9 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Plus, ReceiptText } from 'lucide-react';
+import { ArrowLeft, Pencil, Plus, ReceiptText, Scale } from 'lucide-react';
 
-import { AppShell } from '@/components/keel/app-shell';
 import { EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
@@ -29,6 +28,8 @@ import {
   type TrialBalanceRow,
 } from '@/lib/keel-api';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
+import { RenameAccountDialog } from '@/components/keel/rename-account-dialog';
+import { SetOpeningBalanceDialog } from '@/components/keel/set-opening-balance-dialog';
 import { TxnEditDialog, TxnList } from '@/components/keel/txn-edit-dialog';
 import { BalanceTrendChart, CategoryBarList } from '@/components/keel/charts';
 import { spendingMix } from '@/lib/spending';
@@ -40,11 +41,7 @@ const EMPTY_SELECTION = new Set<string>();
 
 export default function AccountDetailPage() {
   const params = useParams<{ id: string }>();
-  return (
-    <AppShell>
-      <AccountDetailBody accountId={params.id} />
-    </AppShell>
-  );
+  return <AccountDetailBody accountId={params.id} />;
 }
 
 function AccountDetailBody({ accountId }: { accountId: string }) {
@@ -62,6 +59,9 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
   const [goals, setGoals] = useState<GoalRow[]>([]);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<RichTransactionRow | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [accountReload, setAccountReload] = useState(0);
+  const [settingBalance, setSettingBalance] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -113,7 +113,7 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
     return () => {
       active = false;
     };
-  }, [householdId, accountId]);
+  }, [householdId, accountId, accountReload]);
 
   const accountTxns = useMemo(
     () => txns.rows.filter((t) => t.accountId === accountId),
@@ -175,7 +175,21 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{account.name}</h1>
+          <div className="flex items-center gap-1.5">
+            <h1 className="text-2xl font-semibold tracking-tight">{account.name}</h1>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Rename account"
+              title="Rename account"
+              className="text-muted-foreground/60 hover:text-foreground"
+              onClick={() => {
+                setRenaming(true);
+              }}
+            >
+              <Pencil className="size-3.5" />
+            </Button>
+          </div>
           <p className="text-sm capitalize text-muted-foreground">
             {kind} · {account.subtype.replaceAll('_', ' ')}
           </p>
@@ -204,8 +218,52 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
             balanceMinor={balanceMinor}
             currency={account.currency}
           />
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="mt-1 h-7 text-xs text-muted-foreground"
+            onClick={() => {
+              setSettingBalance(true);
+            }}
+          >
+            <Scale className="size-3.5" />
+            Set opening balance
+          </Button>
+          <SetOpeningBalanceDialog
+            open={settingBalance}
+            householdId={householdId}
+            userId={userId}
+            accountId={accountId}
+            accountName={account.name}
+            accountKind={kind}
+            currency={account.currency}
+            onClose={() => {
+              setSettingBalance(false);
+            }}
+            onSaved={() => {
+              setSettingBalance(false);
+              void balances.refetch();
+              void txns.refetch();
+            }}
+          />
         </div>
       </div>
+
+      <RenameAccountDialog
+        open={renaming}
+        householdId={householdId}
+        accountId={accountId}
+        currentName={account.name}
+        onClose={() => {
+          setRenaming(false);
+        }}
+        onRenamed={() => {
+          setRenaming(false);
+          setAccountReload((n) => n + 1);
+          void txns.refetch();
+        }}
+      />
 
       {(trend !== null && trend.length > 1) || spending.length > 0 ? (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">

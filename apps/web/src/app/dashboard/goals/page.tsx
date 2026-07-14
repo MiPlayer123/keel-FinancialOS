@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Target, Plus, Loader2, Archive, ArchiveRestore, PiggyBank } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { AppShell } from '@/components/keel/app-shell';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
@@ -45,7 +44,7 @@ import {
 
 export default function GoalsPage() {
   return (
-    <AppShell>
+    <>
       <PageHeader
         title="Goals"
         description="Earmark money toward what's next — nothing moves, it's just spoken for."
@@ -53,7 +52,7 @@ export default function GoalsPage() {
       <div className="p-6">
         <GoalsBody />
       </div>
-    </AppShell>
+    </>
   );
 }
 

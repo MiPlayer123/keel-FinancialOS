@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Wallet, ChevronRight } from 'lucide-react';
 
-import { AppShell } from '@/components/keel/app-shell';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
@@ -23,12 +22,12 @@ type Enriched = AccountRow & { kind: string; balanceMinor: string };
 
 export default function AccountsPage() {
   return (
-    <AppShell>
+    <>
       <PageHeader title="Accounts" description="Everything you own and owe, by type." />
       <div className="p-6">
         <AccountsBody />
       </div>
-    </AppShell>
+    </>
   );
 }
 
