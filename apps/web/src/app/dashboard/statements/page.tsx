@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { FileCheck2, Plus, Trash2, Loader2, ChevronRight, LockOpen } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { AppShell } from '@/components/keel/app-shell';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
@@ -42,7 +41,7 @@ import {
 
 export default function StatementsPage() {
   return (
-    <AppShell>
+    <>
       <PageHeader
         title="Statements"
         description="Enter a bank statement, reconcile it against the ledger, lock the period."
@@ -50,7 +49,7 @@ export default function StatementsPage() {
       <div className="p-6">
         <StatementsBody />
       </div>
-    </AppShell>
+    </>
   );
 }
 

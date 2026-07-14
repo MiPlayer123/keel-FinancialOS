@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeftRight, Plus, Loader2, ChevronRight, Undo2 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { AppShell } from '@/components/keel/app-shell';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
@@ -55,7 +54,7 @@ const CLAIM_KINDS = ['friend', 'employer', 'client', 'insurance', 'household'] a
 
 export default function ReimbursementsPage() {
   return (
-    <AppShell>
+    <>
       <PageHeader
         title="Reimbursements"
         description="Money someone owes you back — tracked against the original expense, never fake income."
@@ -63,7 +62,7 @@ export default function ReimbursementsPage() {
       <div className="p-6">
         <ReimbursementsBody />
       </div>
-    </AppShell>
+    </>
   );
 }
 

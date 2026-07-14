@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, Plus, ReceiptText } from 'lucide-react';
 
-import { AppShell } from '@/components/keel/app-shell';
 import { EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
@@ -40,11 +39,7 @@ const EMPTY_SELECTION = new Set<string>();
 
 export default function AccountDetailPage() {
   const params = useParams<{ id: string }>();
-  return (
-    <AppShell>
-      <AccountDetailBody accountId={params.id} />
-    </AppShell>
-  );
+  return <AccountDetailBody accountId={params.id} />;
 }
 
 function AccountDetailBody({ accountId }: { accountId: string }) {

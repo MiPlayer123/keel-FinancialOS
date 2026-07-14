@@ -15,7 +15,6 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { AppShell } from '@/components/keel/app-shell';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery } from '@/lib/use-keel-query';
@@ -47,7 +46,7 @@ import {
 
 export default function LedgerPage() {
   return (
-    <AppShell>
+    <>
       <PageHeader title="Ledger" description="Every transaction, categorized." />
       <div className="p-6">
         {/* Suspense: useSearchParams in LedgerTable needs a boundary for the
@@ -64,7 +63,7 @@ export default function LedgerPage() {
           <LedgerTable />
         </Suspense>
       </div>
-    </AppShell>
+    </>
   );
 }
 

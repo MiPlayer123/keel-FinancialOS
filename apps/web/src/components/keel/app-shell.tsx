@@ -32,7 +32,7 @@ import { Sheet, SheetContent, SheetTrigger, SheetTitle } from '@/components/ui/s
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { KeelLogo, KeelMark } from '@/components/keel/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { HouseholdProvider, useHousehold } from '@/components/keel/household-context';
+import { useHousehold } from '@/components/keel/household-context';
 import { fetchAccounts, fetchLedgerKinds, type AccountRow } from '@/lib/keel-api';
 import { QuickNav } from '@/components/keel/quick-nav';
 import { ReviewBadge } from '@/components/keel/review-badge';
@@ -329,7 +329,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <HouseholdProvider>
     <div className="flex min-h-dvh">
       {/* Desktop sidebar — pinned to the viewport, fixed height, scrolls
           internally so a tall page never stretches the nav. */}
@@ -367,6 +366,5 @@ export function AppShell({ children }: { children: ReactNode }) {
         </main>
       </div>
     </div>
-    </HouseholdProvider>
   );
 }

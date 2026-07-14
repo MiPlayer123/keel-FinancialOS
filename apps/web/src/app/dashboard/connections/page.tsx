@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link2, RefreshCw, Pencil, Check, X, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { AppShell } from '@/components/keel/app-shell';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { useHousehold } from '@/components/keel/household-context';
 import {
@@ -28,11 +27,7 @@ const STATUS_TONE: Record<string, string> = {
 };
 
 export default function ConnectionsPage() {
-  return (
-    <AppShell>
-      <ConnectionsBody />
-    </AppShell>
-  );
+  return <ConnectionsBody />;
 }
 
 function ConnectionsBody() {

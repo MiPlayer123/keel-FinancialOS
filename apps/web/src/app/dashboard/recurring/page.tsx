@@ -4,7 +4,6 @@ import { useCallback, useMemo, useState } from 'react';
 import { Repeat, Loader2, CalendarClock, Plus, Pause, Play, CheckCircle2, SkipForward, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { AppShell } from '@/components/keel/app-shell';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
@@ -59,7 +58,7 @@ import { useEffect } from 'react';
 
 export default function RecurringPage() {
   return (
-    <AppShell>
+    <>
       <PageHeader
         title="Recurring"
         description="Subscriptions and bills KEEL has detected — confirm, pause or cancel them."
@@ -67,7 +66,7 @@ export default function RecurringPage() {
       <div className="p-6">
         <RecurringBody />
       </div>
-    </AppShell>
+    </>
   );
 }
 
