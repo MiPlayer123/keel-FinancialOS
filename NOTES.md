@@ -1337,3 +1337,40 @@ implementing agents.
 Also merged into this batch: `3398996` (test-hygiene fix from the previous
 cycle — retry transient PostgREST errors in the webhook negative-cache
 assertion, never opened its own PR).
+
+**Account rename gap fix** (`20260714100000_account_rename.sql`): `accounts`
+had a create path (`accounts.create`) but no way to correct a name
+afterward — `connections` and `ledger_accounts` categories both already had
+one (`keel_rename_connection`, `keel_rename_category`). Added
+`keel_rename_account(p_household_id, p_account_id, p_name)` following the
+newest house pattern (`20260713210000_entity_management.sql`):
+`keel_assert_member_write` for the auth+membership+write-role gate, GUC-based
+uid resolution (never `auth.uid()`) for the audit actor. Wired as a bespoke
+`/accounts/rename` route in `supabase/functions/api/index.ts`, same shape as
+`/entities/create`/`/categories/set-tax-line`/`/transactions/override` — a
+plain metadata edit gated entirely by the proc doesn't need an entry in
+`packages/contracts`'s `COMMAND_PAYLOAD_SCHEMAS` or `packages/authz`'s
+`Action` union (verified neither of those three existing bespoke routes
+appears in either file either).
+
+Deviation worth flagging: `20260710210500_grants_rls.sql` never granted
+`keel_api` UPDATE on `public.accounts` (only SELECT+INSERT, plus scoped
+UPDATE on a handful of other tables) — this is the first `accounts`-mutating
+proc to be `keel_api`-owned, so the migration adds
+`grant update (name) on public.accounts to keel_api;` alongside the ownership
+handoff. Without it the RLS `accounts_definer_all` policy would still permit
+the row, but the underlying UPDATE would fail closed with permission denied
+once the proc ran as `keel_api` instead of the migration role.
+
+Frontend: pencil icon next to the account name on the account-detail page
+opens `RenameAccountDialog` (`apps/web/src/components/keel/
+rename-account-dialog.tsx`), matching the small-dialog shape of
+`manage-tags-dialog.tsx`/`txn-edit-dialog.tsx`. On save, the page bumps a
+local reload counter (refetches `fetchAccounts` — that data isn't
+TanStack-cached, it's a plain per-page fetch like the accounts list page)
+and calls the existing `useKeelQuery` `refetch()` to invalidate the broader
+`keel-query` cache.
+
+Gates: `pnpm -w typecheck` clean, `pnpm vitest run` 451/451,
+`cd apps/web && pnpm build` clean (19 routes, unchanged route count — no new
+page, just a dialog on the existing account-detail route).

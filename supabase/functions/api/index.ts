@@ -631,6 +631,36 @@ export default {
       return json(200, { ok: true });
     }
 
+    if (path === '/accounts/rename') {
+      // Plain metadata edit (Law 2/9: user-owned, not an AI action — no
+      // suggest/approve gate applies). The proc enforces membership + write
+      // role + the accounts.name check constraint (1-200 chars).
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const accountId = AccountIdSchema.safeParse(input['accountId']);
+      const name = input['name'];
+      if (
+        !householdId.success ||
+        !accountId.success ||
+        typeof name !== 'string' ||
+        name.trim().length === 0 ||
+        name.length > 200
+      ) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Rename request failed validation.',
+          details: {},
+        });
+      }
+      const { error: renameError } = await ctx.supabase.rpc('keel_rename_account', {
+        p_household_id: householdId.data,
+        p_account_id: accountId.data,
+        p_name: name,
+      });
+      if (renameError) return mapDbError(renameError);
+      return json(200, { ok: true });
+    }
+
     if (path === '/entities/create') {
       const input = body as Record<string, unknown>;
       const householdId = HouseholdIdSchema.safeParse(input['householdId']);
