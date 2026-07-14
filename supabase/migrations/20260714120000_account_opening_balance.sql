@@ -30,15 +30,127 @@
 --
 -- Idempotency / correction: the OUTER economic_event_key is per-attempt (like
 -- accounts.create's `accounts.create:<commandId>`) so a network retry replays
--- cleanly. Locating "the live opening-balance entry to correct" reuses the
--- exact structural marker keel_apply_account_balance already established for
--- "this account's opening entry": a batch with canonical_transaction_id null,
--- reverses_batch_id null, not yet reversed, posting on this ledger account —
--- regardless of whether it was booked by the Plaid auto-anchor, the manual
--- account-creation flow (postOpeningBalance), or a prior call to THIS
--- command. Every such live entry is reversed (Law 2: compensating batch,
--- original preserved — never UPDATE/DELETE) before the new one is posted, so
--- at most one opening entry is ever live for an account.
+-- cleanly. Locating "the live opening-balance entry to correct" needs an
+-- UNAMBIGUOUS marker — Codex review on PR #9 (P1) caught that the marker this
+-- migration originally reused from keel_apply_account_balance ("a batch with
+-- canonical_transaction_id null and reverses_batch_id null") also matches any
+-- manually-recorded transfer (RecordTransferDialog rides journal.post_batch
+-- with no canonical_transaction_id too), so re-setting an opening balance
+-- would have silently reversed unrelated manual transfers on the same
+-- account. The fix, applied to BOTH keel_apply_account_balance (below) and
+-- this proc's correction loop: a genuine opening-balance batch is the only
+-- kind of batch that posts to BOTH the account's own ledger account AND the
+-- entity's "Opening Balances" equity account in the same batch — a transfer
+-- always moves between two real asset/liability accounts and never touches
+-- equity, so this combination can't misfire on it. Every live batch matching
+-- that combination is reversed (Law 2: compensating batch, original
+-- preserved — never UPDATE/DELETE) before the new one is posted, regardless
+-- of whether it was booked by the Plaid auto-anchor, the manual
+-- account-creation flow, or a prior call to THIS command, so at most one
+-- opening entry is ever live for an account.
+
+-- Fixes the same ambiguous marker in the pre-existing auto-anchor proc
+-- (20260712190000_account_balances.sql), already live in prod: its
+-- "canonical_transaction_id is null and reverses_batch_id is null" existence
+-- check would also true-positive on any manually-recorded transfer, wrongly
+-- suppressing the one-time auto-anchor forever on any account that already
+-- has a manual transfer. create-or-replace preserves the original owner/ACLs
+-- (service_role execute only, no keel_api ownership ritual here — matches
+-- the original).
+create or replace function public.keel_apply_account_balance(
+  p_household_id uuid,
+  p_account_id uuid,
+  p_current_minor bigint,
+  p_available_minor bigint,
+  p_currency text,
+  p_as_of timestamptz
+) returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_ledger        uuid;
+  v_entity        uuid;
+  v_curr          char(3);
+  v_kind          public.ledger_account_kind;
+  v_opening_ledger uuid;
+  v_target        bigint;
+  v_current_sum   bigint;
+  v_opening       bigint;
+  v_batch         uuid;
+  v_has_opening   boolean;
+begin
+  select a.ledger_account_id, a.entity_id, a.currency
+    into v_ledger, v_entity, v_curr
+    from public.accounts a
+    where a.id = p_account_id and a.household_id = p_household_id;
+  if v_ledger is null then
+    raise exception 'KEEL_NOT_FOUND: account' using errcode = 'P0006';
+  end if;
+  select kind into v_kind from public.ledger_accounts where id = v_ledger;
+
+  -- Provider snapshot (history for trend + future reconciliation).
+  insert into public.balance_snapshots
+    (household_id, account_id, as_of, available_minor, current_minor, currency, source, snapshot_metadata)
+  values
+    (p_household_id, p_account_id, p_as_of, p_available_minor, p_current_minor,
+     coalesce(nullif(p_currency, ''), v_curr), 'plaid', '{}'::jsonb);
+
+  select id into v_opening_ledger
+    from public.ledger_accounts
+    where entity_id = v_entity and name = 'Opening Balances' and archived_at is null;
+  if v_opening_ledger is null then
+    raise exception 'KEEL_INVALID_COMMAND: opening balances account missing' using errcode = 'P0009';
+  end if;
+
+  -- Opening balance is booked once. The unambiguous marker for "this account
+  -- already has an opening entry" is a live (non-reversal) batch touching
+  -- BOTH this account's own ledger account AND the entity's Opening Balances
+  -- equity account — a manual transfer moves between two real asset/
+  -- liability accounts and never touches equity, so it can't satisfy both.
+  select exists (
+    select 1
+      from public.journal_batches b
+      where b.household_id = p_household_id
+        and b.canonical_transaction_id is null
+        and b.reverses_batch_id is null
+        and exists (
+          select 1 from public.journal_postings p
+          where p.batch_id = b.id and p.ledger_account_id = v_ledger
+        )
+        and exists (
+          select 1 from public.journal_postings p2
+          where p2.batch_id = b.id and p2.ledger_account_id = v_opening_ledger
+        )
+  ) into v_has_opening;
+  if v_has_opening then
+    return;
+  end if;
+
+  v_target := case when v_kind = 'liability' then -p_current_minor else p_current_minor end;
+  select coalesce(sum(amount_minor), 0) into v_current_sum
+    from public.journal_postings where ledger_account_id = v_ledger;
+  v_opening := v_target - v_current_sum;
+  if v_opening = 0 then
+    return;
+  end if;
+
+  insert into public.journal_batches
+    (household_id, canonical_transaction_id, description, effective_date, command_id, posted_at)
+  values
+    (p_household_id, null, 'Opening balance', current_date, gen_random_uuid(), now())
+  returning id into v_batch;
+
+  insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency)
+  values
+    (v_batch, v_ledger,         v_entity,  v_opening, coalesce(nullif(p_currency, ''), v_curr)),
+    (v_batch, v_opening_ledger, v_entity, -v_opening, coalesce(nullif(p_currency, ''), v_curr));
+end;
+$$;
+
+grant execute on function public.keel_apply_account_balance(uuid, uuid, bigint, bigint, text, timestamptz)
+  to service_role;
 
 create function public.keel_cmd_set_opening_balance(
   p_command_id uuid,
@@ -161,21 +273,29 @@ begin
   v_target := case when v_account.ledger_kind = 'liability' then -v_balance_minor else v_balance_minor end;
 
   -- Reverse every currently-live opening-balance marker batch for this ledger
-  -- account (structural marker: no canonical transaction, not itself a
-  -- reversal, not yet reversed — same predicate keel_apply_account_balance
-  -- uses to decide "has this account already been anchored"). Normally at
-  -- most one such batch exists; loop defensively in case more than one ever
-  -- landed (Law 2: compensate, never mutate/delete).
+  -- account. Unambiguous marker (see header comment / PR #9 Codex P1): a
+  -- batch with no canonical transaction, not itself a reversal, not yet
+  -- reversed, that posts to BOTH this account's own ledger account AND the
+  -- entity's Opening Balances equity account — a manual transfer can never
+  -- match both legs, only a genuine opening entry can. Normally at most one
+  -- such batch exists; loop defensively in case more than one ever landed
+  -- (Law 2: compensate, never mutate/delete).
   for v_prior in
     select jb.*
       from public.journal_batches jb
-      join public.journal_postings jp on jp.batch_id = jb.id
       where jb.household_id = p_household_id
         and jb.canonical_transaction_id is null
         and jb.reverses_batch_id is null
-        and jp.ledger_account_id = v_account.ledger_account_id
         and not exists (
           select 1 from public.journal_revisions rev where rev.original_batch_id = jb.id
+        )
+        and exists (
+          select 1 from public.journal_postings jp
+          where jp.batch_id = jb.id and jp.ledger_account_id = v_account.ledger_account_id
+        )
+        and exists (
+          select 1 from public.journal_postings jp2
+          where jp2.batch_id = jb.id and jp2.ledger_account_id = v_opening_ledger_id
         )
       order by jb.posted_at, jb.id
   loop
