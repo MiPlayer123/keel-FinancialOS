@@ -150,7 +150,7 @@ export function BalanceTrendChart({ points, height = 200 }: { points: BalancePoi
             axisLine={false}
             tick={{ fill: INK_MUTED, fontSize: 11 }}
             tickFormatter={(v: number) => compactAxis(v)}
-            ticks={yTicks}
+            {...(yTicks !== undefined ? { ticks: yTicks } : {})}
             domain={['auto', 'auto']}
           />
           <Tooltip
