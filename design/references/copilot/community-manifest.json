@@ -1,0 +1,68 @@
+[
+  {
+    "file": "community-01-mac-transactions-review-pane.png",
+    "what_it_shows": "Copilot Money macOS app, Transactions tab (dark): date-grouped All Transactions list with category pills and unreviewed-dot indicators, right-hand Regular Transaction detail pane with 'To Review' status and Review / Split / Recurring actions, two rows multi-selected with the floating '2 selected — Category / Review / Type' bulk bar. Core needs-review loop.",
+    "source_page_url": "https://help.copilot.money/en/articles/6778561-copilot-money-for-macos",
+    "image_url": "https://downloads.intercomcdn.com/i/o/627966059/63ae076751023a26328b805f/Transactions.png"
+  },
+  {
+    "file": "community-02-review-quick-edit-category.png",
+    "what_it_shows": "'Transactions To Review' widget with inline quick-edit: typing 'g' in the category picker over a to-review row (Publix) with Groceries/Gym/New category suggestions — the one-keystroke recategorize step of the review flow on desktop.",
+    "source_page_url": "https://help.copilot.money/en/articles/6778561-copilot-money-for-macos",
+    "image_url": "https://downloads.intercomcdn.com/i/o/624943686/75727e0d15326dd96646741a/quick-edit.png"
+  },
+  {
+    "file": "community-03-transaction-detail-to-review.png",
+    "what_it_shows": "Desktop transaction detail view (light): 'To Review' status dot next to the date, Review / Split / Recurring header buttons, category + account pills, notes and tags fields, and 'Similar Transactions' history grouped by month — the approve step of the review loop.",
+    "source_page_url": "https://help.copilot.money/en/articles/9554412-transactions-tab-overview",
+    "image_url": "https://downloads.intercomcdn.com/i/o/1100673655/f47b63285f5be972a19a9fb4/image.png"
+  },
+  {
+    "file": "community-04-split-editor-equal.png",
+    "what_it_shows": "Split Transaction modal, Equal split mode: original transaction card (Red Hook Tavern $100), two 50%/$50 split rows — one categorized Restaurants, one Excluded — Add split button, and green 'Left to split $0.00' counter with Cancel/Save.",
+    "source_page_url": "https://help.copilot.money/en/articles/5325255-splitting-transactions",
+    "image_url": "https://downloads.intercomcdn.com/i/o/gw2wbwl7/2466215963/01bd5b10c3ecc811747a42db7e8c/image.png"
+  },
+  {
+    "file": "community-05-split-editor-custom.png",
+    "what_it_shows": "Split Transaction modal, Custom split mode: four rows with editable per-row amounts and percentages (40% Restaurants + three 20% Excluded), Add split with cursor, Left to split $0.00 — shows amount/percent dual editing in the split editor.",
+    "source_page_url": "https://help.copilot.money/en/articles/5325255-splitting-transactions",
+    "image_url": "https://downloads.intercomcdn.com/i/o/gw2wbwl7/2466219355/c4f9e43756eddfe5906b8bd30768/image.png"
+  },
+  {
+    "file": "community-06-transaction-detail-split-summary.png",
+    "what_it_shows": "Transaction detail after splitting: 'Edit split' header action, Split row showing '$100.00 split 4 ways', and the 'Split transactions' child list with Excluded pills — how a parent transaction represents its splits (red callouts from the help article).",
+    "source_page_url": "https://help.copilot.money/en/articles/5325255-splitting-transactions",
+    "image_url": "https://downloads.intercomcdn.com/i/o/gw2wbwl7/2466211360/fd854a173da99da9da29ddc73c1d/image.png"
+  },
+  {
+    "file": "community-07-mac-categories-drilldown-dark.png",
+    "what_it_shows": "macOS Categories tab (dark): budget donut with spent-so-far vs total budget, Regular Categories list with per-category budget progress bars and nested subcategories, and right-hand Food & Drink group drill-down — monthly spend bar history with budget marker, key metrics by year, and the category's November transactions.",
+    "source_page_url": "https://help.copilot.money/en/articles/6778561-copilot-money-for-macos",
+    "image_url": "https://downloads.intercomcdn.com/i/o/627966358/2158f39bb339b51422531433/Categories.png"
+  },
+  {
+    "file": "community-08-categories-budget-drilldown-light.png",
+    "what_it_shows": "Categories tab in light mode (web/desktop): Rebalance and Edit Budget / Turn Off Budgeting controls, Regular Categories with spent-vs-budget bars, and 'All Regular Categories' drill-down pane with multi-year spend history bars, key metrics table, and per-category Spent/Budget/Left table.",
+    "source_page_url": "https://help.copilot.money/en/articles/11157550-quick-start-guide",
+    "image_url": "https://downloads.intercomcdn.com/i/o/gw2wbwl7/1525862582/d9ff56a8e1c2a9b620f7031129e5/image.png"
+  },
+  {
+    "file": "community-09-mac-recurrings.png",
+    "what_it_shows": "macOS Recurrings tab (dark): left-to-pay vs paid-so-far progress ring, 'This month' list with paid checkmarks and Overdue items, 'In the future' section, and right-hand Monthly Recurring detail (Property Payment Rent) with matching rules chips, yearly payment timeline, key metrics, last account used, and matched transactions.",
+    "source_page_url": "https://help.copilot.money/en/articles/6778561-copilot-money-for-macos",
+    "image_url": "https://downloads.intercomcdn.com/i/o/627966405/d7e1383e1b4d6f9f12f557ee/Recurrings.png"
+  },
+  {
+    "file": "community-10-mac-dashboard-dark.png",
+    "what_it_shows": "macOS Dashboard (dark, populated state): Monthly Spending pace chart with '$97 under' marker, Net Worth chart with range toggle, 'Transactions To Review' widget with 'Mark all as reviewed', Top Categories with budget bars, Monthly Income progress, and 'Next Two Weeks' upcoming recurrings including Overdue rows; sidebar shows account groups with balances and Transactions badge count.",
+    "source_page_url": "https://help.copilot.money/en/articles/6778561-copilot-money-for-macos",
+    "image_url": "https://downloads.intercomcdn.com/i/o/627965717/68f9e4234702a8184c79a102/Dashboard.png"
+  },
+  {
+    "file": "community-11-mac-accounts.png",
+    "what_it_shows": "macOS Accounts tab (dark): Net Worth chart, account groups (Credit Cards / Depository / Investments) with per-account sparklines, utilization/change percentages and balances, and right-hand Checking account drill-down with balance history line and the account's transaction feed.",
+    "source_page_url": "https://help.copilot.money/en/articles/6778561-copilot-money-for-macos",
+    "image_url": "https://downloads.intercomcdn.com/i/o/627966251/f39193f9849332446ea1b946/Accounts.png"
+  }
+]
