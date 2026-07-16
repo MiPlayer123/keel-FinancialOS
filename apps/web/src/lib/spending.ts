@@ -10,77 +10,82 @@ const DEBT_TRANSFER_PFC_KEYS = new Set(['loan_payments', 'transfers']);
 
 /**
  * Same two buckets by seeded display name, for shapes that carry a category
- * name but no pfc_key (e.g. `budgets.list` rows).
+ * name but no pfc_key (e.g. `budgets.list` rows). Exported so every surface
+ * (budgets, rebalance) shares ONE definition rather than drifting copies.
  */
-const DEBT_TRANSFER_CATEGORY_NAMES = new Set(['loan payments', 'transfers']);
+export const DEBT_TRANSFER_CATEGORY_NAMES: ReadonlySet<string> = new Set([
+  'loan payments',
+  'transfers',
+]);
 
-/**
- * Conservative credit-card / loan payoff memo patterns for the payment leg that
- * hasn't been paired into a confirmed transfer yet. Deliberately narrow — a
- * false negative (a real payoff slips through as spend) is safer than a false
- * positive (real spend stripped from analytics), so each pattern demands the
- * word "payment" plus an explicit card/credit cue.
- */
-const CC_PAYOFF_PATTERNS: readonly RegExp[] = [
-  // "Payment To Chase card ending 1234", "AUTOPAY PAYMENT ... CREDIT CARD"
-  /payment\b.*\b(credit )?card\b/i,
-  // "ONLINE PAYMENT ... TO ... CREDIT CARD" / "... TO ... CARD"
-  /online payment\b.*\bto\b.*\b(card|credit)\b/i,
-  // Classic card-statement memo on the incoming payment leg
-  /payment thank you/i,
-];
+/** Shared name-based check for shapes without pfc_key (budgets.list rows). */
+export function isMoneyMovementCategoryName(name: string): boolean {
+  return DEBT_TRANSFER_CATEGORY_NAMES.has(name.trim().toLowerCase());
+}
 
 /** The fields `isDebtOrTransferLike` inspects — a subset of RichTransactionRow. */
-export type DebtOrTransferLike = Pick<
-  RichTransactionRow,
-  'transferStatus' | 'categoryName' | 'description'
-> &
-  Partial<Pick<RichTransactionRow, 'categoryPfcKey' | 'originalDescription'>>;
+export type DebtOrTransferLike = Pick<RichTransactionRow, 'transferStatus' | 'categoryName'> &
+  Partial<Pick<RichTransactionRow, 'categoryPfcKey'>>;
 
 /**
  * True when a row is money-movement or debt payoff rather than real spend, so
- * spend analytics can drop it. Any single predicate is sufficient:
- *  1. transferStatus is confirmed OR suggested — a detected transfer leg.
- *     (Only 'confirmed' was excluded before; unconfirmed legs polluted spend.)
+ * SPENDING analytics can drop it. Either predicate is sufficient:
+ *  1. transferStatus === 'confirmed' — a user-approved transfer leg. Suggested
+ *     legs are deliberately NOT excluded: a suggestion is unapproved inference,
+ *     and the explicit-ownership invariant (Law 9 / BC-v2.1 §9.1) forbids
+ *     silently treating it as fact. The nudge banner discloses the pending set.
  *  2. the category is the PFC "Loan Payments"/"Transfers" bucket — matched by
- *     rename-proof pfc_key when present, else by seeded display name.
- *  3. the raw memo matches a conservative CC/loan-payoff pattern — the payment
- *     leg before any transfer pairing exists.
- * Conservative by design: prefers false negatives over stripping real spend.
+ *     rename-proof pfc_key when present, else by seeded display name. A
+ *     deterministic, disclosed formula-scope rule (debt payments and transfers
+ *     are money movement, not consumption), stated in every footnote that uses
+ *     this predicate.
+ *
+ * Deliberately absent: memo/description pattern matching (Law 5 data-tier +
+ * the NOTES "no memo interpretation" invariant — provider text and
+ * user-editable names must never move analytics totals).
+ *
+ * SPENDING scope only. Cash metrics (free-to-spend "Spent so far", cash-flow)
+ * must NOT use this predicate: an unpaired debt payment is real cash out, and
+ * only confirmed transfer PAIRS net to zero.
  */
 export function isDebtOrTransferLike(txn: DebtOrTransferLike): boolean {
-  // (1) detected transfer leg, confirmed or merely suggested.
-  if (txn.transferStatus === 'confirmed' || txn.transferStatus === 'suggested') return true;
-  // (2) the debt/transfer category buckets.
+  if (txn.transferStatus === 'confirmed') return true;
   const pfc = txn.categoryPfcKey;
   if (pfc != null && DEBT_TRANSFER_PFC_KEYS.has(pfc)) return true;
-  if (
-    txn.categoryName != null &&
-    DEBT_TRANSFER_CATEGORY_NAMES.has(txn.categoryName.trim().toLowerCase())
-  ) {
-    return true;
-  }
-  // (3) CC/loan payoff memo on the raw (provider) description when available.
-  const raw = txn.originalDescription ?? txn.description;
-  return CC_PAYOFF_PATTERNS.some((re) => re.test(raw));
+  return txn.categoryName != null && isMoneyMovementCategoryName(txn.categoryName);
 }
 
+/** The fields suggestedTransferCount inspects. */
+export type SuggestedTransferLike = Pick<RichTransactionRow, 'transferStatus'> &
+  Partial<Pick<RichTransactionRow, 'transactionId' | 'counterpartyTransactionId'>>;
+
 /**
- * Count of rows that read as debt/transfer movement but are NOT confirmed
- * transfers yet — the population a "confirm your transfers" nudge surfaces
- * (numbers that exclude them may shift once the user confirms; Law 9).
+ * Number of SUGGESTED transfer pairings in `rows` — the actionable population
+ * the Review page surfaces. Counts pairs, not legs (both legs of a suggestion
+ * carry transferStatus === 'suggested'; naive row-counting doubles it). Pair
+ * identity via counterpartyTransactionId; a leg whose counterpart is outside
+ * the loaded window still counts once.
  */
-export function unconfirmedTransferLikeCount(rows: DebtOrTransferLike[]): number {
-  return rows.reduce(
-    (n, t) => (t.transferStatus !== 'confirmed' && isDebtOrTransferLike(t) ? n + 1 : n),
-    0,
-  );
+export function suggestedTransferCount(rows: SuggestedTransferLike[]): number {
+  const pairs = new Set<string>();
+  let unpaired = 0;
+  for (const t of rows) {
+    if (t.transferStatus !== 'suggested') continue;
+    const self = t.transactionId;
+    const other = t.counterpartyTransactionId;
+    if (self != null && other != null) {
+      pairs.add(self < other ? `${self}:${other}` : `${other}:${self}`);
+    } else {
+      unpaired += 1;
+    }
+  }
+  return pairs.size + Math.ceil(unpaired / 2);
 }
 
 /**
- * Expense totals by category over the trailing N days. Transfers and debt
- * payments are excluded (moving money isn't spending); BigInt sums (Law 4);
- * top 6 + Other so the list never sprawls.
+ * Expense totals by category over the trailing N days. Confirmed transfers and
+ * the debt-payment/transfer category buckets are excluded (moving money isn't
+ * spending); BigInt sums (Law 4); top 6 + Other so the list never sprawls.
  */
 export function spendingMix(rows: RichTransactionRow[], days = 30): CategorySpend[] {
   const cutoff = new Date();

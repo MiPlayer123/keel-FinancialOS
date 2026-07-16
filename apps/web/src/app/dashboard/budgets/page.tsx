@@ -9,6 +9,7 @@ import { Money } from '@/components/keel/money';
 import { RebalanceBudgetsDialog } from '@/components/keel/rebalance-budgets-dialog';
 import { useHousehold } from '@/components/keel/household-context';
 import { fetchBudgets, setBudget, copyBudgets, type BudgetRow } from '@/lib/keel-api';
+import { isMoneyMovementCategoryName } from '@/lib/spending';
 import { parseSignedDollars, minorToDollars } from '@/lib/hash';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -93,22 +94,27 @@ function BudgetsBody() {
 
   // Children sort directly under their parent (one-level tree).
   const raw = rows ?? [];
-  // BUDGETS-4: the seeded "Transfers" bucket is money-movement, not spending —
-  // showing its "spent" here would contradict this page's "transfers excluded"
-  // subtitle, so suppress that row (and anything nested under it). Matched by
-  // seeded display name; budgets.list carries no rename-proof pfc_key.
-  const transferIds = new Set(
+  // BUDGETS-4: the seeded "Transfers"/"Loan Payments" buckets are money-
+  // movement, not spending — showing their "spent" here would contradict this
+  // page's "transfers excluded" subtitle. Both buckets share ONE definition
+  // with the analytics predicate (isMoneyMovementCategoryName). But a row the
+  // user has actually budgeted is never hidden (hiding it would strand an
+  // existing budget that copy-forward keeps propagating — review finding);
+  // only unbudgeted movement rows are suppressed. budgets.list carries no
+  // rename-proof pfc_key yet — surface it there and switch this to pfc_key.
+  const movementIds = new Set(
     raw
-      .filter((r) => r.categoryName.trim().toLowerCase() === 'transfers')
+      .filter((r) => isMoneyMovementCategoryName(r.categoryName))
       .map((r) => r.categoryLedgerAccountId),
   );
   const visible =
-    transferIds.size > 0
-      ? raw.filter(
-          (r) =>
-            !transferIds.has(r.categoryLedgerAccountId) &&
-            !(r.parentLedgerAccountId != null && transferIds.has(r.parentLedgerAccountId)),
-        )
+    movementIds.size > 0
+      ? raw.filter((r) => {
+          const isMovement =
+            movementIds.has(r.categoryLedgerAccountId) ||
+            (r.parentLedgerAccountId != null && movementIds.has(r.parentLedgerAccountId));
+          return !isMovement || r.budgetMinor !== null;
+        })
       : raw;
   const nameById = new Map(visible.map((r) => [r.categoryLedgerAccountId, r.categoryName]));
   const groupOf = (r: BudgetRow) =>

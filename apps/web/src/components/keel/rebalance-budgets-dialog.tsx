@@ -5,6 +5,7 @@ import { Wand2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { setBudget, type BudgetRow, type RichTransactionRow } from '@/lib/keel-api';
+import { isDebtOrTransferLike } from '@/lib/spending';
 import { useKeelQuerySilent } from '@/lib/use-keel-query';
 import { Money } from '@/components/keel/money';
 import { formatMoney } from '@/lib/money';
@@ -34,9 +35,10 @@ function monthsBefore(monthIso: string, n: number): string[] {
 
 /**
  * Sum of net expense spend per category over the given months — same
- * split-aware, confirmed-transfer-excluding, net-signed convention as
- * `buildMatrix` in reports/page.tsx (and the same sign convention the
- * `budgets.list` RPC uses for `spentMinor`): debit-positive, refunds net out.
+ * split-aware, net-signed convention as `buildMatrix` in reports/page.tsx
+ * (debit-positive, refunds net out), and the SAME money-movement exclusion
+ * (isDebtOrTransferLike), so rebalance never proposes a budget from rows the
+ * rest of the app says aren't spending (review finding).
  */
 function threeMonthActuals(rows: RichTransactionRow[], months: string[]): Map<string, bigint> {
   const monthSet = new Set(months);
@@ -45,7 +47,7 @@ function threeMonthActuals(rows: RichTransactionRow[], months: string[]): Map<st
     totals.set(id, (totals.get(id) ?? 0n) + amt);
   };
   for (const t of rows) {
-    if (t.transferStatus === 'confirmed') continue;
+    if (isDebtOrTransferLike(t)) continue;
     const mk = t.effectiveDate.slice(0, 7);
     if (!monthSet.has(mk)) continue;
     if (t.splits && t.splits.length > 0) {

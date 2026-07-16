@@ -23,7 +23,7 @@ import {
   type SankeyFlowLink,
   type SankeyFlowNode,
 } from '@/components/keel/charts';
-import { isDebtOrTransferLike, unconfirmedTransferLikeCount } from '@/lib/spending';
+import { isDebtOrTransferLike, suggestedTransferCount } from '@/lib/spending';
 import { TransferNudgeBanner } from '@/components/keel/transfer-nudge-banner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -404,7 +404,10 @@ function taxSchedule(
 }
 
 /**
- * Net cash by tag over the trailing months (confirmed transfers excluded).
+ * Net cash by tag over the trailing months. NET-CASH scope, deliberately
+ * different from the spending widgets above: only confirmed transfer pairs are
+ * excluded (they net to zero); debt payments are real cash against a tag, so
+ * they stay counted. Each card's caption states its own formula (Law 9).
  * Sums are single-currency: restricted to the household's dominant currency,
  * which is returned so the card formats with it.
  */
@@ -689,6 +692,7 @@ function ReportsBody() {
       });
   }, [householdId]);
   const taxReport = useMemo(() => taxSchedule(txns.rows, taxLines), [txns.rows, taxLines]);
+  const suggestedCount = useMemo(() => suggestedTransferCount(txns.rows), [txns.rows]);
   const matrix = useMemo(
     () => buildMatrix(txns.rows, months, view),
     [txns.rows, months, view],
@@ -737,7 +741,7 @@ function ReportsBody() {
 
   return (
     <>
-      <TransferNudgeBanner count={unconfirmedTransferLikeCount(txns.rows)} />
+      <TransferNudgeBanner count={suggestedCount} />
 
       <Card>
         <CardHeader className="pb-2">
@@ -1130,7 +1134,8 @@ function ReportsBody() {
             ))}
             <p className="pt-1 text-xs text-muted-foreground">
               Net cash for tagged transactions — tag things like tax-deductible or a
-              trip, then read the total here.
+              trip, then read the total here. Confirmed transfers excluded; debt
+              payments count (net cash, not spending).
             </p>
           </CardContent>
         </Card>
@@ -1166,7 +1171,8 @@ function ReportsBody() {
             ))}
             <p className="pt-1 text-xs text-muted-foreground">
               Actual cash per IRS line, from the tax lines you set on categories
-              (Home → Categories → Manage). Bookkeeping, not tax advice.
+              (Home → Categories → Manage). Confirmed transfers excluded.
+              Bookkeeping, not tax advice.
             </p>
           </CardContent>
         </Card>
