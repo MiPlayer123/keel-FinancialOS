@@ -45,8 +45,20 @@ function compactAxis(dollars: number): string {
  * so a flat or narrow series collapses to a single honest label instead of N
  * identical ones ("15.2K" ×4, DASHBOARD-7 / GOALSFORECAST-3).
  */
-function distinctAxisTicks(min: number, max: number, count = 5): number[] {
+/**
+ * Custom y-ticks ONLY for the degenerate case recharts mishandles — a series
+ * so flat that its auto ticks all render the same compact label ("15.2K" ×4).
+ * Returns undefined for healthy ranges so recharts keeps its nice-rounded
+ * ticks (and the $0 gridline on zero-crossing series — review finding: an
+ * unconditional override pinned labels to the plot edges on every chart).
+ * In the degenerate case, ticks are deduped by label and always include 0
+ * when the domain crosses it, anchoring the red/emerald boundary (Law 8).
+ */
+function distinctAxisTicks(min: number, max: number, count = 5): number[] | undefined {
   if (!(max > min)) return [min];
+  // Healthy range heuristic: if the endpoints already render distinct compact
+  // labels, recharts' own ticks will too — leave them alone.
+  if (compactAxis(min) !== compactAxis(max)) return undefined;
   const seen = new Set<string>();
   const ticks: number[] = [];
   for (let i = 0; i < count; i++) {
@@ -56,7 +68,8 @@ function distinctAxisTicks(min: number, max: number, count = 5): number[] {
     seen.add(label);
     ticks.push(v);
   }
-  return ticks;
+  if (min < 0 && max > 0 && !ticks.includes(0)) ticks.push(0);
+  return ticks.sort((a, b) => a - b);
 }
 
 function monthLabel(isoMonth: string): string {

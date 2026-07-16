@@ -1003,7 +1003,9 @@ export type StatementRow = {
 export type ExportBundle = {
   manifest: unknown;
   json: string;
-  csv: Record<string, string>;
+  /** One entry per table — the api function returns `toCsvFiles(snapshot)`
+   *  verbatim, which is an ARRAY of named files, not a Record. */
+  csv: { name: string; csv: string }[];
   qif: string;
   beancount: string;
 };

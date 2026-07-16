@@ -157,16 +157,14 @@ function ExportCard() {
       const bundle: ExportBundle = await exportHousehold(householdId);
       const spec = FORMATS.find((f) => f.key === fmt);
       if (!spec) return;
-      // CSV is one file per table (Record<name, csv>); concatenate into a
-      // single download with a section marker per table, matching the
+      // CSV is one file per table (CsvFile[] from toCsvFiles); concatenate
+      // into a single download with a section marker per table, matching the
       // one-click behavior of the other formats.
       const content =
         fmt === 'json'
           ? bundle.json
           : fmt === 'csv'
-            ? Object.entries(bundle.csv)
-                .map(([name, body]) => `# ${name}\r\n${body}`)
-                .join('\r\n')
+            ? bundle.csv.map((f) => `# ${f.name}\r\n${f.csv}`).join('\r\n')
             : bundle[fmt];
       download(`keel-export.${spec.ext}`, spec.mime, content);
       toast.success(`Exported ${spec.label}.`);
