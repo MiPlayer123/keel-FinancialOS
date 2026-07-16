@@ -1,0 +1,68 @@
+[
+  {
+    "file": "community-01-expenses-table-grouped.jpg",
+    "what_it_shows": "Brex expenses table with group-by (Merchant/Employee/Budget/Status/Trip) dropdown: rows show merchant logo, employee, budget, Submitted status chip, amount — '6 of 234 groups of expenses'.",
+    "source_page_url": "https://www.brex.com/product-announcements/grouped-expenses-for-bulk-approval",
+    "image_url": "https://brand.brex.com/transform/cb856ba3-a139-49d9-a422-ac6aa058a649/pl-Grouping-Expenses"
+  },
+  {
+    "file": "community-02-accounting-queue.jpg",
+    "what_it_shows": "Brex Accounting page in laptop frame: Create rule / Manage automations / NetSuite settings / Fields library / Export history tiles, Prepare-Review-Exported tabs with month-close progress, dense expense table (user, type, merchant, amount, debit GL account, spend limit) and '1,000 prepared as accruals — Export' bulk bar.",
+    "source_page_url": "https://www.brex.com/product/expense-management",
+    "image_url": "https://brand.brex.com/transform/a23f8b22-3591-4abc-83ec-dd21b0708adf/Exp-Mgmt-Accounting-Desktop-Test3"
+  },
+  {
+    "file": "community-03-payment-approval-settings.jpg",
+    "what_it_shows": "Brex payment approval configuration: radio options 'Payment equals or exceeds $50K — request approval from any other admin (Default)' vs 'Customize my own approval settings' vs no approvals.",
+    "source_page_url": "https://www.brex.com/product-announcements/payment-approvals",
+    "image_url": "https://brand.brex.com/transform/e3f7447a-f21a-4f31-81cc-4b3e5352b9b5/PL_0923_Multi-Step-Admin-Approval-for-BBAs"
+  },
+  {
+    "file": "community-04-receipt-validation.jpg",
+    "what_it_shows": "Brex expense edit panel (Budget, Receipt upload, Memo) with automated receipt validation tooltip: 'Brex automatically verified this receipt: Date ✓ / Amount ✗ / Merchant ✓'.",
+    "source_page_url": "https://www.brex.com/product-announcements/automated-receipt-validation",
+    "image_url": "https://brand.brex.com/transform/5fea6d2c-0273-48c7-8b12-9f7fb2227a09/pl-Receipt-Validation"
+  },
+  {
+    "file": "community-05-unmatched-receipts.png",
+    "what_it_shows": "Brex 'Unmatched receipts' manager: receipt thumbnails with detected merchant + amount rows (Starbucks $9.56, Target $22.48, Shake Shack $12.99) and Attach actions (product-announcement feature crop).",
+    "source_page_url": "https://www.brex.com/product-announcements/manage-your-unmatched-receipts-in-one-place",
+    "image_url": "https://brand.brex.com/transform/200c3821-7901-4d23-a6d0-5d40416c8bba/Manage-your-unmatched-receipts-in-one-place"
+  },
+  {
+    "file": "community-06-custom-accounting-rule.png",
+    "what_it_shows": "Brex custom accounting rule editor: 'Custom rule — NetSuite Department is [Engineering] [Sales] [HR]' multi-value condition chips (product-announcement feature crop).",
+    "source_page_url": "https://www.brex.com/product-announcements",
+    "image_url": "https://brand.brex.com/transform/01de737b-ce53-4681-be16-25393c408132/Select-multiple-values-in-custom-accounting-rules"
+  },
+  {
+    "file": "community-07-mcc-policy-rule.png",
+    "what_it_shows": "Brex If/Then policy rule builder: 'If MCC is any of 7995, 7801, or 5813 → Then Block transaction' (product-announcement feature crop of policy-level MCC controls).",
+    "source_page_url": "https://www.brex.com/product-announcements",
+    "image_url": "https://brand.brex.com/transform/d18414e4-8574-460f-9f39-94ef7f0b1a3e/Set-MCC-controls-at-the-policy-level"
+  },
+  {
+    "file": "community-08-cards-and-limits-table.png",
+    "what_it_shows": "Brex 'Cards and limits' desktop page: Issue cards / Create spend limits / Manage request types tiles, Employee cards tab with filter pills and dense card table (cardholder, card number, form, monthly limit); mobile Wallet overlay with approved expenses.",
+    "source_page_url": "https://www.brex.com/product/expense-management",
+    "image_url": "https://brand.brex.com/transform/913350c0-4767-4699-a19d-1971abdee713/Exp-Mgmt-Hero-Simplified"
+  },
+  {
+    "file": "community-09-bill-pay-bills-table.png",
+    "what_it_shows": "Brex Bill Pay 'Bills' page: Pay a bill / Upload invoices / Edit policy / Bill pay settings tiles, Drafts-For approval-For payment-Processing tabs with counts, and dense bills table (due date, vendor, amount, method, status, payment date, invoice, PO).",
+    "source_page_url": "https://www.brex.com/product/bill-pay",
+    "image_url": "https://brand.brex.com/transform/c01bae25-bd78-4b1c-92e7-904090a5c74b/Billpay-dashboard"
+  },
+  {
+    "file": "community-10-ai-flagged-expense.png",
+    "what_it_shows": "Brex AI expense review: auto-generated IRS-compliant receipt with line items, flag banner 'This expense was flagged by Brex AI because: High risk item detected on receipt: Alcohol' highlighting the Chardonnay line.",
+    "source_page_url": "https://www.brex.com/product-announcements/powerful-ai-for-expense-reviews",
+    "image_url": "https://brand.brex.com/transform/46c5fe52-5ab0-4620-aa56-defb189de211/AI-alcohol-flag"
+  },
+  {
+    "file": "community-11-assistant-notifications.jpg",
+    "what_it_shows": "Brex Notifications panel: 'Brex Assistant added receipt and memo to $56.00 at Delta' agent-action item with View buttons, grouped by date (product-announcement feature crop).",
+    "source_page_url": "https://www.brex.com/product-announcements",
+    "image_url": "https://brand.brex.com/transform/78ed3148-0bbb-4881-8774-cd8e158c50e8/See-Brex-Assistant-updates-in-your-main-notifications"
+  }
+]

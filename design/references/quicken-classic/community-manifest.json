@@ -1,0 +1,74 @@
+[
+  {
+    "file": "community-01-register-running-balance.png",
+    "what_it_shows": "Quicken Classic for Windows account register ('Ted's Checking'): dense table with Date / Payee / Category / Payment / Amount (red negatives) / running Balance columns, search + filter bar, Online Balance and Ending Balance footer. 1069x429.",
+    "source_page_url": "https://info.quicken.com/win/using-the-account-register",
+    "image_url": "https://info.quicken.com/__attachments/a_00f01d9cf1156b3a4843f9c1707d2003b29979c06f6c0a13cdb01d212e957009/registersimple.png"
+  },
+  {
+    "file": "community-02-register-full-window-accounts-bar.png",
+    "what_it_shows": "Quicken Classic Windows full app window: left Accounts bar (Banking/Investing groups with balances) plus money-market register with Date / Check# / Payee / Memo / Category / Tag / Payment / Deposit / Amount / Balance columns and tab strip (Home, Spending, Bills, Planning, Investing...). Official getting-started guide screenshot with two callout annotations. 1767x623.",
+    "source_page_url": "https://web.archive.org/web/20200804182110/https://www.quicken.com/sites/default/files/getting-started/accounts_bar_and_register.png",
+    "image_url": "https://web.archive.org/web/20200804182110im_/https://www.quicken.com/sites/default/files/getting-started/accounts_bar_and_register.png"
+  },
+  {
+    "file": "community-03-reconcile-window.jpg",
+    "what_it_shows": "Quicken Classic for Windows Reconcile window: two-pane 'Payments and Checks' vs 'Deposits' cleared-transaction lists with Clr checkmarks, Cleared Balance / Statement Ending Balance / Difference summary, Mark All / Finish Later / Done buttons. 849x628.",
+    "source_page_url": "https://www.quicken.com/support/reconciling-account-quicken-windows/",
+    "image_url": "https://images.ctfassets.net/hfxittkcm76w/4Ax8O1honioZpesbd5tIVE/95a34a97435709bc44142b7ad9a40a5d/Reconcile_example.jpg"
+  },
+  {
+    "file": "community-04-mac-portfolio-holdings-cost-basis.png",
+    "what_it_shows": "Quicken Classic for Mac full window: sidebar with account groups + Brokerage account Portfolio view — value area chart over time and holdings table with Quote / Price Day Change / Shares / Cost Basis / Market Value / Gain-Loss columns; each security row has a disclosure triangle that expands to individual lots. Closest found to a lots view. 928x596.",
+    "source_page_url": "https://web.archive.org/web/20240511011730/https://www.quicken.com/sites/default/files/quicken-features/quicken-mac-investment-portfolio-2018%402x.png",
+    "image_url": "https://web.archive.org/web/20240511011730im_/https://www.quicken.com/sites/default/files/quicken-features/quicken-mac-investment-portfolio-2018%402x.png"
+  },
+  {
+    "file": "community-05-mac-investing-dashboard.png",
+    "what_it_shows": "Quicken Premier (Classic) for Mac brokerage-account investing dashboard: Holdings table (security/shares/price/value), Top Movers panel, Allocation by Security and Asset Allocation donut charts, market value + daily gain/loss header. 2120x1304.",
+    "source_page_url": "https://robertbreen.com/2024/01/12/quicken-classic-for-mac-a-long-time-user-review/",
+    "image_url": "https://i0.wp.com/robertbreen.com/wp-content/uploads/2024/01/Quicken1.jpg.png?ssl=1"
+  },
+  {
+    "file": "community-06-mac-portfolio-chart-table.png",
+    "what_it_shows": "Quicken Classic for Mac Investing > Portfolio tab (official help, annotated): time-frame selector, portfolio value area chart, and portfolio table with Price / Price Day Change / Shares / Market Value per security. 1025x477.",
+    "source_page_url": "https://info.quicken.com/mac/investing-portfolio-tab",
+    "image_url": "https://info.quicken.com/__attachments/a_79422ec8547186f23a7f8a91622e32bdd037afac68f1d74cb71fcd21e42cb656/newchart.png"
+  },
+  {
+    "file": "community-07-business-profit-loss-tab.jpg",
+    "what_it_shows": "Quicken Home, Business & Rental Property (Windows) full window on Business > Profit/Loss view: income/expense/P&L bar chart, Total Income / Total Expense / Profit-Loss summary cards, income-vs-expenses trend, and the full accounts sidebar with Net Worth footer. 1024x664.",
+    "source_page_url": "https://www.wallstreetsurvivor.com/quicken-review/",
+    "image_url": "https://www.wallstreetsurvivor.com/wp-content/uploads/2023/05/quicken-business.jpg"
+  },
+  {
+    "file": "community-08-home-tab-spending-dashboard.jpg",
+    "what_it_shows": "Quicken Home, Business & Rental Property (Windows, RPM version) Home tab: 'See Where Your Money Goes' spending donut with category legend and amounts, 'Stay On Top of Monthly Bills' reminders list, full accounts sidebar with Net Worth and Credit Score. Window chrome and menu bar visible. 1280x758.",
+    "source_page_url": "https://www.pcworld.com/article/3332999/quicken-deluxe-2019-review.html",
+    "image_url": "https://legacy-us-images.foundryco.app/images/article/2019/01/win-home-100785211-orig.jpg"
+  },
+  {
+    "file": "community-09-budget-graph-view.jpg",
+    "what_it_shows": "Quicken for Windows budget Graph View: category rows (Entertainment, Food & Dining, Home with nested subcategories, Kids) with green/red horizontal progress bars showing budgeted-vs-actual amounts. Cropped to content area. 1333x864.",
+    "source_page_url": "https://www.wallstreetsurvivor.com/quicken-review/",
+    "image_url": "https://www.wallstreetsurvivor.com/wp-content/uploads/2023/05/budget-categories.jpg"
+  },
+  {
+    "file": "community-10-mac-sidebar-annotated.png",
+    "what_it_shows": "Quicken Classic for Mac sidebar / account list (official help, annotated): All Transactions, Banking group with Cash/Savings/Credit Card subgroups and balances, Investing and Property & Debt groups, red negative balances, new-transaction blue dots, Net Worth footer. 643x643.",
+    "source_page_url": "https://info.quicken.com/mac/the-quicken-sidebar",
+    "image_url": "https://info.quicken.com/__attachments/a_0ef61c9d7414c78817e1271c0ec73bb6739312357cb8cb4a00c1aabb999f359a/maksidebar.png"
+  },
+  {
+    "file": "community-11-spending-donut-report.jpg",
+    "what_it_shows": "Quicken spending-by-category report visualization: donut chart with category legend showing dollar amounts and percentages plus total. Cropped to report content, no window chrome. 1024x605.",
+    "source_page_url": "https://www.wallstreetsurvivor.com/quicken-review/",
+    "image_url": "https://www.wallstreetsurvivor.com/wp-content/uploads/2023/05/expenses.jpg"
+  },
+  {
+    "file": "community-12-buy-sell-preview-dialog.png",
+    "what_it_shows": "Quicken Classic for Windows Buy/Sell Preview dialog (investing): what-if sale of shares with Gross Proceeds, Cost Basis, Pre-tax gain, Estimated Federal Tax, After-Tax gain analysis and Capital Gains Estimator button (entry point to lot selection). 920x600.",
+    "source_page_url": "https://web.archive.org/web/20220129071955/https://www.quicken.com/sites/default/files/Min%20Invest%20Taxes_Buy%20Sell_2020_1.png",
+    "image_url": "https://web.archive.org/web/20220129071955im_/https://www.quicken.com/sites/default/files/Min%20Invest%20Taxes_Buy%20Sell_2020_1.png"
+  }
+]

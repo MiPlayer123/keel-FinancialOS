@@ -1,0 +1,56 @@
+[
+  {
+    "file": "community-01-rules-list-settings.png",
+    "what_it_shows": "Quicken Simplifi web app Settings > Rules page listing transaction rules with if/then columns (payee contains keywords, account, amount range -> rename payee, update category) and the + Rule button. Frame extracted from Delete a Transaction Rule.gif.",
+    "source_page_url": "https://support.simplifi.quicken.com/en/articles/4792733-how-to-use-transaction-rules-in-the-web-app",
+    "image_url": "https://downloads.intercomcdn.com/i/o/dh2r043p/2196274905/cc0b2ea5636ef676e04c44b76d06/Delete+a+Transaction+Rule.gif"
+  },
+  {
+    "file": "community-02-create-rule-category-dropdown.png",
+    "what_it_shows": "Simplifi Create Rule editor: 'If a transaction matches this' payee condition (Original statement name, Is exactly Walmart) with the THEN-side category cascade dropdown open (Business > Advertising, Car & Truck, etc.). Frame from Create a Transaction Rule.gif.",
+    "source_page_url": "https://support.simplifi.quicken.com/en/articles/4792733-how-to-use-transaction-rules-in-the-web-app",
+    "image_url": "https://downloads.intercomcdn.com/i/o/dh2r043p/2196270569/7e13c356f7b6bdb83b7b88509966/Create+a+Transaction+Rule.gif"
+  },
+  {
+    "file": "community-03-create-rule-if-then-account-picker.png",
+    "what_it_shows": "Simplifi Create Rule two-pane editor showing keyword chips (Contains wal, mart), Account condition with specific-accounts dropdown open, and THEN pane with Rename Payee and Update Category (business vs personal categories). Frame from Creating a Transaction Rule from a Transaction.gif.",
+    "source_page_url": "https://support.simplifi.quicken.com/en/articles/4792733-how-to-use-transaction-rules-in-the-web-app",
+    "image_url": "https://downloads.intercomcdn.com/i/o/dh2r043p/2196271851/cb5cc73912f4054b1c99227ed8c8/Creating+a+Transaction+Rule+from+a+Transaction.gif"
+  },
+  {
+    "file": "community-04-edit-rule-update-category.png",
+    "what_it_shows": "Simplifi Update Rule editor (editing an existing rule): if-conditions on left, THEN pane with Rename Payee filled and Update Category card focused; Delete Rule and Continue to review actions in footer. Frame from Edit a Transaction Rule.gif.",
+    "source_page_url": "https://support.simplifi.quicken.com/en/articles/4792733-how-to-use-transaction-rules-in-the-web-app",
+    "image_url": "https://downloads.intercomcdn.com/i/o/dh2r043p/2196273027/ea1a56d29436f8f235fa06cde8ad/Edit+a+Transaction+Rule.gif"
+  },
+  {
+    "file": "community-05-receipt-attach-upload-area.png",
+    "what_it_shows": "Simplifi web Transaction detail modal with the Attachments upload area highlighted (cloud Upload button) below Note field, alongside category, tags, split, and exclude-from options. Frame from AttachReceiptTransaction.gif.",
+    "source_page_url": "https://support.simplifi.quicken.com/en/articles/4409764-managing-transactions",
+    "image_url": "https://downloads.intercomcdn.com/ (AttachReceiptTransaction.gif, previously harvested to _raw/img-simplifi-transactions/)"
+  },
+  {
+    "file": "community-06-receipt-attached-file.png",
+    "what_it_shows": "Simplifi Transaction detail modal after attaching a receipt: 'Walmart Receipt.png' chip with remove (x) shown in the Attachments area, arrow annotation pointing to it. Frame from AttachReceiptTransaction.gif.",
+    "source_page_url": "https://support.simplifi.quicken.com/en/articles/4409764-managing-transactions",
+    "image_url": "https://downloads.intercomcdn.com/ (AttachReceiptTransaction.gif, previously harvested to _raw/img-simplifi-transactions/)"
+  },
+  {
+    "file": "community-07-bills-income-overview-calendar.png",
+    "what_it_shows": "Simplifi Bills & Income Overview page (dark theme): Next 30 Days summary (Income/Expenses/Net), Reminders list sorted by due date with paid state, and monthly calendar with due-date dots.",
+    "source_page_url": "https://support.simplifi.quicken.com/en/articles/4109588-using-the-bills-income-section",
+    "image_url": "https://downloads.intercomcdn.com/i/o/dh2r043p/1358671212/974e76f70b49347f37ed7bc2e202/01302025UpdatedBillsAndIncome.gif"
+  },
+  {
+    "file": "community-08-bills-income-cashflow-tab.png",
+    "what_it_shows": "Simplifi Bills & Income > Cash Flow tab: projected cash-flow chart with reminder plots on timeline, time-range dropdown open (Next 2 weeks .. 12 months), account selection panel, Reminders list below.",
+    "source_page_url": "https://support.simplifi.quicken.com/en/articles/4109588-using-the-bills-income-section",
+    "image_url": "https://downloads.intercomcdn.com/i/o/dh2r043p/1359935362/d465ba997f05e3925d6eba4be0f9/01312025UpdatedBillsandInomeCashFlow.gif"
+  },
+  {
+    "file": "community-09-bills-income-reminder-series-detail.png",
+    "what_it_shows": "Simplifi recurring reminder series detail modal (Farmers Insurance, Every month): Connect biller banner, 6-month payment history bar chart with average line, Coming Up entry, and History list.",
+    "source_page_url": "https://support.simplifi.quicken.com/en/articles/4109588-using-the-bills-income-section",
+    "image_url": "https://downloads.intercomcdn.com/i/o/dh2r043p/1358818761/219a48a8f6d144f947da1ffc09af/01302025UpdatedBillsAndIncomeOptions.gif"
+  }
+]
