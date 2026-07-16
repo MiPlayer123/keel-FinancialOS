@@ -21,11 +21,8 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isLocalhost, setIsLocalhost] = useState(false);
 
   useEffect(() => {
-    const host = window.location.hostname;
-    setIsLocalhost(host === 'localhost' || host === '127.0.0.1');
     if (window.location.hash === '#signup') setMode('signup');
   }, []);
 
@@ -174,14 +171,6 @@ export default function LoginPage() {
               {isSignup ? 'Sign in' : 'Create one'}
             </button>
           </p>
-
-          {isLocalhost ? (
-            <p className="mt-8 rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
-              Local dev:{' '}
-              <code className="font-mono text-foreground">alex@keel.local</code> /{' '}
-              <code className="font-mono text-foreground">keel-local-dev-password</code>
-            </p>
-          ) : null}
         </div>
       </main>
     </div>

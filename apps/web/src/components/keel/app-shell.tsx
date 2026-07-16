@@ -28,6 +28,7 @@ import type { LucideIcon } from 'lucide-react';
 import { getSupabaseBrowserClient } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from '@/components/ui/sheet';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -293,9 +294,16 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
           ) : (
             <>
-              <div className="flex items-center justify-between gap-2 px-1">
+              {/* NAVLAYOUT-5: single account row (avatar · email · theme
+                  control); Sign out stacked below so nothing overlaps it. */}
+              <div className="flex items-center gap-2 px-1">
+                <Avatar size="sm">
+                  <AvatarFallback>
+                    {(email ?? '?').charAt(0).toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
                 <span
-                  className="truncate text-xs text-muted-foreground"
+                  className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
                   title={email ?? undefined}
                 >
                   {email ?? '—'}

@@ -22,9 +22,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { RulesCard } from '@/components/keel/rules-card';
 import { CategoriesCard } from '@/components/keel/categories-card';
 
-type Format = 'json' | 'qif' | 'beancount';
+type Format = 'csv' | 'json' | 'qif' | 'beancount';
 
+// Law 6 names CSV first among the guaranteed export formats (CSV/JSON/QIF/beancount).
 const FORMATS: { key: Format; label: string; ext: string; mime: string }[] = [
+  { key: 'csv', label: 'CSV', ext: 'csv', mime: 'text/csv' },
   { key: 'json', label: 'JSON', ext: 'json', mime: 'application/json' },
   { key: 'qif', label: 'QIF', ext: 'qif', mime: 'application/qif' },
   { key: 'beancount', label: 'Beancount', ext: 'beancount', mime: 'text/plain' },
@@ -155,7 +157,17 @@ function ExportCard() {
       const bundle: ExportBundle = await exportHousehold(householdId);
       const spec = FORMATS.find((f) => f.key === fmt);
       if (!spec) return;
-      const content = fmt === 'json' ? bundle.json : bundle[fmt];
+      // CSV is one file per table (Record<name, csv>); concatenate into a
+      // single download with a section marker per table, matching the
+      // one-click behavior of the other formats.
+      const content =
+        fmt === 'json'
+          ? bundle.json
+          : fmt === 'csv'
+            ? Object.entries(bundle.csv)
+                .map(([name, body]) => `# ${name}\r\n${body}`)
+                .join('\r\n')
+            : bundle[fmt];
       download(`keel-export.${spec.ext}`, spec.mime, content);
       toast.success(`Exported ${spec.label}.`);
     } catch (err) {
@@ -194,6 +206,10 @@ function ExportCard() {
             </Button>
           ))}
         </div>
+        <p className="text-xs text-muted-foreground">
+          CSV for spreadsheets · JSON for full fidelity · QIF and Beancount for other finance
+          tools.
+        </p>
       </CardContent>
     </Card>
   );
