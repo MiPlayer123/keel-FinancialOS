@@ -1,0 +1,38 @@
+[
+  {
+    "file": "community-01-auto-assign-panel-options.png",
+    "what_it_shows": "YNAB web app Auto-Assign panel expanded (Inspector) showing all options with computed amounts: Underfunded, Assigned Last Month, Spent Last Month, Average Assigned, Average Spent, Reduce Overfunding, Reset Available Amounts, Reset Assigned Amounts. Current UI, official help-article asset.",
+    "source_page_url": "https://support.ynab.com/en_us/the-inspector-an-overview-ryylY7OCq",
+    "image_url": "https://cdn.bfldr.com/NIEXAZS5/at/37hrkghtpgmz36hkw7fb6zb/Auto-Assign-Web-Help-Article.png?auto=webp&format=png"
+  },
+  {
+    "file": "community-02-auto-assign-modal-in-plan.png",
+    "what_it_shows": "YNAB web plan (2021-era UI) with Auto-Assign confirmation modal ('Auto-Assign will automatically assign your money to your 23 expenses... Assign Money') open over the category list; Auto-Assign option list visible in the right-hand Inspector and green Auto-Assign button next to Ready to Assign.",
+    "source_page_url": "https://www.ynab.com/blog/auto-assign-in-ynab",
+    "image_url": "https://cdn.prod.website-files.com/6410766c6141dc6c15cfe33c/6a4bf15599a6975bbe6ecdca_646eb19b2bd5799cfb9b3a09_Step-2-1024x608.png"
+  },
+  {
+    "file": "community-03-spending-trends-bar-chart.png",
+    "what_it_shows": "YNAB web Reflect > Spending Trends report: stacked monthly bar chart with trend line, hover tooltip (Frequent $2,050.00, 37.8% of Total), Average Monthly Spending / Total Spending stats, date-range, category and account filters, Export. Frame extracted from official help-article GIF.",
+    "source_page_url": "https://support.ynab.com/en_us/spending-trends-H1inlhzAc",
+    "image_url": "https://cdn.kustomerhostedcontent.com/media/623b25d297003b3fefc740e1/94a0503a27e983571156b2fa9e15584e.gif"
+  },
+  {
+    "file": "community-04-spending-trends-drilldown.png",
+    "what_it_shows": "YNAB Spending Trends drill-down: breadcrumb All Groups > Frequent, clicked bar segment opens a Groceries transaction popover (account, date, payee, memo, amount rows) over the stacked bars. Frame from the same help-article GIF.",
+    "source_page_url": "https://support.ynab.com/en_us/spending-trends-H1inlhzAc",
+    "image_url": "https://cdn.kustomerhostedcontent.com/media/623b25d297003b3fefc740e1/94a0503a27e983571156b2fa9e15584e.gif"
+  },
+  {
+    "file": "community-05-category-target-panel.png",
+    "what_it_shows": "YNAB current web UI: plan with Home Maintenance category selected ('$50.00 more needed') and the right-hand panel showing the category's Target section - 'Set Aside Another $50.00 Each Month, By the End of the Month', 0% progress ring, 'Assign $50.00 to meet your target' button, edit pencil. Official targets help-article asset (downscaled from 5487px original).",
+    "source_page_url": "https://support.ynab.com/en_us/how-to-use-targets-rk5kkI9ks",
+    "image_url": "https://cdn.bfldr.com/NIEXAZS5/at/7xqkrtx886348bmzng8q77/Target-Funding-Web-Help-Article.png?auto=webp&format=png"
+  },
+  {
+    "file": "community-06-target-type-picker-legacy.png",
+    "what_it_shows": "LEGACY (pre-2022 goals UI) YNAB web target/goal type picker dropdown: Needed For Spending, Target Savings Balance, Monthly Savings Builder with descriptions. Kept as the only publicly available web target-creation picker; current web target creation/edit form is only documented via video and mobile screenshots.",
+    "source_page_url": "https://web.archive.org/web/20231110155133/https://www.ynab.com/blog/ynab-targets",
+    "image_url": "https://cdn.prod.website-files.com/6410766c6141dc6c15cfe33c/646ec76c071f90fbf5ce2233_image-4-2.png"
+  }
+]
