@@ -1,183 +1,169 @@
 # KEEL Competitive Teardown — 2026-07-16
 
-**Status: DRAFT-IN-PROGRESS** — being written live while the census/synthesis
-workflow completes. Sections marked ⏳ get enriched from dimension fragments.
-
-**Method.** 295 screenshots (279 competitor across Copilot, Monarch, YNAB,
-Quicken Simplifi, Quicken Classic, Rocket Money, Ramp, Brex + cross-cutting
-flows; 18 KEEL current-state 2026-07-16) → 49 structured census records
-(`docs/harness/census/2026-07-16/`) → 12-dimension synthesis
-(`docs/harness/plans/fragments-2026-07-16/`) → this merge. Every image is
-accounted for (conservation-checked manifest). Complements
-`design/FEATURE-GAP-REPORT.md` (capability-level, 07-12) with
-interaction/pixel-level findings. Rule: patterns, never pixels — everything
-lands in KEEL's own design language (Law 8).
+**Status: FINAL.** 295 screenshots (279 competitor: Copilot, Monarch, YNAB,
+Quicken Simplifi, Quicken Classic, Rocket Money, Ramp, Brex, cross-cutting
+flows; 18 KEEL current-state) → 49 structured census records
+(`docs/harness/census/2026-07-16/`, conservation-checked manifest) → 12
+dimension analyses (`docs/harness/plans/fragments-2026-07-16/`) → this merge.
+**154 findings: 2 P0 · 57 P1 · 67 P2 · 27 P3** — every finding cites census
+records + image files; the fragments are the detail layer, this document is
+the ranked map. Complements `design/FEATURE-GAP-REPORT.md` (capability-level,
+07-12) at the interaction/pixel level. Rule throughout: patterns, never
+pixels — everything expressed in KEEL's design language (Law 8).
 
 ---
 
-## Executive summary — the biggest problems, ranked
+## The two P0s (fix before anything else)
 
-1. **[P0] Transfers are polluting every analytic surface.** On KEEL's own
-   dashboard, "Top merchant this month" and "Biggest purchase" are BOTH
-   `ONLINE PAYMENT TO DISCOVER CARDS 07/15` — the user's own credit-card
-   payment. "Spending · last 30 days" is dominated by **Loan Payments
-   $5,999.55** (the ledger shows these are `Online Payment … To CITIBANK
-   CREDIT CARD` rows, one at −$4,519.33) and even lists **Transfers $48.23 as
-   a spending category**. Copilot's evidence shows the fix pattern: transfer
-   rows carry NO category pill at all — they sit entirely outside the
-   categorization scheme (census `copilot-community-01`: "T"-glyph rows,
-   inflow leg green, no pill). Cash-flow/net-worth exclusion of confirmed
-   transfers exists in KEEL's backend; the categorize/spending overlay and
-   the insight tiles are not honoring it. **This is a trust-destroying
-   correctness bug on the first screen a user sees.**
+### P0-A — Transfer/CC-payment pollution corrupts every analytic number
+`DASHBOARD-1` + `REPORTSCASHFLOW-1` + `BUDGETS-4`. On KEEL's own screens:
+"Top merchant this month" AND "Biggest purchase" are both the user's Discover
+card payment ($895.33); "Biggest single purchase" in Reports is a **$4,518.33
+Citibank CC bill**; Loan Payments is the #1 "spending" category everywhere
+($5,999.55 dashboard / $15,156.15 six-month); the 6-month table shows
+**$30,645.49 of Transfers inside a table footnoted "confirmed transfers
+excluded"**; savings rate renders **−124%**; Budgets lists "Transfers —
+$36.23 spent" directly under a subtitle promising "transfers excluded."
+Every competitor strips transfers/CC-payments from all spend surfaces
+(Copilot transfer rows carry no category pill at all).
+**Fix:** wire the existing transfer-exclusion into ALL aggregation paths
+(spend mix, top-merchant, biggest-purchase, savings rate, budgets "spent");
+suppress obvious CC-payoff patterns pre-confirmation; add an "N unreviewed
+transfers may affect these numbers → Review" banner; never let two insight
+cards resolve to the same transaction.
 
-2. **[P0] The Review page is empty while the ledger is full of unconfirmed
-   suggestions.** KEEL's Review page says "Nothing to review" while the same
-   seed's ledger visibly contains repeated CC-payment/transfer pairs and
-   auto-categorized rows. Copilot runs its entire product through this loop —
-   a **Transactions badge (16)** in the nav, "To Review" status on the row's
-   date line, inline category popover, bulk review bar. If KEEL's detectors
-   aren't emitting suggestions for this seed, the suggest→approve spine (the
-   product thesis!) is invisible in the demo.
+### P0-B — The suggest→approve thesis is invisible: Review is empty while the ledger is full of suggestible material
+`CATEGORIZATIONRULES-1` + `REVIEWAPPROVAL-1/3/5` + `RECURRING-4/12`. The
+audit log shows "Auto-categorized new transactions · KEEL (automatic)" while
+Review's copy promises categorizations "will surface here … each waiting for
+your approval" — a copy/behavior contradiction on the product's core law
+(Law 2/10/11). No typed-response card exists (verdict · confidence ·
+reason_codes · evidence_refs have no UI). No nav badge, no "needs review"
+row state, no per-type queue. Copilot runs its entire product through this
+loop (nav badge "16", To-Review row state, inline quick-fix, bulk bar);
+Ramp shows the AI verdict *with its evidence* and thumbs up/down.
+**Fix:** route sub-threshold categorizations into Review as typed
+suggestions; auto-apply above threshold with a visible reversible "auto"
+badge; ship the W1.5 badge; add a reviewed/unreviewed transaction state;
+reconcile the empty-state copy.
 
-3. **[P1] Sidebar accounts carry no balances.** KEEL lists `CHASE COLLEGE /
-   Personal Profile / CREDIT CARD` as bare text. Copilot (and Quicken) put a
-   right-aligned balance on every sidebar account row, grouped under
-   collapsible type headers ("Credit cards ▾", "Depository ▾") — the founder's
-   own first example. One glance = position; one click = the account.
-
-4. **[P1] No merchant normalization anywhere.** KEEL renders raw bank memos
-   in full caps: `ORIG CO NAME DEEPTUNE CO ENTRY DESCR:PAYROLL SEC:PPD ORIG
-   ID:911757…`. Every competitor shows a clean merchant ("Spotify",
-   "Sunoco") with the raw string preserved one click away. This is AI risk
-   class A (auto+undo) in KEEL's own ladder — allowed to be automatic.
-
-5. **[P1] Transaction rows have no category *chips* and no detail panel.**
-   KEEL's ledger uses a bare `<select>` per row and a pencil icon; there's no
-   master-detail view, no notes/tags/attachments surface, no status on the
-   row. Copilot's row grammar — merchant · dim account · colored category
-   pill (emoji + label) · amount · overflow — plus a right-hand detail panel
-   with Category/Account/Notes/Tags/Similar-Transactions is the convergent
-   pattern across Copilot/Monarch/Simplifi.
-
-6. **[P1] No split editor.** Copilot ships Equal/Custom tabs, live
-   "Left to split $0.00" (green when balanced — literally KEEL's Σ=0
-   invariant as UI), EXCLUDED legs, and a "🔀 $100.00 split 4 ways" field
-   with sibling-leg list. KEEL's ledger schema supports splits
-   (`packages/ledger` splits conserve); the UI exposes none of it.
-
-7. **[P0-adjacent data bug] A checking account shows −$1,711.04 under
-   Assets.** "Personal Profile · Checking" is negative on both dashboard and
-   Accounts. Either a mis-signed manual account, double-counted transfer
-   legs, or an entity account misfiled — whichever it is, the Accounts page
-   presents it without any flag. Competitors annotate anomalies (Copilot:
-   amber utilization badge, staleness "Updated 5 hours ago" per account).
-
-8. **[P1] Charts violate KEEL's own design laws.** "Cash flow by month" uses
-   green + **purple/indigo** bars (money out is not negative-red, but purple
-   is off the stone+emerald token palette and reads fintech-neon). The
-   "Projected cash · next 30 days" y-axis renders **"15.2K" five times** —
-   a broken tick formatter on the first screen. Copilot's cash-flow chart
-   shows the calm pattern: single accent, a "Now" pill separating fact from
-   future, one labeled tick.
-
-9. **[P2] Accounts page is a stub next to any competitor.** No type
-   sub-grouping (Cash/Credit/Investments/Loans), no institution identity, no
-   per-account staleness, no credit-limit/utilization pair
-   ("$7,524.20 / $15,000.00" + "50.16%" badge in Copilot), no balance-history
-   chart, no account detail two-pane. KEEL renders three rows and 70% empty
-   space.
-
-10. **[P2] Recurring intelligence is invisible.** Copilot shows a
-    left-to-pay progress ring, natural-language rule chips ("Named
-    **Spotify**", "from **$6** to **$15**"), and a dashed-projection
-    timeline. KEEL has the detector backend (confidence bps, occurrences)
-    but the dashboard's projected-cash panel sits empty with a plea to go
-    confirm suggestions — on a seed where Review shows nothing to confirm.
-
-*(Enriched top-list pending dimension fragments — budgets, reports, goals,
-mobile, onboarding, approval-queues.)* ⏳
+**Also load-bearing (P1 but data-trust):** "Personal Profile · Checking
+−$1,711.04" sits under Assets unflagged; `ONBOARDINGIMPORT-7` — local-dev
+credentials render on the production-dated sign-in screen (Law 12 hygiene);
+`REPORTSCASHFLOW-4` — red on favorable deltas (spending *dropped* $38k shown
+red) while a genuine −124% savings rate is plain black: Law 8 inverted twice.
 
 ---
 
-## KEEL ground truth (what our screens show today)
+## Dimension digest
 
-Evidence: `design/current/2026-07-16/*.png`, census `keel-*.md`.
+Full findings live in `docs/harness/plans/fragments-2026-07-16/<dim>.md`.
 
-- **Home**: Free-to-spend hero + per-day pace (good bones — Copilot-class
-  idea), net position, 30-day cash flow, insight tiles, projected cash
-  (empty; broken axis), net-worth 90d (red/green fill, correct token use),
-  cash-flow-by-month (purple bars), spending mix (transfer-polluted),
-  accounts strip with "Updated 21m ago · Sync" (good).
-- **Accounts**: net-worth hero, `Record transfer` + `Add account` actions
-  (good), Assets/Liabilities groups with subtotals — then nothing else.
-- **Ledger**: filter bar (search, All time, All accounts, All categories,
-  Newest first, Group by) — genuinely competitive bones; dense rows; inline
-  category select; per-row edit pencil; totals footer (count/in/out). Missing:
-  chips, detail panel, review state, date-group headers, splits, running
-  balance on account registers, bulk UX beyond `Select`.
-- **Review**: clean empty state with explanatory copy (good pattern) — but
-  empty against a seed that plainly contains suggestible pairs.
-- Remaining pages (Budgets, Goals, Reports, Recurring, Paychecks,
-  Reimbursements, Statements, Connections, Settings, mobile) ⏳ from
-  `keel-money-02` / `keel-ops-03` / `keel-mobile-04` census records.
-
-**KEEL strengths no competitor in the set matches** (keep, don't dilute):
-statement reconciliation with period locks; paychecks with component-level
-gross→net; reimbursements/expense-shares; append-only audit + revisions;
-full-fidelity export; entity model. The teardown is about the daily-driver
-surface, where we're behind.
+| Dimension | Findings | Top items |
+|---|---|---|
+| **nav-layout** | 12 | Sidebar accounts: no balances/subtotals/net-worth in rail (the founder's own example — Copilot/YNAB/Quicken/Simplifi/Monarch all do it); no global ⌘K search (Ramp/Brex/Copilot/Quicken); no desktop top bar (utilities crammed in footer, avatar **overlaps "Sign out"** on every screen); mobile = drawer-only, no bottom tabs; 13-item flat nav unchunked; zero nav badges |
+| **dashboard** | 13 | P0-A tiles; "Free to spend $8,803 / $586/day" reserves nothing for upcoming bills (Simplifi/Copilot/Rocket all compute left-after-bills); net position = bare number, no delta/%/range, trend divorced 7 cards down; 100% passive (no to-review, no upcoming bills); spending bars unreadable when one category dominates 100×; projected-cash chart renders "15.2K"×4 axis (looks broken); cards are dead-ends (no drill-in); no per-account freshness; no as-of stamp (Law 9) |
+| **accounts** | 9 | Only Assets/Liabilities bands — no Cash/Credit/Investments/Loans groups+subtotals; net worth bare (no trend/delta/as-of); no per-account "Updated Nh ago"/reauth state; no account detail (register+running balance+history chart = W1.9 unshipped); no balance/limit/utilization; no rename/hide/close; no institution logo/last-4; ALL-CAPS raw provider names |
+| **ledger-transactions** | 18 | No splits (W2.4 blocked by a read-model bug, not design); raw ACH memos as primary label; **mobile cannot edit/categorize at all** (Law 8 gap); filters lack status/uncategorized/amount facets + saved views; bulk = category-only; no reviewed state; only "PENDING" (no cleared/reconciled on row despite Statements being a strength); no attachments/receipts; no exclude-from-reports flag; no tags; no column headers; no keyboard (j/k/c/e); no date-group headers; "Show 47 more" instead of virtualization |
+| **categorization-rules** | 14 | P0-B silent auto-cat; bare `<select>` picker (no typeahead/recents/inline-create — Copilot pattern); rules = 1 condition × 2 actions, no dry-run count (Monarch previews affected rows); flat 19-category taxonomy, no groups/subcats (W2.3); no create-rule-from-transaction; no merge/archive UI; audit leaks `ingest.apply_action` raw strings ×15 |
+| **budgets** | 13 | Rows show *only* "spent" — no target/remaining/bar (a spend list mislabeled Budgets); no hero ("Left this month") or totals; no over/under state at all (needs a non-red near-limit signal — every competitor's amber is off-limits under Law 8); Transfers-row contradiction (P0-A); flat list; no drill-to-transactions; no rollover model reserved; no pacing ("is $679 fine on day 16?"); no income line so "left to budget" can't exist; "Set budget" button instead of inline cell |
+| **recurring** | 12 | Page captured 100% empty vs live backend; no calendar view (Monarch's primary view); no series detail (cadence/next/price history/matched txns); no paid/due/overdue/missed occurrence states; no Suggested-vs-Active split (Law 2 seam!); no $X/mo·$Y/yr total; no price-change detection surfaced despite tolerance data existing; "cancel" verb collides with Rocket's concierge meaning — rename "Stop tracking" |
+| **reports-cashflow** | 15 | P0-A; charts are dead-ends (donut/Sankey/bars unclickable — only the 6-month table drills); four unsynchronized date paradigms on one page (top card says June, cards below say July); **no account/entity filter — directly undercuts the multi-entity thesis**; Law 8 delta-color inversion; no per-report export (Law 6 exists but unreachable from where users look); no Net Worth report; donut truncates tail silently; Sankey static. *Strength: per-widget as-of/scope footnotes beat every competitor — keep.* |
+| **goals-forecast** | 9 | Goals = empty undesigned page (competitors ship target/progress/date/funding objects); free-to-spend ignores bills+goal earmarks; projection chart non-functional; no debt-payoff simulator (while "Loan Payments" is the #1 category!); no what-if levers; goals don't earmark real money |
+| **onboarding-import** | 16 | No first-run onboarding, no zero-data states (charts would render degenerate for a real new user); **CSV button missing from "Export all data" despite Law 6 naming CSV**; Disconnect = irreversible crypto-shred styled as a neutral button, no confirm; Connections only ever shows "active" (no reauth/error/stale path); Import = bare button (vs Lunch Money column-mapping / YNAB duplicate-handling copy); dev credentials on login; Settings = one long scroll; audit viewer leaks internals; no scoped export |
+| **review-approval** | 12 | P0-B cluster; audit trail floods with duplicate rows + raw event names (the trust surface!); no bulk approve; no confidence routing disclosure ("here's what we auto-did: N"); no feedback loop on suggestions; approval-chain schema exists but no multi-approver surface (Ramp/Brex are the reference); no keyboard/swipe queue |
+| **mobile** | 11 | No bottom nav; cannot edit a transaction; Review has no phone model (vs Monarch swipe queue); ledger buries rows under a screen of filter chrome; merchant+category truncate to garbage; ~14,800px unvirtualized DOM; floating "N" overlaps a dollar figure; charts unadapted; full cents in width-critical heroes |
 
 ---
 
-## Dimension findings ⏳
+## Convergent patterns (what ≥3 competitors do that KEEL doesn't)
 
-*One subsection per dimension, merged from
-`docs/harness/plans/fragments-2026-07-16/<dim>.md` when synthesis lands:*
+The strongest signals in the corpus — each verified across ≥3 independent apps:
 
-1. Navigation, sidebar & global layout
-2. Dashboard / home surface
-3. Accounts & account detail
-4. Transactions register & detail (incl. splits)
-5. Categorization & rules
-6. Budgets
-7. Recurring & subscriptions
-8. Reports & cash flow
-9. Goals, forecasting & planning
-10. Onboarding, import/export & empty states
-11. Review queues & approval workflows
-12. Mobile & 390px
+| # | Pattern | Evidence |
+|---|---|---|
+| C1 | Sidebar accounts = balance-bearing clickable rows in type groups w/ subtotals + pinned net worth | Copilot, YNAB, Quicken, Simplifi, Monarch |
+| C2 | Review/needs-attention **count as nav badge** | Copilot "16", Ramp (per-item), YNAB "2" |
+| C3 | Normalized merchant primary label; raw string preserved in detail | all consumer apps |
+| C4 | Category picker = typeahead popover, recents, inline "New category", old value shown crossed out | Copilot, Monarch, Lunch Money |
+| C5 | Transfers live **outside** categorization (no pill, paired glyph, excluded from all spend math) | Copilot, YNAB, Monarch, Simplifi |
+| C6 | Master-detail transaction surface: status+date, account w/ last-4, notes, tags, split summary, similar-transactions | Copilot, Monarch, Simplifi |
+| C7 | Split editor w/ live left-to-split→0 (KEEL's Σ=0 invariant as UI!) + per-leg exclude | Copilot, Simplifi, Monarch, YNAB, Quicken |
+| C8 | Per-account staleness "Updated Nh ago" + reauth state at the row | Copilot, Monarch, Quicken, Rocket |
+| C9 | Credit: balance/limit pair + utilization badge | Copilot, Monarch, Rocket |
+| C10 | Time-range pills (1W/1M/3M/YTD/1Y/ALL) on every trend chart | Copilot, Monarch, Rocket, Simplifi |
+| C11 | Net worth hero = number + signed delta + % + window + chart fused | Monarch, Copilot, Rocket, YNAB |
+| C12 | Budget row = budgeted · spent · remaining + progress bar; page hero = "Left to budget/this month" | YNAB, Monarch, Copilot, Simplifi |
+| C13 | Recurring calendar month-grid + per-occurrence paid/due/overdue states + $X/yr totals | Monarch, Simplifi, Rocket (+Copilot ring) |
+| C14 | Report page driven by ONE scope bar (date+account+category); every chart drills to transactions | Monarch, YNAB, Simplifi (+Copilot) |
+| C15 | Export the report you're looking at | Monarch, YNAB, Simplifi, Copilot |
+| C16 | Home leads with actionable modules (to-review, upcoming bills, ready-to-assign) | Copilot, YNAB, Rocket, Simplifi |
+| C17 | Mobile: persistent bottom tabs/tab strip; edit-anything-on-phone; swipe review | YNAB, Rocket, Copilot, Monarch |
+| C18 | Rules: multi-condition → multi-action with live affected-count dry-run | Monarch, Brex, Ramp |
+| C19 | Relative due dates near-term ("in 3 days"), absolute beyond; "~Dec 4" for projections | Rocket, Simplifi, Copilot |
+| C20 | Import: column-mapping preview, row counts in the CTA, duplicate-handling copy up front | Lunch Money, YNAB, Simplifi |
 
----
-
-## Convergent patterns (≥3 competitors, KEEL lacks) ⏳
-
-Seeded from completed records; to be completed from fragments:
-
-| # | Pattern | Seen in | KEEL today |
-|---|---------|---------|------------|
-| C1 | Sidebar accounts with live balances under collapsible type groups | Copilot, Quicken, Monarch | names only |
-| C2 | Review/needs-attention count as a nav badge | Copilot (16), Monarch, Rocket | none |
-| C3 | Clean merchant name + raw string preserved | all consumer apps | raw memo only |
-| C4 | Category as colored pill w/ icon, popover picker w/ typeahead + inline "New category" | Copilot, Monarch, Lunch Money | bare select |
-| C5 | Transfers visually outside categorization (no pill; paired glyph) | Copilot, YNAB, Monarch | transfers ARE categories |
-| C6 | Master-detail transaction panel (notes/tags/attachments/similar) | Copilot, Monarch, Simplifi | none |
-| C7 | Split editor with live remainder-to-zero | Copilot, YNAB, Monarch | none |
-| C8 | Per-account staleness ("Updated Nh ago") + connection state per row | Copilot, Rocket, Monarch | global only |
-| C9 | Credit accounts: balance / limit pair + utilization | Copilot, Monarch | balance only |
-| C10 | Time-range pill tabs (1W 1M 3M YTD 1Y ALL) on every chart | Copilot, Monarch, Empower-style | fixed ranges |
+Details worth stealing (small, high-charm): Copilot's natural-language rule
+chips ("Named **Spotify**", "from **$6** to **$15**"); solid-vs-dashed
+fact/forecast chart grammar + "Now" pill; left-to-pay progress ring;
+Rocket's "(−$142.15) 5 transactions selected" total-in-the-count; YNAB's
+"Worried about duplicates?" import copy; Lunch Money's "PROCESS 210 ROWS"
+scope-in-the-button; Simplifi's exclude checkboxes with one-line blast-radius
+captions; Brex's day-grouped notifications with per-row "View" deep-links.
 
 ---
 
-## Fix backlog delta (maps to PLAN-FEATURE-PARITY) ⏳
+## Recommended build order
 
-Populated after fragments; each row: finding → W-item or NEW slice, sized.
+**Wave 0 — trust repairs (days, mostly wiring/copy):**
+1. P0-A exclusion wiring across dashboard/reports/budgets aggregations + the
+   unreviewed-transfers banner. 2. Fix projected-cash degenerate axis →
+   proper empty state. 3. Law 8 delta-color rule (neutral direction glyphs;
+   red = negative money only) + purple→token palette on cash-flow bars.
+4. Sidebar footer collision + floating "N"; pull dev creds off login.
+5. Investigate the −$1,711.04 "asset" checking account (data lineage).
+6. Add CSV to Export-all (Law 6); confirm-dialog + danger styling on
+   Disconnect.
+
+**Wave 1 — the daily-driver spine (the biggest UX-per-effort wins):**
+7. Sidebar rail: balances + subtotals + net worth + click-through (C1).
+8. Review loop v1: typed suggestion cards + nav badge + reviewed-state +
+   bulk approve (P0-B; W1.5+). 9. Merchant normalization overlay + raw
+   demoted to secondary (C3). 10. Category picker popover w/ typeahead +
+   inline create (C4). 11. Transaction detail surface (desktop panel /
+   mobile bottom-sheet — kills the mobile-can't-edit gap) (C6).
+12. Net-worth hero fusion + range pills on Home/Accounts (C10/C11).
+13. Home "Needs attention" + "Coming up" modules (C16).
+
+**Wave 2 — parity depth (mostly already in PLAN as W-items — this teardown
+adds the missing specifics):** splits w/ live remainder (W2.4, unblock read
+model), budgets v1 with target/remaining/bar/hero + non-red near-limit
+signal (W2.2 + BUDGETS-3 decision), recurring sections/states/detail/totals
+(W1.1+), reports scope bar + drill-through + per-report export, account
+detail w/ running balance (W1.9), rules multi-condition + dry-run (W2.1+),
+subcategories (W2.3), mobile bottom tabs + swipe review.
+
+**Wave 3 — differentiators no competitor in the set has:** entity-scoped
+reports (the multi-entity thesis, REPORTSCASHFLOW-3), reconciled-status
+chips on rows/accounts (leveraging Statements — a genuine moat), typed-AI
+evidence cards with confidence routing disclosure (Law 11 as UX), price-
+change suggest→approve, debt-payoff simulator fed by real Loan Payments.
+
+## KEEL strengths to preserve (found by the same magnifying glass)
+
+Reports' per-widget as-of/scope/exclusion footnotes (no competitor matches —
+extend to Home, don't dilute); statement reconciliation + period locks;
+paycheck component modeling; reimbursements engine; append-only audit spine
+(fix its *presentation*, keep its substance); full-fidelity export; ledger
+filter-bar bones; "Detection runs nightly" transparency copy; dashed-border
+empty-state convention (apply it consistently); calm mono `tabular-nums`
+money typography.
 
 ---
 
 ## Conservation ledger
 
-- Census units: 49 planned / <N> complete at last update — see
-  `docs/harness/census/manifest-2026-07-16.json`.
-- Dimension fragments: 12 planned.
-- Every finding cites census records; every census record cites image files.
+295/295 images → 49/49 census units (0 missing) → 12/12 dimension fragments
+→ 154 findings (2 P0 · 57 P1 · 67 P2 · 27 P3), all merged here. Workflow:
+61 agents, 0 errors, 313 image-reads. Every finding traces:
+finding → fragment → census record(s) → image file(s).

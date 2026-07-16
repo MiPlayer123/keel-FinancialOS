@@ -1461,3 +1461,11 @@ the adversarial pass that nothing was dropped from either side.
 
 - `GET /functions/v1/api/health` with publishable key only → **401 INVALID_CREDENTIALS — correct** (TASK-000 test 9: publishable key alone is not a credential). Confirms the prod auth boundary in the deployed function.
 - All four edge functions ACTIVE at version {api:21, worker:22, webhook-provider:25, scheduled:23}; `updated_at` matches today's post-merge `deploy-functions` run — CI→deploy chain verified live.
+
+## 2026-07-16 — Competitive teardown complete (154 findings)
+
+- **Run:** 295 screenshots → 49 census records → 12 dimension fragments → `design/COMPETITIVE-TEARDOWN-2026-07-16.md` (final). Workflow: 61 agents (Sonnet census / Opus synthesis), 0 errors after the 529-overload restart, conservation-checked end to end.
+- **P0-A (correctness):** transfer/CC-payment pollution across ALL analytics — Reports 6-month table shows $30,645.49 Transfers under a "confirmed transfers excluded" footnote; savings rate −124%; "Biggest purchase" = a $4,518.33 Citibank payment. Exclusion exists in backend but is not wired into spend-mix/top-merchant/biggest-purchase/savings-rate/budgets aggregations.
+- **P0-B (thesis):** suggest→approve invisible — audit shows silent auto-categorization while Review promises approval-gated suggestions; no typed-response UI (Law 11), no badge, no reviewed-state.
+- **Law violations found on our own screens:** Law 8 inverted in Reports deltas (red on favorable decreases; −124% savings rate unflagged) + off-token purple bars; Law 6 gap (no CSV button on Export-all); Law 12 hygiene (dev credentials rendered on login); Law 9 gap (no as-of on Home heroes — Reports footnotes are exemplary and should extend).
+- **Build order:** Wave 0 trust repairs → Wave 1 daily-driver spine (sidebar balances, review loop v1, merchant normalization, picker, txn detail incl. mobile, net-worth hero, home action modules) → Wave 2 parity depth (maps to existing W-items) → Wave 3 differentiators (entity-scoped reports, reconciliation chips, typed-AI cards). Teardown doc §Recommended build order is the canonical list.
