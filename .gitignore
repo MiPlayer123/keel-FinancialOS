@@ -40,6 +40,8 @@ backups/
 supabase/functions/_shared/vendor/
 .env.local-automations
 
-# harness / skill artifacts (not project files)
-.claude/
+# local Claude Code state (settings, session artifacts) — but the
+# versioned pipeline skills under .claude/skills/ are project files
+.claude/*
+!.claude/skills/
 docs/superpowers/
