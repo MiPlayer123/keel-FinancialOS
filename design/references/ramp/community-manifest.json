@@ -1,0 +1,74 @@
+[
+  {
+    "file": "community-01-transactions-coding-table.png",
+    "what_it_shows": "Ramp Accounting queue: dense card-transactions table (merchant, amount, cardholder, QuickBooks category, receipt indicator, Mark Ready/Sync actions) with left nav and inline bill-match prompt.",
+    "source_page_url": "https://support.ramp.com/match-transactions-to-open-bills",
+    "image_url": "https://assets.ramp.com/help-center/match-transactions-to-open-bills/attachments/17135657078163.png"
+  },
+  {
+    "file": "community-02-transactions-table-bill-matched.png",
+    "what_it_shows": "Same Ramp Accounting coding table showing a transaction with 'Matched to Bill #00-598' chip and green Ready state, plus Sync (2) call-to-action.",
+    "source_page_url": "https://support.ramp.com/match-transactions-to-open-bills",
+    "image_url": "https://assets.ramp.com/help-center/match-transactions-to-open-bills/attachments/17135706641939.png"
+  },
+  {
+    "file": "community-03-approval-detail-approve-reject.png",
+    "what_it_shows": "Ramp transaction detail in review: 'Awaiting review from...' banner, Requirements complete badge, Approvals 0-of-2 approver chain, Reject dropdown (Request changes / Request repay) and Approve button with keyboard shortcuts.",
+    "source_page_url": "https://support.ramp.com/what-to-do-if-youre-missing-a-receipt",
+    "image_url": "https://assets.ramp.com/help-center/what-to-do-if-youre-missing-a-receipt/attachments/43397966816019.png"
+  },
+  {
+    "file": "community-04-ai-approval-verdict.png",
+    "what_it_shows": "Ramp Policy Agent verdicts on a transaction: green 'Transaction complete — Ramp found no issues and suggested it be approved' card with reason bullets (receipt auto-verified), plus '971 transactions were automatically approved by agent' summary row.",
+    "source_page_url": "https://support.ramp.com/policy-agent-overview",
+    "image_url": "https://assets.ramp.com/help-center/policy-agent-overview/attachments/44077947197587.png"
+  },
+  {
+    "file": "community-05-match-transaction-to-bill-modal.png",
+    "what_it_shows": "Ramp 'Match transaction to bill' side panel: transaction summary, searchable NetSuite bills table with checkboxes, 'Selected bill matches expense amount' validation, Match & mark ready button.",
+    "source_page_url": "https://support.ramp.com/match-transactions-to-open-bills",
+    "image_url": "https://assets.ramp.com/help-center/match-transactions-to-open-bills/attachments/17135675185299.png"
+  },
+  {
+    "file": "community-06-receipt-verification-popover.png",
+    "what_it_shows": "Ramp receipt verification popover on a matched receipt: 'Auto-verified' state with verified amount/date/merchant checklist and 'Report incorrect receipt verification' action.",
+    "source_page_url": "https://support.ramp.com/receipt-verification",
+    "image_url": "https://assets.ramp.com/help-center/receipt-verification/attachments/44377055432595.png"
+  },
+  {
+    "file": "community-07-conditional-coding-rule-builder.png",
+    "what_it_shows": "Ramp conditional coding rule builder: 'If Ramp Location is Miami → Display GL accounts...' / 'If no conditions are met → Display all options for NetSuite Category' branching editor.",
+    "source_page_url": "https://support.ramp.com/overview-of-ramp-accounting",
+    "image_url": "https://assets.ramp.com/help-center/overview-of-ramp-accounting/attachments/24379684584211.png"
+  },
+  {
+    "file": "community-08-policy-settings-ai-sidebar.png",
+    "what_it_shows": "Ramp Policy settings page (Spend request approvals, Expense requirements, Expense approvals, employee policy signatures) with docked AI policy-agent chat sidebar answering a policy question.",
+    "source_page_url": "https://support.ramp.com/policy-agent-overview",
+    "image_url": "https://assets.ramp.com/help-center/policy-agent-overview/attachments/47925692189459.png"
+  },
+  {
+    "file": "community-09-policy-agent-analytics.png",
+    "what_it_shows": "Ramp Policy Agent analytics: in-policy spend KPIs with trend charts, agent-vs-reviewer outcome table, department out-of-policy insights, and a transaction activity timeline including 'Automatically matched a receipt from Gmail Integration'.",
+    "source_page_url": "https://support.ramp.com/policy-agent-overview",
+    "image_url": "https://assets.ramp.com/help-center/policy-agent-overview/attachments/44077966209811.png"
+  },
+  {
+    "file": "community-10-budget-dashboard.webp",
+    "what_it_shows": "Ramp budget dashboard ('2026 Budget'): total/spent/committed KPIs, donut and monthly budget-vs-actuals bars, per-department budget utilization table with overage highlighting (marketing asset rendered from real product UI).",
+    "source_page_url": "https://ramp.com/expense-management",
+    "image_url": "https://ramp.com/_next/static/media/em-stay-ahead-overspend.099cb8lwk9gh6.webp"
+  },
+  {
+    "file": "community-11-bill-pay-new-bill-ocr.png",
+    "what_it_shows": "Ramp Bill Pay 'New Bill' screen: uploaded invoice PDF on the left, AI-extracted vendor/invoice #/dates fields on the right with QuickBooks sync and Review button (demo browser frame).",
+    "source_page_url": "https://support.ramp.com/bill-pay-overview",
+    "image_url": "https://assets.ramp.com/help-center/bill-pay-overview/attachments/4418763243539.png"
+  },
+  {
+    "file": "community-12-bill-pay-list-filters.png",
+    "what_it_shows": "Ramp Bill Pay Bills list: Overview / Drafts / For approval / For payment tabs with accounting-class filter pill and multi-select exclude filter dropdown.",
+    "source_page_url": "https://support.ramp.com/managing-bills-and-payments-on-bill-pay",
+    "image_url": "https://assets.ramp.com/help-center/managing-bills-and-payments-on-bill-pay/attachments/41400870153747.png"
+  }
+]
