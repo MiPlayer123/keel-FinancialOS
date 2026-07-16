@@ -1,0 +1,65 @@
+[
+  {
+    "file": "community-01-account-register-search-filters.png",
+    "what_it_shows": "Web account register: Add Transaction toolbar, cleared/uncleared/working balance bar, transaction rows, and Is:Uncleared search filter dropdown",
+    "source_page_url": "https://support.ynab.com/en_us/troubleshooting-reconciliation-issues-rJkijlVki",
+    "image_url": "https://cdn.bfldr.com/NIEXAZS5/at/nphwnwsz86qhtcsbkktww5q/Uncleared-Search-Web-Help-Article.png",
+    "dimensions": "5344x2736"
+  },
+  {
+    "file": "community-02-budget-ready-to-assign.png",
+    "what_it_shows": "Current (2025) web budget screen with green Ready to Assign pill ($2,250.78) and Assign dropdown button, category group with Assigned/Activity/Available columns",
+    "source_page_url": "https://www.makingyourmoneymatter.com/how-and-why-i-budget-my-income-in-ynab-while-still-using-the-ynab-method/",
+    "image_url": "https://www.makingyourmoneymatter.com/wp-content/uploads/2025/05/Screenshot-2025-05-27-154526.png",
+    "dimensions": "1344x672"
+  },
+  {
+    "file": "community-03-budget-table-inspector-upcoming.png",
+    "what_it_shows": "Web budget table with category groups (Debt Payments, Bills), funded targets, and right-hand inspector showing category Available Balance breakdown and upcoming transaction",
+    "source_page_url": "https://support.ynab.com/en_us/scheduled-transactions-a-guide-BygrAIFA9",
+    "image_url": "https://cdn.bfldr.com/NIEXAZS5/at/gxm5wpqzkr9grwxf4h399m9/Upcoming-Transaction-Web-Help-Article.png",
+    "dimensions": "5886x2718"
+  },
+  {
+    "file": "community-04-income-v-expense-report.png",
+    "what_it_shows": "Reflect > Income v Expense report: monthly columns, income/expense category rows, average and total columns, net income row",
+    "source_page_url": "https://support.ynab.com/en_us/income-v-expense-Byu1BYWRq",
+    "image_url": "https://cdn.bfldr.com/NIEXAZS5/at/pkq6cs9fcz6893k7nm92jcv/Income-V-Expense-Averages-Web-Help-Article.png",
+    "dimensions": "3240x3240"
+  },
+  {
+    "file": "community-05-spending-totals-report.png",
+    "what_it_shows": "Spending Totals report: donut chart by category group with right rail totals, average spending, and category legend",
+    "source_page_url": "https://www.ynab.com/blog/ynab-reports-and-data",
+    "image_url": "https://cdn.prod.website-files.com/6410766c6141dc6c15cfe33c/67760348958381cd84854f3a_646e6b1c8bfa950a3ef5ad77_img_blog_122921_spendingtotals-1024x772.avif",
+    "dimensions": "1024x772"
+  },
+  {
+    "file": "community-06-net-worth-report.png",
+    "what_it_shows": "Net Worth report: assets vs debt bar chart with net worth trend line and month-by-month table in right rail",
+    "source_page_url": "https://www.ynab.com/blog/ynab-reports-and-data",
+    "image_url": "https://cdn.prod.website-files.com/6410766c6141dc6c15cfe33c/67760348958381cd84854f69_646e6b1cb36b5fe43d3ccb4b_img_blog_122921_networth-1024x675.avif",
+    "dimensions": "1024x675"
+  },
+  {
+    "file": "community-07-loan-payoff-simulator.png",
+    "what_it_shows": "Loan Planner (Loan Payoff Simulator) modal: monthly payment input, payoff date, interest remaining, payoff projection chart",
+    "source_page_url": "https://www.ynab.com/blog/ynab-loan-planner",
+    "image_url": "https://cdn.prod.website-files.com/6410766c6141dc6c15cfe33c/682b715fa524de48e3c53b30_64678d4fe8ff6864d148f99d_yDKftWVu9EPenkxk0jXAQG0yxlE-88lr-lgf4RjyVqiDfTz7wto8p186zfI1qUg36YHcESiOvXXJoElJe4MYuzbk8304q6nr-h69z6jSh73rfTl8VuSL-FJALLkQZh39dL167WPzmBk9khKRS6hpZsXmUcMM55_0HNt1BSfgFxssyp-ELDSIUksPAflYJw.avif",
+    "dimensions": "868x747"
+  },
+  {
+    "file": "community-08-loan-payoff-simulator-extra-payment.png",
+    "what_it_shows": "Loan Payoff Simulator with one-time extra payment entered: interest/time savings summary card and current-track vs simulation chart",
+    "source_page_url": "https://www.ynab.com/blog/ynab-loan-planner",
+    "image_url": "https://cdn.prod.website-files.com/6410766c6141dc6c15cfe33c/682b715fa524de48e3c53b23_64678d4fe8ff6864d148f991_jeUohfAuFYHOXdkIVRtDvdlUoTPM6tz6mmxDH9s74tEjSGeBQWH9t8H9dRGcxsQFpYzrwkslgv9bLOee5vDUlvt8XMmt2Tgq7W9jIiNwlraH0ANpTOYWYTH6--ZsO_cyVtvm_pgEdcFOAG4mjeEeIwilzvj3YtMBb4ToMv48AvVeEUEKjy4Rg5v6ntk4qg.avif",
+    "dimensions": "871x752"
+  },
+  {
+    "file": "community-09-budget-table-category-group.png",
+    "what_it_shows": "Web budget table (2025 UI) with expanded category group, filter chips (Income/Savings/Fixed Monthly...), All Money Assigned state, list/grid view toggle",
+    "source_page_url": "https://www.makingyourmoneymatter.com/how-and-why-i-budget-my-income-in-ynab-while-still-using-the-ynab-method/",
+    "image_url": "https://www.makingyourmoneymatter.com/wp-content/uploads/2025/05/image-1.png",
+    "dimensions": "1340x853"
+  }
+]

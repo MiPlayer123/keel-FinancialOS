@@ -1,0 +1,72 @@
+[
+  {
+    "file": "community-01-subscriptions-recurring-list-web.png",
+    "what_it_shows": "Recurring screen (web): All Recurring subscriptions list with name/frequency, linked account, due date, amount, and yearly spend total",
+    "source_page_url": "https://thesavvycouple.com/rocket-money-review/",
+    "image_url": "https://thesavvycouple.com/wp-content/uploads/2023/11/Rocket-Money-Transaction-List.png",
+    "dimensions": "1024x824"
+  },
+  {
+    "file": "community-02-spending-insights-web.png",
+    "what_it_shows": "Spending insights (web): category donut chart with month-over-month change callout, income/bills/spending/left-for-savings summary rail, frequent spend card",
+    "source_page_url": "https://robberger.com/rocket-money-review/",
+    "image_url": "https://robberger.com/wp-content/uploads/2025/08/Rocket-Money-Spending.png.webp",
+    "dimensions": "1760x996"
+  },
+  {
+    "file": "community-03-bill-negotiation-lower-bills-web.png",
+    "what_it_shows": "Bill negotiation entry (web): 'Let us lower your bills for you' modal over Recurring screen, with Lower my bills card and savings social proof toast",
+    "source_page_url": "https://thesavvycouple.com/rocket-money-review/",
+    "image_url": "https://thesavvycouple.com/wp-content/uploads/2023/11/Rocket-Money-Lower-Bill.png",
+    "dimensions": "1705x800"
+  },
+  {
+    "file": "community-04-cancel-subscription-action-sheet.png",
+    "what_it_shows": "Cancellation flow step 1 (mobile, official help GIF frame): subscription action sheet with Edit Details / Cancel Netflix / Remove From List over Recurring list",
+    "source_page_url": "https://help.rocketmoney.com/en/articles/934402-how-do-i-cancel-a-subscription",
+    "image_url": "https://downloads.intercomcdn.com/i/o/p51efdfh/2246932734/3e06e1d0f38d9246189245571f08/How+do+I+cancel+a+subscription_.gif",
+    "dimensions": "608x1080"
+  },
+  {
+    "file": "community-05-cancellation-request-form.png",
+    "what_it_shows": "Cancellation flow step 2 (mobile, official help GIF frame): cancellation request form with contact/billing fields, cancellation reason, authorization checkbox, Continue",
+    "source_page_url": "https://help.rocketmoney.com/en/articles/934402-how-do-i-cancel-a-subscription",
+    "image_url": "https://downloads.intercomcdn.com/i/o/p51efdfh/2246932734/3e06e1d0f38d9246189245571f08/How+do+I+cancel+a+subscription_.gif",
+    "dimensions": "608x1080"
+  },
+  {
+    "file": "community-06-bill-negotiation-submitted.png",
+    "what_it_shows": "Bill negotiation submitted (mobile, official help GIF frame): 'We're on it!' confirmation with provider, negotiation fee (50% of savings), payment method",
+    "source_page_url": "https://help.rocketmoney.com/en/articles/9744564-how-to-submit-a-bill-negotiation",
+    "image_url": "https://downloads.intercomcdn.com/i/o/p51efdfh/2246991313/171265d994c08ddecf7b615b611a/How+to+submit+a+Bill+Negotiation.gif",
+    "dimensions": "608x1080"
+  },
+  {
+    "file": "community-07-bill-negotiation-credentials-step.png",
+    "what_it_shows": "Bill negotiation flow (mobile, official help GIF frame): provider credentials step with 'Upload your bill' alternative",
+    "source_page_url": "https://help.rocketmoney.com/en/articles/9744564-how-to-submit-a-bill-negotiation",
+    "image_url": "https://downloads.intercomcdn.com/i/o/p51efdfh/2246991313/171265d994c08ddecf7b615b611a/How+to+submit+a+Bill+Negotiation.gif",
+    "dimensions": "608x1080"
+  },
+  {
+    "file": "community-08-subscriptions-list-mobile.jpg",
+    "what_it_shows": "Recurring screen (mobile): subscriptions and bills & utilities lists with per-item amounts and yearly totals, bottom tab bar",
+    "source_page_url": "https://robberger.com/rocket-money-review/",
+    "image_url": "https://robberger.com/wp-content/uploads/2025/01/Rocket-Money-Mobile-App-751x1536.jpg",
+    "dimensions": "751x1536"
+  },
+  {
+    "file": "community-09-dashboard-recent-transactions-web.png",
+    "what_it_shows": "Dashboard (web): recent transactions with per-row category actions, spending chart, savings/investments accounts, upcoming recurring charges calendar (video still, small webcam overlay bottom-right)",
+    "source_page_url": "https://thesavvycouple.com/rocket-money-review/",
+    "image_url": "https://thesavvycouple.com/wp-content/uploads/2023/11/Rocket-Money-Dashboard.png",
+    "dimensions": "1606x800"
+  },
+  {
+    "file": "community-10-cancel-subscription-modal-web.png",
+    "what_it_shows": "Cancellation flow (web): 'What would you like to cancel?' modal listing cancellable services over Recurring screen (video still, moderate sharpness)",
+    "source_page_url": "https://thesavvycouple.com/rocket-money-review/",
+    "image_url": "https://thesavvycouple.com/wp-content/uploads/2023/11/Rocket-Money-Cancel-Subscriptions.png",
+    "dimensions": "1204x623"
+  }
+]
