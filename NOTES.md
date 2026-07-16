@@ -1434,3 +1434,19 @@ deno suites) green, `cd apps/web && pnpm build` clean (19 routes). One
 merge conflict (both rename and opening-balance streams added UI to the same
 account-detail page) resolved as a clean union — reviewed and confirmed by
 the adversarial pass that nothing was dropped from either side.
+
+## 2026-07-16 — Slice-pipeline harness scaffold (build automation)
+
+### Decisions
+
+- **D-030 Slice pipeline adopted.** Scaffolded an automated plan→build→test→validate→deploy loop under `docs/harness/` + `.claude/skills/harness-*` + `scripts/harness/`, adapted from an external agent-build-harness the founder supplied (evidence census → adjudicated plan with conservation → slice docs → frozen-tests-first build → independent verify → PR ⚑ → existing deploy workflows → probe). Human gates deliberately kept at exactly two points: plan taste pass and PR merge (Law 2 suggest→approve applied to the build process; deploys to the real project remain gated on human merge + green CI, unchanged).
+- **D-031 Frozen-test discipline.** Slice tests are committed before implementation; `scripts/harness/verify-frozen-tests.mjs --baseline <sha>` proves the implementer never modified them (anti-overfit gate). Wrong tests cascade back as tests-only commits with a new recorded baseline.
+- **D-032 New always-on CI gates.** `verify-purity.mjs` (pure packages import no Supabase/Next/provider/model SDKs — CLAUDE.md repo-shape law, previously unenforced) and `verify-reachability.mjs` (every `api` route invoked from `apps/web`, every invocation hits a real route; intentional exceptions in `reachability-allowlist.json` with reasons). Wired into ci.yml unit job.
+
+### Findings
+
+- First reachability run surfaced that `invoke<T>('api/…')` generic call sites were missed by a naive regex (fixed), after which the only unreached route is `/health` (allowlisted: probe endpoint). All 34 web invocations resolve to real routes; current tree passes both gates clean.
+
+### State
+
+- Verifiers tested green against the current tree. No product code touched. Evidence/census/plans/slices directories are templates-only until the founder's screenshot drop lands.

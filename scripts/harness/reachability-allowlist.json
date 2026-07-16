@@ -1,0 +1,6 @@
+{
+  "_comment": "Routes served by the api Edge Function that are intentionally not invoked from apps/web. Every entry needs a reason; additions are reviewed like code (verify-reachability.mjs flags stale entries automatically).",
+  "routes": {
+    "/health": "Deploy/monitoring probe endpoint — consumed by post-deploy checks and uptime tooling, never by the UI."
+  }
+}
