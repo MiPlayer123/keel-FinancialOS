@@ -77,9 +77,10 @@
     --chart-3: oklch(0.553 0.013 58.071);           /* stone-500 */
     --chart-4: oklch(0.432 0.095 166.913);          /* emerald-800 */
     --chart-5: oklch(0.374 0.01 67.558);            /* stone-700 */
-    /* Cash-flow pair — CVD-validated (dataviz six checks) in light mode. */
+    /* Cash-flow pair — chromatic emerald vs neutral stone (CVD-safe), not neon;
+       red stays reserved for negative money (Law 8). */
     --keel-chart-inflow: #047857;                   /* emerald-700 — money in */
-    --keel-chart-outflow: #4f46e5;                  /* indigo-600 — money out */
+    --keel-chart-outflow: #78716c;                  /* stone-500 — money out */
     --radius: 0.5rem;
     --sidebar: oklch(0.985 0.001 106.423);          /* stone-50 */
     --sidebar-foreground: oklch(0.216 0.006 56.043);
@@ -116,9 +117,9 @@
     --chart-3: oklch(0.709 0.01 56.259);            /* stone-400 */
     --chart-4: oklch(0.765 0.177 163.223);          /* emerald-400 */
     --chart-5: oklch(0.553 0.013 58.071);           /* stone-500 */
-    /* Cash-flow pair — CVD-validated against the dark surface. */
+    /* Cash-flow pair — chromatic emerald vs neutral stone, tuned for the dark surface. */
     --keel-chart-inflow: #059669;                   /* emerald-600 — money in */
-    --keel-chart-outflow: #6366f1;                  /* indigo-500 — money out */
+    --keel-chart-outflow: #a8a29e;                  /* stone-400 — money out */
     --sidebar: oklch(0.216 0.006 56.043);           /* stone-900 */
     --sidebar-foreground: oklch(0.97 0.001 106.424);
     --sidebar-primary: oklch(0.696 0.17 162.48);    /* emerald-500 */

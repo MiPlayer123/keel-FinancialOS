@@ -603,15 +603,27 @@ function buildMonthReview(
   };
 }
 
-/** Small "+$120 vs May" delta line; no color — a delta's sign isn't itself a loss/gain signal. */
+/**
+ * Small "↑ $120 vs May" delta line. Law 8 (REPORTSCASHFLOW-4): a delta's minus
+ * sign is arithmetic direction, not negative money, so direction wears a neutral
+ * up/down glyph + muted tone — never red. Magnitude is rendered unsigned so the
+ * Money component can't tint it; red stays reserved for the figures that are
+ * themselves negative money (the Net readout above, unchanged).
+ */
 function DeltaLine({ deltaMinor, vsLabel }: { deltaMinor: bigint; vsLabel: string }) {
   if (deltaMinor === 0n) {
     return <p className="text-xs text-muted-foreground">No change vs {vsLabel}</p>;
   }
+  const magnitude = (deltaMinor < 0n ? -deltaMinor : deltaMinor).toString();
   return (
-    <p className="text-xs text-muted-foreground">
-      <Money amountMinor={deltaMinor.toString()} signed className="text-xs" muteZero={false} /> vs{' '}
-      {vsLabel}
+    <p className="flex items-center gap-1 text-xs text-muted-foreground">
+      {deltaMinor > 0n ? (
+        <ArrowUpRight className="size-3.5" />
+      ) : (
+        <ArrowDownRight className="size-3.5" />
+      )}
+      <Money amountMinor={magnitude} className="text-xs text-muted-foreground" muteZero={false} />
+      <span>vs {vsLabel}</span>
     </p>
   );
 }
@@ -807,9 +819,17 @@ function ReportsBody() {
                     {monthReview.topCategories.map((c) => (
                       <div key={c.categoryId ?? 'uncategorized'} className="flex items-center gap-3 text-sm">
                         <span className="min-w-0 flex-1 truncate">{c.name}</span>
-                        <span className="shrink-0 text-xs text-muted-foreground">
-                          <Money amountMinor={c.deltaMinor.toString()} signed className="text-xs" />{' '}
-                          vs {monthLabel(monthReview.prevMonth)}
+                        <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                          {c.deltaMinor > 0n ? (
+                            <ArrowUpRight className="size-3.5" />
+                          ) : c.deltaMinor < 0n ? (
+                            <ArrowDownRight className="size-3.5" />
+                          ) : null}
+                          <Money
+                            amountMinor={(c.deltaMinor < 0n ? -c.deltaMinor : c.deltaMinor).toString()}
+                            className="text-xs text-muted-foreground"
+                          />
+                          <span>vs {monthLabel(monthReview.prevMonth)}</span>
                         </span>
                         <Money
                           amountMinor={c.amountMinor.toString()}
