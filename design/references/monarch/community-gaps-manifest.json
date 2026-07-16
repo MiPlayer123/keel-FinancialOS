@@ -1,0 +1,32 @@
+[
+  {
+    "file": "community-01-dashboard-widgets-web.jpg",
+    "what_it_shows": "Monarch Money web widget Dashboard (2022 UI): Getting Started checklist widget, Spending this-month-vs-last-month chart widget, Most Recent Transactions widget, Plan (June) and Advice widgets, Customize dashboard button, left nav (Dashboard/Accounts/Transactions/Cash Flow/Plan/Goals/Investments/Advice). Real user screenshot, 2386x1348.",
+    "source_page_url": "https://wallethacks.com/monarch-money-review/",
+    "image_url": "https://wallethacks.com/wp-content/uploads/2022/07/Monarch-Money-Dashboard-1.jpg"
+  },
+  {
+    "file": "community-02-investments-performance-holdings-web.jpg",
+    "what_it_shows": "Monarch Investments view, Performance tab (2021 blue-sidebar UI): Your Portfolio vs S&P 500 / NASDAQ / US Stocks benchmark cards with 90-day and 1-day returns, comparison line chart, start of Holdings table (symbol/quantity/cost basis/current price/total value/daily change/total gain-loss), date-range and account filters. Official product marketing screenshot, 1860x1050.",
+    "source_page_url": "https://www.monarch.com/blog/investments-beta-live-and-more",
+    "image_url": "https://cdn.sanity.io/images/mdewiujj/production/ebde563444c3a81325be4d135e5146e7c15a1c5c-1860x1050.jpg"
+  },
+  {
+    "file": "community-03-investments-holdings-benchmark-web.jpg",
+    "what_it_shows": "Monarch Investments page, Holdings tab (2023 UI): portfolio vs S&P 500 / US Stocks / US Bonds benchmark cards, performance line chart with 1W-5Y range picker, Holdings table with securities (VTSAX, VBTLX) showing price, quantity, past-92-days return chip, and value; Add Holding button. Real user screenshot, 1138x739.",
+    "source_page_url": "https://wallethacks.com/monarch-money-review/",
+    "image_url": "https://wallethacks.com/wp-content/uploads/2022/08/Monarch-investing.jpg"
+  },
+  {
+    "file": "community-04-recurring-calendar-web-and-mobile.jpg",
+    "what_it_shows": "Monarch Recurring page on web (2022 UI), Upcoming tab: full month calendar (July 2022) with paid/upcoming recurring items on their due dates (Verizon, IBM, Netflix, Comcast popover with recent transactions history), This Month merchant list with due date/category/account/amount columns, plus mobile Recurring calendar alongside. Official blog hero, 1860x1050.",
+    "source_page_url": "https://www.monarch.com/blog/track-recurring-bills-and-subscriptions",
+    "image_url": "https://cdn.sanity.io/images/mdewiujj/production/dec028eccafeb61f7effa77fdcd6ada20c074578-1860x1050.jpg"
+  },
+  {
+    "file": "community-05-recurring-calendar-upcoming-list-web.jpg",
+    "what_it_shows": "Monarch Recurring page on web (March 2023, real data): monthly calendar with paid checkmarks and amounts per day (Netflix, Disney+, Spotify, ComEd, State Farm, paychecks), Upcoming list below with merchant, frequency, due date, category, account, and amount. Real user screenshot, 1099x707.",
+    "source_page_url": "https://wallethacks.com/monarch-money-review/",
+    "image_url": "https://wallethacks.com/wp-content/uploads/2022/08/monarch-recurring.jpg"
+  }
+]
