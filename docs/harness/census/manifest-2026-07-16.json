@@ -1,0 +1,642 @@
+{
+ "units": [
+  {
+   "id": "brex-community-01",
+   "app": "brex",
+   "group": "community",
+   "files": [
+    "design/references/brex/community-01-expenses-table-grouped.jpg",
+    "design/references/brex/community-02-accounting-queue.jpg",
+    "design/references/brex/community-03-payment-approval-settings.jpg",
+    "design/references/brex/community-04-receipt-validation.jpg",
+    "design/references/brex/community-05-unmatched-receipts.png",
+    "design/references/brex/community-06-custom-accounting-rule.png",
+    "design/references/brex/community-07-mcc-policy-rule.png",
+    "design/references/brex/community-08-cards-and-limits-table.png"
+   ]
+  },
+  {
+   "id": "brex-community-02",
+   "app": "brex",
+   "group": "community",
+   "files": [
+    "design/references/brex/community-09-bill-pay-bills-table.png",
+    "design/references/brex/community-10-ai-flagged-expense.png",
+    "design/references/brex/community-11-assistant-notifications.jpg"
+   ]
+  },
+  {
+   "id": "copilot-community-01",
+   "app": "copilot",
+   "group": "community",
+   "files": [
+    "design/references/copilot/community-01-mac-transactions-review-pane.png",
+    "design/references/copilot/community-02-review-quick-edit-category.png",
+    "design/references/copilot/community-03-transaction-detail-to-review.png",
+    "design/references/copilot/community-04-split-editor-equal.png",
+    "design/references/copilot/community-05-split-editor-custom.png",
+    "design/references/copilot/community-06-transaction-detail-split-summary.png",
+    "design/references/copilot/community-07-mac-categories-drilldown-dark.png",
+    "design/references/copilot/community-08-categories-budget-drilldown-light.png"
+   ]
+  },
+  {
+   "id": "copilot-community-02",
+   "app": "copilot",
+   "group": "community",
+   "files": [
+    "design/references/copilot/community-09-mac-recurrings.png",
+    "design/references/copilot/community-10-mac-dashboard-dark.png",
+    "design/references/copilot/community-11-mac-accounts.png",
+    "design/references/copilot/community-x01-goals-tab-overview-ring.png",
+    "design/references/copilot/community-x02-goals-list-active-ready-archived.png",
+    "design/references/copilot/community-x03-goals-monthly-checkins-add-goal.png",
+    "design/references/copilot/community-x04-cashflow-tab-net-income.png",
+    "design/references/copilot/community-x05-cashflow-spend-category-breakdown.png"
+   ]
+  },
+  {
+   "id": "copilot-community-03",
+   "app": "copilot",
+   "group": "community",
+   "files": [
+    "design/references/copilot/community-x06-cashflow-spend-detail-key-metrics.png",
+    "design/references/copilot/community-x07-cashflow-net-income-monthly-card.png",
+    "design/references/copilot/community-x08-investments-brokerage-balance-chart.png",
+    "design/references/copilot/community-x09-investments-allocation.png",
+    "design/references/copilot/community-x10-investments-holding-detail-msft.png",
+    "design/references/copilot/community-x11-investments-holding-card-positions.png"
+   ]
+  },
+  {
+   "id": "copilot-ipad-01",
+   "app": "copilot",
+   "group": "ipad",
+   "files": [
+    "design/references/copilot/ipad-01-AppStoreArt_iPadOS_2.png",
+    "design/references/copilot/ipad-02-AppStoreArt_iPadOS_7.png",
+    "design/references/copilot/ipad-03-AppStoreArt_iPadOS_5.png",
+    "design/references/copilot/ipad-04-AppStoreArt_iPadOS_4.png",
+    "design/references/copilot/ipad-05-AppStoreArt_iPadOS_6.png",
+    "design/references/copilot/ipad-06-AppStoreArt_iPadOS_1.png",
+    "design/references/copilot/ipad-07-AppStoreArt_iPadOS_3.png"
+   ]
+  },
+  {
+   "id": "copilot-iphone-01",
+   "app": "copilot",
+   "group": "iphone",
+   "files": [
+    "design/references/copilot/iphone-01-4.7.png",
+    "design/references/copilot/iphone-02-4.1.png",
+    "design/references/copilot/iphone-03-4.4.png",
+    "design/references/copilot/iphone-04-4.5.png",
+    "design/references/copilot/iphone-05-4.6.png",
+    "design/references/copilot/iphone-06-4.8.png",
+    "design/references/copilot/iphone-07-4.2.png",
+    "design/references/copilot/iphone-08-4.3.png"
+   ]
+  },
+  {
+   "id": "copilot-mac-01",
+   "app": "copilot",
+   "group": "mac",
+   "files": [
+    "design/references/copilot/mac-01-AppStoreArt_macOS_4.png",
+    "design/references/copilot/mac-02-AppStoreArt_macOS_2.png",
+    "design/references/copilot/mac-03-AppStoreArt_macOS_5.png",
+    "design/references/copilot/mac-04-AppStoreArt_macOS_7.png",
+    "design/references/copilot/mac-05-AppStoreArt_macOS_3.png",
+    "design/references/copilot/mac-06-AppStoreArt_macOS_6.png",
+    "design/references/copilot/mac-07-AppStoreArt_macOS_1.png"
+   ]
+  },
+  {
+   "id": "copilot-web-01",
+   "app": "copilot",
+   "group": "web",
+   "files": [
+    "design/references/copilot/web-01.png"
+   ]
+  },
+  {
+   "id": "flows-flow-01",
+   "app": "flows",
+   "group": "flow",
+   "files": [
+    "design/references/flows/flow-01-plaid-link-consent-phone.png",
+    "design/references/flows/flow-02-plaid-link-institution-search.png",
+    "design/references/flows/flow-03-plaid-link-oauth-handoff.png",
+    "design/references/flows/flow-04-plaid-link-bank-credentials.png",
+    "design/references/flows/flow-05-plaid-link-select-accounts.png",
+    "design/references/flows/flow-06-plaid-link-success.png",
+    "design/references/flows/flow-07-copilot-select-institution-onboarding.png",
+    "design/references/flows/flow-08-copilot-categories-budget-management.png"
+   ]
+  },
+  {
+   "id": "flows-flow-02",
+   "app": "flows",
+   "group": "flow",
+   "files": [
+    "design/references/flows/flow-09-lunchmoney-csv-upload-dialog.png",
+    "design/references/flows/flow-10-lunchmoney-csv-column-mapping.png",
+    "design/references/flows/flow-11-ynab-file-import-dialog.png",
+    "design/references/flows/flow-12-simplifi-attach-receipt-transaction-detail.png",
+    "design/references/flows/flow-13-simplifi-onboarding-welcome.png",
+    "design/references/flows/flow-14-simplifi-onboarding-add-accounts-empty.png",
+    "design/references/flows/flow-15-simplifi-add-account-intuit-consent.png",
+    "design/references/flows/flow-16-simplifi-settings-categories-tags.png"
+   ]
+  },
+  {
+   "id": "flows-flow-03",
+   "app": "flows",
+   "group": "flow",
+   "files": [
+    "design/references/flows/flow-17-simplifi-mobile-notification-settings.png",
+    "design/references/flows/flow-18-simplifi-export-selected-transactions.png",
+    "design/references/flows/flow-19-rocketmoney-create-category-mobile.png",
+    "design/references/flows/flow-20-rocketmoney-linked-accounts-management.png",
+    "design/references/flows/flow-21-rocketmoney-plaid-link-handoff.png"
+   ]
+  },
+  {
+   "id": "monarch-appstore-01",
+   "app": "monarch",
+   "group": "appstore",
+   "files": [
+    "design/references/monarch/appstore-monarch-pad-01-2064x2752.jpg",
+    "design/references/monarch/appstore-monarch-pad-02-2064x2752.jpg",
+    "design/references/monarch/appstore-monarch-pad-03-2064x2752.jpg",
+    "design/references/monarch/appstore-monarch-pad-04-2064x2752.jpg",
+    "design/references/monarch/appstore-monarch-pad-05-2064x2752.jpg",
+    "design/references/monarch/appstore-monarch-pad-06-2064x2752.jpg",
+    "design/references/monarch/appstore-monarch-pad-07-2064x2752.jpg",
+    "design/references/monarch/appstore-monarch-pad-08-2064x2752.jpg"
+   ]
+  },
+  {
+   "id": "monarch-appstore-02",
+   "app": "monarch",
+   "group": "appstore",
+   "files": [
+    "design/references/monarch/appstore-monarch-pad-09-2064x2752.jpg",
+    "design/references/monarch/appstore-monarch-pad-10-2064x2752.jpg"
+   ]
+  },
+  {
+   "id": "monarch-community-01",
+   "app": "monarch",
+   "group": "community",
+   "files": [
+    "design/references/monarch/community-01-transactions-list-filters-summary.webp",
+    "design/references/monarch/community-02-transactions-bulk-edit-selected.jpg",
+    "design/references/monarch/community-03-rules-editor-new-rule-modal.png",
+    "design/references/monarch/community-04-budget-view-desktop-full.png",
+    "design/references/monarch/community-05-flex-budget-flexible-group-unallocated.png",
+    "design/references/monarch/community-06-flex-budget-summary-card.png",
+    "design/references/monarch/community-07-cashflow-sankey-report-full-app.png",
+    "design/references/monarch/community-08-cashflow-sankey-shared-chart.png"
+   ]
+  },
+  {
+   "id": "monarch-community-02",
+   "app": "monarch",
+   "group": "community",
+   "files": [
+    "design/references/monarch/community-09-cashflow-monthly-bar-view.webp",
+    "design/references/monarch/community-10-accounts-page-networth-grouped-subtotals.png",
+    "design/references/monarch/community-11-income-report-filters.webp",
+    "design/references/monarch/community-12-goals-page-cards.webp",
+    "design/references/monarch/community-13-goals-account-allocation.png",
+    "design/references/monarch/community-14-goal-detail-timeline.png",
+    "design/references/monarch/community-15-budget-view-real-user.png",
+    "design/references/monarch/community-x01-dashboard-widgets-web.jpg"
+   ]
+  },
+  {
+   "id": "monarch-community-03",
+   "app": "monarch",
+   "group": "community",
+   "files": [
+    "design/references/monarch/community-x02-investments-performance-holdings-web.jpg",
+    "design/references/monarch/community-x03-investments-holdings-benchmark-web.jpg",
+    "design/references/monarch/community-x04-recurring-calendar-web-and-mobile.jpg",
+    "design/references/monarch/community-x05-recurring-calendar-upcoming-list-web.jpg"
+   ]
+  },
+  {
+   "id": "monarch-iphone-01",
+   "app": "monarch",
+   "group": "iphone",
+   "files": [
+    "design/references/monarch/iphone-01-6-reports.png",
+    "design/references/monarch/iphone-02-Frame_1400002686.png",
+    "design/references/monarch/iphone-03-Frame_1400002681.png",
+    "design/references/monarch/iphone-04-Frame_1400002684.png",
+    "design/references/monarch/iphone-05-7-recurring.png",
+    "design/references/monarch/iphone-06-Frame_1400002683.png",
+    "design/references/monarch/iphone-07-Frame_1400002678.png",
+    "design/references/monarch/iphone-08-updated_Goals_UI_-_March__U002726.png"
+   ]
+  },
+  {
+   "id": "monarch-iphone-02",
+   "app": "monarch",
+   "group": "iphone",
+   "files": [
+    "design/references/monarch/iphone-09-Frame_1400002680.png",
+    "design/references/monarch/iphone-10-8-goals.png",
+    "design/references/monarch/iphone-11-4-budgeting.png",
+    "design/references/monarch/iphone-12-3-collaboration.png",
+    "design/references/monarch/iphone-13-Frame_1400002682.png",
+    "design/references/monarch/iphone-14-10-security.png",
+    "design/references/monarch/iphone-15-5-transactions.png",
+    "design/references/monarch/iphone-16-9-dark-mode.png"
+   ]
+  },
+  {
+   "id": "monarch-iphone-03",
+   "app": "monarch",
+   "group": "iphone",
+   "files": [
+    "design/references/monarch/iphone-17-Frame_1400002685.png",
+    "design/references/monarch/iphone-18-1-hero.png",
+    "design/references/monarch/iphone-19-Frame_1400002692.png",
+    "design/references/monarch/iphone-20-2-net-worth.png"
+   ]
+  },
+  {
+   "id": "monarch-web-01",
+   "app": "monarch",
+   "group": "web",
+   "files": [
+    "design/references/monarch/web-01.png"
+   ]
+  },
+  {
+   "id": "quicken-classic-appstore-01",
+   "app": "quicken-classic",
+   "group": "appstore",
+   "files": [
+    "design/references/quicken-classic/appstore-quicken-classic-pad-01-2048x2732.jpg",
+    "design/references/quicken-classic/appstore-quicken-classic-pad-02-2048x2732.jpg",
+    "design/references/quicken-classic/appstore-quicken-classic-pad-03-2048x2732.jpg",
+    "design/references/quicken-classic/appstore-quicken-classic-pad-04-2048x2732.jpg",
+    "design/references/quicken-classic/appstore-quicken-classic-pad-05-2048x2732.jpg",
+    "design/references/quicken-classic/appstore-quicken-classic-pad-06-2048x2732.jpg",
+    "design/references/quicken-classic/appstore-quicken-classic-pad-07-2048x2732.jpg"
+   ]
+  },
+  {
+   "id": "quicken-classic-community-01",
+   "app": "quicken-classic",
+   "group": "community",
+   "files": [
+    "design/references/quicken-classic/community-01-register-running-balance.png",
+    "design/references/quicken-classic/community-02-register-full-window-accounts-bar.png",
+    "design/references/quicken-classic/community-03-reconcile-window.jpg",
+    "design/references/quicken-classic/community-04-mac-portfolio-holdings-cost-basis.png",
+    "design/references/quicken-classic/community-05-mac-investing-dashboard.png",
+    "design/references/quicken-classic/community-06-mac-portfolio-chart-table.png",
+    "design/references/quicken-classic/community-07-business-profit-loss-tab.jpg",
+    "design/references/quicken-classic/community-08-home-tab-spending-dashboard.jpg"
+   ]
+  },
+  {
+   "id": "quicken-classic-community-02",
+   "app": "quicken-classic",
+   "group": "community",
+   "files": [
+    "design/references/quicken-classic/community-09-budget-graph-view.jpg",
+    "design/references/quicken-classic/community-10-mac-sidebar-annotated.png",
+    "design/references/quicken-classic/community-11-spending-donut-report.jpg",
+    "design/references/quicken-classic/community-12-buy-sell-preview-dialog.png"
+   ]
+  },
+  {
+   "id": "quicken-classic-iphone-01",
+   "app": "quicken-classic",
+   "group": "iphone",
+   "files": [
+    "design/references/quicken-classic/iphone-01-logo_admin_2020q4_color-0-1x_U007emarket.png",
+    "design/references/quicken-classic/iphone-02-4.png",
+    "design/references/quicken-classic/iphone-03-QC_2048__U00d7_2732_5.png",
+    "design/references/quicken-classic/iphone-04-QC_2048__U00d7_2732_2.png",
+    "design/references/quicken-classic/iphone-05-6.png",
+    "design/references/quicken-classic/iphone-06-QC_2048__U00d7_2732_4.png",
+    "design/references/quicken-classic/iphone-07-7.png",
+    "design/references/quicken-classic/iphone-08-QC_2048__U00d7_2732_7.png"
+   ]
+  },
+  {
+   "id": "quicken-classic-iphone-02",
+   "app": "quicken-classic",
+   "group": "iphone",
+   "files": [
+    "design/references/quicken-classic/iphone-09-QC_2048__U00d7_2732_6.png",
+    "design/references/quicken-classic/iphone-10-1.png",
+    "design/references/quicken-classic/iphone-11-QC_2048__U00d7_2732_1.png",
+    "design/references/quicken-classic/iphone-12-8.png",
+    "design/references/quicken-classic/iphone-13-3.png",
+    "design/references/quicken-classic/iphone-14-2.png",
+    "design/references/quicken-classic/iphone-15-QC_2048__U00d7_2732_3.png",
+    "design/references/quicken-classic/iphone-16-5.png"
+   ]
+  },
+  {
+   "id": "quicken-classic-web-01",
+   "app": "quicken-classic",
+   "group": "web",
+   "files": [
+    "design/references/quicken-classic/web-01.png",
+    "design/references/quicken-classic/web-02.png"
+   ]
+  },
+  {
+   "id": "quicken-simplifi-appstore-01",
+   "app": "quicken-simplifi",
+   "group": "appstore",
+   "files": [
+    "design/references/quicken-simplifi/appstore-quicken-simplifi-pad-01-2064x2752.jpg",
+    "design/references/quicken-simplifi/appstore-quicken-simplifi-pad-02-2064x2752.jpg",
+    "design/references/quicken-simplifi/appstore-quicken-simplifi-pad-03-2064x2752.jpg",
+    "design/references/quicken-simplifi/appstore-quicken-simplifi-pad-04-2064x2752.jpg",
+    "design/references/quicken-simplifi/appstore-quicken-simplifi-pad-05-2064x2752.jpg"
+   ]
+  },
+  {
+   "id": "quicken-simplifi-community-01",
+   "app": "quicken-simplifi",
+   "group": "community",
+   "files": [
+    "design/references/quicken-simplifi/community-01-spending-plan-overview.png",
+    "design/references/quicken-simplifi/community-02-transactions-register.png",
+    "design/references/quicken-simplifi/community-03-projected-cash-flow.png",
+    "design/references/quicken-simplifi/community-04-watchlist-detail.png",
+    "design/references/quicken-simplifi/community-05-reports-spending-bar-chart.png",
+    "design/references/quicken-simplifi/community-06-reports-income-donut.png",
+    "design/references/quicken-simplifi/community-07-reports-transactions-table.png",
+    "design/references/quicken-simplifi/community-08-dashboard.png"
+   ]
+  },
+  {
+   "id": "quicken-simplifi-community-02",
+   "app": "quicken-simplifi",
+   "group": "community",
+   "files": [
+    "design/references/quicken-simplifi/community-09-split-transaction-editor.png",
+    "design/references/quicken-simplifi/community-x01-rules-list-settings.png",
+    "design/references/quicken-simplifi/community-x02-create-rule-category-dropdown.png",
+    "design/references/quicken-simplifi/community-x03-create-rule-if-then-account-picker.png",
+    "design/references/quicken-simplifi/community-x04-edit-rule-update-category.png",
+    "design/references/quicken-simplifi/community-x05-receipt-attach-upload-area.png",
+    "design/references/quicken-simplifi/community-x06-receipt-attached-file.png",
+    "design/references/quicken-simplifi/community-x07-bills-income-overview-calendar.png"
+   ]
+  },
+  {
+   "id": "quicken-simplifi-community-03",
+   "app": "quicken-simplifi",
+   "group": "community",
+   "files": [
+    "design/references/quicken-simplifi/community-x08-bills-income-cashflow-tab.png",
+    "design/references/quicken-simplifi/community-x09-bills-income-reminder-series-detail.png"
+   ]
+  },
+  {
+   "id": "quicken-simplifi-iphone-01",
+   "app": "quicken-simplifi",
+   "group": "iphone",
+   "files": [
+    "design/references/quicken-simplifi/iphone-01-APPLE_T_05_LIGHT_2064x2752.png",
+    "design/references/quicken-simplifi/iphone-02-APPLE_T_02_LIGHT_2064x2752.png",
+    "design/references/quicken-simplifi/iphone-03-APPLE_T_03_LIGHT_2064x2752.png",
+    "design/references/quicken-simplifi/iphone-04-0x0ss-6.png",
+    "design/references/quicken-simplifi/iphone-05-APPLE_T_01_LIGHT_2064x2752.png",
+    "design/references/quicken-simplifi/iphone-06-PromotionalImage-1024x1024-4.png",
+    "design/references/quicken-simplifi/iphone-07-APPLE_T_06_LIGHT_2064x2752.png",
+    "design/references/quicken-simplifi/iphone-08-0x0ss-3.png"
+   ]
+  },
+  {
+   "id": "quicken-simplifi-iphone-02",
+   "app": "quicken-simplifi",
+   "group": "iphone",
+   "files": [
+    "design/references/quicken-simplifi/iphone-09-PromotionalImage-1024x1024-10.png",
+    "design/references/quicken-simplifi/iphone-10-0x0ss-2.png",
+    "design/references/quicken-simplifi/iphone-11-0x0ss-7.png",
+    "design/references/quicken-simplifi/iphone-12-0x0ss.png",
+    "design/references/quicken-simplifi/iphone-13-0x0ss-4.png",
+    "design/references/quicken-simplifi/iphone-14-0x0ss-5.png"
+   ]
+  },
+  {
+   "id": "quicken-simplifi-web-01",
+   "app": "quicken-simplifi",
+   "group": "web",
+   "files": [
+    "design/references/quicken-simplifi/web-01.png"
+   ]
+  },
+  {
+   "id": "ramp-community-01",
+   "app": "ramp",
+   "group": "community",
+   "files": [
+    "design/references/ramp/community-01-transactions-coding-table.png",
+    "design/references/ramp/community-02-transactions-table-bill-matched.png",
+    "design/references/ramp/community-03-approval-detail-approve-reject.png",
+    "design/references/ramp/community-04-ai-approval-verdict.png",
+    "design/references/ramp/community-05-match-transaction-to-bill-modal.png",
+    "design/references/ramp/community-06-receipt-verification-popover.png",
+    "design/references/ramp/community-07-conditional-coding-rule-builder.png",
+    "design/references/ramp/community-08-policy-settings-ai-sidebar.png"
+   ]
+  },
+  {
+   "id": "ramp-community-02",
+   "app": "ramp",
+   "group": "community",
+   "files": [
+    "design/references/ramp/community-09-policy-agent-analytics.png",
+    "design/references/ramp/community-10-budget-dashboard.webp",
+    "design/references/ramp/community-11-bill-pay-new-bill-ocr.png",
+    "design/references/ramp/community-12-bill-pay-list-filters.png"
+   ]
+  },
+  {
+   "id": "rocket-money-community-01",
+   "app": "rocket-money",
+   "group": "community",
+   "files": [
+    "design/references/rocket-money/community-01-subscriptions-recurring-list-web.png",
+    "design/references/rocket-money/community-02-spending-insights-web.png",
+    "design/references/rocket-money/community-03-bill-negotiation-lower-bills-web.png",
+    "design/references/rocket-money/community-04-cancel-subscription-action-sheet.png",
+    "design/references/rocket-money/community-05-cancellation-request-form.png",
+    "design/references/rocket-money/community-06-bill-negotiation-submitted.png",
+    "design/references/rocket-money/community-07-bill-negotiation-credentials-step.png",
+    "design/references/rocket-money/community-08-subscriptions-list-mobile.jpg"
+   ]
+  },
+  {
+   "id": "rocket-money-community-02",
+   "app": "rocket-money",
+   "group": "community",
+   "files": [
+    "design/references/rocket-money/community-09-dashboard-recent-transactions-web.png",
+    "design/references/rocket-money/community-10-cancel-subscription-modal-web.png",
+    "design/references/rocket-money/community-x01-budget-view-mobile.png",
+    "design/references/rocket-money/community-x02-budget-view-appstore.png",
+    "design/references/rocket-money/community-x03-net-worth-summary-mobile.png",
+    "design/references/rocket-money/community-x04-net-worth-appstore.png"
+   ]
+  },
+  {
+   "id": "rocket-money-iphone-01",
+   "app": "rocket-money",
+   "group": "iphone",
+   "files": [
+    "design/references/rocket-money/iphone-01-ASO_iOS_1242x2688_C2.png",
+    "design/references/rocket-money/iphone-02-ASO_iOS_1242x2688_C6.png",
+    "design/references/rocket-money/iphone-03-ASO_iOS_1242x2688_C5.png",
+    "design/references/rocket-money/iphone-04-ASO_iOS_1242x2688_C4.png",
+    "design/references/rocket-money/iphone-05-ASO_iOS_1242x2688_C1.png",
+    "design/references/rocket-money/iphone-06-ASO_iOS_1242x2688_C3.png",
+    "design/references/rocket-money/iphone-07-ASO_iOS_1242x2688_C7.png"
+   ]
+  },
+  {
+   "id": "ynab-community-01",
+   "app": "ynab",
+   "group": "community",
+   "files": [
+    "design/references/ynab/community-01-account-register-search-filters.png",
+    "design/references/ynab/community-02-budget-ready-to-assign.png",
+    "design/references/ynab/community-03-budget-table-inspector-upcoming.png",
+    "design/references/ynab/community-04-income-v-expense-report.png",
+    "design/references/ynab/community-05-spending-totals-report.png",
+    "design/references/ynab/community-06-net-worth-report.png",
+    "design/references/ynab/community-07-loan-payoff-simulator.png",
+    "design/references/ynab/community-08-loan-payoff-simulator-extra-payment.png"
+   ]
+  },
+  {
+   "id": "ynab-community-02",
+   "app": "ynab",
+   "group": "community",
+   "files": [
+    "design/references/ynab/community-09-budget-table-category-group.png",
+    "design/references/ynab/community-x01-auto-assign-panel-options.png",
+    "design/references/ynab/community-x02-auto-assign-modal-in-plan.png",
+    "design/references/ynab/community-x03-spending-trends-bar-chart.png",
+    "design/references/ynab/community-x04-spending-trends-drilldown.png",
+    "design/references/ynab/community-x05-category-target-panel.png",
+    "design/references/ynab/community-x06-target-type-picker-legacy.png"
+   ]
+  },
+  {
+   "id": "ynab-ipad-01",
+   "app": "ynab",
+   "group": "ipad",
+   "files": [
+    "design/references/ynab/ipad-01-iPad6_USD_7.png",
+    "design/references/ynab/ipad-02-iPad6_USD_6.png",
+    "design/references/ynab/ipad-03-iPad6_USD_5.png",
+    "design/references/ynab/ipad-04-iPad6_USD_2.png",
+    "design/references/ynab/ipad-05-iPad6_USD_4.png",
+    "design/references/ynab/ipad-06-iPad6_USD_3.png",
+    "design/references/ynab/ipad-07-iPad6_USD_1.png",
+    "design/references/ynab/ipad-08-iPad6_USD_8.png"
+   ]
+  },
+  {
+   "id": "ynab-iphone-01",
+   "app": "ynab",
+   "group": "iphone",
+   "files": [
+    "design/references/ynab/iphone-01-iPhone69_USD_6.png",
+    "design/references/ynab/iphone-02-iPhone69_USD_7.png",
+    "design/references/ynab/iphone-03-iPhone69_USD_1.png",
+    "design/references/ynab/iphone-04-iPhone69_USD_5.png",
+    "design/references/ynab/iphone-05-iPhone69_USD_3.png",
+    "design/references/ynab/iphone-06-APPLE_WATCH_Last_Updated_Nov_27_U002c_20.png",
+    "design/references/ynab/iphone-07-iPhone69_USD_8.png",
+    "design/references/ynab/iphone-08-iPhone69_USD_4.png"
+   ]
+  },
+  {
+   "id": "ynab-iphone-02",
+   "app": "ynab",
+   "group": "iphone",
+   "files": [
+    "design/references/ynab/iphone-09-iPhone69_USD_5a.png",
+    "design/references/ynab/iphone-10-iPhone69_USD_2.png",
+    "design/references/ynab/iphone-11-Jobf4f9bcb6-14d2-4eb6-a151-43152096efb5-.png"
+   ]
+  },
+  {
+   "id": "ynab-web-01",
+   "app": "ynab",
+   "group": "web",
+   "files": [
+    "design/references/ynab/web-01.png",
+    "design/references/ynab/web-02.png",
+    "design/references/ynab/web-03.png",
+    "design/references/ynab/web-04.png",
+    "design/references/ynab/web-05.png",
+    "design/references/ynab/web-06.png",
+    "design/references/ynab/web-07.png"
+   ]
+  },
+  {
+   "id": "keel-core-01",
+   "app": "keel",
+   "group": "current",
+   "files": [
+    "design/current/2026-07-16/accounts-desktop.png",
+    "design/current/2026-07-16/dashboard-desktop.png",
+    "design/current/2026-07-16/ledger-desktop.png",
+    "design/current/2026-07-16/review-desktop.png"
+   ]
+  },
+  {
+   "id": "keel-money-02",
+   "app": "keel",
+   "group": "current",
+   "files": [
+    "design/current/2026-07-16/budgets-desktop.png",
+    "design/current/2026-07-16/goals-desktop.png",
+    "design/current/2026-07-16/paychecks-desktop.png",
+    "design/current/2026-07-16/recurring-desktop.png",
+    "design/current/2026-07-16/reports-desktop.png"
+   ]
+  },
+  {
+   "id": "keel-ops-03",
+   "app": "keel",
+   "group": "current",
+   "files": [
+    "design/current/2026-07-16/connections-desktop.png",
+    "design/current/2026-07-16/login-desktop.png",
+    "design/current/2026-07-16/reimbursements-desktop.png",
+    "design/current/2026-07-16/settings-desktop.png",
+    "design/current/2026-07-16/statements-desktop.png"
+   ]
+  },
+  {
+   "id": "keel-mobile-04",
+   "app": "keel",
+   "group": "current",
+   "files": [
+    "design/current/2026-07-16/accounts-mobile-390.png",
+    "design/current/2026-07-16/dashboard-mobile-390.png",
+    "design/current/2026-07-16/ledger-mobile-390.png",
+    "design/current/2026-07-16/review-mobile-390.png"
+   ]
+  }
+ ]
+}
