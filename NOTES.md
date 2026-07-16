@@ -1469,3 +1469,38 @@ the adversarial pass that nothing was dropped from either side.
 - **P0-B (thesis):** suggest→approve invisible — audit shows silent auto-categorization while Review promises approval-gated suggestions; no typed-response UI (Law 11), no badge, no reviewed-state.
 - **Law violations found on our own screens:** Law 8 inverted in Reports deltas (red on favorable decreases; −124% savings rate unflagged) + off-token purple bars; Law 6 gap (no CSV button on Export-all); Law 12 hygiene (dev credentials rendered on login); Law 9 gap (no as-of on Home heroes — Reports footnotes are exemplary and should extend).
 - **Build order:** Wave 0 trust repairs → Wave 1 daily-driver spine (sidebar balances, review loop v1, merchant normalization, picker, txn detail incl. mobile, net-worth hero, home action modules) → Wave 2 parity depth (maps to existing W-items) → Wave 3 differentiators (entity-scoped reports, reconciliation chips, typed-AI cards). Teardown doc §Recommended build order is the canonical list.
+
+---
+
+## Wave 0 · Cluster B — chart truth & Law 8 colors (DASHBOARD-7, GOALSFORECAST-3, REPORTSCASHFLOW-4, purple bars)
+
+- **DASHBOARD-7 / GOALSFORECAST-3 (projected-cash chart):**
+  - `charts.tsx` `BalanceTrendChart`: y-axis now derives ticks from the real data
+    extent via `distinctAxisTicks()`, which drops any tick whose compact label
+    duplicates one already used — so a flat/narrow series can never render four
+    identical "15.2K" ticks; it collapses to one honest label. Supplied via the
+    YAxis `ticks` prop (overrides recharts' own auto-tick generation, which is
+    what produced the duplicates); domain left `['auto','auto']` so the existing
+    zero-crossing gradient is untouched.
+  - `dashboard/page.tsx`: the "Projected cash" card no longer draws the degenerate
+    flat band. `forecastVaries` (distinct `balanceMinor` count > 1) gates the
+    chart; with zero confirmed recurring occurrences the card shows the standard
+    dashed-border `EmptyState` (matches Goals/Review) with a CTA to
+    `/dashboard/recurring`. The recurring page's `ProjectedCash` already returns
+    null when there is no variance, so no change needed there.
+- **Purple/indigo "money out" bar (Law 8 / design tokens):** `--keel-chart-outflow`
+  changed from indigo (`#4f46e5` / `#6366f1`) to stone (`#78716c` light /
+  `#a8a29e` dark). Inflow stays emerald; the pair is now chromatic-vs-neutral
+  (CVD-safe) and on-token (stone neutrals + emerald), red still reserved for
+  negative money. Header comment in `charts.tsx` updated (was "emerald/indigo").
+- **REPORTSCASHFLOW-4 (delta colors):** `DeltaLine` and the month-in-review
+  top-category delta no longer render deltas through signed `Money` (which tints
+  negatives red). Direction is now a neutral up/down glyph + muted magnitude —
+  matching the existing "this month vs last month" list, which was already
+  compliant. Red stays only on figures that are themselves negative money (the
+  Net readout, unchanged).
+  - **Savings rate judgment (per task):** left the negative savings-rate text
+    NEUTRAL, not red. Law 8 is "red = negative *money* only"; a savings rate is a
+    percentage ratio, not a money figure, so reddening it would itself be a Law-8
+    tension. Consistent with the rest of this fix (red strictly = negative-money
+    figures). Flagged here rather than silently changed.

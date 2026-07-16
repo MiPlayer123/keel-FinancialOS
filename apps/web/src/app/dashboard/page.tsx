@@ -36,8 +36,8 @@ import { TransferNudgeBanner } from '@/components/keel/transfer-nudge-banner';
 import { formatMoney } from '@/lib/money';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Button } from '@/components/ui/button';
-import { RefreshCw, Loader2 } from 'lucide-react';
+import { Button, buttonVariants } from '@/components/ui/button';
+import { RefreshCw, Loader2, TrendingUp } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function HomePage() {
@@ -508,6 +508,14 @@ function HomeBody() {
   const showMonthlyFlow =
     monthlyFlow !== null &&
     monthlyFlow.some((m) => m.inflowMinor !== '0' || m.outflowMinor !== '0');
+  // With no confirmed recurring occurrences in the window the forecast collapses
+  // to a flat band (every balance equal) that reads as a broken chart
+  // (DASHBOARD-7 / GOALSFORECAST-3). Only draw the chart once the series really
+  // varies; otherwise the card shows the standard empty state below.
+  const forecastVaries =
+    forecast !== null &&
+    forecast.rows.length > 1 &&
+    new Set(forecast.rows.map((r) => r.balanceMinor)).size > 1;
 
   return (
     <>
@@ -562,36 +570,49 @@ function HomeBody() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <BalanceTrendChart points={forecast.rows} height={160} />
-            {forecast.bills.length > 0 ? (
-              <div className="space-y-1">
-                {forecast.bills.slice(0, 5).map((b) => (
-                  <div
-                    key={`${b.seriesId}-${b.date}`}
-                    className="flex items-center gap-3 text-sm"
-                  >
-                    <span className="w-14 shrink-0 font-mono text-xs text-muted-foreground">
-                      {b.date.slice(5)}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate">{b.name}</span>
-                    <Money
-                      amountMinor={b.sign === 'outflow' ? `-${b.amountMinor}` : b.amountMinor}
-                      currency={b.currency}
-                      signed
-                      className="shrink-0 text-sm"
-                    />
+            {forecastVaries ? (
+              <>
+                <BalanceTrendChart points={forecast.rows} height={160} />
+                {forecast.bills.length > 0 ? (
+                  <div className="space-y-1">
+                    {forecast.bills.slice(0, 5).map((b) => (
+                      <div
+                        key={`${b.seriesId}-${b.date}`}
+                        className="flex items-center gap-3 text-sm"
+                      >
+                        <span className="w-14 shrink-0 font-mono text-xs text-muted-foreground">
+                          {b.date.slice(5)}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate">{b.name}</span>
+                        <Money
+                          amountMinor={b.sign === 'outflow' ? `-${b.amountMinor}` : b.amountMinor}
+                          currency={b.currency}
+                          signed
+                          className="shrink-0 text-sm"
+                        />
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                ) : null}
+                <p className="text-xs text-muted-foreground">
+                  A preview from your confirmed recurring bills — not a statement of record.
+                </p>
+              </>
             ) : (
-              <p className="text-xs text-muted-foreground">
-                No confirmed recurring bills in the window yet — confirm suggestions on the
-                Recurring page to project them here.
-              </p>
+              <EmptyState
+                icon={<TrendingUp className="size-6" />}
+                title="No projection yet"
+                description="Confirm your recurring bills and income and KEEL will roll your balance forward here."
+                action={
+                  <Link
+                    href="/dashboard/recurring"
+                    className={buttonVariants({ variant: 'outline', size: 'sm' })}
+                  >
+                    Review recurring
+                  </Link>
+                }
+              />
             )}
-            <p className="text-xs text-muted-foreground">
-              A preview from your confirmed recurring bills — not a statement of record.
-            </p>
           </CardContent>
         </Card>
       ) : null}

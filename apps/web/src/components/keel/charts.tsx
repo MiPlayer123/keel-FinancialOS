@@ -2,8 +2,8 @@
 
 /**
  * KEEL chart primitives (recharts, shadcn-styled). Financial calm: one hue
- * for single-series trends, an emerald/indigo pair for inflow/outflow
- * (validated for CVD separation + contrast in both modes — see NOTES.md;
+ * for single-series trends, an emerald/stone pair for inflow/outflow
+ * (chromatic vs neutral — CVD-safe separation + contrast in both modes;
  * red stays reserved for negative money, Law 8). Geometry uses Number for
  * pixel scaling only — every LABEL formats from the original BIGINT minor
  * string (Law 4); no ledger arithmetic happens here (Law 1).
@@ -37,6 +37,26 @@ function compactAxis(dollars: number): string {
     notation: 'compact',
     maximumFractionDigits: 1,
   }).format(dollars);
+}
+
+/**
+ * Y-axis tick VALUES whose compact labels are guaranteed distinct. Even spacing
+ * across [min, max], then drop any tick that formats to a label already taken —
+ * so a flat or narrow series collapses to a single honest label instead of N
+ * identical ones ("15.2K" ×4, DASHBOARD-7 / GOALSFORECAST-3).
+ */
+function distinctAxisTicks(min: number, max: number, count = 5): number[] {
+  if (!(max > min)) return [min];
+  const seen = new Set<string>();
+  const ticks: number[] = [];
+  for (let i = 0; i < count; i++) {
+    const v = min + ((max - min) * i) / (count - 1);
+    const label = compactAxis(v);
+    if (seen.has(label)) continue;
+    seen.add(label);
+    ticks.push(v);
+  }
+  return ticks;
 }
 
 function monthLabel(isoMonth: string): string {
@@ -73,6 +93,13 @@ export function BalanceTrendChart({ points, height = 200 }: { points: BalancePoi
   const max = Math.max(...data.map((d) => d.value), 0);
   const min = Math.min(...data.map((d) => d.value), 0);
   const zeroOffset = max <= 0 ? 0 : min >= 0 ? 1 : max / (max - min);
+  // Y-axis ticks from the real data extent, deduped so their compact labels are
+  // always distinct — recharts' own auto ticks are what produce "15.2K" ×4 on a
+  // flat/narrow series; supplying our own overrides that (domain stays 'auto').
+  const values = data.map((d) => d.value);
+  const dataMin = values.length > 0 ? Math.min(...values) : 0;
+  const dataMax = values.length > 0 ? Math.max(...values) : 0;
+  const yTicks = distinctAxisTicks(dataMin, dataMax);
   const NEGATIVE = 'var(--destructive)';
   // Unique per instance: two charts on one page must not share gradient ids.
   const gid = useId();
@@ -110,6 +137,7 @@ export function BalanceTrendChart({ points, height = 200 }: { points: BalancePoi
             axisLine={false}
             tick={{ fill: INK_MUTED, fontSize: 11 }}
             tickFormatter={(v: number) => compactAxis(v)}
+            ticks={yTicks}
             domain={['auto', 'auto']}
           />
           <Tooltip
