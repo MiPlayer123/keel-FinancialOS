@@ -31,7 +31,8 @@ import {
   CashFlowMonthlyChart,
   CategoryBarList,
 } from '@/components/keel/charts';
-import { spendingMix } from '@/lib/spending';
+import { spendingMix, isDebtOrTransferLike, unconfirmedTransferLikeCount } from '@/lib/spending';
+import { TransferNudgeBanner } from '@/components/keel/transfer-nudge-banner';
 import { formatMoney } from '@/lib/money';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -159,7 +160,7 @@ function buildInsights(rows: RichTransactionRow[]): Insight[] {
   const merchants = new Map<string, bigint>();
 
   for (const t of rows) {
-    if (t.transferStatus === 'confirmed') continue;
+    if (isDebtOrTransferLike(t)) continue;
     if (t.currency !== domCurrency) continue;
     const cash = BigInt(t.amountMinor || '0');
     if (cash >= 0n) continue; // outflows only
@@ -193,9 +194,16 @@ function buildInsights(rows: RichTransactionRow[]): Insight[] {
       detail: `${formatMoney(mtd.toString(), { currency: domCurrency })} so far vs ${formatMoney(prevToSameDay.toString(), { currency: domCurrency })} by day ${String(dayOfMonth)}`,
     });
   }
-  const topMerchant = [...merchants.entries()].sort((a, b) =>
+  const rankedMerchants = [...merchants.entries()].sort((a, b) =>
     b[1] > a[1] ? 1 : b[1] < a[1] ? -1 : 0,
-  )[0];
+  );
+  // Two tiles must never surface the identical purchase: if the top merchant is
+  // the very row already shown as "Biggest purchase · 7 days", fall through to
+  // the next-ranked merchant so the pair reads as two distinct facts.
+  const topMerchant =
+    (biggest
+      ? rankedMerchants.find(([desc]) => desc !== biggest.description)
+      : rankedMerchants[0]) ?? rankedMerchants[0];
   if (topMerchant && topMerchant[1] > 0n) {
     out.push({
       label: 'Top merchant this month',
@@ -225,7 +233,7 @@ type FreeToSpend = {
  * entirely from data already on the page — Law 1, no model in the loop.
  * free = received so far + expected income still to come
  *       − spent so far − bills still due.
- * Confirmed transfers are excluded (moving money isn't income or spend).
+ * Transfers and debt payments are excluded (moving money isn't income or spend).
  * Only confirmed recurring series and active schedules count as "still to
  * come" — mirrors Recurring's Projected Cash card, including its documented
  * double-count risk when a schedule duplicates a detected series (the user
@@ -255,7 +263,7 @@ function computeFreeToSpend(
   let receivedMinor = 0n;
   let spentMinor = 0n;
   for (const t of richTxns) {
-    if (t.transferStatus === 'confirmed') continue;
+    if (isDebtOrTransferLike(t)) continue;
     if (t.currency !== currency) continue;
     if (!t.effectiveDate.startsWith(month)) continue;
     const amt = BigInt(t.amountMinor || '0');
@@ -496,12 +504,15 @@ function HomeBody() {
 
   const spending = spendingMix(richTxns ?? []);
   const insights = buildInsights(richTxns ?? []);
+  const unconfirmedTransfers = unconfirmedTransferLikeCount(richTxns ?? []);
   const showMonthlyFlow =
     monthlyFlow !== null &&
     monthlyFlow.some((m) => m.inflowMinor !== '0' || m.outflowMinor !== '0');
 
   return (
     <>
+      <TransferNudgeBanner count={unconfirmedTransfers} />
+
       <FreeToSpendCard
         richTxns={richTxns ?? []}
         series={recurringSeries ?? []}
