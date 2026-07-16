@@ -93,11 +93,28 @@ function BudgetsBody() {
 
   // Children sort directly under their parent (one-level tree).
   const raw = rows ?? [];
-  const nameById = new Map(raw.map((r) => [r.categoryLedgerAccountId, r.categoryName]));
+  // BUDGETS-4: the seeded "Transfers" bucket is money-movement, not spending —
+  // showing its "spent" here would contradict this page's "transfers excluded"
+  // subtitle, so suppress that row (and anything nested under it). Matched by
+  // seeded display name; budgets.list carries no rename-proof pfc_key.
+  const transferIds = new Set(
+    raw
+      .filter((r) => r.categoryName.trim().toLowerCase() === 'transfers')
+      .map((r) => r.categoryLedgerAccountId),
+  );
+  const visible =
+    transferIds.size > 0
+      ? raw.filter(
+          (r) =>
+            !transferIds.has(r.categoryLedgerAccountId) &&
+            !(r.parentLedgerAccountId != null && transferIds.has(r.parentLedgerAccountId)),
+        )
+      : raw;
+  const nameById = new Map(visible.map((r) => [r.categoryLedgerAccountId, r.categoryName]));
   const groupOf = (r: BudgetRow) =>
     r.parentLedgerAccountId ? (nameById.get(r.parentLedgerAccountId) ?? '') : r.categoryName;
   const depthOf = (r: BudgetRow) => (r.parentLedgerAccountId ? 1 : 0);
-  const list = [...raw].sort(
+  const list = [...visible].sort(
     (a, b) =>
       groupOf(a).localeCompare(groupOf(b)) ||
       depthOf(a) - depthOf(b) ||
