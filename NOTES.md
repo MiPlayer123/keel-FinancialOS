@@ -1450,3 +1450,14 @@ the adversarial pass that nothing was dropped from either side.
 ### State
 
 - Verifiers tested green against the current tree. No product code touched. Evidence/census/plans/slices directories are templates-only until the founder's screenshot drop lands.
+
+## 2026-07-16 — Cloud MCP access confirmed; live probe baseline
+
+### Decisions
+
+- **D-033 Supabase MCP now sees the FinancialOS project** (`yrbteeownwjhcushwaga`, ACTIVE_HEALTHY, us-west-2, PG 17.6). Supersedes the D-004/D-006 limitation ("MCP for docs search only") — the MCP can now be used for read-side operations against the real project (logs, advisors, table listing) in the slice pipeline's post-deploy probe phase. Founder re-confirmed the publishable key; it was already recorded in `.env.example` (INFRA §11.1), no change needed. Writes to the cloud project still go through migrations + CI deploy only, never ad-hoc MCP mutations (Law 2 / execution protocol).
+
+### Live probe baseline (first post-deploy probe, manual)
+
+- `GET /functions/v1/api/health` with publishable key only → **401 INVALID_CREDENTIALS — correct** (TASK-000 test 9: publishable key alone is not a credential). Confirms the prod auth boundary in the deployed function.
+- All four edge functions ACTIVE at version {api:21, worker:22, webhook-provider:25, scheduled:23}; `updated_at` matches today's post-merge `deploy-functions` run — CI→deploy chain verified live.
