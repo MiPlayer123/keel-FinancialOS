@@ -2,8 +2,8 @@
 
 /**
  * KEEL chart primitives (recharts, shadcn-styled). Financial calm: one hue
- * for single-series trends, an emerald/indigo pair for inflow/outflow
- * (validated for CVD separation + contrast in both modes — see NOTES.md;
+ * for single-series trends, an emerald/stone pair for inflow/outflow
+ * (chromatic vs neutral — CVD-safe separation + contrast in both modes;
  * red stays reserved for negative money, Law 8). Geometry uses Number for
  * pixel scaling only — every LABEL formats from the original BIGINT minor
  * string (Law 4); no ledger arithmetic happens here (Law 1).
@@ -37,6 +37,39 @@ function compactAxis(dollars: number): string {
     notation: 'compact',
     maximumFractionDigits: 1,
   }).format(dollars);
+}
+
+/**
+ * Y-axis tick VALUES whose compact labels are guaranteed distinct. Even spacing
+ * across [min, max], then drop any tick that formats to a label already taken —
+ * so a flat or narrow series collapses to a single honest label instead of N
+ * identical ones ("15.2K" ×4, DASHBOARD-7 / GOALSFORECAST-3).
+ */
+/**
+ * Custom y-ticks ONLY for the degenerate case recharts mishandles — a series
+ * so flat that its auto ticks all render the same compact label ("15.2K" ×4).
+ * Returns undefined for healthy ranges so recharts keeps its nice-rounded
+ * ticks (and the $0 gridline on zero-crossing series — review finding: an
+ * unconditional override pinned labels to the plot edges on every chart).
+ * In the degenerate case, ticks are deduped by label and always include 0
+ * when the domain crosses it, anchoring the red/emerald boundary (Law 8).
+ */
+function distinctAxisTicks(min: number, max: number, count = 5): number[] | undefined {
+  if (!(max > min)) return [min];
+  // Healthy range heuristic: if the endpoints already render distinct compact
+  // labels, recharts' own ticks will too — leave them alone.
+  if (compactAxis(min) !== compactAxis(max)) return undefined;
+  const seen = new Set<string>();
+  const ticks: number[] = [];
+  for (let i = 0; i < count; i++) {
+    const v = min + ((max - min) * i) / (count - 1);
+    const label = compactAxis(v);
+    if (seen.has(label)) continue;
+    seen.add(label);
+    ticks.push(v);
+  }
+  if (min < 0 && max > 0 && !ticks.includes(0)) ticks.push(0);
+  return ticks.sort((a, b) => a - b);
 }
 
 function monthLabel(isoMonth: string): string {
@@ -73,6 +106,13 @@ export function BalanceTrendChart({ points, height = 200 }: { points: BalancePoi
   const max = Math.max(...data.map((d) => d.value), 0);
   const min = Math.min(...data.map((d) => d.value), 0);
   const zeroOffset = max <= 0 ? 0 : min >= 0 ? 1 : max / (max - min);
+  // Y-axis ticks from the real data extent, deduped so their compact labels are
+  // always distinct — recharts' own auto ticks are what produce "15.2K" ×4 on a
+  // flat/narrow series; supplying our own overrides that (domain stays 'auto').
+  const values = data.map((d) => d.value);
+  const dataMin = values.length > 0 ? Math.min(...values) : 0;
+  const dataMax = values.length > 0 ? Math.max(...values) : 0;
+  const yTicks = distinctAxisTicks(dataMin, dataMax);
   const NEGATIVE = 'var(--destructive)';
   // Unique per instance: two charts on one page must not share gradient ids.
   const gid = useId();
@@ -110,6 +150,7 @@ export function BalanceTrendChart({ points, height = 200 }: { points: BalancePoi
             axisLine={false}
             tick={{ fill: INK_MUTED, fontSize: 11 }}
             tickFormatter={(v: number) => compactAxis(v)}
+            {...(yTicks !== undefined ? { ticks: yTicks } : {})}
             domain={['auto', 'auto']}
           />
           <Tooltip

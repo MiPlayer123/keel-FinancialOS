@@ -17,7 +17,18 @@ import { PlaidLinkButton } from '@/components/keel/plaid-link-button';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 
 const STATUS_TONE: Record<string, string> = {
   active: 'text-primary',
@@ -210,15 +221,10 @@ function ConnectionsBody() {
                     )}
                     Sync now
                   </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      void disconnect(c.id);
-                    }}
-                  >
-                    Disconnect
-                  </Button>
+                  <DisconnectDialog
+                    label={c.displayName ?? c.institutionId ?? c.provider}
+                    onConfirm={() => disconnect(c.id)}
+                  />
                 </div>
               </div>
             ))}
@@ -226,5 +232,93 @@ function ConnectionsBody() {
         )}
       </div>
     </>
+  );
+}
+
+/**
+ * ONBOARDINGIMPORT-4: Disconnect crypto-shreds the encrypted provider token —
+ * irreversible (the user must re-link and re-authorize). Gate it behind a
+ * typed confirmation with a destructive-styled confirm button so it can't be
+ * mis-clicked next to the routine "Sync now" control. The action itself is
+ * unchanged.
+ */
+const CONFIRM_WORD = 'DISCONNECT';
+
+function DisconnectDialog({
+  label,
+  onConfirm,
+}: {
+  label: string;
+  onConfirm: () => Promise<void> | void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function confirm() {
+    setBusy(true);
+    try {
+      await onConfirm();
+      setOpen(false);
+      setTyped('');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setTyped('');
+      }}
+    >
+      <DialogTrigger
+        render={
+          <Button variant="outline" size="sm">
+            Disconnect
+          </Button>
+        }
+      />
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Disconnect {label}?</DialogTitle>
+          <DialogDescription>
+            This permanently deletes the connection&apos;s credentials. Transactions are kept.
+            You&apos;ll need to reconnect and re-authorize to resume syncing.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2">
+          <Label htmlFor="disconnect-confirm">
+            Type <span className="font-medium text-foreground">{CONFIRM_WORD}</span> to confirm
+          </Label>
+          <Input
+            id="disconnect-confirm"
+            autoComplete="off"
+            value={typed}
+            onChange={(e) => {
+              setTyped(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && typed === CONFIRM_WORD && !busy) void confirm();
+            }}
+          />
+        </div>
+        <DialogFooter>
+          <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+          <Button
+            variant="destructive"
+            disabled={typed !== CONFIRM_WORD || busy}
+            onClick={() => {
+              void confirm();
+            }}
+          >
+            {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+            Disconnect
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
