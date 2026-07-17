@@ -8,8 +8,9 @@ import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery } from '@/lib/use-keel-query';
-import { keelCommand, newId, type RichTransactionRow } from '@/lib/keel-api';
+import { fetchEntities, keelCommand, newId, type RichTransactionRow } from '@/lib/keel-api';
 import { TxnPicker } from '@/components/keel/txn-picker';
+import { AttachmentsSection } from '@/components/keel/attachments-section';
 import { parseSignedDollars } from '@/lib/hash';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -76,6 +77,20 @@ function ReimbursementsBody() {
   const [creating, setCreating] = useState(false);
   const [openDetail, setOpenDetail] = useState<string | null>(null);
   const [settling, setSettling] = useState<ClaimRow | null>(null);
+  // Reimbursement claims have no entity_id of their own; same
+  // first-entity fallback as paychecks (personal households have exactly one).
+  const [entityId, setEntityId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!householdId) return;
+    void fetchEntities(householdId)
+      .then((entities) => {
+        setEntityId(entities[0]?.entityId ?? null);
+      })
+      .catch(() => {
+        setEntityId(null);
+      });
+  }, [householdId]);
 
   const txnById = useMemo(
     () => new Map(txns.rows.map((t) => [t.transactionId, t])),
@@ -144,6 +159,7 @@ function ReimbursementsBody() {
               }}
               householdId={householdId}
               userId={userId}
+              entityId={entityId}
               onChanged={() => {
                 void refetch();
               }}
@@ -190,6 +206,7 @@ function ClaimCard({
   onSettle,
   householdId,
   userId,
+  entityId,
   onChanged,
 }: {
   claim: ClaimRow;
@@ -199,6 +216,7 @@ function ClaimCard({
   onSettle: () => void;
   householdId: string | null;
   userId: string | null;
+  entityId: string | null;
   onChanged: () => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
@@ -266,6 +284,14 @@ function ClaimCard({
 
       {open ? (
         <div className="space-y-3 border-t border-border px-4 py-3">
+          <AttachmentsSection
+            householdId={householdId}
+            userId={userId}
+            entityId={entityId}
+            targetType="reimbursement_claim"
+            targetId={c.claimId}
+            kind="receipt"
+          />
           {c.settlements.length > 0 ? (
             <div className="space-y-1">
               {c.settlements.map((s) => (

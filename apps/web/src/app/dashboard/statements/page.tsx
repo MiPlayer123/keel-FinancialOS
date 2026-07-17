@@ -19,6 +19,7 @@ import {
 } from '@/lib/keel-api';
 import { sha256Hex, parseSignedDollars, minorToDollars } from '@/lib/hash';
 import { shortDateWithYear } from '@/lib/relative-date';
+import { AttachmentsSection } from '@/components/keel/attachments-section';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -129,6 +130,7 @@ function StatementsBody() {
               key={s.statementId}
               statement={s}
               accountName={accountName(s.accountId)}
+              entityId={accounts.find((a) => a.id === s.accountId)?.entityId ?? null}
               open={openDetail === s.statementId}
               onToggle={() => {
                 setOpenDetail(openDetail === s.statementId ? null : s.statementId);
@@ -163,6 +165,7 @@ function StatementsBody() {
 function StatementCard({
   statement: s,
   accountName,
+  entityId,
   open,
   onToggle,
   householdId,
@@ -171,6 +174,7 @@ function StatementCard({
 }: {
   statement: StatementRow;
   accountName: string;
+  entityId: string | null;
   open: boolean;
   onToggle: () => void;
   householdId: string | null;
@@ -251,6 +255,15 @@ function StatementCard({
               </>
             ) : null}
           </div>
+
+          <AttachmentsSection
+            householdId={householdId}
+            userId={userId}
+            entityId={entityId}
+            targetType="statement"
+            targetId={s.statementId}
+            kind="statement"
+          />
 
           <div className="overflow-hidden rounded-md border border-border">
             {s.lines.map((l, i) => (

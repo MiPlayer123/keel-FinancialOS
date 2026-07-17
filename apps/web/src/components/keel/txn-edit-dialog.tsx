@@ -31,6 +31,7 @@ import {
   overrideTransaction,
   setTransactionSplits,
   voidManualTransaction,
+  type AccountRow,
   type CategoryRow,
   type RichTransactionRow,
   type TagRow,
@@ -58,6 +59,7 @@ import { shortDateWithYear } from '@/lib/relative-date';
 import { isUncategorized } from '@/lib/needs-attention';
 import { isAutoCategorized } from '@/lib/review-state';
 import { useHousehold } from '@/components/keel/household-context';
+import { AttachmentsSection } from '@/components/keel/attachments-section';
 import { Money } from '@/components/keel/money';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -614,6 +616,8 @@ type TxnEditFormProps = {
   row: RichTransactionRow;
   householdId: string | null;
   userId: string | null;
+  /** The transaction's owning account's entity — required to attach a document. */
+  entityId: string | null;
   categories: CategoryRow[];
   allTags: TagRow[];
   onTagsMutated: () => void;
@@ -644,6 +648,7 @@ function TxnEditForm({
   row,
   householdId,
   userId,
+  entityId,
   categories,
   allTags,
   onTagsMutated,
@@ -1180,6 +1185,14 @@ function TxnEditForm({
             }}
           />
         </div>
+        <AttachmentsSection
+          householdId={householdId}
+          userId={userId}
+          entityId={entityId}
+          targetType="transaction"
+          targetId={row.transactionId}
+          kind="receipt"
+        />
       </div>
       <DialogFooter className="gap-2 sm:justify-between">
         {row.source === 'manual' && !voiding ? (
@@ -1239,6 +1252,7 @@ export function TxnEditDialog({
   row,
   householdId,
   userId,
+  accounts,
   categories,
   allTags,
   onTagsMutated,
@@ -1251,6 +1265,8 @@ export function TxnEditDialog({
   row: RichTransactionRow | null;
   householdId: string | null;
   userId: string | null;
+  /** Looked up by row.accountId to find the entity a new attachment belongs to. */
+  accounts: AccountRow[];
   categories: CategoryRow[];
   allTags: TagRow[];
   onTagsMutated: () => void;
@@ -1290,6 +1306,7 @@ export function TxnEditDialog({
             row={row}
             householdId={householdId}
             userId={userId}
+            entityId={accounts.find((a) => a.id === row.accountId)?.entityId ?? null}
             categories={categories}
             allTags={allTags}
             onTagsMutated={onTagsMutated}
@@ -1316,6 +1333,7 @@ export function TxnDetailPanel({
   row,
   householdId,
   userId,
+  accounts,
   categories,
   allTags,
   onTagsMutated,
@@ -1328,6 +1346,8 @@ export function TxnDetailPanel({
   row: RichTransactionRow | null;
   householdId: string | null;
   userId: string | null;
+  /** Looked up by row.accountId to find the entity a new attachment belongs to. */
+  accounts: AccountRow[];
   categories: CategoryRow[];
   allTags: TagRow[];
   onTagsMutated: () => void;
@@ -1366,6 +1386,7 @@ export function TxnDetailPanel({
           row={row}
           householdId={householdId}
           userId={userId}
+          entityId={accounts.find((a) => a.id === row.accountId)?.entityId ?? null}
           categories={categories}
           allTags={allTags}
           onTagsMutated={onTagsMutated}

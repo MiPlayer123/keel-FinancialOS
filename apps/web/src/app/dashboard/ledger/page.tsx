@@ -815,6 +815,7 @@ function LedgerTable() {
               row={editing}
               householdId={householdId}
               userId={userId}
+              accounts={accounts}
               categories={categories}
               allTags={tags}
               formRef={editorRef}
@@ -872,6 +873,7 @@ function LedgerTable() {
         row={showPanel ? null : editing}
         householdId={householdId}
         userId={userId}
+        accounts={accounts}
         categories={categories}
         allTags={tags}
         formRef={editorRef}

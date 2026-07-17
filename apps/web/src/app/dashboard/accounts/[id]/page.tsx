@@ -549,6 +549,7 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
                 row={editing}
                 householdId={householdId}
                 userId={userId}
+                accounts={accounts}
                 categories={categories}
                 allTags={tags}
                 formRef={editorRef}
@@ -569,6 +570,7 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
           row={showPanel ? null : editing}
           householdId={householdId}
           userId={userId}
+          accounts={accounts}
           categories={categories}
           allTags={tags}
           formRef={editorRef}
