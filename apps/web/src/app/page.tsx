@@ -16,6 +16,7 @@ import { RedirectIfAuthed } from '@/components/keel/redirect-if-authed';
 import { HeroMockupLazy } from '@/components/keel/landing/hero-mockup-lazy';
 import { LandingNav } from '@/components/keel/landing/landing-nav';
 import { Reveal } from '@/components/keel/landing/reveal';
+import { TransactionStory } from '@/components/keel/landing/transaction-story';
 import { cn } from '@/lib/utils';
 
 const FEATURES = [
@@ -136,6 +137,9 @@ export default function LandingPage() {
             </Reveal>
           </div>
         </section>
+
+        {/* ————— How it works: scroll-scrubbed transaction story ————— */}
+        <TransactionStory />
 
         {/* ————— Problem / principles ————— */}
         <section id="principles" className="scroll-mt-24 border-t border-border">

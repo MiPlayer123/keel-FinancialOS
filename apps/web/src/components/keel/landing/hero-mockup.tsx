@@ -3,6 +3,8 @@
 import { ArrowLeftRight, Check, Landmark, ListChecks, Sparkles, X } from 'lucide-react';
 import { BalanceTrendChart, type BalancePoint } from '@/components/keel/charts';
 import { Money } from '@/components/keel/money';
+import { Odometer } from '@/components/keel/landing/odometer';
+import { Tilt } from '@/components/keel/landing/tilt';
 import { cn } from '@/lib/utils';
 
 /**
@@ -52,7 +54,8 @@ function DemoBadge({ kind }: { kind: 'transfer' | 'split' }) {
 
 export function HeroMockup({ className }: { className?: string }) {
   return (
-    <div aria-hidden tabIndex={-1} className={cn('pointer-events-none select-none', className)}>
+    <div aria-hidden tabIndex={-1} className={cn('select-none', className)}>
+      <Tilt>
       <div className="overflow-hidden rounded-xl border border-border bg-card shadow-2xl shadow-stone-900/10 dark:shadow-black/40">
         {/* window chrome */}
         <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2.5">
@@ -70,8 +73,8 @@ export function HeroMockup({ className }: { className?: string }) {
                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   Net worth
                 </p>
-                <p className="mt-1 font-mono text-2xl font-semibold tabular-nums tracking-tight">
-                  $124,833.90
+                <p className="mt-1 text-2xl font-semibold tracking-tight">
+                  <Odometer value="$124,833.90" />
                 </p>
               </div>
               <p className="text-xs text-muted-foreground">
@@ -138,6 +141,7 @@ export function HeroMockup({ className }: { className?: string }) {
           </div>
         </div>
       </div>
+      </Tilt>
     </div>
   );
 }
