@@ -361,7 +361,14 @@ export function CategoryPicker({
         ),
       );
     }
-    if (c.ledgerAccountId !== currentId) onPick(c.ledgerAccountId, c.name);
+    // `auto` rows must fire onPick even when the picked category IS the
+    // currently-displayed one (review r3604432435): confirming an
+    // auto-categorized row is exactly "pick the same category" from the
+    // user's perspective, and that has to actually re-file it with
+    // source='user' (clearing the Auto badge) — the no-op suppression below
+    // exists for the ordinary trigger, where re-picking the current value is
+    // truly a no-op with nothing to confirm.
+    if (auto || c.ledgerAccountId !== currentId) onPick(c.ledgerAccountId, c.name);
   }
 
   async function createAndPick() {

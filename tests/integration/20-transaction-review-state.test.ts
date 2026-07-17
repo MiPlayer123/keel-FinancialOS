@@ -1,21 +1,30 @@
 /**
  * Reviewed/unreviewed transaction state (P0-B follow-up — teardown queue
  * item 2): keel_list_transactions_rich's new `categorySource` field, proven
- * end to end through the REAL command surfaces that produce each state
- * (Law 7: RPC/commands only, zero direct DML on financial tables):
+ * end to end through the REAL command/worker surfaces that produce each
+ * state (Law 7: RPC/commands only, zero direct DML on financial tables):
  *   1. keel_categorize_transaction (the user-initiated recategorize path)
  *      -> categorySource 'user'.
- *   2. keel_rule_save + keel_apply_rules (the rules engine) -> 'rule'.
+ *   2. keel_rule_save + keel_apply_rules (the rules engine) -> 'rule'. The
+ *      fixture MUST reach the rule via a synced, never-overlaid transaction
+ *      (keel_worker_record_raw_event + drainQueue, same pattern 04-replay/
+ *      06-redteam/08-plaid-sync already use) — a manualTxn single-split
+ *      entry pins its own source='user' overlay unconditionally
+ *      (20260713100000 §"Single-split"), and keel_apply_rules' own
+ *      conflict guard (`where transaction_categories.source <> 'user'`)
+ *      refuses to touch that row (review r3604432441: the original fixture
+ *      used manualTxn here, so `categorized` was always 0).
  *   3. keel_cmd_set_splits (a real multi-category split, no overlay row at
  *      all) -> 'user' — reviewed by construction, per 20260717200000.
  *
- * The fourth state (categorySource null — a freshly synced transaction that
- * has NEVER been touched by any of the above) is not reachable through a
- * command at all by definition, so it is covered at the SQL layer instead:
- * supabase/tests/019_transaction_review_state.sql.
+ * The fourth state (categorySource null) is also exercised at the SQL layer
+ * (supabase/tests/019_transaction_review_state.sql) for a cheaper/more
+ * direct read-model assertion, but it is emphatically NOT true that a
+ * fresh sync is unreachable through a command — case 2 below IS that same
+ * synced-and-uncategorized starting point, just before a rule ever runs.
  */
 import { describe, expect, it } from 'vitest';
-import { SEED, signIn } from './helpers.js';
+import { drainQueue, serviceClient, SEED, signIn } from './helpers.js';
 
 const HOUSEHOLD = SEED.households.alpha;
 const ACTOR = { kind: 'user' as const, userId: SEED.users.alex.id };
@@ -84,8 +93,51 @@ describe('reviewed/unreviewed transaction state (categorySource)', () => {
 
   it('the rules engine (keel_rule_save + keel_apply_rules) yields categorySource "rule"', async () => {
     const alex = await signIn(SEED.users.alex.email);
+    const svc = serviceClient();
     const pattern = `RULE STATE MERCHANT ${Date.now().toString(36)}`;
-    const txnId = await manualTxn(alex, pattern);
+
+    // A rule must land on a transaction with NO existing overlay — the same
+    // starting point a real Plaid sync produces before anything has
+    // classified it. manualTxn (used by the other two cases here) always
+    // pins a source='user' overlay on a single-split entry, which
+    // keel_apply_rules' own conflict guard refuses to touch (review
+    // r3604432441) — so this fixture goes through the sync/worker path
+    // instead, exactly like 04-replay/06-redteam/08-plaid-sync.
+    const providerTxnId = `rulestate-${Date.now().toString(36)}`;
+    const { error: recordError } = await svc.rpc('keel_worker_record_raw_event', {
+      p_provider: 'simulator',
+      p_connection_external_ref: SEED.connections.simAlpha.ref,
+      p_provider_event_id: `rulestate:${providerTxnId}`,
+      p_account_external_ref: 'sim-acct-checking',
+      p_body: {
+        kind: 'transaction_added',
+        eventId: `rulestate-evt-${providerTxnId}`,
+        transaction: {
+          providerTransactionId: providerTxnId,
+          accountExternalRef: 'sim-acct-checking',
+          amountMinor: '-1000',
+          currency: 'USD',
+          date: new Date().toISOString().slice(0, 10),
+          description: pattern,
+          pending: false,
+          pendingTransactionId: null,
+        },
+      },
+      p_received_at: new Date().toISOString(),
+    });
+    if (recordError) throw new Error(`record raw event failed: ${recordError.message}`);
+
+    const outcomes = await drainQueue('sync_events');
+    expect(outcomes.every((o) => o.startsWith('done:'))).toBe(true);
+
+    const economicEventKey = `txn:simulator:${SEED.connections.simAlpha.ref}:${providerTxnId}`;
+    const { data: canonical, error: canonicalError } = await svc
+      .from('canonical_transactions')
+      .select('id')
+      .eq('economic_event_key', economicEventKey)
+      .single();
+    if (canonicalError) throw new Error(`canonical lookup failed: ${canonicalError.message}`);
+    const txnId = canonical.id;
 
     const { data: ruleId, error: ruleError } = await alex.rpc('keel_rule_save', {
       p_household_id: HOUSEHOLD,
