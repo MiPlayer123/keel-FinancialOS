@@ -36,11 +36,13 @@ import { relativeSyncLabel } from '@/lib/relative-date';
 import { utilizationPercent } from '@/lib/credit-utilization';
 import { resolveEditingAfterSave } from '@/lib/txn-edit-guard';
 import { useIsDesktopDetail } from '@/lib/use-desktop-detail';
+import { looksLikeInvestmentAccount } from '@/lib/investment-subtype';
 import { ReauthLink } from '@/components/keel/reauth-link';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
 import { RenameAccountDialog } from '@/components/keel/rename-account-dialog';
 import { ReassignEntityDialog } from '@/components/keel/reassign-entity-dialog';
 import { SetOpeningBalanceDialog } from '@/components/keel/set-opening-balance-dialog';
+import { HoldingsCard } from '@/components/keel/holdings-card';
 import {
   TxnDetailPanel,
   TxnEditDialog,
@@ -482,6 +484,10 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
             </Card>
           ) : null}
         </div>
+      ) : null}
+
+      {looksLikeInvestmentAccount(account.subtype) ? (
+        <HoldingsCard householdId={householdId} accountId={accountId} currency={account.currency} />
       ) : null}
 
       <div>
