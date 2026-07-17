@@ -770,6 +770,10 @@ export type RuleRow = {
   renameTo: string | null;
   priority: number;
   active: boolean;
+  /** C18 residual: optional AND condition — abs(amount_minor) >= this. Null = no lower bound. */
+  amountMinMinor: string | null;
+  /** C18 residual: optional AND condition — abs(amount_minor) <= this. Null = no upper bound. */
+  amountMaxMinor: string | null;
 };
 
 export async function fetchRules(householdId: string): Promise<RuleRow[]> {
@@ -785,6 +789,9 @@ export async function saveRule(input: {
   renameTo?: string | null;
   priority?: number;
   active?: boolean;
+  /** BIGINT minor units as a string (Law 4). Both optional/independent; null clears the bound. */
+  amountMinMinor?: string | null;
+  amountMaxMinor?: string | null;
 }): Promise<{ ruleId?: string }> {
   return invoke('api/rules/save', {
     householdId: input.householdId,
@@ -794,6 +801,8 @@ export async function saveRule(input: {
     renameTo: input.renameTo ?? null,
     ...(input.priority !== undefined ? { priority: input.priority } : {}),
     ...(input.active !== undefined ? { active: input.active } : {}),
+    amountMinMinor: input.amountMinMinor ?? null,
+    amountMaxMinor: input.amountMaxMinor ?? null,
   });
 }
 

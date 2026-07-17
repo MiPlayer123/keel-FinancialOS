@@ -53,7 +53,7 @@ insert into expected_export_tables(table_name, allowed_columns, omitted_columns)
   ('transaction_categories', array['canonical_transaction_id','household_id','category_ledger_account_id','source','rule_id','created_at','updated_at'], '{}'),
   ('transaction_overrides', array['canonical_transaction_id','household_id','display_description','note','created_at','updated_at'], '{}');
 insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
-  ('category_rules', array['id','household_id','entity_id','matcher','pattern','category_ledger_account_id','rename_to','priority','active','created_at','updated_at'], '{}'),
+  ('category_rules', array['id','household_id','entity_id','matcher','pattern','category_ledger_account_id','rename_to','priority','active','created_at','updated_at','amount_min_minor','amount_max_minor'], '{}'),
   ('rule_renames', array['canonical_transaction_id','household_id','rule_id','display_name','created_at','updated_at'], '{}'),
   ('category_suggestions', array['id','household_id','canonical_transaction_id','suggested_category_ledger_account_id','source','reason_code','evidence','status','created_at','decided_at','decided_by'], '{}');
 insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
