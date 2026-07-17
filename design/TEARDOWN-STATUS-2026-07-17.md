@@ -11,7 +11,7 @@ slices merge.
 | ID | Status | Evidence / gap |
 |---|---|---|
 | **P0-A** transfer/CC-payment pollution | **SHIPPED** | Wave 0 cluster A (PR #10), predicate redesigned D-034: `isDebtOrTransferLike` in `lib/spending`; `TransferNudgeBanner` on Home; budgets suppress movement buckets; reports donut footnote. Top-merchant tie-break removed. |
-| **P0-B** suggest→approve invisible | **◐ core NOT COVERED** | Typed evidence cards + "Why?" disclosure + reason codes SHIPPED for **transfers + recurring** (PR #15, D-038); nav `ReviewBadge` SHIPPED. **Missing:** categorizations still auto-applied silently (never routed to Review), no reviewed/unreviewed transaction state, no reversible-"auto" badge, no bulk approve, no confidence-routing disclosure. |
+| **P0-B** suggest→approve invisible | **◐ SHIPPED (core)** | Categorization loop SHIPPED (PR #20, migration 20260717160000 live in prod): typed `category_suggestions` + deterministic detection (rules beat PFC) + audited accept/dismiss command + Review section + badge count; 5 CI rounds + adversarial review (starvation anti-join, stale-clobber guard, claims-not-auth.uid, service_role grant trap). **Perf caveat in flight:** detection's raw-event PFC scan hit 37s on real prod data → statement timeout; fix = denormalized `nsr.pfc_primary` (branch claude/p0b-perf). **Residual:** reviewed/unreviewed txn state, "auto" badge, bulk approve. |
 
 ## Convergent patterns C1–C20
 
@@ -47,10 +47,8 @@ slices merge.
 
 ## Build queue (priority order)
 
-1. **P0-B categorization loop** — route sub-threshold categorizations into
-   Review as typed suggestions; reviewed/unreviewed txn state; visible
-   reversible "auto" badge. Reuses PR #15 card/disclosure/badge infra; needs a
-   categorization-suggestion query + `reviewed` flag on `transactions.rich`.
+1. **P0-B follow-ups** — detection perf (nsr.pfc_primary, in flight); reviewed/
+   unreviewed txn state; visible reversible "auto" badge; bulk approve.
 2. **C4 category picker** — cmdk popover (typeahead/recents/inline-create/old
    value struck). No new deps.
 3. **C14 reports scope bar + drill** — date+account+entity bar driving every
