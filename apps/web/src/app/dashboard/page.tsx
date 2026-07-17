@@ -479,6 +479,13 @@ function HomeBody() {
   const waitingForAccounts = householdId !== null && accounts === null;
   const loading = !ready || balances.loading || waitingForAccounts;
 
+  // Hooks must run on EVERY render — these sit ABOVE the early returns below
+  // (Rules of Hooks; placing them after `if (loading) return …` crashed the
+  // whole dashboard — caught by the live UI verification pass).
+  const spending = useMemo(() => spendingMix(richTxns ?? []), [richTxns]);
+  const insights = useMemo(() => buildInsights(richTxns ?? []), [richTxns]);
+  const suggestedTransfers = useMemo(() => suggestedTransferCount(richTxns ?? []), [richTxns]);
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -506,9 +513,6 @@ function HomeBody() {
     return acc + BigInt(b);
   }, 0n);
 
-  const spending = useMemo(() => spendingMix(richTxns ?? []), [richTxns]);
-  const insights = useMemo(() => buildInsights(richTxns ?? []), [richTxns]);
-  const suggestedTransfers = useMemo(() => suggestedTransferCount(richTxns ?? []), [richTxns]);
   const showMonthlyFlow =
     monthlyFlow !== null &&
     monthlyFlow.some((m) => m.inflowMinor !== '0' || m.outflowMinor !== '0');
