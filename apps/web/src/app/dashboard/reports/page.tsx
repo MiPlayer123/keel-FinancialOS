@@ -23,6 +23,8 @@ import {
   type SankeyFlowLink,
   type SankeyFlowNode,
 } from '@/components/keel/charts';
+import { isDebtOrTransferLike, suggestedTransferCount } from '@/lib/spending';
+import { TransferNudgeBanner } from '@/components/keel/transfer-nudge-banner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -73,7 +75,7 @@ type CategoryReportRow = {
 };
 
 /**
- * Category × month matrix, confirmed transfers excluded, NET signed per
+ * Category × month matrix, transfers & debt payments excluded, NET signed per
  * month (refund inflows on an expense category reduce it — the same net
  * convention as budget-spent-v1; income view mirrors it). BigInt everywhere.
  */
@@ -101,7 +103,7 @@ function buildMatrix(
     byCategory.set(key, entry);
   };
   for (const t of rows) {
-    if (t.transferStatus === 'confirmed') continue;
+    if (isDebtOrTransferLike(t)) continue;
     const mk = monthKey(t.effectiveDate);
     if (!monthSet.has(mk)) continue;
     // Split transactions: attribute each share to its own category.
@@ -170,7 +172,7 @@ function rangeLabel(from: string, to: string): string {
 
 /**
  * Net-signed expense totals per category over an arbitrary inclusive
- * [from, to] calendar-day range — split-aware and confirmed-transfer-
+ * [from, to] calendar-day range — split-aware and transfer/debt-payment-
  * excluding, same convention as buildMatrix. Restricted to the dominant
  * currency within the range (like tagTotals/taxSchedule) so the donut and
  * its total format with one currency. Categories whose net is negative
@@ -192,7 +194,7 @@ function categoryRangeTotals(
   };
   const currencyCounts = new Map<string, number>();
   for (const t of rows) {
-    if (t.transferStatus === 'confirmed') continue;
+    if (isDebtOrTransferLike(t)) continue;
     if (!inRange(t.effectiveDate)) continue;
     currencyCounts.set(t.currency, (currencyCounts.get(t.currency) ?? 0) + 1);
   }
@@ -206,7 +208,7 @@ function categoryRangeTotals(
     byCategory.set(key, e);
   };
   for (const t of rows) {
-    if (t.transferStatus === 'confirmed') continue;
+    if (isDebtOrTransferLike(t)) continue;
     if (t.currency !== currency) continue;
     if (!inRange(t.effectiveDate)) continue;
     if (t.splits && t.splits.length > 0) {
@@ -244,7 +246,7 @@ type FlowGraph = {
  * This month's money movement as a flow: income categories → Income →
  * spending categories, with "Saved" / "From savings" balancing the sides so
  * every ribbon is positive. Net convention matches the matrix; subcategories
- * roll up into their parents; confirmed transfers excluded. BigInt sums.
+ * roll up into their parents; transfers & debt payments excluded. BigInt sums.
  */
 function buildFlow(rows: RichTransactionRow[], categories: CategoryRow[]): FlowGraph {
   const month = new Date().toISOString().slice(0, 7);
@@ -270,7 +272,7 @@ function buildFlow(rows: RichTransactionRow[], categories: CategoryRow[]): FlowG
   };
 
   for (const t of rows) {
-    if (t.transferStatus === 'confirmed') continue;
+    if (isDebtOrTransferLike(t)) continue;
     if (!t.effectiveDate.startsWith(month)) continue;
     if (t.splits && t.splits.length > 0) {
       for (const s of t.splits) {
@@ -402,7 +404,10 @@ function taxSchedule(
 }
 
 /**
- * Net cash by tag over the trailing months (confirmed transfers excluded).
+ * Net cash by tag over the trailing months. NET-CASH scope, deliberately
+ * different from the spending widgets above: only confirmed transfer pairs are
+ * excluded (they net to zero); debt payments are real cash against a tag, so
+ * they stay counted. Each card's caption states its own formula (Law 9).
  * Sums are single-currency: restricted to the household's dominant currency,
  * which is returned so the card formats with it.
  */
@@ -477,7 +482,7 @@ function prevMonthKey(key: string): string {
 /**
  * Income total, expense-category totals (net of refunds, split-aware — same
  * convention as buildMatrix), for one month in the dominant currency.
- * Confirmed transfers excluded.
+ * Transfers & debt payments excluded.
  */
 function monthIncomeAndSpending(
   rows: RichTransactionRow[],
@@ -495,7 +500,7 @@ function monthIncomeAndSpending(
     categories.set(key, e);
   };
   for (const t of rows) {
-    if (t.transferStatus === 'confirmed') continue;
+    if (isDebtOrTransferLike(t)) continue;
     if (t.currency !== currency) continue;
     if (monthKey(t.effectiveDate) !== month) continue;
     if (t.splits && t.splits.length > 0) {
@@ -521,8 +526,9 @@ function monthIncomeAndSpending(
 
 /**
  * Biggest single purchase, distinct-merchant count, and transaction count for
- * one month in the dominant currency. "Purchase" = any non-transfer row whose
- * cash amount is money out, regardless of category (Uncategorized counts).
+ * one month in the dominant currency. "Purchase" = any row that isn't a
+ * transfer or debt payment whose cash amount is money out, regardless of
+ * category (Uncategorized counts).
  */
 function monthActivity(
   rows: RichTransactionRow[],
@@ -537,7 +543,7 @@ function monthActivity(
   let biggestPurchase: { description: string; amountMinor: bigint } | null = null;
   const merchants = new Set<string>();
   for (const t of rows) {
-    if (t.transferStatus === 'confirmed') continue;
+    if (isDebtOrTransferLike(t)) continue;
     if (t.currency !== currency) continue;
     if (monthKey(t.effectiveDate) !== month) continue;
     transactionCount += 1;
@@ -555,8 +561,8 @@ function monthActivity(
 
 /**
  * Copilot-style "Month in Review" recap for one month vs the prior month,
- * dominant currency only, confirmed transfers excluded. Pure BigInt; the only
- * Number() conversion is the display-only savings-rate percent.
+ * dominant currency only, transfers & debt payments excluded. Pure BigInt; the
+ * only Number() conversion is the display-only savings-rate percent.
  */
 function buildMonthReview(
   rows: RichTransactionRow[],
@@ -686,6 +692,7 @@ function ReportsBody() {
       });
   }, [householdId]);
   const taxReport = useMemo(() => taxSchedule(txns.rows, taxLines), [txns.rows, taxLines]);
+  const suggestedCount = useMemo(() => suggestedTransferCount(txns.rows), [txns.rows]);
   const matrix = useMemo(
     () => buildMatrix(txns.rows, months, view),
     [txns.rows, months, view],
@@ -734,6 +741,8 @@ function ReportsBody() {
 
   return (
     <>
+      <TransferNudgeBanner count={suggestedCount} />
+
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex flex-wrap items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
@@ -852,7 +861,8 @@ function ReportsBody() {
                 </div>
               </div>
               <p className="text-xs text-muted-foreground">
-                {monthLabel(reviewMonth)}, dominant currency only, confirmed transfers excluded.
+                {monthLabel(reviewMonth)}, dominant currency only, transfers & debt payments
+                excluded.
               </p>
             </>
           ) : (
@@ -942,8 +952,8 @@ function ReportsBody() {
             </div>
           ) : null}
           <p className="text-xs text-muted-foreground">
-            {rangeLabel(donutRange.from, donutRange.to)}, dominant currency only, confirmed
-            transfers excluded, net of refunds.
+            {rangeLabel(donutRange.from, donutRange.to)}, dominant currency only, transfers &
+            debt payments excluded, net of refunds.
           </p>
         </CardContent>
       </Card>
@@ -976,7 +986,7 @@ function ReportsBody() {
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
               Income on the left, spending on the right; subcategories roll up into
-              their parents. Confirmed transfers excluded.
+              their parents. Transfers & debt payments excluded.
             </p>
           </CardContent>
         </Card>
@@ -1022,8 +1032,8 @@ function ReportsBody() {
         <CardContent>
           <p className="mb-3 text-xs text-muted-foreground">
             {view === 'expense'
-              ? 'Net spending per month (refunds reduce it); confirmed transfers excluded.'
-              : 'Net income per month; confirmed transfers excluded.'}{' '}
+              ? 'Net spending per month (refunds reduce it); transfers & debt payments excluded.'
+              : 'Net income per month; transfers & debt payments excluded.'}{' '}
             Click a category to open it in the ledger.
           </p>
           <div className="overflow-x-auto">
@@ -1124,7 +1134,8 @@ function ReportsBody() {
             ))}
             <p className="pt-1 text-xs text-muted-foreground">
               Net cash for tagged transactions — tag things like tax-deductible or a
-              trip, then read the total here.
+              trip, then read the total here. Confirmed transfers excluded; debt
+              payments count (net cash, not spending).
             </p>
           </CardContent>
         </Card>
@@ -1160,7 +1171,8 @@ function ReportsBody() {
             ))}
             <p className="pt-1 text-xs text-muted-foreground">
               Actual cash per IRS line, from the tax lines you set on categories
-              (Home → Categories → Manage). Bookkeeping, not tax advice.
+              (Home → Categories → Manage). Confirmed transfers excluded.
+              Bookkeeping, not tax advice.
             </p>
           </CardContent>
         </Card>

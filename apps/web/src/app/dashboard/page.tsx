@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Wallet } from 'lucide-react';
 
@@ -31,7 +31,8 @@ import {
   CashFlowMonthlyChart,
   CategoryBarList,
 } from '@/components/keel/charts';
-import { spendingMix } from '@/lib/spending';
+import { spendingMix, isDebtOrTransferLike, suggestedTransferCount } from '@/lib/spending';
+import { TransferNudgeBanner } from '@/components/keel/transfer-nudge-banner';
 import { formatMoney } from '@/lib/money';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -159,7 +160,7 @@ function buildInsights(rows: RichTransactionRow[]): Insight[] {
   const merchants = new Map<string, bigint>();
 
   for (const t of rows) {
-    if (t.transferStatus === 'confirmed') continue;
+    if (isDebtOrTransferLike(t)) continue;
     if (t.currency !== domCurrency) continue;
     const cash = BigInt(t.amountMinor || '0');
     if (cash >= 0n) continue; // outflows only
@@ -193,9 +194,13 @@ function buildInsights(rows: RichTransactionRow[]): Insight[] {
       detail: `${formatMoney(mtd.toString(), { currency: domCurrency })} so far vs ${formatMoney(prevToSameDay.toString(), { currency: domCurrency })} by day ${String(dayOfMonth)}`,
     });
   }
-  const topMerchant = [...merchants.entries()].sort((a, b) =>
+  const rankedMerchants = [...merchants.entries()].sort((a, b) =>
     b[1] > a[1] ? 1 : b[1] < a[1] ? -1 : 0,
-  )[0];
+  );
+  // The true top merchant, always — even when it also owns the biggest 7-day
+  // purchase. Skipping to rank 2 would mislabel the tile (review finding);
+  // with money-movement excluded upstream, an honest overlap is fine.
+  const topMerchant = rankedMerchants[0];
   if (topMerchant && topMerchant[1] > 0n) {
     out.push({
       label: 'Top merchant this month',
@@ -225,7 +230,10 @@ type FreeToSpend = {
  * entirely from data already on the page — Law 1, no model in the loop.
  * free = received so far + expected income still to come
  *       − spent so far − bills still due.
- * Confirmed transfers are excluded (moving money isn't income or spend).
+ * CASH scope: only confirmed transfer pairs are excluded (they net to zero in
+ * the household); an unpaired debt/CC payment is real cash out and counts as
+ * spent — excluding it would overstate "free" (review finding). This differs
+ * deliberately from the SPENDING scope used by the mix/insight cards.
  * Only confirmed recurring series and active schedules count as "still to
  * come" — mirrors Recurring's Projected Cash card, including its documented
  * double-count risk when a schedule duplicates a detected series (the user
@@ -255,6 +263,10 @@ function computeFreeToSpend(
   let receivedMinor = 0n;
   let spentMinor = 0n;
   for (const t of richTxns) {
+    // CASH semantics, not spending semantics: only confirmed transfer PAIRS
+    // net to zero inside the household. An unpaired debt/CC payment is real
+    // cash that left this month — excluding it would overstate "free to
+    // spend" in the dangerous direction (review finding; cf. ledger "Out").
     if (t.transferStatus === 'confirmed') continue;
     if (t.currency !== currency) continue;
     if (!t.effectiveDate.startsWith(month)) continue;
@@ -467,6 +479,13 @@ function HomeBody() {
   const waitingForAccounts = householdId !== null && accounts === null;
   const loading = !ready || balances.loading || waitingForAccounts;
 
+  // Hooks must run on EVERY render — these sit ABOVE the early returns below
+  // (Rules of Hooks; placing them after `if (loading) return …` crashed the
+  // whole dashboard — caught by the live UI verification pass).
+  const spending = useMemo(() => spendingMix(richTxns ?? []), [richTxns]);
+  const insights = useMemo(() => buildInsights(richTxns ?? []), [richTxns]);
+  const suggestedTransfers = useMemo(() => suggestedTransferCount(richTxns ?? []), [richTxns]);
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -494,14 +513,14 @@ function HomeBody() {
     return acc + BigInt(b);
   }, 0n);
 
-  const spending = spendingMix(richTxns ?? []);
-  const insights = buildInsights(richTxns ?? []);
   const showMonthlyFlow =
     monthlyFlow !== null &&
     monthlyFlow.some((m) => m.inflowMinor !== '0' || m.outflowMinor !== '0');
 
   return (
     <>
+      <TransferNudgeBanner count={suggestedTransfers} />
+
       <FreeToSpendCard
         richTxns={richTxns ?? []}
         series={recurringSeries ?? []}
