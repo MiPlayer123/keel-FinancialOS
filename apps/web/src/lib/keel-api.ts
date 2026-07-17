@@ -555,6 +555,24 @@ export async function decideTransfer(input: {
 }
 
 /**
+ * Manually mark two transactions as a transfer pair — for near-misses (a
+ * wire fee, a longer float) that keel_detect_transfers' exact-amount/±3-day
+ * rule doesn't catch. Lands as 'suggested', same as auto-detection; still
+ * needs a confirm on Review.
+ */
+export async function linkTransfer(input: {
+  householdId: string;
+  txnA: string;
+  txnB: string;
+}): Promise<{ linkId?: string }> {
+  return invoke('api/transfers/link', {
+    householdId: input.householdId,
+    txnA: input.txnA,
+    txnB: input.txnB,
+  });
+}
+
+/**
  * One pending categorization suggestion (P0-B suggest→approve loop). Typed
  * evidence record (Law 11): reasonCode + evidence carry the proof; nothing is
  * applied until the user decides via `categorization.decide_suggestion`.

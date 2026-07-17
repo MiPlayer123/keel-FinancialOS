@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Search,
   ListChecks,
+  ArrowLeftRight,
   Check,
   X,
   Loader2,
@@ -23,6 +24,7 @@ import {
   fetchCategories,
   fetchTags,
   categorizeTransaction,
+  linkTransfer,
   type AccountRow,
   type RichTransactionRow,
   type CategoryRow,
@@ -374,6 +376,24 @@ function LedgerTable() {
         : `Categorized ${String(ok)} transaction${ok === 1 ? '' : 's'}.`,
     );
     await refetch();
+  }
+
+  async function linkSelectedAsTransfer() {
+    if (!householdId || selected.size !== 2) return;
+    const [txnA, txnB] = [...selected];
+    if (!txnA || !txnB) return;
+    setBulkBusy(true);
+    try {
+      await linkTransfer({ householdId, txnA, txnB });
+      setSelected(new Set());
+      setSelecting(false);
+      toast.success('Marked as a transfer — confirm it on Review to exclude it from spending.');
+      await refetch();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not link these as a transfer.');
+    } finally {
+      setBulkBusy(false);
+    }
   }
 
   function toggleSelected(id: string) {
@@ -751,6 +771,9 @@ function LedgerTable() {
           onApply={(catId) => {
             void bulkCategorize(catId);
           }}
+          onLinkTransfer={() => {
+            void linkSelectedAsTransfer();
+          }}
           onClear={() => {
             setSelected(new Set());
           }}
@@ -921,12 +944,14 @@ function BulkBar({
   categories,
   busy,
   onApply,
+  onLinkTransfer,
   onClear,
 }: {
   count: number;
   categories: CategoryRow[];
   busy: boolean;
   onApply: (categoryLedgerAccountId: string) => void;
+  onLinkTransfer: () => void;
   onClear: () => void;
 }) {
   const [catId, setCatId] = useState<string | null>(null);
@@ -971,6 +996,20 @@ function BulkBar({
         {busy ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
         Apply
       </Button>
+      {/* Only meaningful for exactly a pair — hidden rather than disabled
+          the rest of the time, matching the house "don't show a choice when
+          there's nothing to decide" rule. */}
+      {count === 2 ? (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          onClick={onLinkTransfer}
+        >
+          {busy ? <Loader2 className="size-4 animate-spin" /> : <ArrowLeftRight className="size-4" />}
+          Mark as transfer
+        </Button>
+      ) : null}
       <Button variant="ghost" size="sm" disabled={busy || count === 0} onClick={onClear}>
         <X className="size-4" />
         Clear
