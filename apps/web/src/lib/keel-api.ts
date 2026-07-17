@@ -528,9 +528,11 @@ export type TransferLinkRow = {
   currency: string;
   outTxnId: string;
   outDescription: string;
+  outAccountId: string;
   outAccountName: string;
   inTxnId: string;
   inDescription: string;
+  inAccountId: string;
   inAccountName: string;
   dayGap: number;
 };
@@ -551,6 +553,24 @@ export async function decideTransfer(input: {
     householdId: input.householdId,
     linkId: input.linkId,
     confirm: input.confirm,
+  });
+}
+
+/**
+ * Manually mark two transactions as a transfer pair — for near-misses (a
+ * wire fee, a longer float) that keel_detect_transfers' exact-amount/±3-day
+ * rule doesn't catch. Lands as 'suggested', same as auto-detection; still
+ * needs a confirm on Review.
+ */
+export async function linkTransfer(input: {
+  householdId: string;
+  txnA: string;
+  txnB: string;
+}): Promise<{ linkId?: string }> {
+  return invoke('api/transfers/link', {
+    householdId: input.householdId,
+    txnA: input.txnA,
+    txnB: input.txnB,
   });
 }
 

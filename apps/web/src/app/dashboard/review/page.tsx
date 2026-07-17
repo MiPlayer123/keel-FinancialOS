@@ -37,6 +37,7 @@ import {
   recurringReasonLine,
   transferReasonLine,
 } from '@/lib/recurring-evidence';
+import { groupTransfersByAccountPair } from '@/lib/transfer-grouping';
 import { merchantDisplayName } from '@/lib/merchant-name';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -163,16 +164,31 @@ function ReviewBody() {
             These pairs look like money moving between your own accounts. Confirming keeps both
             sides in the ledger but stops them counting as income and spending.
           </p>
-          {transfers.suggested.map((link) => (
-            <TransferCard
-              key={link.linkId}
-              link={link}
-              householdId={householdId}
-              onDone={() => {
-                void transfers.refetch();
-              }}
-            />
-          ))}
+          {groupTransfersByAccountPair(transfers.suggested).flatMap((group) => {
+            const first = group[0];
+            if (!first) return [];
+            return [
+              group.length > 1 ? (
+                <RecurringTransferGroupCard
+                  key={first.linkId}
+                  links={group}
+                  householdId={householdId}
+                  onDone={() => {
+                    void transfers.refetch();
+                  }}
+                />
+              ) : (
+                <TransferCard
+                  key={first.linkId}
+                  link={first}
+                  householdId={householdId}
+                  onDone={() => {
+                    void transfers.refetch();
+                  }}
+                />
+              ),
+            ];
+          })}
         </section>
       ) : null}
 
@@ -541,6 +557,114 @@ function TransferCard({
               <Check className="size-4" />
             )}
             Confirm transfer
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * A recurring transfer between the same two accounts (e.g. a weekly
+ * checking → savings sweep) generates a fresh suggested pair every sync —
+ * without grouping, that's N identical cards demanding N separate confirm
+ * clicks forever (TRANSFER-2). This groups them into one card with a bulk
+ * action, while still listing every occurrence's date so an outlier (a
+ * coincidental amount match that isn't really this series) is visible
+ * before a bulk "Confirm all" sweeps it in too. Each occurrence still goes
+ * through its own keel_decide_transfer call — batching is a UI convenience
+ * over the same audited per-decision command, not a shortcut around it.
+ */
+function RecurringTransferGroupCard({
+  links,
+  householdId,
+  onDone,
+}: {
+  links: TransferLinkRow[];
+  householdId: string;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState<null | 'confirm' | 'reject'>(null);
+  const first = links[0];
+  if (!first) return null;
+
+  async function actAll(confirm: boolean) {
+    setBusy(confirm ? 'confirm' : 'reject');
+    let ok = 0;
+    let failed = 0;
+    for (const link of links) {
+      try {
+        await decideTransfer({ householdId, linkId: link.linkId, confirm });
+        ok++;
+      } catch {
+        failed++;
+      }
+    }
+    setBusy(null);
+    toast[failed > 0 ? 'error' : 'success'](
+      failed > 0
+        ? `${confirm ? 'Confirmed' : 'Rejected'} ${String(ok)}, ${String(failed)} failed.`
+        : `${confirm ? 'Confirmed' : 'Rejected'} ${String(ok)} transfers.`,
+    );
+    onDone();
+  }
+
+  return (
+    <Card>
+      <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 space-y-1.5">
+          <div className="flex items-center gap-2">
+            <ArrowLeftRight className="size-4 shrink-0 text-muted-foreground" />
+            <p className="truncate text-sm font-medium">
+              {first.outAccountName}
+              <ArrowRight className="mx-1.5 inline size-3.5 align-[-2px] text-muted-foreground" />
+              {first.inAccountName}
+            </p>
+            <Badge variant="secondary" className="font-normal">
+              {links.length} occurrences
+            </Badge>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Same two accounts, {links.length} times — looks recurring. Review each date below, or
+            confirm the whole series at once.
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {links.map((link) => (
+              <span
+                key={link.linkId}
+                className="rounded-full border border-border px-2 py-0.5 font-mono text-xs text-muted-foreground"
+                title={`${link.outDescription} → ${link.inDescription}`}
+              >
+                {link.effectiveDate} · <Money amountMinor={link.amountMinor} currency={link.currency} />
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy !== null}
+            onClick={() => {
+              void actAll(false);
+            }}
+          >
+            {busy === 'reject' ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
+            Reject all {links.length}
+          </Button>
+          <Button
+            size="sm"
+            disabled={busy !== null}
+            onClick={() => {
+              void actAll(true);
+            }}
+          >
+            {busy === 'confirm' ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Check className="size-4" />
+            )}
+            Confirm all {links.length}
           </Button>
         </div>
       </CardContent>

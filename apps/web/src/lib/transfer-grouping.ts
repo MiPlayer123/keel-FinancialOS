@@ -1,0 +1,35 @@
+import type { TransferLinkRow } from '@/lib/keel-api';
+
+/**
+ * Groups suggested transfer pairs by account pair (out → in) so a recurring
+ * transfer (e.g. a weekly checking → savings sweep) surfaces as ONE group
+ * the user reviews once, instead of N identical cards demanding N separate
+ * confirm clicks (TRANSFER-2, docs/harness/plans/entities-investments-transfers.md).
+ *
+ * Account pair is an exact key here (unlike merchant-name recurring
+ * detection, which needs fuzzy normalization) — the same two accounts are
+ * definitionally the same transfer relationship, so no cadence/statistics
+ * detector is needed. Order is preserved: the first row's position in the
+ * input determines the group's position in the output.
+ *
+ * Keys on account IDs, not display names — two different accounts (a
+ * personal "Savings" and a business "Savings", say) can share a name, and
+ * grouping by name would silently merge two unrelated transfer
+ * relationships into one card whose "Confirm all" then batch-approves a
+ * pair that doesn't belong together.
+ */
+export function groupTransfersByAccountPair(rows: TransferLinkRow[]): TransferLinkRow[][] {
+  const order: string[] = [];
+  const groups = new Map<string, TransferLinkRow[]>();
+  for (const row of rows) {
+    const key = `${row.outAccountId} ${row.inAccountId}`;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.push(row);
+    } else {
+      groups.set(key, [row]);
+      order.push(key);
+    }
+  }
+  return order.map((key) => groups.get(key) ?? []);
+}

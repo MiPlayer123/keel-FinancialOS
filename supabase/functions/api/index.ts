@@ -17,6 +17,7 @@ import {
   AiProviderError,
   buildChatMessages,
   buildChatResponseRecord,
+  CanonicalTransactionIdSchema,
   CommandIdSchema,
   EmptyAiResponseError,
   OpenAiCompatibleChatProvider,
@@ -1727,6 +1728,32 @@ export default {
       });
       if (decideError) return mapDbError(decideError);
       return json(200, { ok: true });
+    }
+
+    if (path === '/transfers/link') {
+      // Manual "these two are a transfer" override for near-misses the
+      // deterministic detector's exact-amount/±3-day rule skips (TRANSFER-1
+      // in docs/harness/plans/entities-investments-transfers.md). Still
+      // lands as a 'suggested' link -- the user confirms it on Review like
+      // any other suggestion (Law 2).
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const txnA = CanonicalTransactionIdSchema.safeParse(input['txnA']);
+      const txnB = CanonicalTransactionIdSchema.safeParse(input['txnB']);
+      if (!householdId.success || !txnA.success || !txnB.success) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Transfer link request failed validation.',
+          details: {},
+        });
+      }
+      const { data: linkId, error: linkError } = await ctx.supabase.rpc('keel_link_transfer', {
+        p_household_id: householdId.data,
+        p_txn_a: txnA.data,
+        p_txn_b: txnB.data,
+      });
+      if (linkError) return mapDbError(linkError);
+      return json(200, { linkId });
     }
 
     if (path === '/connections/sync') {
