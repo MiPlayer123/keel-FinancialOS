@@ -26,6 +26,16 @@ function dollarsToMinorString(input: string): string | null {
   return (BigInt(whole) * 100n + BigInt(frac.padEnd(2, '0') || '0')).toString();
 }
 
+/** Exact inverse of dollarsToMinorString — BigInt only, never round-trips
+ *  money through a JS float (Law 4). */
+function minorToDollarsString(minor: string): string {
+  const negative = minor.startsWith('-');
+  const n = BigInt(negative ? minor.slice(1) : minor);
+  const whole = n / 100n;
+  const cents = (n % 100n).toString().padStart(2, '0');
+  return `${negative ? '-' : ''}${whole.toString()}.${cents}`;
+}
+
 /**
  * Create or edit a manual holding. Plaid-synced rows never open this dialog
  * (S-inv-1b's sync owns them entirely) — `editing` is always a
@@ -61,8 +71,8 @@ export function HoldingFormDialog({
     setSymbol(editing?.symbol ?? '');
     setName(editing?.name ?? '');
     setQty(editing?.qty ?? '');
-    setPrice(editing ? (Number(editing.priceMinor) / 100).toFixed(2) : '');
-    setCostBasis(editing?.costBasisMinor ? (Number(editing.costBasisMinor) / 100).toFixed(2) : '');
+    setPrice(editing ? minorToDollarsString(editing.priceMinor) : '');
+    setCostBasis(editing?.costBasisMinor ? minorToDollarsString(editing.costBasisMinor) : '');
   }, [open, editing]);
 
   const priceMinor = price.trim() ? dollarsToMinorString(price) : null;
