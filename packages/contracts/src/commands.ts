@@ -366,20 +366,30 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'accounts.set_opening_balance': SetOpeningBalancePayloadSchema,
   'accounts.reanchor_balance': ReanchorBalancePayloadSchema,
   'categorization.decide_suggestion': DecideCategorySuggestionPayloadSchema,
-  'documents.confirm_upload': ConfirmDocumentUploadPayloadSchema,
   'documents.detach': DetachDocumentPayloadSchema,
   'documents.delete': DeleteDocumentPayloadSchema,
 } as const;
 export type CommandProcedureName = keyof typeof COMMAND_PAYLOAD_SCHEMAS;
+/**
+ * `documents.confirm_upload` is deliberately NOT a CommandProcedureName: it
+ * needs a server-side Storage download + hash computation before the RPC
+ * call (Postgres can't reach Storage), so it's a bespoke route
+ * (`/documents/confirm-upload`), not a generic `/commands` dispatch entry —
+ * same reasoning as `connections.link`/`connections.disconnect` below.
+ * `ConfirmDocumentUploadPayloadSchema` still documents/validates that
+ * route's shape; it's just not wired into COMMAND_PAYLOAD_SCHEMAS.
+ */
 export type CommandName =
   | CommandProcedureName
   | 'connections.link'
   | 'connections.disconnect'
+  | 'documents.confirm_upload'
   | 'admin.export_all';
 export const CommandNameSchema = z.enum([
   ...(Object.keys(COMMAND_PAYLOAD_SCHEMAS) as CommandProcedureName[]),
   'connections.link',
   'connections.disconnect',
+  'documents.confirm_upload',
   'admin.export_all',
 ]);
 export const CommandProcedureNameSchema = z.enum(

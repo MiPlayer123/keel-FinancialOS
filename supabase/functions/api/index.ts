@@ -1973,6 +1973,14 @@ export default {
         (storageBucket !== 'receipts' && storageBucket !== 'statements') ||
         typeof storagePath !== 'string' ||
         storagePath.length === 0 ||
+        // Bind confirm to the EXACT prefix /documents/upload-url minted for
+        // this caller's own household+document — otherwise a caller could
+        // name any other object in the shared bucket (e.g. a leaked or
+        // guessed path from another household) and have it attached + later
+        // exposed to them via a signed read URL from /documents/list.
+        (documentId.success &&
+          householdId.success &&
+          !storagePath.startsWith(`${householdId.data}/${documentId.data}/`)) ||
         typeof originalFilename !== 'string' ||
         originalFilename.length === 0 ||
         originalFilename.length > 255 ||

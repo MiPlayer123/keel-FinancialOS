@@ -51,13 +51,25 @@ export function AttachmentsSection({
   const [rows, setRows] = useState<DocumentRow[] | null>(null);
   const [uploading, setUploading] = useState(false);
   const [detaching, setDetaching] = useState<string | null>(null);
+  // Ignore a resolving fetch for a target this section has since moved past
+  // (e.g. the desktop panel switching rows) — otherwise an older request can
+  // resolve after a newer one and overwrite the current target's rows with
+  // a different transaction's attachments (review r3606236984).
+  const requestKeyRef = useRef(0);
 
   const load = useCallback(() => {
-    if (!householdId) return;
+    if (!householdId) {
+      setRows(null);
+      return;
+    }
+    const requestKey = ++requestKeyRef.current;
+    setRows(null);
     void fetchDocumentsForTarget(householdId, targetType, targetId)
-      .then(setRows)
+      .then((fetched) => {
+        if (requestKeyRef.current === requestKey) setRows(fetched);
+      })
       .catch(() => {
-        setRows([]);
+        if (requestKeyRef.current === requestKey) setRows([]);
       });
   }, [householdId, targetType, targetId]);
 
