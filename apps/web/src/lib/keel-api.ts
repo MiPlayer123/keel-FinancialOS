@@ -1197,6 +1197,33 @@ export async function setAccountOpeningBalance(input: {
   });
 }
 
+/**
+ * Re-anchor (fix) a synced account's balance from provider truth. Use when a
+ * connected account reads too high or too low because its opening balance was
+ * anchored before the transaction backfill landed, or because history is
+ * shallow. The client sends only the account — the server reads the latest
+ * provider balance snapshot, reverses any prior opening entry, and books a
+ * corrected delta (Law 1: no ledger arithmetic on the client; Law 2: audited +
+ * reversible). No relinking required.
+ */
+export async function reanchorAccountBalance(input: {
+  householdId: string;
+  userId: string;
+  accountId: string;
+}): Promise<CommandResult> {
+  const commandId = newId();
+  return keelCommand({
+    commandId,
+    command: 'accounts.reanchor_balance',
+    economicEventKey: `accounts.reanchor_balance:${commandId}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: {
+      accountId: input.accountId,
+    },
+  });
+}
+
 /** Recent audit-log entries (RLS-scoped; append-only trail, Law 2). */
 export type AuditLogRow = {
   id: number;

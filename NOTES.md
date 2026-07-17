@@ -1514,3 +1514,73 @@ the adversarial pass that nothing was dropped from either side.
 ## 2026-07-17 — D-035: midnight-window CI failure in 12-recurring (test assumption bug)
 
 - Integration test asserted candidate `asOf === today(runner clock)`, but `keel_cron_enqueue_recurring_detection` stamps as_of from its idempotency bucket (`floor(epoch/3601)*3601`) — replay-stable by design (Law 9). In the first ~hour after midnight UTC the bucket starts on the previous date, so CI failed 00:00–~01:00 UTC only (green 23:45, red 00:04, deterministic on rerun). Pre-existing on main; surfaced because Wave 0 PRs ran CI after the date rollover. Fix cascaded to the test (accept today/yesterday UTC with explanatory comment) — the proc's bucketed as_of is correct and unchanged.
+
+## 2026-07-17 — Wave 1: historical backfill + opening-balance anchor (inflated balances)
+
+- **Problem (teardown anomaly-personal-profile.md):** synced balances read too
+  high — Plaid's default ~90-day window (Venmo shallower) plus a one-time
+  auto-anchor (`keel_apply_account_balance`) that could fire on a balance-refresh
+  cycle BEFORE the cursor→now backfill landed. Firing early with Σ(postings)≈0
+  books an opening equal to the FULL provider balance; the backfilled window
+  then piles on top → displayed = provider + Σ(synced) = inflated, permanently
+  (the anchor is booked once and never revisited).
+- **(1) Deeper history on new links:** `linkTokenCreate` now sends
+  `transactions.days_requested` (default 730 = Plaid max, env override
+  `PLAID_TRANSACTIONS_DAYS_REQUESTED`). Institutions cap lower; Plaid honors the
+  smaller value. Small, safe, high-value (api/index.ts). The anchor keeps the
+  DISPLAYED balance correct regardless of depth; deeper history just makes the
+  register/trends more complete.
+- **(2) Deferred auto-anchor (fixes NEW accounts):** `keel_apply_account_balance`
+  now withholds its one-time anchor until the account's connection has completed
+  a full sync (`connections.last_successful_sync_at is not null`) so Σ(postings)
+  already reflects the backfill when the delta is taken. The provider snapshot is
+  still recorded every cycle (read model + re-anchor need it); only the equity
+  anchor waits. Still idempotent (booked once via the both-legs opening marker).
+- **(3) Audited re-anchor (fixes EXISTING/inflated accounts):** new command
+  `accounts.reanchor_balance` → `keel_cmd_reanchor_balance`. Reads the latest
+  provider balance snapshot (server-side truth — Law 1 keeps ledger arithmetic
+  off the client; the browser sends only `accountId`), reverses any prior
+  opening-balance marker batch (Law 2 compensating batch, original preserved —
+  including an inflated legacy auto-anchor), then re-books the corrected delta so
+  Σ(postings) == provider balance. Balanced (Law 3), BIGINT minor units (Law 4),
+  audited + reproducible via `keel_finish_command`. Dated today and posts a
+  DELTA (not a full opening under history), so — unlike
+  `keel_cmd_set_opening_balance` — it has no "before all history" guard and works
+  on accounts that already have transactions. UI: "Fix balance" button on the
+  account detail page, shown when a provider snapshot exists; routes through the
+  existing `/commands` endpoint (reachability harness green — no new route).
+- **Deviation / smallest-correct choice (flagged per runbook):** the task
+  suggested routing the auto-anchor through the `keel_cmd_set_opening_balance`
+  path. That proc posts a FULL-target opening under a pre-history date (and
+  guards against existing txns), which is the wrong shape for "tie today's
+  displayed balance to the bank when history is shallow." The correct math is
+  `opening = provider − Σ(synced)`, which is exactly what `keel_apply_account_balance`
+  already computes and what the new re-anchor command reuses. I therefore fixed
+  the auto path by DEFERRING the existing (idempotent) anchor rather than
+  rerouting the cron/worker through an authenticated keel_api-owned command proc
+  (which would need service_role execute + a synthetic user actor — larger and
+  riskier than this slice warrants). The user-facing correction IS the audited
+  command. Open question: whether a later slice should also emit the auto-anchor
+  through the audit log (the internal snapshot-anchor proc posts journal batches
+  without an audit_log row — a pre-existing condition, not introduced here).
+- **Tests:** tests/integration/16-reanchor-balance.test.ts — reproduces the
+  inflation (early anchor + backfill) and proves re-anchor ties Σ back to
+  provider truth, reversal recorded (Law 2), opening batch balanced (Law 3),
+  audit row present, idempotent convergence on a second call; plus the deferral
+  gate (snapshot-only before first sync, correct anchor after). Contracts/authz
+  action vocabulary tests extended for the new command.
+
+## 2026-07-17 — D-036: Wave 1 backfill/re-anchor review fixes
+
+Six-angle-style review of `keel_cmd_reanchor_balance` confirmed the ledger math correct (sign traced on asset/liability, Σ=0 reversal+redelta, replay-convergent, cron-race-safe, authz + Law 1 correct). Four findings, dispositioned:
+- **F1 (CI-blocking, fixed):** integration test asserted `audit_log.action='accounts.balance_reanchored'` — that's the domain-event name (→ domain_events); `keel_finish_command` writes `action` = the COMMAND name `accounts.reanchor_balance`. The runtime audit write was correct; the test was wrong and short-circuited the idempotency assertion after it. Fixed the assertion.
+- **F2 (fixed):** period-lock precheck only covered `current_date`; a prior opening dated in a now-locked period would fail the reversal deep in the loop with a raw trigger error. Added an up-front precheck over the prior openings' effective_dates raising a clear KEEL_PERIOD_LOCKED ("reopen that period before re-anchoring"). Fail-closed either way (Law 2 never bypassed).
+- **F3 (fixed):** snapshot currency was not validated against `ledger_currency` — a foreign-currency provider snapshot would anchor a wrong magnitude (Law 4). Added a currency guard that fails closed; FX re-anchor deferred until an as-of rate + formula version exists (Law 9).
+- **F4 (accepted limitation, documented):** a connection that reaches partial sync then gets stuck (reauth/error) never sets `last_successful_sync_at`, so its accounts are never auto-anchored and display Σ(partial synced window) — a silent wrong-low balance. Recovery is the manual "Fix balance" (re-anchor) button. Acceptable for v1; a later slice may auto-anchor on partial-sync-with-provider-balance or surface a "needs anchoring" nudge.
+- Pre-existing note (not introduced here): the internal `keel_apply_account_balance` snapshot-anchor posts journal batches without an audit_log row; a later slice may route it through the audit trail.
+
+## 2026-07-17 — D-036 cont.: reanchor integration test routed through real command surface
+
+CI (integration job) surfaced that `16-reanchor-balance.test.ts` set up ledger state by direct DML on `journal_batches`/`connections` — denied even to service_role (financial tables are proc-only, Law 7; pgTAP passed because it runs privileged). Fixes:
+- Test 1 (reanchor happy path): the inflating "backfill activity" now posts through `keel_cmd_manual_transaction` (real balanced batch, non-opening) instead of raw journal inserts. Signed-in client hoisted.
+- Test 2 (auto-anchor deferral gate): moved out of the integration file — it needs an UNSYNCED connection, un-creatable via the allowed surface — into pgTAP `supabase/tests/015_reanchor_balance.sql`, which runs privileged and can insert an unsynced connection + account directly. Covers: deferral while unsynced (snapshot only, no anchor), anchor after first full sync, both-legs equity marker, and no-double-anchor idempotency. Coverage preserved at the correct layer.
