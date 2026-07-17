@@ -66,6 +66,7 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'transactions.manual_create': 'keel_cmd_manual_transaction',
   'transactions.manual_void': 'keel_cmd_manual_void',
   'accounts.set_opening_balance': 'keel_cmd_set_opening_balance',
+  'accounts.reanchor_balance': 'keel_cmd_reanchor_balance',
 };
 
 const QUERY_TO_PROC: Record<string, string> = {
@@ -300,12 +301,26 @@ export default {
             .split(',')
             .map((s) => s.trim())
             .filter(Boolean);
+        // Request the deepest transaction history Plaid allows (730 days) so an
+        // account's synced window reaches back far enough to be meaningful —
+        // Venmo especially defaults to a shallow ~90-day window. Institutions
+        // cap this lower and Plaid honors the smaller value; that's fine. Env
+        // override for tuning without a redeploy. The opening-balance anchor
+        // keeps the DISPLAYED balance tied to the bank regardless of depth;
+        // deeper history just makes the register and trends more complete.
+        const daysRequested = Number.parseInt(
+          Deno.env.get('PLAID_TRANSACTIONS_DAYS_REQUESTED') ?? '730',
+          10,
+        );
         const result = await plaid.linkTokenCreate(`linktoken:${householdId.data}:${userId}`, {
           user: { client_user_id: userId },
           client_name: 'KEEL',
           products: splitEnv('PLAID_PRODUCTS', 'transactions'),
           country_codes: splitEnv('PLAID_COUNTRY_CODES', 'US'),
           language: 'en',
+          ...(Number.isSafeInteger(daysRequested) && daysRequested > 0
+            ? { transactions: { days_requested: daysRequested } }
+            : {}),
         });
         const linkToken = result['link_token'];
         if (typeof linkToken !== 'string') return internalFailure();

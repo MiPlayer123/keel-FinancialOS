@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Pencil, Plus, ReceiptText, Scale } from 'lucide-react';
+import { ArrowLeft, Loader2, Pencil, Plus, ReceiptText, Scale, Wand2 } from 'lucide-react';
 
 import { EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
@@ -14,6 +14,7 @@ import {
   categorizeTransaction,
   fetchAccounts,
   fetchGoals,
+  reanchorAccountBalance,
   fetchCategories,
   fetchLedgerKinds,
   fetchLatestBalances,
@@ -62,6 +63,7 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
   const [renaming, setRenaming] = useState(false);
   const [accountReload, setAccountReload] = useState(0);
   const [settingBalance, setSettingBalance] = useState(false);
+  const [fixingBalance, setFixingBalance] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -218,18 +220,59 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
             balanceMinor={balanceMinor}
             currency={account.currency}
           />
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="mt-1 h-7 text-xs text-muted-foreground"
-            onClick={() => {
-              setSettingBalance(true);
-            }}
-          >
-            <Scale className="size-3.5" />
-            Set opening balance
-          </Button>
+          <div className="mt-1 flex flex-col items-start gap-0.5 sm:items-end">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs text-muted-foreground"
+              onClick={() => {
+                setSettingBalance(true);
+              }}
+            >
+              <Scale className="size-3.5" />
+              Set opening balance
+            </Button>
+            {/* Fix balance / re-anchor: only meaningful once the bank has
+                reported a balance (a synced, connected account). Re-reads
+                provider truth and re-books the opening anchor so a balance that
+                drifted high/low from a shallow or early-anchored sync ties back
+                to the bank — audited + reversible, no relinking. */}
+            {provider ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={fixingBalance}
+                className="h-7 text-xs text-muted-foreground"
+                onClick={() => {
+                  if (!householdId || !userId) return;
+                  setFixingBalance(true);
+                  void reanchorAccountBalance({ householdId, userId, accountId })
+                    .then(() => {
+                      toast.success('Balance re-anchored to the bank.');
+                      void balances.refetch();
+                      void txns.refetch();
+                    })
+                    .catch((err: unknown) => {
+                      toast.error(
+                        err instanceof Error ? err.message : 'Could not re-anchor the balance.',
+                      );
+                    })
+                    .finally(() => {
+                      setFixingBalance(false);
+                    });
+                }}
+              >
+                {fixingBalance ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Wand2 className="size-3.5" />
+                )}
+                Fix balance
+              </Button>
+            ) : null}
+          </div>
           <SetOpeningBalanceDialog
             open={settingBalance}
             householdId={householdId}
