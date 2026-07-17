@@ -23,6 +23,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Sparkles,
+  ClipboardList,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -68,6 +69,7 @@ const NAV: NavItem[] = [
   { label: 'Reimbursements', href: '/dashboard/reimbursements', icon: ArrowLeftRight },
   { label: 'Statements', href: '/dashboard/statements', icon: FileCheck2 },
   { label: 'Review', href: '/dashboard/review', icon: BadgeCheck },
+  { label: 'Notes & Tasks', href: '/dashboard/notes-tasks', icon: ClipboardList },
   { label: 'Connections', href: '/dashboard/connections', icon: Link2 },
   { label: 'Settings', href: '/dashboard/settings', icon: Settings },
 ];

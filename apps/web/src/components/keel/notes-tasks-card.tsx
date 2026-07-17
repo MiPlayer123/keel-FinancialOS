@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import { Archive, Check, ClipboardList, Loader2, Pin, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -20,7 +21,21 @@ function dueLabel(dueOn: string | null): string | null {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-export function NotesTasksCard({ householdId }: { householdId: string }) {
+/**
+ * `compact` drives the Home dashboard's "at a glance" placement: only
+ * active work should compete for attention there, so completed tasks (the
+ * server already excludes dismissed ones) are filtered out and the list is
+ * capped at 6 rows with a link to the full page for everything else. The
+ * dedicated Notes & Tasks page renders the same component with `compact`
+ * left at its default `false` — the complete history, uncapped.
+ */
+export function NotesTasksCard({
+  householdId,
+  compact = false,
+}: {
+  householdId: string;
+  compact?: boolean;
+}) {
   const { rows, loading, error, refetch } = useKeelQuery<NoteTaskRow>(
     'notes_tasks.list',
     householdId,
@@ -34,7 +49,12 @@ export function NotesTasksCard({ householdId }: { householdId: string }) {
     [rows],
   );
   const notes = useMemo(() => rows.filter((row) => row.type === 'note'), [rows]);
-  const previewRows = rows.slice(0, 6);
+  const visibleRows = useMemo(
+    () => (compact ? rows.filter((row) => !(row.type === 'task' && row.status === 'done')) : rows),
+    [rows, compact],
+  );
+  const previewRows = compact ? visibleRows.slice(0, 6) : visibleRows;
+  const hasMore = compact && visibleRows.length > previewRows.length;
 
   async function refreshAfter(action: () => Promise<unknown>, success: string) {
     setBusy(success);
@@ -70,10 +90,18 @@ export function NotesTasksCard({ householdId }: { householdId: string }) {
           <ClipboardList className="size-4 text-muted-foreground" />
           Notes & tasks
         </CardTitle>
-        <CardAction>
+        <CardAction className="flex items-center gap-2">
           <Badge variant="secondary" className="font-normal">
             {String(openTasks.length)} open · {String(notes.length)} notes
           </Badge>
+          {hasMore ? (
+            <Link
+              href="/dashboard/notes-tasks"
+              className="text-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              View all
+            </Link>
+          ) : null}
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">

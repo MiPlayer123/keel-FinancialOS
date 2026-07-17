@@ -3092,3 +3092,66 @@ this session's established fallback):**
   longer fully holds; `pnpm --filter @keel/web exec vitest run` is
   288/288 across 18 files (was 273/273 across 16) after this fix, `pnpm
   typecheck`/`pnpm lint`/`cd apps/web && pnpm build` all re-verified clean.
+
+## 2026-07-17 — D-055: Notes & Tasks — sidebar nav + dedicated full page + active-only Home preview
+
+User request (direct, not from the teardown ledger): the notes/tasks
+feature (household reminders anchored to finance objects, migration
+20260717180000_notes_tasks.sql, `NotesTasksCard` on Home) had no dedicated
+page or sidebar entry — it only ever existed as a compact card on Home,
+truncated to 6 rows with no way to see the rest. Also asked: only ACTIVE
+tasks should surface on the dashboard.
+
+- `NotesTasksCard` gains a `compact` prop (default `false`). When `true`
+  (Home's usage): filters out `status === 'done'` tasks before truncating
+  to 6 rows (the server-side `keel_list_notes_tasks` already excludes
+  `dismissed`, so this closes the remaining "stale completed work crowding
+  the dashboard" gap), and shows a "View all" link to the full page when
+  the filtered set exceeds 6. When `false` (the new dedicated page's
+  usage): renders every non-archived note/task, uncapped, done tasks
+  included — a real "view everything" surface, not just a bigger card.
+- New `apps/web/src/app/dashboard/notes-tasks/page.tsx` — same
+  `PageHeader` + `<div className="p-6">` shell every other simple
+  dashboard page uses (mirrored from `paychecks/page.tsx`), hosting the
+  same `NotesTasksCard` component uncapped. No new component logic
+  duplicated — same create-note/create-task forms, same per-row
+  done/archive actions, just a different `compact` value.
+- Sidebar (`app-shell.tsx`): new `Notes & Tasks` nav entry
+  (`ClipboardList` icon) between Review and Connections. Not added to the
+  phone-only bottom tab bar (C17, `bottom-tab-bar.tsx`) — that's a
+  deliberately curated 5-slot set for one-handed reach, and this wasn't
+  the ask.
+- **Gate evidence (CI still unavailable — GitHub Actions minutes
+  exhausted; local battery substitutes):** `pnpm typecheck` clean, 0
+  errors. `pnpm --filter @keel/web exec vitest run` — 288/288 passed, 18
+  files (no regressions; no new pure-logic helper was needed for this
+  slice, so no new test file). `cd apps/web && pnpm build` — clean, 23/23
+  static pages (new `/dashboard/notes-tasks` route, 1.88 kB), same 4
+  pre-existing lint warnings, none in files this slice touched.
+- Rebased onto latest `main` before pushing — this branch was
+  accidentally cut from a stale local `main` (missing #44/#45, merged
+  earlier this session); caught before opening the PR via a test-count
+  mismatch (16 files/273 tests instead of the expected 18/288), confirmed
+  via `git fetch origin main` + `git log`, and rebased clean with no
+  conflicts.
+
+## Also this session: edge functions were stale in prod
+
+Unrelated to the above, but discovered while investigating a live
+"Unknown query. (invalid_command)" error report: `mcp__Supabase__list_
+edge_functions` showed `api`/`worker` were both last deployed at
+2026-07-17 15:07:58 UTC. Three merged commits since then touched
+`supabase/functions/api/index.ts` and/or `worker/index.ts` without a
+redeploy — a `notes_tasks.list` query-route commit (16:14 UTC, the direct
+cause of the error report), PR #39's account-mask capture in
+`worker/index.ts`, and PR #40's rules amount-range validation in
+`api/index.ts`. Their MIGRATIONS were applied live (this session's
+established convention), but the EDGE FUNCTION code changes were not —
+`supabase functions deploy` is a separate manual step this sandbox has no
+CLI for (`supabase: command not found`), so it has to go through
+`mcp__Supabase__deploy_edge_function` directly, file-by-file, which was
+never done. Delegated the redeploy (regenerate
+`_shared/vendor/keel-domain.mjs` via `scripts/build-functions.mjs`, then
+push `api` and `worker` plus their full dependency trees) to an isolated
+subagent — the vendor bundle alone is ~690KB, too large to shuttle through
+the main session's own context.
