@@ -29,6 +29,7 @@ import {
   createCategory,
   saveTag,
   overrideTransaction,
+  setTransactionDate,
   setTransactionSplits,
   voidManualTransaction,
   type AccountRow,
@@ -660,6 +661,11 @@ function TxnEditForm({
 }: TxnEditFormProps) {
   const [name, setName] = useState('');
   const [note, setNote] = useState('');
+  const [date, setDate] = useState('');
+  // One idempotency key per dialog session, mirroring splitAttemptKey: a
+  // retry after a timeout replays the same date correction instead of
+  // double-revising (invariant 3).
+  const [dateAttemptKey, setDateAttemptKey] = useState(() => crypto.randomUUID());
   const [saving, setSaving] = useState(false);
   const [voiding, setVoiding] = useState(false);
   // Category picked in THIS dialog session. The row prop keeps the pre-change
@@ -708,6 +714,8 @@ function TxnEditForm({
   useEffect(() => {
     setName(row.description);
     setNote(row.note ?? '');
+    setDate(row.effectiveDate);
+    setDateAttemptKey(crypto.randomUUID());
     setVoiding(false);
     setPicked(null);
     // Multi-split rows open straight into the editor, seeded from the real
@@ -886,6 +894,15 @@ function TxnEditForm({
     if (!householdId) return;
     setSaving(true);
     try {
+      if (date !== row.effectiveDate && userId) {
+        await setTransactionDate({
+          householdId,
+          userId,
+          transactionId: row.transactionId,
+          effectiveDate: date,
+          attemptKey: dateAttemptKey,
+        });
+      }
       await overrideTransaction({
         householdId,
         transactionId: row.transactionId,
@@ -946,6 +963,23 @@ function TxnEditForm({
               setName(e.target.value);
             }}
           />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="txn-date">Date</Label>
+          <Input
+            id="txn-date"
+            type="date"
+            value={date}
+            onChange={(e) => {
+              setDate(e.target.value);
+            }}
+          />
+          {date !== row.effectiveDate ? (
+            <p className="text-xs text-muted-foreground">
+              Moving this transaction from {shortDateWithYear(row.effectiveDate)} to{' '}
+              {shortDateWithYear(date)} — the original entry is reversed, not erased.
+            </p>
+          ) : null}
         </div>
         {splitRows !== null && row.transferStatus !== 'confirmed' ? (
           <div className="space-y-2">

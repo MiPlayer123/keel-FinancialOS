@@ -39,6 +39,7 @@ describe('action vocabulary', () => {
       'transactions.manual_create',
       'transactions.manual_void',
       'transactions.set_splits',
+      'transactions.set_date',
       'accounts.set_opening_balance',
       'accounts.reanchor_balance',
       'categorization.decide_suggestion',

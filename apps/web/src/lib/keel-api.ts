@@ -1271,6 +1271,34 @@ export async function setTransactionSplits(input: {
   });
 }
 
+/**
+ * Correct an existing transaction's effective date (Quicken-style date
+ * edit). The server reverses the live batch as of its ORIGINAL date and
+ * reposts the identical postings as of the NEW date (reversible correction,
+ * same model as setTransactionSplits) — rejected if either date falls in a
+ * locked period.
+ */
+export async function setTransactionDate(input: {
+  householdId: string;
+  userId: string;
+  transactionId: string;
+  effectiveDate: string;
+  /** Idempotency handle: mint ONE per edit session. */
+  attemptKey: string;
+}): Promise<CommandResult> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'transactions.set_date',
+    economicEventKey: `set-date:${input.transactionId}:${input.attemptKey}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: {
+      transactionId: input.transactionId,
+      effectiveDate: input.effectiveDate,
+    },
+  });
+}
+
 /** The entity's Opening Balances equity ledger account (for starting balances). */
 export async function fetchOpeningBalancesLedgerId(
   householdId: string,

@@ -259,6 +259,20 @@ export const SetSplitsPayloadSchema = z.object({
 });
 
 /**
+ * Correct an existing transaction's effective date (Quicken-style date edit).
+ * Same house-correction model as set_splits: the live batch is reversed AS OF
+ * ITS ORIGINAL DATE and a replacement batch carrying the identical postings
+ * is posted AS OF THE NEW DATE — so period-scoped reports for the old date
+ * net to zero and the new date picks up the full effect (Law 2 reversible
+ * correction, Law 9 reproducible numbers). Rejected if either the old or the
+ * new date falls inside a locked period.
+ */
+export const SetTransactionDatePayloadSchema = z.object({
+  transactionId: CanonicalTransactionIdSchema,
+  effectiveDate: IsoDateSchema,
+}).strict();
+
+/**
  * "As of [date], this account's balance was $X" — a one-time statement that
  * anchors the running balance for a synced account whose transaction history
  * doesn't reach back far enough. balanceMinor is the REAL-WORLD magnitude
@@ -363,6 +377,7 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'transactions.manual_create': ManualTransactionPayloadSchema,
   'transactions.manual_void': ManualVoidPayloadSchema,
   'transactions.set_splits': SetSplitsPayloadSchema,
+  'transactions.set_date': SetTransactionDatePayloadSchema,
   'accounts.set_opening_balance': SetOpeningBalancePayloadSchema,
   'accounts.reanchor_balance': ReanchorBalancePayloadSchema,
   'categorization.decide_suggestion': DecideCategorySuggestionPayloadSchema,
