@@ -182,9 +182,15 @@ export function TxnList({
                 something). A dedicated line means these only compete with
                 each other, never with the account name. */}
             {t.note || (t.tags?.length ?? 0) > 0 ? (
-              <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/80">
+              <p className="flex items-center gap-1.5 overflow-hidden text-xs text-muted-foreground/80">
+                {/* Review r3605876939: neither group is allowed a fixed/natural
+                    width anymore — both can shrink and clip on their own, and
+                    the row itself clips as a backstop, so a long note AND long
+                    tag names can never bleed into the amount/category columns
+                    on narrow rows (mobile, or the account page with the 22rem
+                    detail panel open). */}
                 {t.note ? (
-                  <span className="flex min-w-0 items-center gap-1">
+                  <span className="flex min-w-0 shrink items-center gap-1">
                     <StickyNote className="size-3 shrink-0 align-[-1px]" aria-label="Note" />
                     <span className="truncate">
                       {t.note.length > 40 ? `${t.note.slice(0, 40)}…` : t.note}
@@ -192,12 +198,12 @@ export function TxnList({
                   </span>
                 ) : null}
                 {(t.tags ?? []).length > 0 ? (
-                  <span className="flex shrink-0 items-center gap-1">
+                  <span className="flex min-w-0 shrink items-center gap-1 truncate">
                     {(t.tags ?? []).slice(0, 2).map((x) => (
-                      <span key={x.tagId}>#{x.name}</span>
+                      <span key={x.tagId} className="shrink-0">#{x.name}</span>
                     ))}
                     {(t.tags?.length ?? 0) > 2 ? (
-                      <span className="text-muted-foreground/60">
+                      <span className="shrink-0 text-muted-foreground/60">
                         +{String((t.tags?.length ?? 0) - 2)}
                       </span>
                     ) : null}
