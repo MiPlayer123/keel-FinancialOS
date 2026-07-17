@@ -29,9 +29,8 @@ import { stepScheduleDue } from '@/lib/recurring';
 import { Badge } from '@/components/ui/badge';
 import { CashFlowCard } from '@/components/keel/cash-flow-card';
 import { BalanceTrendChart, CashFlowMonthlyChart, CategoryBarList } from '@/components/keel/charts';
-import { spendingMix, isDebtOrTransferLike, suggestedTransferCount } from '@/lib/spending';
+import { spendingMix, isDebtOrTransferLike } from '@/lib/spending';
 import { NetWorthHero } from '@/components/keel/net-worth-hero';
-import { TransferNudgeBanner } from '@/components/keel/transfer-nudge-banner';
 import { NotesTasksCard } from '@/components/keel/notes-tasks-card';
 import { NeedsAttention } from '@/components/keel/needs-attention';
 import { formatMoney } from '@/lib/money';
@@ -68,26 +67,11 @@ function SyncStatus({
 }) {
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    let active = true;
-    fetchConnections(householdId)
-      .then((conns) => {
-        if (!active) return;
-        const synced = conns
-          .filter((c) => c.lastSuccessfulSyncAt !== null)
-          .sort((a, b) =>
-            (b.lastSuccessfulSyncAt ?? '').localeCompare(a.lastSuccessfulSyncAt ?? ''),
-          );
-        setLastSync(synced[0]?.lastSuccessfulSyncAt ?? null);
-        setConnectionId(conns[0]?.id ?? null);
-      })
-      .catch(() => {
-        if (active) setLastSync(null);
-      });
-    return () => {
-      active = false;
-    };
-  }, [householdId]);
+  const synced = connections
+    .filter((c) => c.lastSuccessfulSyncAt !== null)
+    .sort((a, b) => (b.lastSuccessfulSyncAt ?? '').localeCompare(a.lastSuccessfulSyncAt ?? ''));
+  const lastSync = synced[0]?.lastSuccessfulSyncAt ?? null;
+  const connectionId = connections[0]?.id ?? null;
 
   if (!connectionId) return null;
 
