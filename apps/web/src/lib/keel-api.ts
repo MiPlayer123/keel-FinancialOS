@@ -387,6 +387,15 @@ export type RichTransactionRow = {
   categoryKind: 'income' | 'expense' | null;
   /** Stable key for system categories (rename-proof "Uncategorized" checks). */
   categoryPfcKey?: string | null;
+  /**
+   * Provenance of the CURRENT single-offset category (absent pre-migration;
+   * null when the transaction has never had an overlay written — still on
+   * the Uncategorized landing pad). 'user' = a human confirmed it (directly,
+   * or a suggestion the user approved — the approval path writes source
+   * 'user' too); 'rule' / 'plaid_pfc' = machine-filed, never individually
+   * reviewed. See lib/review-state.ts for the derived "Auto" badge check.
+   */
+  categorySource?: 'user' | 'rule' | 'plaid_pfc' | null;
   /** Present (non-null) only for multi-split transactions. */
   splits?: TransactionSplit[] | null;
   /** User labels, orthogonal to categories (absent pre-tags-migration). */

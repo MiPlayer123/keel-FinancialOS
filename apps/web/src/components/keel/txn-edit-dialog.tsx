@@ -45,6 +45,7 @@ import {
 } from '@/lib/category-picker';
 import { merchantDisplayName } from '@/lib/merchant-name';
 import { isUncategorized } from '@/lib/needs-attention';
+import { isAutoCategorized } from '@/lib/review-state';
 import { useHousehold } from '@/components/keel/household-context';
 import { Money } from '@/components/keel/money';
 import { Badge } from '@/components/ui/badge';
@@ -153,9 +154,14 @@ export function TxnList({
             </p>
             <p className="truncate text-xs text-muted-foreground">
               {t.accountName}
-              {/* The picker is hidden below sm — keep the category visible. */}
+              {/* The picker is hidden below sm — keep the category (and its
+                  reviewed state) visible without it. */}
               {t.categoryName ? (
-                <span className="sm:hidden"> · {t.categoryName}</span>
+                <span className="sm:hidden">
+                  {' '}
+                  · {t.categoryName}
+                  {isAutoCategorized(t) ? ' · Auto' : ''}
+                </span>
               ) : null}
               {t.note ? (
                 <span className="text-muted-foreground/80">
@@ -203,6 +209,7 @@ export function TxnList({
             <CategoryPicker
               row={t}
               categories={categories}
+              auto={isAutoCategorized(t)}
               onPick={(catId) => {
                 onRecategorize(t.transactionId, catId);
               }}
@@ -261,6 +268,7 @@ export function CategoryPicker({
   onPick,
   wide,
   createEntityId,
+  auto,
 }: {
   row: RichTransactionRow;
   categories: CategoryRow[];
@@ -275,6 +283,14 @@ export function CategoryPicker({
    * the category the user just created.
    */
   createEntityId?: string | null;
+  /**
+   * P0-B follow-up: a small neutral "Auto" pill inside the SAME trigger a
+   * click already opens — the badge is reversible by construction (picking
+   * any category here, even the one already showing, re-files it with
+   * source='user' via keel_categorize_transaction). Never red/green (Law 8):
+   * this is provenance, not a verdict.
+   */
+  auto?: boolean;
 }) {
   const { householdId } = useHousehold();
   const [open, setOpen] = useState(false);
@@ -345,7 +361,14 @@ export function CategoryPicker({
         ),
       );
     }
-    if (c.ledgerAccountId !== currentId) onPick(c.ledgerAccountId, c.name);
+    // `auto` rows must fire onPick even when the picked category IS the
+    // currently-displayed one (review r3604432435): confirming an
+    // auto-categorized row is exactly "pick the same category" from the
+    // user's perspective, and that has to actually re-file it with
+    // source='user' (clearing the Auto badge) — the no-op suppression below
+    // exists for the ordinary trigger, where re-picking the current value is
+    // truly a no-op with nothing to confirm.
+    if (auto || c.ledgerAccountId !== currentId) onPick(c.ledgerAccountId, c.name);
   }
 
   async function createAndPick() {
@@ -407,7 +430,18 @@ export function CategoryPicker({
               }`
         }
       >
-        <span className="truncate">{label}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          {auto ? (
+            <Badge
+              variant="outline"
+              className="h-4 shrink-0 px-1 text-[10px] uppercase"
+              title="Auto-categorized — a rule or the bank's own category, not yet confirmed by you. Click to confirm or change."
+            >
+              Auto
+            </Badge>
+          ) : null}
+          <span className="truncate">{label}</span>
+        </span>
         <ChevronDown className="pointer-events-none size-4 shrink-0 text-muted-foreground" />
       </PopoverTrigger>
       <PopoverContent
@@ -1000,6 +1034,9 @@ export function TxnEditDialog({
                   }
                   categories={categories}
                   wide
+                  // Once picked in THIS session the badge would be stale —
+                  // saving always writes source='user' regardless of pick.
+                  auto={!picked && isAutoCategorized(row)}
                   onPick={(catId, catName) => {
                     setPicked({
                       id: catId,
