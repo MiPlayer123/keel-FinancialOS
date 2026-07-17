@@ -61,9 +61,33 @@ const RISK_LADDER = [
   { grade: 'D', label: 'disabled' },
 ];
 
+/** Structured data for search + LLM crawlers (GEO): what KEEL is, in one record. */
+const JSON_LD = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'KEEL',
+  url: 'https://keel.mikulsaravanan.com',
+  applicationCategory: 'FinanceApplication',
+  operatingSystem: 'Web',
+  description:
+    'KEEL is an AI-first personal and entity finance system of record: a deterministic double-entry ledger with exact integer money, append-only audited history, undoable changes, full data export (CSV, JSON, QIF, Beancount), and AI that only suggests — every material change waits for user approval.',
+  featureList: [
+    'Double-entry ledger with balanced postings',
+    'AI categorization with suggest-and-approve workflow',
+    'Multi-entity finances (personal and LLC)',
+    'Budgets, recurring detection, goals and cash-flow forecast',
+    'Statement reconciliation with period locks',
+    'Full data export in CSV, JSON, QIF and Beancount',
+  ],
+};
+
 export default function LandingPage() {
   return (
     <div className="flex min-h-dvh flex-col overflow-x-clip">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(JSON_LD) }}
+      />
       {/* Without JS the reveal-on-scroll content must simply be visible. */}
       <noscript>
         <style>{`[data-reveal]{opacity:1 !important;transform:none !important}`}</style>
