@@ -1260,6 +1260,35 @@ export async function fetchAuditLog(householdId: string, limit = 25): Promise<Au
   }));
 }
 
+/**
+ * Typed, display-only AI chat record (Law 11) returned by /api/ai/chat.
+ * Class C preview: narration of server-computed numbers — never a write,
+ * never a proposed action. `evidenceRefs` are snapshot SECTION ids (what the
+ * model saw), not raw data.
+ */
+export type AiChatRecord = {
+  tldr: string;
+  body: string;
+  asOf: string;
+  scope: { householdId: string; entityIds: string[] };
+  riskClass: 'C';
+  displayOnly: true;
+  modelVersion: string;
+  promptVersion: string;
+  evidenceRefs: string[];
+};
+
+/** Ask KEEL Assistant one read-only question (single-shot, no streaming). */
+export async function askKeel(input: {
+  householdId: string;
+  question: string;
+}): Promise<AiChatRecord> {
+  return invoke<AiChatRecord>('api/ai/chat', {
+    householdId: input.householdId,
+    question: input.question,
+  });
+}
+
 /** Generate a browser-side UUID for command ids. */
 export function newId(): string {
   return crypto.randomUUID();

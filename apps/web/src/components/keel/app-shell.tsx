@@ -22,6 +22,7 @@ import {
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
+  Sparkles,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -56,6 +57,7 @@ const NAV: NavItem[] = [
   { label: 'Budgets', href: '/dashboard/budgets', icon: PiggyBank },
   { label: 'Goals', href: '/dashboard/goals', icon: Target },
   { label: 'Reports', href: '/dashboard/reports', icon: BarChart3 },
+  { label: 'Assistant', href: '/dashboard/assistant', icon: Sparkles },
   { label: 'Paychecks', href: '/dashboard/paychecks', icon: Banknote },
   { label: 'Reimbursements', href: '/dashboard/reimbursements', icon: ArrowLeftRight },
   { label: 'Statements', href: '/dashboard/statements', icon: FileCheck2 },
@@ -94,6 +96,11 @@ function NavLinks({
             <Icon className="size-4 shrink-0" />
             {collapsed ? null : label}
             {!collapsed && href === '/dashboard/review' ? <ReviewBadge /> : null}
+            {!collapsed && href === '/dashboard/assistant' ? (
+              <span className="ml-auto rounded-full border border-border px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+                Preview
+              </span>
+            ) : null}
           </Link>
         );
         const withSubnav =

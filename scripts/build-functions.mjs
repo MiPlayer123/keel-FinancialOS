@@ -17,6 +17,7 @@ const entry = join(outDir, '.entry.ts');
 writeFileSync(
   entry,
   [
+    "export * from '@keel/ai';",
     "export * from '@keel/contracts';",
     "export * from '@keel/authz';",
     "export * from '@keel/ingest';",
@@ -38,6 +39,7 @@ await build({
   mainFields: ['module', 'main'],
   conditions: ['import'],
   alias: {
+    '@keel/ai': join(root, 'packages', 'ai', 'src', 'index.ts'),
     '@keel/contracts': join(root, 'packages', 'contracts', 'src', 'index.ts'),
     '@keel/authz': join(root, 'packages', 'authz', 'src', 'index.ts'),
     '@keel/ingest': join(root, 'packages', 'ingest', 'src', 'index.ts'),

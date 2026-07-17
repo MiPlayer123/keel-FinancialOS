@@ -20,6 +20,7 @@ const REPO_ROOT = new URL('../..', import.meta.url).pathname;
 
 // packages/providers/* wrap provider SDKs by design and are excluded.
 const PURE_PACKAGES = [
+  'ai',
   'authz',
   'contracts',
   'detectors',

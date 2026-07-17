@@ -1629,3 +1629,36 @@ CI (integration job) surfaced that `16-reanchor-balance.test.ts` set up ledger s
 - Live-UI verification on the real account, before and after the fix pass:
   no crashes, zero console errors, no 390px horizontal overflow; ACH payroll
   row renders "Deeptune · Payroll" with the raw memo in the tooltip.
+## 2026-07-17 — D-039: AI chat POC slice (packages/ai + /ai/chat + Assistant preview page)
+
+Smallest honest slice of docs/research/AI-CHAT-2026-07-16.md §6 ("ask KEEL
+about your finances"), read-only, single-shot (no streaming, no sessions,
+no tool-use loop yet). Law compliance encoded structurally:
+- `packages/ai` (new, pure — added to verify-purity PURE_PACKAGES): provider-
+  agnostic `ChatProvider` + fetch-based OpenAI-compatible client (base URL /
+  model / key all injected; research specced Anthropic, founder supplied an
+  OpenAI key — interface keeps it swappable, INFRA §11); deterministic prompt
+  builder over a typed `FinancialContextSnapshot`; response-record mapper to a
+  typed display-only class-C record {tldr, body, asOf, scope, modelVersion,
+  promptVersion, evidenceRefs} (Laws 10/11). 25 unit tests incl. Law-5
+  hostile-memo-in-data-block and Law-12 no-key-in-errors cases.
+- `POST /api/ai/chat` (inside functions/api, not a separate function — POC
+  is a plain request/response, no SSE; deviation from research §2.1 noted,
+  revisit when streaming lands): user JWT + same authz compiler
+  (`transactions.list` + `ledger.trial_balance` viewer reads, fail closed),
+  snapshot from EXISTING read procs only (trial balance, rich transactions
+  capped at 50, categories, budgets, entities — no new SQL), per-request
+  random data boundary (spotlighting), `OPENAI_API_KEY` via Deno.env only;
+  absent key → typed 503 `ai_unavailable` (feature off, never stubbed).
+- Deviations, justified: (1) no usage_events metering — the C6
+  `keel_meter_provider_call` proc hard-rejects provider≠'plaid' and this POC
+  adds no migrations; telemetry is a counts-only console line (no PII/keys),
+  real metering lands with the full slice's migration. (2) no audit_log row
+  per answer — same no-migration constraint; the POC path performs zero
+  writes anywhere, so Law 2's mutation-audit duty is not triggered. (3) no
+  figures-verification loop (research §3.3) — all amounts are pre-rendered
+  display strings in the snapshot and the record is display-only prose;
+  verification arrives with the typed `respond` tool loop.
+- `apps/web`: /dashboard/assistant page (tldr-first card, as-of + scope line,
+  collapsed "what the model saw" listing section LABELS only), nav entry with
+  Preview badge. 390px = stacked layout; no new deps; red untouched.
