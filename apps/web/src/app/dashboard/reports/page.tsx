@@ -1,34 +1,67 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { BarChart3, ArrowDownRight, ArrowUpRight } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { BarChart3, ArrowDownRight, ArrowUpRight, ChevronDown } from 'lucide-react';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { taxLineLabel, taxLineSchedule } from '@/lib/tax-lines';
 import { useHousehold } from '@/components/keel/household-context';
-import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
+import { useKeelQuery } from '@/lib/use-keel-query';
 import {
+  fetchAccounts,
   fetchCategories,
   fetchCategoryTaxLines,
+  fetchEntities,
+  type AccountRow,
   type CategoryRow,
-  type MonthlyCashFlowRow,
+  type EntityRow,
   type RichTransactionRow,
 } from '@/lib/keel-api';
 import {
   CashFlowMonthlyChart,
   CashFlowSankey,
   CategoryDonut,
+  type MonthlyFlow,
   type SankeyFlowLink,
   type SankeyFlowNode,
 } from '@/components/keel/charts';
 import { isDebtOrTransferLike, suggestedTransferCount } from '@/lib/spending';
+import {
+  clampMonthToRange,
+  dominantCurrency,
+  ledgerDrillHref,
+  parseReportScope,
+  presetRange,
+  RANGE_PRESETS,
+  reportScopeToSearch,
+  scopeLabel,
+  scopeMonths,
+  scopeRows,
+  scopedAccountIdSet,
+  type ReportScope,
+} from '@/lib/report-scope';
 import { TransferNudgeBanner } from '@/components/keel/transfer-nudge-banner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 export default function ReportsPage() {
   return (
@@ -38,26 +71,25 @@ export default function ReportsPage() {
         description="Where the money went — by category, by month, exactly."
       />
       <div className="space-y-6 p-6">
-        <ReportsBody />
+        {/* Suspense: useSearchParams (scope-in-URL) needs a boundary for the
+            static prerender — same pattern as the ledger page. */}
+        <Suspense
+          fallback={
+            <div className="space-y-4">
+              <Skeleton className="h-56 w-full" />
+              <Skeleton className="h-72 w-full" />
+            </div>
+          }
+        >
+          <ReportsBody />
+        </Suspense>
       </div>
     </>
   );
 }
 
-const MONTHS_SHOWN = 6;
-
 function monthKey(dateIso: string): string {
   return dateIso.slice(0, 7);
-}
-
-function lastMonths(n: number): string[] {
-  const now = new Date();
-  const out: string[] = [];
-  for (let i = n - 1; i >= 0; i--) {
-    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
-    out.push(d.toISOString().slice(0, 7));
-  }
-  return out;
 }
 
 function monthLabel(key: string): string {
@@ -78,6 +110,7 @@ type CategoryReportRow = {
  * Category × month matrix, transfers & debt payments excluded, NET signed per
  * month (refund inflows on an expense category reduce it — the same net
  * convention as budget-spent-v1; income view mirrors it). BigInt everywhere.
+ * Callers pass rows already reduced to the report scope (accounts + range).
  */
 function buildMatrix(
   rows: RichTransactionRow[],
@@ -128,42 +161,6 @@ function buildMatrix(
     );
   }
   return [...byCategory.values()].sort((a, b) => (b.total > a.total ? 1 : b.total < a.total ? -1 : 0));
-}
-
-const RANGE_PRESETS = [
-  { key: 'this_month', label: 'This month' },
-  { key: 'last_month', label: 'Last month' },
-  { key: 'last_3', label: 'Last 3 months' },
-  { key: 'ytd', label: 'Year to date' },
-  { key: 'last_12', label: 'Last 12 months' },
-] as const;
-type RangePresetKey = (typeof RANGE_PRESETS)[number]['key'];
-
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
-/** Inclusive [from, to] calendar-day range for a preset chip, anchored on today. */
-function presetRange(key: RangePresetKey): { from: string; to: string } {
-  const now = new Date();
-  const y = now.getUTCFullYear();
-  const m = now.getUTCMonth();
-  const today = isoDate(now);
-  switch (key) {
-    case 'this_month':
-      return { from: isoDate(new Date(Date.UTC(y, m, 1))), to: today };
-    case 'last_month':
-      return {
-        from: isoDate(new Date(Date.UTC(y, m - 1, 1))),
-        to: isoDate(new Date(Date.UTC(y, m, 0))),
-      };
-    case 'last_3':
-      return { from: isoDate(new Date(Date.UTC(y, m - 2, 1))), to: today };
-    case 'ytd':
-      return { from: isoDate(new Date(Date.UTC(y, 0, 1))), to: today };
-    case 'last_12':
-      return { from: isoDate(new Date(Date.UTC(y, m - 11, 1))), to: today };
-  }
 }
 
 function rangeLabel(from: string, to: string): string {
@@ -243,13 +240,13 @@ type FlowGraph = {
 } | null;
 
 /**
- * This month's money movement as a flow: income categories → Income →
- * spending categories, with "Saved" / "From savings" balancing the sides so
- * every ribbon is positive. Net convention matches the matrix; subcategories
- * roll up into their parents; transfers & debt payments excluded. BigInt sums.
+ * Money movement as a flow: income categories → Income → spending categories,
+ * with "Saved" / "From savings" balancing the sides so every ribbon is
+ * positive. Net convention matches the matrix; subcategories roll up into
+ * their parents; transfers & debt payments excluded. BigInt sums. Callers
+ * pass rows already reduced to the report scope (accounts + date range).
  */
 function buildFlow(rows: RichTransactionRow[], categories: CategoryRow[]): FlowGraph {
-  const month = new Date().toISOString().slice(0, 7);
   const byId = new Map(categories.map((c) => [c.ledgerAccountId, c]));
   const rollup = (id: string | null, fallback: string): { key: string; name: string } => {
     const cat = id ? byId.get(id) : undefined;
@@ -273,7 +270,6 @@ function buildFlow(rows: RichTransactionRow[], categories: CategoryRow[]): FlowG
 
   for (const t of rows) {
     if (isDebtOrTransferLike(t)) continue;
-    if (!t.effectiveDate.startsWith(month)) continue;
     if (t.splits && t.splits.length > 0) {
       for (const s of t.splits) {
         const share = BigInt(s.amountMinor || '0');
@@ -344,17 +340,16 @@ function buildFlow(rows: RichTransactionRow[], categories: CategoryRow[]): FlowG
 /**
  * Actuals grouped by IRS tax line (Quicken's Tax Schedule report). A category
  * carries an optional taxLine; splits attribute their own share. Net cash per
- * line in the dominant currency, current calendar year to date.
+ * line in the dominant currency. Callers pass rows already reduced to the
+ * report scope (accounts + date range) — the footnote states that scope.
  */
 function taxSchedule(
   rows: RichTransactionRow[],
   taxByCategory: Map<string, string>,
 ): {
   currency: string;
-  year: string;
   groups: { schedule: string; lines: { line: string; count: number; netMinor: bigint }[] }[];
 } {
-  const year = new Date().toISOString().slice(0, 4);
   const currencyCounts = new Map<string, number>();
   for (const t of rows) {
     currencyCounts.set(t.currency, (currencyCounts.get(t.currency) ?? 0) + 1);
@@ -372,7 +367,6 @@ function taxSchedule(
   for (const t of rows) {
     if (t.transferStatus === 'confirmed') continue;
     if (t.currency !== currency) continue;
-    if (!t.effectiveDate.startsWith(year)) continue;
     if (t.splits && t.splits.length > 0) {
       for (const sp of t.splits) {
         const line = taxByCategory.get(sp.categoryLedgerAccountId);
@@ -400,37 +394,28 @@ function taxSchedule(
       lines: lines.sort((a, b) => a.line.localeCompare(b.line)),
     }))
     .sort((a, b) => a.schedule.localeCompare(b.schedule));
-  return { currency, year, groups };
+  return { currency, groups };
 }
 
 /**
- * Net cash by tag over the trailing months. NET-CASH scope, deliberately
- * different from the spending widgets above: only confirmed transfer pairs are
- * excluded (they net to zero); debt payments are real cash against a tag, so
- * they stay counted. Each card's caption states its own formula (Law 9).
- * Sums are single-currency: restricted to the household's dominant currency,
- * which is returned so the card formats with it.
+ * Net cash by tag. NET-CASH scope, deliberately different from the spending
+ * widgets above: only confirmed transfer pairs are excluded (they net to
+ * zero); debt payments are real cash against a tag, so they stay counted.
+ * Each card's caption states its own formula (Law 9). Sums are
+ * single-currency: restricted to the dominant currency, which is returned so
+ * the card formats with it. Callers pass rows already reduced to the report
+ * scope (accounts + date range).
  */
-function tagTotals(
-  rows: RichTransactionRow[],
-  months: string[],
-): {
+function tagTotals(rows: RichTransactionRow[]): {
   currency: string;
   totals: { tagId: string; name: string; count: number; netMinor: bigint }[];
 } {
-  const currencyCounts = new Map<string, number>();
-  for (const t of rows) {
-    currencyCounts.set(t.currency, (currencyCounts.get(t.currency) ?? 0) + 1);
-  }
-  const currency =
-    [...currencyCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'USD';
-  const monthSet = new Set(months);
+  const currency = dominantCurrency(rows);
   const byTag = new Map<string, { tagId: string; name: string; count: number; netMinor: bigint }>();
   for (const t of rows) {
     if (t.transferStatus === 'confirmed') continue;
     if (t.currency !== currency) continue;
     if (!t.tags || t.tags.length === 0) continue;
-    if (!monthSet.has(monthKey(t.effectiveDate))) continue;
     const cash = BigInt(t.amountMinor || '0');
     for (const tag of t.tags) {
       const e = byTag.get(tag.tagId) ?? { tagId: tag.tagId, name: tag.name, count: 0, netMinor: 0n };
@@ -634,10 +619,161 @@ function DeltaLine({ deltaMinor, vsLabel }: { deltaMinor: bigint; vsLabel: strin
   );
 }
 
+/**
+ * THE scope bar (teardown C14): one date range + account subset + entity
+ * drives every widget below it. State lives in the URL (shareable views);
+ * flex-wrap keeps it usable at 390px. Entity select renders only for
+ * multi-entity households.
+ */
+function ScopeBar({
+  scope,
+  accounts,
+  entities,
+  onScopeChange,
+}: {
+  scope: ReportScope;
+  accounts: AccountRow[];
+  entities: EntityRow[];
+  onScopeChange: (next: ReportScope) => void;
+}) {
+  const entityAccounts =
+    scope.entityId === null ? accounts : accounts.filter((a) => a.entityId === scope.entityId);
+  const selectedIds =
+    scope.accountIds.length === 0
+      ? entityAccounts.map((a) => a.id)
+      : entityAccounts.filter((a) => scope.accountIds.includes(a.id)).map((a) => a.id);
+  const allSelected = selectedIds.length === entityAccounts.length && entityAccounts.length > 0;
+
+  const toggleAccount = (id: string) => {
+    const has = selectedIds.includes(id);
+    // Never allow an empty scope — the last checked account stays checked.
+    if (has && selectedIds.length === 1) return;
+    const next = has ? selectedIds.filter((x) => x !== id) : [...selectedIds, id];
+    // A full selection canonicalizes to [] ("all"), so new accounts join the
+    // scope automatically and the URL stays clean.
+    onScopeChange({
+      ...scope,
+      accountIds: next.length === entityAccounts.length ? [] : next,
+    });
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-3">
+      <span className="flex flex-wrap gap-1">
+        {RANGE_PRESETS.map((p) => (
+          <Button
+            key={p.key}
+            variant={scope.preset === p.key ? 'secondary' : 'ghost'}
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => {
+              onScopeChange({ ...scope, preset: p.key, ...presetRange(p.key) });
+            }}
+          >
+            {p.label}
+          </Button>
+        ))}
+      </span>
+      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Input
+          type="date"
+          value={scope.from}
+          max={scope.to}
+          className="h-8 w-[9.5rem] text-xs"
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v && v <= scope.to) onScopeChange({ ...scope, preset: null, from: v });
+          }}
+        />
+        <span>to</span>
+        <Input
+          type="date"
+          value={scope.to}
+          min={scope.from}
+          className="h-8 w-[9.5rem] text-xs"
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v && v >= scope.from) onScopeChange({ ...scope, preset: null, to: v });
+          }}
+        />
+      </span>
+      {entities.length > 1 ? (
+        <Select
+          value={scope.entityId ?? 'all'}
+          items={{
+            all: 'All entities',
+            ...Object.fromEntries(entities.map((e) => [e.entityId, e.name])),
+          }}
+          onValueChange={(v) => {
+            if (!v) return;
+            // Switching entity resets the account picks — the old picks belong
+            // to another entity's account list.
+            onScopeChange({ ...scope, entityId: v === 'all' ? null : v, accountIds: [] });
+          }}
+        >
+          <SelectTrigger className="h-8 w-36">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All entities</SelectItem>
+            {entities.map((e) => (
+              <SelectItem key={e.entityId} value={e.entityId}>
+                {e.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : null}
+      {entityAccounts.length > 0 ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button variant="outline" size="sm" className="h-8">
+                {allSelected
+                  ? 'All accounts'
+                  : `${String(selectedIds.length)} of ${String(entityAccounts.length)} accounts`}
+                <ChevronDown className="size-4 text-muted-foreground" />
+              </Button>
+            }
+          />
+          <DropdownMenuContent className="min-w-56">
+            <DropdownMenuCheckboxItem
+              checked={allSelected}
+              closeOnClick={false}
+              onCheckedChange={() => {
+                onScopeChange({ ...scope, accountIds: [] });
+              }}
+            >
+              All accounts
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuSeparator />
+            {entityAccounts.map((a) => (
+              <DropdownMenuCheckboxItem
+                key={a.id}
+                checked={selectedIds.includes(a.id)}
+                closeOnClick={false}
+                onCheckedChange={() => {
+                  toggleAccount(a.id);
+                }}
+              >
+                {a.name}
+              </DropdownMenuCheckboxItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
+    </div>
+  );
+}
+
 function ReportsBody() {
   const { householdId, ready } = useHousehold();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const txns = useKeelQuery<RichTransactionRow>('transactions.rich', householdId);
   const [categories, setCategories] = useState<CategoryRow[]>([]);
+  const [accounts, setAccounts] = useState<AccountRow[]>([]);
+  const [entities, setEntities] = useState<EntityRow[]>([]);
 
   useEffect(() => {
     if (!householdId) return;
@@ -649,49 +785,84 @@ function ReportsBody() {
       .catch(() => {
         if (active) setCategories([]);
       });
+    fetchAccounts(householdId)
+      .then((a) => {
+        if (active) setAccounts(a);
+      })
+      .catch(() => {
+        if (active) setAccounts([]);
+      });
+    fetchEntities(householdId)
+      .then((e) => {
+        if (active) setEntities(e);
+      })
+      .catch(() => {
+        if (active) setEntities([]);
+      });
     return () => {
       active = false;
     };
   }, [householdId]);
-  const monthlyFlow = useKeelQuerySilent<MonthlyCashFlowRow>(
-    'dashboard.cash_flow_monthly',
-    householdId,
+
+  // ---- THE scope (C14): parsed from the URL, honored by every widget. ----
+  const scope = useMemo(() => parseReportScope(searchParams), [searchParams]);
+  const setScope = useCallback(
+    (next: ReportScope) => {
+      const qs = reportScopeToSearch(next);
+      router.replace(qs ? `/dashboard/reports?${qs}` : '/dashboard/reports', { scroll: false });
+    },
+    [router],
   );
+  const accountSet = useMemo(() => scopedAccountIdSet(scope, accounts), [scope, accounts]);
+  /** Account/entity-scoped rows (all dates) — for month-granular widgets. */
+  const scopedRows = useMemo(
+    () => (accountSet === null ? txns.rows : txns.rows.filter((r) => accountSet.has(r.accountId))),
+    [txns.rows, accountSet],
+  );
+  /** Rows inside the full scope: accounts AND the [from, to] day range. */
+  const rangedRows = useMemo(() => scopeRows(scopedRows, scope, null), [scopedRows, scope]);
+  const entityName = scope.entityId
+    ? (entities.find((e) => e.entityId === scope.entityId)?.name ?? null)
+    : null;
+  /** "3 of 5 accounts · 2026-05-01 – 2026-07-17" — every footnote leads with this (Law 9). */
+  const scopeText = scopeLabel({
+    scope,
+    accountSet,
+    totalAccounts: accounts.length,
+    entityName,
+  });
 
   const [view, setView] = useState<'expense' | 'income'>('expense');
-  const flow = useMemo(() => buildFlow(txns.rows, categories), [txns.rows, categories]);
+  const flow = useMemo(() => buildFlow(rangedRows, categories), [rangedRows, categories]);
 
-  // Spending-by-category donut: preset chips fill the from/to inputs;
-  // editing either input directly switches the control to "custom" (the
-  // active preset chip un-highlights, but the inputs keep whatever the user
-  // typed — a fully custom range).
-  const [donutPreset, setDonutPreset] = useState<RangePresetKey | null>('this_month');
-  const [donutFrom, setDonutFrom] = useState<string>(() => presetRange('this_month').from);
-  const [donutTo, setDonutTo] = useState<string>(() => presetRange('this_month').to);
-  const applyDonutPreset = (key: RangePresetKey) => {
-    const r = presetRange(key);
-    setDonutFrom(r.from);
-    setDonutTo(r.to);
-    setDonutPreset(key);
-  };
-  const donutRange = useMemo(() => {
-    if (donutFrom && donutTo && donutFrom <= donutTo) return { from: donutFrom, to: donutTo };
-    return presetRange('this_month');
-  }, [donutFrom, donutTo]);
   const donutReport = useMemo(
-    () => categoryRangeTotals(txns.rows, donutRange.from, donutRange.to),
-    [txns.rows, donutRange],
+    () => categoryRangeTotals(scopedRows, scope.from, scope.to),
+    [scopedRows, scope.from, scope.to],
   );
-  const months = useMemo(() => lastMonths(MONTHS_SHOWN), []);
-  const tagReport = useMemo(() => tagTotals(txns.rows, months), [txns.rows, months]);
+  const months = useMemo(() => scopeMonths(scope.from, scope.to), [scope.from, scope.to]);
+  const tagReport = useMemo(() => tagTotals(rangedRows), [rangedRows]);
   const tags = tagReport.totals;
-  // Default to the last FULL month — the current month (months[last]) is still in progress.
+  // Month chips: the months the scope range touches (last 6). Default to the
+  // last FULL month — the newest month is usually still in progress.
+  const reviewMonths = useMemo(() => months.slice(-6), [months]);
   const [reviewMonth, setReviewMonth] = useState<string>(
-    () => months[months.length - 2] ?? months[months.length - 1] ?? '',
+    () => reviewMonths[reviewMonths.length - 2] ?? reviewMonths[reviewMonths.length - 1] ?? '',
   );
+  useEffect(() => {
+    if (reviewMonths.length === 0) return;
+    if (!reviewMonths.includes(reviewMonth)) {
+      setReviewMonth(
+        reviewMonths[reviewMonths.length - 2] ?? reviewMonths[reviewMonths.length - 1] ?? '',
+      );
+    }
+  }, [reviewMonths, reviewMonth]);
+  // Month review is month-granular by design: it honors the ACCOUNT/entity
+  // scope, offers only in-range months, and states its month in the footnote;
+  // the "vs previous month" baseline deliberately reads the full prior month
+  // (a range-clamped baseline would fake huge deltas — Law 9 over-honesty).
   const monthReview = useMemo(
-    () => (reviewMonth ? buildMonthReview(txns.rows, reviewMonth, tagReport.currency) : null),
-    [txns.rows, reviewMonth, tagReport.currency],
+    () => (reviewMonth ? buildMonthReview(scopedRows, reviewMonth, tagReport.currency) : null),
+    [scopedRows, reviewMonth, tagReport.currency],
   );
   // Includes archived categories: their history stays on the tax schedule.
   const [taxLines, setTaxLines] = useState<Map<string, string>>(new Map());
@@ -703,12 +874,34 @@ function ReportsBody() {
         setTaxLines(new Map());
       });
   }, [householdId]);
-  const taxReport = useMemo(() => taxSchedule(txns.rows, taxLines), [txns.rows, taxLines]);
+  const taxReport = useMemo(() => taxSchedule(rangedRows, taxLines), [rangedRows, taxLines]);
+  // Data-quality nudge, not a report number: counts the whole household's
+  // suggested transfers regardless of scope, so a narrow scope can't hide
+  // pending review work.
   const suggestedCount = useMemo(() => suggestedTransferCount(txns.rows), [txns.rows]);
   const matrix = useMemo(
-    () => buildMatrix(txns.rows, months, view),
-    [txns.rows, months, view],
+    () => buildMatrix(rangedRows, months, view),
+    [rangedRows, months, view],
   );
+
+  // Income vs spending per scope month, derived client-side from the scoped
+  // rows (same net convention as the matrix — transfers & debt payments
+  // excluded) so this trend honors the scope bar; the server-side
+  // dashboard.cash_flow_monthly aggregate stays household-wide (Home uses it).
+  const monthlyFlow = useMemo<MonthlyFlow[]>(() => {
+    const currency = dominantCurrency(rangedRows);
+    return months.map((m) => {
+      const { incomeMinor, categories: cats } = monthIncomeAndSpending(rangedRows, m, currency);
+      const spending = [...cats.values()].reduce((acc, c) => acc + c.amountMinor, 0n);
+      return {
+        month: m,
+        currency,
+        inflowMinor: incomeMinor.toString(),
+        outflowMinor: spending.toString(),
+        netMinor: (incomeMinor - spending).toString(),
+      };
+    });
+  }, [rangedRows, months]);
 
   const comparison = useMemo(() => {
     const [prev, curr] = [months[months.length - 2], months[months.length - 1]];
@@ -728,7 +921,14 @@ function ReportsBody() {
       .slice(0, 8);
   }, [matrix, months]);
 
-  if (!ready || txns.loading) {
+  const scopeRestricted = scope.entityId !== null || scope.accountIds.length > 0;
+  if (
+    !ready ||
+    txns.loading ||
+    // A restricted scope can't resolve until the account list arrives —
+    // rendering unscoped numbers first would be a silent scope violation.
+    (scopeRestricted && accounts.length === 0 && txns.rows.length > 0)
+  ) {
     return (
       <div className="space-y-4">
         <Skeleton className="h-56 w-full" />
@@ -747,20 +947,30 @@ function ReportsBody() {
     );
   }
 
-  const showFlow =
-    monthlyFlow !== null &&
-    monthlyFlow.some((m) => m.inflowMinor !== '0' || m.outflowMinor !== '0');
+  const showFlow = monthlyFlow.some((m) => m.inflowMinor !== '0' || m.outflowMinor !== '0');
+  const monthsLabel =
+    months.length === 1 ? monthLabel(months[0] ?? '') : `${String(months.length)} months`;
 
   return (
     <>
       <TransferNudgeBanner count={suggestedCount} />
 
+      <ScopeBar scope={scope} accounts={accounts} entities={entities} onScopeChange={setScope} />
+
+      {rangedRows.length === 0 ? (
+        <EmptyState
+          icon={<BarChart3 className="size-6" />}
+          title="Nothing in this scope"
+          description={`No transactions for ${scopeText}. Widen the date range or accounts above.`}
+        />
+      ) : (
+        <>
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex flex-wrap items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
             <span>Month in review</span>
             <span className="flex flex-wrap gap-1">
-              {months.map((m) => (
+              {reviewMonths.map((m) => (
                 <Button
                   key={m}
                   variant={reviewMonth === m ? 'secondary' : 'ghost'}
@@ -881,8 +1091,12 @@ function ReportsBody() {
                 </div>
               </div>
               <p className="text-xs text-muted-foreground">
-                {monthLabel(reviewMonth)}, dominant currency only, transfers & debt payments
-                excluded.
+                {entityName ? `${entityName} · ` : ''}
+                {accountSet === null
+                  ? 'All accounts'
+                  : `${String(accountSet.size)} of ${String(accounts.length)} accounts`}{' '}
+                · full month {monthLabel(reviewMonth)}, dominant currency only, transfers &
+                debt payments excluded.
               </p>
             </>
           ) : (
@@ -898,57 +1112,28 @@ function ReportsBody() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="flex flex-wrap gap-1">
-              {RANGE_PRESETS.map((p) => (
-                <Button
-                  key={p.key}
-                  variant={donutPreset === p.key ? 'secondary' : 'ghost'}
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() => {
-                    applyDonutPreset(p.key);
-                  }}
-                >
-                  {p.label}
-                </Button>
-              ))}
-            </span>
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Input
-                type="date"
-                value={donutFrom}
-                max={donutTo}
-                className="h-7 w-[9.5rem] text-xs"
-                onChange={(e) => {
-                  setDonutFrom(e.target.value);
-                  setDonutPreset(null);
-                }}
-              />
-              <span>to</span>
-              <Input
-                type="date"
-                value={donutTo}
-                min={donutFrom}
-                className="h-7 w-[9.5rem] text-xs"
-                onChange={(e) => {
-                  setDonutTo(e.target.value);
-                  setDonutPreset(null);
-                }}
-              />
-            </span>
-          </div>
           {donutReport.positive.length > 0 ? (
             <CategoryDonut
               items={donutReport.positive.map((c) => ({
+                id: c.categoryId,
                 name: c.name,
                 amountMinor: c.amountMinor.toString(),
               }))}
               currency={donutReport.currency}
+              onSliceClick={(slice) => {
+                router.push(
+                  ledgerDrillHref({
+                    categoryId: slice.id,
+                    from: scope.from,
+                    to: scope.to,
+                    accountSet,
+                  }),
+                );
+              }}
             />
           ) : (
             <p className="text-sm text-muted-foreground">
-              No spending in {rangeLabel(donutRange.from, donutRange.to)}.
+              No spending in {rangeLabel(scope.from, scope.to)}.
             </p>
           )}
           {donutReport.negative.length > 0 ? (
@@ -972,8 +1157,8 @@ function ReportsBody() {
             </div>
           ) : null}
           <p className="text-xs text-muted-foreground">
-            {rangeLabel(donutRange.from, donutRange.to)}, dominant currency only, transfers &
-            debt payments excluded, net of refunds.
+            {scopeText}, dominant currency only, transfers & debt payments excluded, net of
+            refunds. Click a slice to open it in the ledger.
           </p>
         </CardContent>
       </Card>
@@ -982,7 +1167,7 @@ function ReportsBody() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Where this month&apos;s money went
+              Where the money went
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -1005,8 +1190,8 @@ function ReportsBody() {
               </span>
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
-              Income on the left, spending on the right; subcategories roll up into
-              their parents. Transfers & debt payments excluded.
+              {scopeText}. Income on the left, spending on the right; subcategories roll up
+              into their parents. Transfers & debt payments excluded.
             </p>
           </CardContent>
         </Card>
@@ -1020,7 +1205,19 @@ function ReportsBody() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <CashFlowMonthlyChart rows={monthlyFlow} />
+            <CashFlowMonthlyChart
+              rows={monthlyFlow}
+              onMonthClick={(m) => {
+                const clamped = clampMonthToRange(m, scope.from, scope.to);
+                router.push(
+                  ledgerDrillHref({ from: clamped.from, to: clamped.to, accountSet }),
+                );
+              }}
+            />
+            <p className="mt-2 text-xs text-muted-foreground">
+              {scopeText}, dominant currency only, transfers & debt payments excluded. Click a
+              month to open it in the ledger.
+            </p>
           </CardContent>
         </Card>
       ) : null}
@@ -1029,8 +1226,7 @@ function ReportsBody() {
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
             <span>
-              {view === 'expense' ? 'Spending' : 'Income'} by category · last {MONTHS_SHOWN}{' '}
-              months
+              {view === 'expense' ? 'Spending' : 'Income'} by category · {monthsLabel}
             </span>
             <span className="flex gap-1">
               {(['expense', 'income'] as const).map((k) => (
@@ -1051,6 +1247,7 @@ function ReportsBody() {
         </CardHeader>
         <CardContent>
           <p className="mb-3 text-xs text-muted-foreground">
+            {scopeText}.{' '}
             {view === 'expense'
               ? 'Net spending per month (refunds reduce it); transfers & debt payments excluded.'
               : 'Net income per month; transfers & debt payments excluded.'}{' '}
@@ -1074,11 +1271,12 @@ function ReportsBody() {
                   <tr key={row.categoryId ?? 'uncategorized'} className="border-b border-border/60">
                     <td className="max-w-44 truncate py-2 pr-3">
                       <Link
-                        href={
-                          row.categoryId
-                            ? `/dashboard/ledger?category=${row.categoryId}`
-                            : '/dashboard/ledger?category=uncategorized'
-                        }
+                        href={ledgerDrillHref({
+                          categoryId: row.categoryId,
+                          from: scope.from,
+                          to: scope.to,
+                          accountSet,
+                        })}
                         className="hover:underline"
                       >
                         {row.name}
@@ -1134,7 +1332,7 @@ function ReportsBody() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              By tag · last {MONTHS_SHOWN} months
+              By tag
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
@@ -1153,8 +1351,8 @@ function ReportsBody() {
               </div>
             ))}
             <p className="pt-1 text-xs text-muted-foreground">
-              Net cash for tagged transactions — tag things like tax-deductible or a
-              trip, then read the total here. Confirmed transfers excluded; debt
+              {scopeText}. Net cash for tagged transactions — tag things like tax-deductible
+              or a trip, then read the total here. Confirmed transfers excluded; debt
               payments count (net cash, not spending).
             </p>
           </CardContent>
@@ -1164,7 +1362,7 @@ function ReportsBody() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Tax schedule · {taxReport.year} YTD
+              Tax schedule
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -1190,9 +1388,9 @@ function ReportsBody() {
               </div>
             ))}
             <p className="pt-1 text-xs text-muted-foreground">
-              Actual cash per IRS line, from the tax lines you set on categories
-              (Home → Categories → Manage). Confirmed transfers excluded.
-              Bookkeeping, not tax advice.
+              {scopeText}. Actual cash per IRS line, from the tax lines you set on categories
+              (Home → Categories → Manage). Confirmed transfers excluded. Bookkeeping, not
+              tax advice.
             </p>
           </CardContent>
         </Card>
@@ -1201,13 +1399,24 @@ function ReportsBody() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              This month vs last month
+              {monthLabel(months[months.length - 1] ?? '')} vs{' '}
+              {monthLabel(months[months.length - 2] ?? '')}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             {comparison.map((r) => (
               <div key={r.categoryId ?? r.name} className="flex items-center gap-3 text-sm">
-                <span className="min-w-0 flex-1 truncate">{r.name}</span>
+                <Link
+                  href={ledgerDrillHref({
+                    categoryId: r.categoryId,
+                    from: scope.from,
+                    to: scope.to,
+                    accountSet,
+                  })}
+                  className="min-w-0 flex-1 truncate hover:underline"
+                >
+                  {r.name}
+                </Link>
                 <span className="text-muted-foreground">
                   <Money amountMinor={r.prev.toString()} className="text-xs" /> →{' '}
                   <Money amountMinor={r.curr.toString()} className="text-sm" />
@@ -1226,11 +1435,14 @@ function ReportsBody() {
               </div>
             ))}
             <p className="pt-1 text-xs text-muted-foreground">
-              Sorted by biggest change; the current month is still in progress.
+              {scopeText}. Sorted by biggest change; the newest month may still be in
+              progress.
             </p>
           </CardContent>
         </Card>
       ) : null}
+        </>
+      )}
     </>
   );
 }

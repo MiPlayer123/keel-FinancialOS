@@ -1959,3 +1959,46 @@ Decisions:
   txn-edit-dialog re-exports it, so ledger/page.tsx imports are untouched.
 - SyncStatus now takes connections as a prop; HomeBody fetches connections
   once and shares them with the reauth row (was a second identical fetch).
+
+## 2026-07-17 — D-042: C14 reports scope bar + chart drill-through (teardown queue item 3)
+
+One scope bar (date presets + custom from/to, account multi-select, entity
+select for multi-entity households) now drives EVERY widget on
+/dashboard/reports; state round-trips through URL search params (shareable
+views, `range`/`from`/`to`/`entity`/`accounts`). Pure helpers live in
+`apps/web/src/lib/report-scope.ts` (29 unit tests): parse/serialize,
+entity∩accounts resolution with stale-id dropout, month enumeration,
+month-clamping for partial coverage, drill-href building, and the Law-9
+footnote label ("3 of 5 accounts · 2026-05-01 – 2026-07-17") every widget
+footnote now leads with. Donut slices, trend bars, and matrix/comparison rows
+deep-link to /dashboard/ledger with category+from+to(+account) params.
+
+Decisions / deviations (with justification):
+1. "Income vs spending by month" is now derived CLIENT-SIDE from
+   transactions.rich (same net convention as the matrix: transfers & debt
+   payments excluded, split-aware) instead of the server
+   `dashboard.cash_flow_monthly` aggregate. The C14 brief forbade new SQL and
+   required account/entity scope on every widget; the server aggregate is
+   household-wide by construction. Formula delta vs the old widget (which
+   included Loan Payments postings and could not be scoped) is stated in the
+   widget footnote. Home keeps using the server aggregate unchanged.
+2. Ledger gained a URL-seeded custom date range (`from`/`to` params) shown
+   as a visible extra entry in the existing date select; selecting any preset
+   clears it. The C14 brief said "no filter-logic changes" — this is a
+   bound-sourcing extension of the existing [from,to] comparison, not new
+   filter logic, and the alternative (mapping ranges onto the nearest preset)
+   would show a register that does NOT reproduce the clicked number (Law 9).
+3. Ledger's account filter is single-select, so drill links carry `account`
+   only when the scope resolves to exactly one account; multi-account scopes
+   drill with category+dates and the register visibly shows "All accounts"
+   (disclosed, not silently narrowed). Documented in ledgerDrillHref.
+4. Month in review is month-granular by design: it honors account/entity
+   scope and offers only in-range month chips, but sums the FULL selected
+   month and reads the full prior month as its comparison baseline (a
+   range-clamped baseline would fabricate deltas). Its footnote says "full
+   month <M>" explicitly.
+5. Donut's "Everything else" fold stays non-clickable: it aggregates the
+   folded remainder and no single register view reproduces it.
+6. TransferNudgeBanner stays UNscoped on purpose — it is a data-quality
+   nudge, not a report number; a narrow scope must not hide pending review
+   work.
