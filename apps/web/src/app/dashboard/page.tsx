@@ -23,6 +23,7 @@ import {
   type ScheduleRow,
   type TrialBalanceRow,
 } from '@/lib/keel-api';
+import { merchantDisplayName } from '@/lib/merchant-name';
 import { stepScheduleDue } from '@/lib/recurring';
 import { Badge } from '@/components/ui/badge';
 import { CashFlowCard } from '@/components/keel/cash-flow-card';
@@ -183,7 +184,7 @@ function buildInsights(rows: RichTransactionRow[]): Insight[] {
     out.push({
       label: 'Biggest purchase · 7 days',
       value: formatMoney(biggest.amountMinor.replace('-', ''), { currency: biggest.currency }),
-      detail: biggest.description.slice(0, 40),
+      detail: merchantDisplayName(biggest.description).slice(0, 40),
     });
   }
   if (mtd > 0n && prevToSameDay > 0n) {
@@ -205,7 +206,8 @@ function buildInsights(rows: RichTransactionRow[]): Insight[] {
     out.push({
       label: 'Top merchant this month',
       value: formatMoney(topMerchant[1].toString(), { currency: domCurrency }),
-      detail: topMerchant[0].slice(0, 40),
+      // Display-only cleanup; aggregation stays keyed on the raw memo.
+      detail: merchantDisplayName(topMerchant[0]).slice(0, 40),
     });
   }
   return out;

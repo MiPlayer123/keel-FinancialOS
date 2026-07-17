@@ -28,6 +28,7 @@ import {
   type CategoryRow,
   type TagRow,
 } from '@/lib/keel-api';
+import { merchantDisplayName } from '@/lib/merchant-name';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
 import { ImportCsvDialog } from '@/components/keel/import-csv-dialog';
 import { ManageTagsDialog } from '@/components/keel/manage-tags-dialog';
@@ -193,6 +194,16 @@ function LedgerTable() {
       });
   }, [householdId]);
 
+  // Search must keep matching the RAW description (never narrow search),
+  // but "blue bottle" should also find "SQ *BLUE BOTTLE COFF…" — so the
+  // cleaned display name matches too. Precomputed once per data load so
+  // per-keystroke filtering stays cheap.
+  const cleanedById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of rows) m.set(t.transactionId, merchantDisplayName(t.description).toLowerCase());
+    return m;
+  }, [rows]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     const [from, to] = presetRange(datePreset);
@@ -218,6 +229,7 @@ function LedgerTable() {
         q &&
         !t.description.toLowerCase().includes(q) &&
         !(t.originalDescription ?? '').toLowerCase().includes(q) &&
+        !(cleanedById.get(t.transactionId) ?? '').includes(q) &&
         !t.accountName.toLowerCase().includes(q) &&
         !(t.categoryName ?? '').toLowerCase().includes(q) &&
         // "12.34" or "1234" finds the amount, sign-agnostic.
@@ -245,7 +257,7 @@ function LedgerTable() {
       }
     });
     return out;
-  }, [rows, query, datePreset, accountFilter, categoryFilter, tagFilter, sort]);
+  }, [rows, cleanedById, query, datePreset, accountFilter, categoryFilter, tagFilter, sort]);
 
   const totals = useMemo(() => {
     let inflow = 0n;

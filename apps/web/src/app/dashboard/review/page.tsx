@@ -1,7 +1,15 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { BadgeCheck, Check, X, Loader2, ArrowRight, ArrowLeftRight } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
+import {
+  BadgeCheck,
+  Check,
+  X,
+  Loader2,
+  ArrowRight,
+  ArrowLeftRight,
+  ChevronDown,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
@@ -17,6 +25,12 @@ import {
   type RecurringSeriesRow,
   type TransferLinkRow,
 } from '@/lib/keel-api';
+import {
+  cadenceLabel,
+  recurringReasonLine,
+  transferReasonLine,
+} from '@/lib/recurring-evidence';
+import { merchantDisplayName } from '@/lib/merchant-name';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
@@ -74,8 +88,8 @@ function ReviewBody() {
     return (
       <EmptyState
         icon={<BadgeCheck className="size-6" />}
-        title="Nothing to review"
-        description="Recurring series, transfer matches and categorizations will surface here as suggestions — each waiting for your approval."
+        title="You're all caught up"
+        description="Nothing needs your review right now. Recurring series, transfer matches and categorizations will surface here as suggestions — each waiting for your approval."
       />
     );
   }
@@ -84,7 +98,9 @@ function ReviewBody() {
     <div className="space-y-8">
       {transfers.suggested.length > 0 ? (
         <section className="space-y-3">
-          <h2 className="text-sm font-medium text-muted-foreground">Possible transfers</h2>
+          <h2 className="text-sm font-medium text-muted-foreground">
+            Possible transfers · {transfers.suggested.length}
+          </h2>
           <p className="text-xs text-muted-foreground">
             These pairs look like money moving between your own accounts. Confirming keeps
             both sides in the ledger but stops them counting as income and spending.
@@ -104,7 +120,9 @@ function ReviewBody() {
 
       {suggested.length > 0 ? (
         <section className="space-y-3">
-          <h2 className="text-sm font-medium text-muted-foreground">Recurring series</h2>
+          <h2 className="text-sm font-medium text-muted-foreground">
+            Recurring series · {suggested.length}
+          </h2>
           {suggested.map((series) => (
             <SuggestionCard
               key={series.seriesId}
@@ -167,6 +185,34 @@ function useTransferSuggestions(householdId: string | null) {
   };
 }
 
+/**
+ * Law 11 "proof on demand": a plain useState disclosure (no Collapsible
+ * primitive exists in components/ui, and adding a dep is out of scope).
+ * The TLDR/reason line stays visible; evidence renders only when opened.
+ */
+function WhyDisclosure({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => {
+          setOpen((o) => !o);
+        }}
+        className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+      >
+        Why?
+        <ChevronDown
+          className={`size-3 transition-transform ${open ? 'rotate-180' : ''}`}
+          aria-hidden
+        />
+      </button>
+      {open ? <div className="mt-2">{children}</div> : null}
+    </div>
+  );
+}
+
 function TransferCard({
   link,
   householdId,
@@ -193,7 +239,7 @@ function TransferCard({
 
   return (
     <Card>
-      <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
+      <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 space-y-1">
           <div className="flex items-center gap-2">
             <ArrowLeftRight className="size-4 shrink-0 text-muted-foreground" />
@@ -203,16 +249,56 @@ function TransferCard({
               {link.inAccountName}
             </p>
           </div>
-          <p className="truncate text-xs text-muted-foreground" title={link.outDescription}>
-            {link.outDescription}
-          </p>
+
           <p className="text-sm text-muted-foreground">
             <Money amountMinor={link.amountMinor} currency={link.currency} /> on{' '}
             <span className="font-mono text-xs">{link.effectiveDate}</span>
-            {link.dayGap > 0 ? (
-              <span className="text-xs"> · sides {link.dayGap}d apart</span>
-            ) : null}
           </p>
+          {/* Law 11: deterministic reason codes from real row fields — no invented confidence. */}
+          <p className="text-xs text-muted-foreground">{transferReasonLine(link.dayGap)}</p>
+          <WhyDisclosure>
+            {/*
+             * Evidence table (proof on demand). Limitation: TransferLinkRow
+             * carries a single shared effectiveDate + dayGap, not per-side
+             * posting dates, so we show the pair date on the out side and
+             * express the in side's date as the gap — rather than fetching
+             * per-transaction rows the contract doesn't expose here.
+             */}
+            <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3 text-xs">
+              {[
+                {
+                  label: 'Out',
+                  account: link.outAccountName,
+                  description: link.outDescription,
+                  date: link.effectiveDate,
+                },
+                {
+                  label: 'In',
+                  account: link.inAccountName,
+                  description: link.inDescription,
+                  date:
+                    link.dayGap === 0
+                      ? link.effectiveDate
+                      : `${link.effectiveDate} +${String(link.dayGap)}d`,
+                },
+              ].map((side) => (
+                <div key={side.label} className="flex min-w-0 flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-2">
+                  <span className="w-8 shrink-0 font-medium text-muted-foreground">
+                    {side.label}
+                  </span>
+                  <span className="truncate font-medium">{side.account}</span>
+                  <span className="min-w-0 truncate text-muted-foreground" title={side.description}>
+                    {side.description}
+                  </span>
+                  <span className="shrink-0 font-mono text-muted-foreground">{side.date}</span>
+                </div>
+              ))}
+              <div className="flex items-baseline gap-2 border-t border-border pt-2">
+                <span className="text-muted-foreground">Both sides</span>
+                <Money amountMinor={link.amountMinor} currency={link.currency} />
+              </div>
+            </div>
+          </WhyDisclosure>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <Button
@@ -259,6 +345,15 @@ function SuggestionCard({
 }) {
   const [busy, setBusy] = useState<null | 'confirm' | 'reject'>(null);
   const first = series.occurrences[0];
+  // Law 11: display evidence derived deterministically from the projected
+  // occurrences already on the row — calendar arithmetic only, no confidence.
+  const expectedDates = series.occurrences.map((o) => o.expectedDate);
+  const reasonLine = recurringReasonLine({
+    sign: series.sign,
+    expectedDates,
+    amountsMinor: series.occurrences.map((o) => o.expectedAmountMinor),
+  });
+  const cadence = cadenceLabel(expectedDates);
 
   async function act(command: 'recurring.confirm' | 'recurring.reject') {
     if (!userId) return;
@@ -292,10 +387,14 @@ function SuggestionCard({
 
   return (
     <Card>
-      <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
+      <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 space-y-1">
           <div className="flex items-center gap-2">
-            <p className="truncate font-medium">{series.counterpartyKey}</p>
+            {/* counterpartyKey is the detector's lowercased fingerprint —
+                render it like a merchant; the raw key stays in the tooltip. */}
+            <p className="truncate font-medium" title={series.counterpartyKey}>
+              {merchantDisplayName(series.counterpartyKey)}
+            </p>
             <Badge variant="secondary" className="capitalize">
               {series.sign}
             </Badge>
@@ -308,6 +407,28 @@ function SuggestionCard({
           ) : (
             <p className="text-sm text-muted-foreground">Detected recurring series</p>
           )}
+          <p className="text-xs text-muted-foreground">{reasonLine}</p>
+          {series.occurrences.length > 0 ? (
+            <WhyDisclosure>
+              <div className="space-y-1.5 rounded-md border border-border bg-muted/30 p-3 text-xs">
+                <p className="text-muted-foreground">
+                  {series.occurrences.length} upcoming projected
+                  {cadence ? ` · ${cadence}` : ''}
+                </p>
+                <ul className="space-y-1">
+                  {series.occurrences.map((occ) => (
+                    <li
+                      key={occ.occurrenceId}
+                      className="flex items-baseline justify-between gap-3"
+                    >
+                      <span className="font-mono text-muted-foreground">{occ.expectedDate}</span>
+                      <Money amountMinor={occ.expectedAmountMinor} currency={occ.currency} />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </WhyDisclosure>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <Button
