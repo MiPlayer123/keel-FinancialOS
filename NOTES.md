@@ -2444,3 +2444,114 @@ trusting the ledger doc) before touching anything:
   could not run (GitHub Actions minutes exhausted this session) — this full
   local gate battery is the only verification and is pasted into the PR
   description per protocol.
+
+## 2026-07-17 — D-052: Debt payoff simulator (Class C preview-only)
+
+Teardown runner-up (`design/TEARDOWN-STATUS-2026-07-17.md`'s "Runners-up"
+line: "debt-payoff simulator"). Read first: `20260713180000_debt_goals.sql`
+and its `20260713190000_debt_goal_polish.sql` follow-up. A debt goal already
+tracks exactly two facts about a debt: `start_balance_minor` (captured once,
+immutable) and a live `currentBalanceMinor` derived at read time from
+`journal_postings` (`keel_list_goals`). **Neither migration tracks an APR or
+a minimum payment anywhere in the schema** — confirmed by reading both files
+in full before writing any code, not assumed.
+
+**Option (b) chosen over (a).** A debt-payoff projection is meaningless
+without a rate, but adding persisted rate/minimum-payment tracking is a
+bigger, separate slice (a new nullable column, an audited write path to set
+it, export-table wiring, a UI to capture it against a specific debt) than
+this brief's scope. Per the task's own guidance to prefer the smaller slice
+when it stays clean: this ships as a **pure client-side calculator** — APR,
+minimum payment, and extra payment are ephemeral inputs typed fresh every
+time the panel is used, run against the debt goal's already-live
+`currentBalanceMinor`. Nothing is written, nothing is sent to the server,
+there is no new command, no migration, no new table. This is a web-only
+slice — no `packages/contracts` or `supabase/functions/**` changes, so per
+the runbook's own rule `pnpm test` / `pnpm build:functions` do not apply and
+were not run (confirmed via `git status --short`: only
+`apps/web/src/app/dashboard/goals/page.tsx` touched, plus two new
+`apps/web/src/lib/debt-payoff.*` files).
+
+**Law 10 — Class C, never Class D.** This is a projection/scenario tool
+(same bucket as `keel_cash_flow_forecast`, paycheck/retirement models) —
+look-but-never-act. It cannot move money, cannot create a command, cannot
+touch a real balance, and the UI never lets it be mistaken for financial
+advice: every render of a result carries an outline "Estimate" badge (same
+visual language as the dashboard's "Projection" badge on the cash-flow
+forecast card) plus a disclosure line — "Assumes a fixed rate and on-time
+payments. Nothing here is saved or applied to your account." This is
+deterministic arithmetic, not an AI inference, so the full Law 11 typed-
+response envelope (confidence, reason_codes, evidence_refs, approval tokens)
+doesn't apply — there is no verdict being asserted, just a labeled estimate,
+matching how the cash-flow forecast itself is a plain read model rather than
+a typed AI response.
+
+**Law 4 — BigInt throughout, floor-division rounding convention.**
+`apps/web/src/lib/debt-payoff.ts` exports `simulatePayoff` (pure function,
+zero framework/Supabase imports) and `parseAprBps` (percent-string → integer
+basis points, same digit-split convention as `parseSignedDollars` in
+`hash.ts` — never `parseFloat`, which the repo's eslint config already bans
+in financial code). Monthly interest is `floor(balance * aprBps / 120000)`
+(bps/10000 for percent, /12 for the month) — the exact same "floor, never
+round, document the direction" convention `utilizationPercent`
+(credit-utilization.ts, the closest prior art named in the brief) uses for
+the analogous fractional-percent problem. Flooring means the simulator can
+only ever *under*-state interest by a fraction of a cent per month relative
+to a penny-precise bank statement — the safe direction for a preview to err.
+One lint fix mid-build: an early draft rounded a fractional APR input with
+`Math.round`, which the repo's own `no-restricted-syntax` rule flags
+unconditionally ("Math.round on money is banned") — rather than fighting the
+rule, `simulatePayoff` now requires `aprBps` to already be a whole integer
+(refusing fractional/negative rates with `null`) since its only real caller,
+`parseAprBps`, already produces one; no rounding happens anywhere in the
+money path.
+
+**Amortization loop and its edge cases:** each month, interest is floored
+against the *current* (shrinking) balance, the month's payment is capped at
+`balance + interest` so the final month never overpays, and a horizon cap of
+`MAX_MONTHS = 600` (50 years) turns a payment that can never cover interest
+on the *starting* balance (negative amortization — checked up front against
+the largest balance the loop will ever see) into a clean `null` result
+instead of an infinite loop.
+
+**Tests (`apps/web/src/lib/debt-payoff.test.ts`, 11 cases, all green):**
+0%-APR clean division (exactly 12 months, $0 interest) and an uneven final
+payment (13th month partial) prove the loop terminates correctly without
+interest in the picture; a realistic $2,400-balance/12%-APR/$200-per-month
+scenario is asserted against hand-verified month-1/month-2 interest figures
+(1% of 240000 = 2400, 1% of 222400 = 2224) before trusting the full
+13-month/$16,951-interest result; the same debt with $100/mo extra finishes
+in 9 months at $11,427 interest — strictly better on both axes, which is
+also asserted as a standalone property test sweeping five extra-payment
+amounts (0 → 50000 minor) and checking months and total interest are each
+monotonically non-increasing and strictly better somewhere in the sweep; a
+1-month payoff (huge extra payment) and a negative-amortization refusal
+(payment below one month's interest, 24% APR) are both covered; and a
+dedicated floor-division case ($500 @ 19.99%, an exact-payment scenario)
+proves month-1 interest floors 832.9166... down to 832, never rounding up to
+833. All expected fixture values were independently derived via a
+month-by-month trace run outside the module under test (a standalone Node
+script), with the first several months' interest figures hand-checked
+against simple percentage arithmetic before being hardcoded as expectations
+— not generated by calling the implementation and trusting it.
+
+**Verification:** `pnpm typecheck` clean; `pnpm lint` — 0 errors, 4
+warnings, all pre-existing and outside this slice's files (confirmed via
+`git stash` — the exact same 4 warnings, including the same `isDebt`
+missing-dependency warning in `goals/page.tsx` at its pre-existing line,
+appear with the change stashed out); `pnpm --filter @keel/web exec vitest
+run` — 253/253 passed across 14 files (11 new, all in `debt-payoff.test.ts`);
+`pnpm --filter @keel/web build` also run as an extra sanity pass given CI is
+unavailable this session — compiles clean, same 4 pre-existing warnings, all
+22 routes generate. No migration in this slice, so there is no unexecuted
+pgTAP coverage to flag — the one thing that would normally need the
+Docker/Supabase-CLI-unavailable caveat (per D-043/D-044/D-047's precedent)
+simply doesn't apply here.
+
+**Deviation:** none from the brief — option (b) was the brief's own stated
+preference when it keeps the slice clean, and it does here. The one thing
+worth flagging as a residual/follow-up: a persisted APR + minimum-payment
+field on `savings_goals` (debt kind) would let this simulator default its
+inputs instead of starting blank every time, and would be the natural
+option-(a) migration for a future slice — deliberately not built now to keep
+this an additive, non-schema-touching, no-new-command slice.
