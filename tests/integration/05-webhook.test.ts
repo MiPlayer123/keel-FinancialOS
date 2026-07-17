@@ -116,11 +116,20 @@ const tableCount = async (
 };
 
 const queueDepth = async (): Promise<number> => {
-  const { data, error } = await serviceClient().rpc('keel_worker_queue_depth', {
-    p_queue: 'sync_events',
-  });
-  if (error) throw new Error(`queue depth failed: ${error.message}`);
-  return Number(data);
+  // Observability read, not the behavior under test — retry the local
+  // gateway's transient "invalid response ... upstream server" hiccup the
+  // same way serviceRpcWithRetry does (CI run 29560225203 flaked here).
+  let lastMessage = 'unknown error';
+  for (let i = 0; i < 3; i++) {
+    const { data, error } = await serviceClient().rpc('keel_worker_queue_depth', {
+      p_queue: 'sync_events',
+    });
+    if (!error) return Number(data);
+    lastMessage = error.message;
+    if (!/upstream server|fetch failed|ECONNREFUSED|502|503/i.test(lastMessage)) break;
+    await new Promise((resolve) => setTimeout(resolve, 500 * (i + 1)));
+  }
+  throw new Error(`queue depth failed: ${lastMessage}`);
 };
 
 const seedFetchResponse = async (
