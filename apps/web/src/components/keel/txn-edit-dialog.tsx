@@ -4,8 +4,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeftRight,
   Check,
+  ChevronDown,
   Loader2,
   Pencil,
+  Plus,
   Split,
   StickyNote,
   Trash2,
@@ -14,6 +16,7 @@ import { toast } from 'sonner';
 
 import {
   assignTag,
+  createCategory,
   saveTag,
   overrideTransaction,
   voidManualTransaction,
@@ -21,10 +24,27 @@ import {
   type RichTransactionRow,
   type TagRow,
 } from '@/lib/keel-api';
+import {
+  groupForPicker,
+  hasExactName,
+  inferKindFromAmount,
+  parseRecents,
+  pushRecent,
+  recentCategoriesKey,
+} from '@/lib/category-picker';
 import { merchantDisplayName } from '@/lib/merchant-name';
+import { useHousehold } from '@/components/keel/household-context';
 import { Money } from '@/components/keel/money';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
 import {
   Dialog,
   DialogContent,
@@ -35,14 +55,8 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Textarea } from '@/components/ui/textarea';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 
 /**
  * Rename-proof "is it still on a landing pad?" check: the stable pfc_key when
@@ -228,24 +242,133 @@ export function TxnList({
   );
 }
 
+/**
+ * Category picker (teardown C4): cmdk typeahead over a popover — Recent
+ * group, Income/Expense groups with one-level parent>child indentation, and
+ * inline create when the query matches nothing. Commit on select only: the
+ * trigger always shows the CURRENT category; arrowing over options changes
+ * nothing until Enter/click. Inline create is a user-initiated direct action
+ * (class-none — suggest→approve does not apply; Law 2 governs AI writes).
+ */
 export function CategoryPicker({
   row,
   categories,
   onPick,
+  wide,
 }: {
   row: RichTransactionRow;
   categories: CategoryRow[];
-  onPick: (categoryLedgerAccountId: string) => void;
+  onPick: (categoryLedgerAccountId: string, categoryName?: string) => void;
+  /** Full-width dialog variant; default is the compact ledger-row trigger. */
+  wide?: boolean;
 }) {
+  const { householdId } = useHousehold();
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [recents, setRecents] = useState<string[]>([]);
+  const [createKind, setCreateKind] = useState<'income' | 'expense'>('expense');
+  const [creating, setCreating] = useState(false);
+  // Categories created inline, merged in so a new one is pickable (and its
+  // name resolvable) immediately, before the parent refetches categories.
+  const [created, setCreated] = useState<CategoryRow[]>([]);
+
+  const merged = useMemo(() => {
+    const known = new Set(categories.map((c) => c.ledgerAccountId));
+    return [...categories, ...created.filter((c) => !known.has(c.ledgerAccountId))];
+  }, [categories, created]);
+
   // Only offer categories matching the transaction's direction (income/expense).
   const options = useMemo(
-    () => categories.filter((c) => (row.categoryKind ? c.kind === row.categoryKind : true)),
-    [categories, row.categoryKind],
+    () => merged.filter((c) => (row.categoryKind ? c.kind === row.categoryKind : true)),
+    [merged, row.categoryKind],
   );
+  const groups = useMemo(
+    () => groupForPicker(merged, query, row.categoryKind ?? null),
+    [merged, query, row.categoryKind],
+  );
+  const recentOptions = useMemo(
+    () =>
+      recents
+        .map((id) => options.find((c) => c.ledgerAccountId === id))
+        .filter((c): c is CategoryRow => c !== undefined),
+    [recents, options],
+  );
+
   const label = row.categoryName ?? 'Uncategorized';
   const isDefault = isUncategorized(row);
+  const currentId = row.categoryLedgerAccountId;
+  const trimmed = query.trim();
+  // Duplicate check spans both kinds — a same-named category in the other
+  // kind would collide on the household-unique name anyway.
+  const canCreate =
+    householdId !== null &&
+    trimmed.length > 0 &&
+    trimmed.length <= 80 &&
+    !hasExactName(merged, trimmed, null);
 
-  if (options.length === 0) {
+  function handleOpenChange(next: boolean) {
+    setOpen(next);
+    if (!next) return;
+    setQuery('');
+    // Kind for inline create: the transaction's sign (explicit toggle below).
+    setCreateKind(row.categoryKind ?? inferKindFromAmount(row.amountMinor));
+    setRecents(
+      householdId
+        ? parseRecents(window.localStorage.getItem(recentCategoriesKey(householdId)))
+        : [],
+    );
+  }
+
+  // The ONLY commit path: close, remember, notify. Highlight never commits.
+  function commit(c: CategoryRow) {
+    setOpen(false);
+    if (householdId) {
+      const key = recentCategoriesKey(householdId);
+      window.localStorage.setItem(
+        key,
+        JSON.stringify(
+          pushRecent(parseRecents(window.localStorage.getItem(key)), c.ledgerAccountId),
+        ),
+      );
+    }
+    if (c.ledgerAccountId !== currentId) onPick(c.ledgerAccountId, c.name);
+  }
+
+  async function createAndPick() {
+    if (!householdId || creating) return;
+    const name = trimmed;
+    if (name.length === 0) return;
+    setCreating(true);
+    try {
+      // Same-entity scope: the current category pins the entity; otherwise
+      // the eligible list's entity; null lets the server use its default.
+      const entityId =
+        merged.find((c) => c.ledgerAccountId === currentId)?.entityId ??
+        options[0]?.entityId ??
+        null;
+      const res = await createCategory({ householdId, name, kind: createKind, entityId });
+      if (typeof res.ledgerAccountId === 'string') {
+        const newCat: CategoryRow = {
+          ledgerAccountId: res.ledgerAccountId,
+          name,
+          kind: createKind,
+          entityId: entityId ?? '',
+          parentLedgerAccountId: null,
+        };
+        setCreated((prev) => [...prev, newCat]);
+        toast.success(`Added ${name}. It's available in every picker now.`);
+        commit(newCat);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not create the category.');
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  // Degraded pre-migration state: nothing to pick and no household to create
+  // under — show the label, same as the old read-only fallback.
+  if (options.length === 0 && !householdId) {
     return (
       <Badge variant="secondary" className="hidden shrink-0 sm:inline-flex">
         {label}
@@ -253,29 +376,118 @@ export function CategoryPicker({
     );
   }
 
+  const triggerBase =
+    'items-center justify-between gap-1.5 rounded-lg border border-input bg-transparent py-2 pr-2 pl-2.5 text-sm transition-colors outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30 dark:hover:bg-input/50';
+
   return (
-    <Select
-      value={row.categoryLedgerAccountId ?? undefined}
-      items={Object.fromEntries(options.map((c) => [c.ledgerAccountId, c.name]))}
-      onValueChange={(v) => {
-        if (v) onPick(v);
-      }}
-    >
-      <SelectTrigger
-        className={`hidden h-7 w-40 shrink-0 border-dashed sm:flex ${
-          isDefault ? 'text-muted-foreground' : ''
-        }`}
+    <Popover open={open} onOpenChange={handleOpenChange} modal="trap-focus">
+      <PopoverTrigger
+        title={`Category: ${label}`}
+        className={
+          wide
+            ? `flex h-8 w-full ${triggerBase} ${isDefault ? 'text-muted-foreground' : ''}`
+            : `hidden h-7 w-40 shrink-0 border-dashed sm:flex ${triggerBase} ${
+                isDefault ? 'text-muted-foreground' : ''
+              }`
+        }
       >
-        <SelectValue placeholder={label} />
-      </SelectTrigger>
-      <SelectContent>
-        {options.map((c) => (
-          <SelectItem key={c.ledgerAccountId} value={c.ledgerAccountId}>
-            {c.parentLedgerAccountId ? <span className="pl-3">{c.name}</span> : c.name}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+        <span className="truncate">{label}</span>
+        <ChevronDown className="pointer-events-none size-4 shrink-0 text-muted-foreground" />
+      </PopoverTrigger>
+      <PopoverContent
+        align={wide ? 'start' : 'end'}
+        className={`p-0 ${wide ? 'w-(--anchor-width) min-w-56' : 'w-72 max-w-[calc(100vw-2rem)]'}`}
+      >
+        {/* Manual filtering (shouldFilter=false): matching is the tested
+            case/diacritic-insensitive helper, not cmdk's fuzzy scorer. */}
+        <Command shouldFilter={false} className="rounded-lg!">
+          <CommandInput
+            placeholder="Search or create…"
+            value={query}
+            onValueChange={setQuery}
+            autoFocus
+          />
+          <CommandList>
+            {groups.length === 0 && !canCreate ? (
+              <CommandEmpty>No matching category.</CommandEmpty>
+            ) : null}
+            {trimmed.length === 0 && recentOptions.length > 0 ? (
+              <CommandGroup heading="Recent">
+                {recentOptions.map((c) => (
+                  <CommandItem
+                    key={`recent-${c.ledgerAccountId}`}
+                    value={`recent:${c.ledgerAccountId}`}
+                    data-checked={c.ledgerAccountId === currentId}
+                    onSelect={() => {
+                      commit(c);
+                    }}
+                  >
+                    <span className="truncate">{c.name}</span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ) : null}
+            {groups.map((g) => (
+              <CommandGroup key={g.kind} heading={g.label}>
+                {g.entries.map(({ row: c, depth }) => (
+                  <CommandItem
+                    key={c.ledgerAccountId}
+                    value={`cat:${c.ledgerAccountId}`}
+                    data-checked={c.ledgerAccountId === currentId}
+                    onSelect={() => {
+                      commit(c);
+                    }}
+                  >
+                    <span className={depth === 1 ? 'truncate pl-3' : 'truncate'}>
+                      {c.name}
+                    </span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ))}
+            {canCreate ? (
+              <CommandGroup heading="New category">
+                <CommandItem
+                  value={`create:${trimmed}`}
+                  disabled={creating}
+                  onSelect={() => {
+                    void createAndPick();
+                  }}
+                >
+                  {creating ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Plus className="size-4" />
+                  )}
+                  {/* Raw query rendered verbatim as text — data-tier (Law 5). */}
+                  <span className="truncate">Create &ldquo;{trimmed}&rdquo;</span>
+                </CommandItem>
+                <div className="flex items-center gap-1.5 px-2 pt-0.5 pb-1.5">
+                  <span className="text-xs text-muted-foreground">as</span>
+                  {(['expense', 'income'] as const).map((k) => (
+                    <button
+                      key={k}
+                      type="button"
+                      aria-pressed={createKind === k}
+                      className={`rounded-full border px-2 py-0.5 text-xs transition-colors ${
+                        createKind === k
+                          ? 'border-foreground/40 bg-secondary text-foreground'
+                          : 'border-dashed border-border text-muted-foreground hover:text-foreground'
+                      }`}
+                      onClick={() => {
+                        setCreateKind(k);
+                      }}
+                    >
+                      {k === 'expense' ? 'Expense' : 'Income'}
+                    </button>
+                  ))}
+                </div>
+              </CommandGroup>
+            ) : null}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -312,6 +524,10 @@ export function TxnEditDialog({
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [voiding, setVoiding] = useState(false);
+  // Category picked in THIS dialog session. The row prop keeps the pre-change
+  // category until close, so old→new stays visible (teardown C4: the change
+  // you just made is legible, not silent).
+  const [picked, setPicked] = useState<{ id: string; name: string } | null>(null);
   // Optimistic tag state for THIS row; parent data refreshes on close.
   const [rowTags, setRowTags] = useState<{ tagId: string; name: string }[]>([]);
   const [createdTags, setCreatedTags] = useState<TagRow[]>([]);
@@ -344,6 +560,7 @@ export function TxnEditDialog({
     setName(row.description);
     setNote(row.note ?? '');
     setVoiding(false);
+    setPicked(null);
     setRowTags(row.tags ?? []);
     setCreatedTags([]);
     setNewTag('');
@@ -555,26 +772,34 @@ export function TxnEditDialog({
             categoryOptions.length > 0 ? (
               <div className="space-y-1.5">
                 <Label>Category</Label>
-                <Select
-                  value={row.categoryLedgerAccountId ?? undefined}
-                  items={Object.fromEntries(
-                    categoryOptions.map((c) => [c.ledgerAccountId, c.name]),
-                  )}
-                  onValueChange={(v) => {
-                    if (v) onRecategorize(row.transactionId, v);
+                <CategoryPicker
+                  // Overlay the in-dialog pick so the trigger shows the NEW
+                  // category while the strike-through below keeps the old one.
+                  row={
+                    picked
+                      ? { ...row, categoryLedgerAccountId: picked.id, categoryName: picked.name }
+                      : row
+                  }
+                  categories={categories}
+                  wide
+                  onPick={(catId, catName) => {
+                    setPicked({
+                      id: catId,
+                      name:
+                        catName ??
+                        categories.find((c) => c.ledgerAccountId === catId)?.name ??
+                        'Updated',
+                    });
+                    onRecategorize(row.transactionId, catId);
                   }}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder={row.categoryName ?? 'Uncategorized'} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {categoryOptions.map((c) => (
-                      <SelectItem key={c.ledgerAccountId} value={c.ledgerAccountId}>
-                        {c.parentLedgerAccountId ? <span className="pl-3">{c.name}</span> : c.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                />
+                {picked && picked.id !== row.categoryLedgerAccountId ? (
+                  <p className="text-xs text-muted-foreground">
+                    <span className="line-through">{row.categoryName ?? 'Uncategorized'}</span>
+                    <span aria-hidden="true"> → </span>
+                    <span className="text-foreground">{picked.name}</span>
+                  </p>
+                ) : null}
               </div>
             ) : null}
             <div className="space-y-1.5">
