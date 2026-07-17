@@ -54,7 +54,8 @@ insert into expected_export_tables(table_name, allowed_columns, omitted_columns)
   ('transaction_overrides', array['canonical_transaction_id','household_id','display_description','note','created_at','updated_at'], '{}');
 insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
   ('category_rules', array['id','household_id','entity_id','matcher','pattern','category_ledger_account_id','rename_to','priority','active','created_at','updated_at'], '{}'),
-  ('rule_renames', array['canonical_transaction_id','household_id','rule_id','display_name','created_at','updated_at'], '{}');
+  ('rule_renames', array['canonical_transaction_id','household_id','rule_id','display_name','created_at','updated_at'], '{}'),
+  ('category_suggestions', array['id','household_id','canonical_transaction_id','suggested_category_ledger_account_id','source','reason_code','evidence','status','created_at','decided_at','decided_by'], '{}');
 insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
   ('budgets', array['household_id','category_ledger_account_id','month','amount_minor','currency','created_at','updated_at','rollover'], '{}');
 insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
@@ -102,8 +103,8 @@ select ok(
 select is(
   (select count(*)::int from expected_export_tables
     where has_table_privilege('keel_export', format('public.%I', table_name), 'SELECT')),
-  67,
-  'keel_export can SELECT all 67 included tables'
+  68,
+  'keel_export can SELECT all 68 included tables'
 );
 select is(
   (select count(*)::int
@@ -234,8 +235,8 @@ reset role;
 select is(
   (select count(*)::int from jsonb_object_keys(
     public.keel_export_household('00000000-0000-4000-8000-00000000a001')->'tables')),
-  67,
-  'snapshot contains all 67 included table arrays'
+  68,
+  'snapshot contains all 68 included table arrays'
 );
 select is(
   (select count(*)::int from excluded_export_tables e

@@ -489,6 +489,37 @@ export async function decideTransfer(input: {
   });
 }
 
+/**
+ * One pending categorization suggestion (P0-B suggest→approve loop). Typed
+ * evidence record (Law 11): reasonCode + evidence carry the proof; nothing is
+ * applied until the user decides via `categorization.decide_suggestion`.
+ */
+export type CategorySuggestionRow = {
+  suggestionId: string;
+  status: 'suggested' | 'accepted' | 'dismissed';
+  source: 'pfc' | 'rule';
+  reasonCode: 'rule_match' | 'pfc_mapping';
+  evidence: { ruleId?: string; pattern?: string; pfcPrimary?: string; pfcKey?: string };
+  canonicalTransactionId: string;
+  effectiveDate: string;
+  description: string;
+  originalDescription: string;
+  accountName: string;
+  amountMinor: string;
+  currency: string;
+  suggestedCategoryLedgerAccountId: string;
+  suggestedCategoryName: string;
+  suggestedCategoryKind: 'expense' | 'income';
+  currentCategoryName: string;
+  rulePattern: string | null;
+};
+
+/** Run deterministic categorization detection; returns new suggestion count. */
+export async function detectCategorySuggestions(householdId: string): Promise<number> {
+  const res = await invoke<{ suggested?: number }>('api/categorization/detect', { householdId });
+  return typeof res.suggested === 'number' ? res.suggested : 0;
+}
+
 /** Class-C cash projection (preview-only): daily series + upcoming bills. */
 export type ForecastBill = {
   date: string;

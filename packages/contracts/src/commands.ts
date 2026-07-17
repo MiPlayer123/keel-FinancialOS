@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   AccountIdSchema,
   CanonicalTransactionIdSchema,
+  CategorySuggestionIdSchema,
   CommandIdSchema,
   EconomicEventKeySchema,
   EntityIdSchema,
@@ -244,6 +245,18 @@ export const ReanchorBalancePayloadSchema = z.object({
   accountId: AccountIdSchema,
 }).strict();
 
+/**
+ * Decide one machine-proposed categorization (P0-B suggest→approve loop,
+ * Laws 2/10 class B). Accept applies the suggested category through the same
+ * audited overlay path the user-initiated recategorize uses; dismiss records
+ * the decision and changes nothing. Either way the suggestion row transitions
+ * exactly once — the server rejects re-decisions.
+ */
+export const DecideCategorySuggestionPayloadSchema = z.object({
+  suggestionId: CategorySuggestionIdSchema,
+  accept: z.boolean(),
+}).strict();
+
 export const COMMAND_PAYLOAD_SCHEMAS = {
   'accounts.create': CreateAccountPayloadSchema,
   'ingest.record_raw_event': RecordRawEventPayloadSchema,
@@ -269,6 +282,7 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'transactions.manual_void': ManualVoidPayloadSchema,
   'accounts.set_opening_balance': SetOpeningBalancePayloadSchema,
   'accounts.reanchor_balance': ReanchorBalancePayloadSchema,
+  'categorization.decide_suggestion': DecideCategorySuggestionPayloadSchema,
 } as const;
 export type CommandProcedureName = keyof typeof COMMAND_PAYLOAD_SCHEMAS;
 export type CommandName =

@@ -40,6 +40,7 @@ describe('action vocabulary', () => {
       'transactions.manual_void',
       'accounts.set_opening_balance',
       'accounts.reanchor_balance',
+      'categorization.decide_suggestion',
       'ledger.trial_balance',
       'transactions.list',
       'recurring.list',

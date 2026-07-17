@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   amountsConsistent,
   cadenceLabel,
+  categorizationReasonLine,
   dayGapsBetween,
   median,
+  pfcPrimaryLabel,
   recurringReasonLine,
   transferReasonLine,
 } from './recurring-evidence';
@@ -108,5 +110,29 @@ describe('reason lines', () => {
     expect(transferReasonLine(0)).toBe('Same amount · opposite directions · same day');
     expect(transferReasonLine(1)).toBe('Same amount · opposite directions · 1 day apart');
     expect(transferReasonLine(3)).toBe('Same amount · opposite directions · 3 days apart');
+  });
+  it('humanizes PFC primaries', () => {
+    expect(pfcPrimaryLabel('FOOD_AND_DRINK')).toBe('Food and drink');
+    expect(pfcPrimaryLabel('RENT_AND_UTILITIES')).toBe('Rent and utilities');
+    expect(pfcPrimaryLabel('')).toBe('Unknown');
+  });
+  it('builds the categorization reason line for rule and PFC sources', () => {
+    expect(
+      categorizationReasonLine({ reasonCode: 'rule_match', rulePattern: 'blue bottle' }),
+    ).toBe("Matches your rule 'blue bottle'");
+    // A deleted rule loses its live pattern but the claim stays honest.
+    expect(categorizationReasonLine({ reasonCode: 'rule_match', rulePattern: null })).toBe(
+      'Matches one of your rules',
+    );
+    expect(
+      categorizationReasonLine({ reasonCode: 'pfc_mapping', pfcPrimary: 'FOOD_AND_DRINK' }),
+    ).toBe('Bank category: Food and drink');
+    expect(categorizationReasonLine({ reasonCode: 'pfc_mapping' })).toBe(
+      'Mapped from the bank category',
+    );
+    // Unknown future codes degrade to an honest generic line, never a throw.
+    expect(categorizationReasonLine({ reasonCode: 'mystery' })).toBe(
+      'Suggested by a deterministic detector',
+    );
   });
 });

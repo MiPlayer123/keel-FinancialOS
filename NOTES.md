@@ -1699,3 +1699,48 @@ no tool-use loop yet). Law compliance encoded structurally:
   when no trend exists. (3) 30d pill is always enabled: with <30d of history
   there is nothing shorter to fall back to, and the chart still shows only
   real days.
+## 2026-07-17 — D-041: categorization suggest→approve loop (P0-B core, teardown queue item 1)
+
+Categories were the last silent class-A write: PFC auto-categorization
+(20260712200100/20260713090000) and rule application filed transactions with
+no visible approve step (Laws 2/10 put category assignment in class B).
+Slice makes the loop real without turning off the existing machinery:
+
+- `category_suggestions` (20260717160000): typed suggestion records
+  (source pfc|rule, reason_code, evidence jsonb, status
+  suggested→accepted|dismissed once, unique (household, txn, category,
+  source) so re-detection is idempotent and a dismissed proposal is never
+  re-raised). RLS member-read + keel_api policy pair (grant alone yields
+  zero rows — reanchor ritual); INCLUDED in export (Law 6; same footing as
+  transfer_links) via the keel_export_household wrapper chain
+  (`_pre_category_suggestions`); 008_export inventory updated to 68.
+- `keel_detect_category_suggestions` (keel_api-owned): deterministic — for
+  transactions whose EFFECTIVE category is an Uncategorized landing pad or a
+  plaid_pfc overlay, proposes the rule winner (keel_apply_rules lattice:
+  priority, created_at, id; kind- and entity-safe) else the PFC mapping;
+  rules beat PFC; never suggests the current category; 200-row cap per call.
+  Settled 'user'/'rule' overlays on real categories are never re-litigated.
+- `keel_cmd_decide_category_suggestion`: full envelope (idempotency, actor
+  from JWT, keel_finish_command). Accept replicates the
+  keel_categorize_transaction overlay-upsert effect with source='user' — an
+  approval is a human decision, so the rules engine's never-a-user-row guard
+  now protects it. Dismiss records the decision only.
+- Wiring mirrors transfers exactly: `/categorization/detect` route,
+  `categorization.suggestions` query, command through the dispatch map +
+  contracts payload schema (strict) + authz WRITE_ACTIONS('partner').
+- Review page third section reuses the PR #15 card/WhyDisclosure grammar;
+  raw bank memo, rule pattern or PFC key, and current→suggested change in
+  the Why panel; ReviewBadge now counts pending categorizations (silent-
+  failure contract kept). Deterministic reason lines (categorizationReasonLine)
+  — no invented confidence (Law 9).
+- Deviations/choices logged: (1) "uncategorized" target = effective category
+  pfc_key ∈ uncategorized_* regardless of overlay provenance — a user filing
+  onto the landing pad is still unresolved, and it makes the loop testable
+  through the manual-transaction command (Law 7). (2) Suggestion rows carry
+  no FK to category_rules (evidence keeps ruleId/pattern copy; the read model
+  joins the live rule when it still exists) so rule deletion cannot destroy
+  decision provenance. (3) Existing PFC/rule auto-apply is left running —
+  this slice adds visibility for what they DIDN'T settle; routing sub-
+  threshold confidence away from auto-apply is the follow-up
+  (reviewed/unreviewed txn state + visible "auto" badge, still open on the
+  teardown ledger).

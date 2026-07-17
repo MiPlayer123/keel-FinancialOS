@@ -73,6 +73,7 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'transactions.manual_void': 'keel_cmd_manual_void',
   'accounts.set_opening_balance': 'keel_cmd_set_opening_balance',
   'accounts.reanchor_balance': 'keel_cmd_reanchor_balance',
+  'categorization.decide_suggestion': 'keel_cmd_decide_category_suggestion',
 };
 
 const QUERY_TO_PROC: Record<string, string> = {
@@ -91,6 +92,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'dashboard.cash_flow_monthly': 'keel_cash_flow_monthly',
   'accounts.balance_daily': 'keel_account_balance_daily',
   'transfers.list': 'keel_list_transfers',
+  'categorization.suggestions': 'keel_list_category_suggestions',
   'rules.list': 'keel_list_rules',
   'budgets.list': 'keel_list_budgets',
   'tags.list': 'keel_list_tags',
@@ -1355,6 +1357,27 @@ export default {
       }
       const { data: created, error: detectError } = await ctx.supabase.rpc(
         'keel_detect_transfers',
+        { p_household_id: householdId.data },
+      );
+      if (detectError) return mapDbError(detectError);
+      return json(200, { suggested: created ?? 0 });
+    }
+
+    if (path === '/categorization/detect') {
+      // Deterministic categorization proposals (Law 1); results are
+      // SUGGESTIONS only and change nothing until the user decides
+      // (suggest→approve, Laws 2/10 class B). Same shape as /transfers/detect.
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      if (!householdId.success) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Categorization detect request failed validation.',
+          details: {},
+        });
+      }
+      const { data: created, error: detectError } = await ctx.supabase.rpc(
+        'keel_detect_category_suggestions',
         { p_household_id: householdId.data },
       );
       if (detectError) return mapDbError(detectError);
