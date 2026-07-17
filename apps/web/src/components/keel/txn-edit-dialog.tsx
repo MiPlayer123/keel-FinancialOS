@@ -1,6 +1,14 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type Ref,
+  type RefObject,
+} from 'react';
 import {
   ArrowLeftRight,
   Check,
@@ -559,13 +567,48 @@ export function CategoryPicker({
   );
 }
 
-
 /**
  * Edit the user-facing name + note for a transaction. Presentation overlay
  * only: the provider's original description is immutable and stays visible.
  * Also hosts the category picker (on mobile it's the only recategorize path).
  */
-export function TxnEditDialog({
+export type TxnEditFormHandle = {
+  /**
+   * Flushes any pending tag write to the parent (list refetch) and then
+   * calls onClose. Every dismiss path funnels here: the Cancel button, the
+   * "See everything from this merchant" link, TxnEditDialog's own Escape/
+   * overlay/× (via its formRef), and — new in the master-detail slice
+   * (teardown C6) — the ledger page's "select a different transaction while
+   * the desktop panel is already open" path, so switching rows without an
+   * intermediate close can never strand a stale tag list behind.
+   */
+  requestClose: () => void;
+};
+
+type TxnEditFormProps = {
+  row: RichTransactionRow;
+  householdId: string | null;
+  userId: string | null;
+  categories: CategoryRow[];
+  allTags: TagRow[];
+  onTagsMutated: () => void;
+  onClose: () => void;
+  onSaved: () => void;
+  onRecategorize: (txnId: string, categoryId: string) => void;
+  onMerchantSearch: (description: string) => void;
+  ref?: Ref<TxnEditFormHandle>;
+};
+
+/**
+ * All the field-rendering + editing logic for one transaction — name,
+ * splits, transfer info, category picker, tags, note, void — factored out
+ * of the modal (teardown C6 residual: the master-detail panel) so the exact
+ * same logic can be hosted by two shells: TxnEditDialog's existing mobile/
+ * narrow modal (behavior unchanged) and the new desktop TxnDetailPanel
+ * below. Neither shell reimplements any editing behavior; they only supply
+ * chrome (header/footer container) around this one component.
+ */
+function TxnEditForm({
   row,
   householdId,
   userId,
@@ -576,18 +619,8 @@ export function TxnEditDialog({
   onSaved,
   onRecategorize,
   onMerchantSearch,
-}: {
-  row: RichTransactionRow | null;
-  householdId: string | null;
-  userId: string | null;
-  categories: CategoryRow[];
-  allTags: TagRow[];
-  onTagsMutated: () => void;
-  onClose: () => void;
-  onSaved: () => void;
-  onRecategorize: (txnId: string, categoryId: string) => void;
-  onMerchantSearch: (description: string) => void;
-}) {
+  ref,
+}: TxnEditFormProps) {
   const [name, setName] = useState('');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
@@ -631,8 +664,11 @@ export function TxnEditDialog({
     onClose();
   }
 
+  // Recomputed every render (no deps array) so it always closes over the
+  // latest flushTagsAndClose — the only thing external callers ever need.
+  useImperativeHandle(ref, () => ({ requestClose: flushTagsAndClose }));
+
   useEffect(() => {
-    if (!row) return;
     setName(row.description);
     setNote(row.note ?? '');
     setVoiding(false);
@@ -650,7 +686,7 @@ export function TxnEditDialog({
   }, [row]);
 
   async function toggleTag(tag: { tagId: string; name: string }) {
-    if (!row || !householdId) return;
+    if (!householdId) return;
     const assigned = !rowTags.some((x) => x.tagId === tag.tagId);
     const prev = rowTags;
     setRowTags(assigned ? [...prev, tag] : prev.filter((x) => x.tagId !== tag.tagId));
@@ -674,7 +710,7 @@ export function TxnEditDialog({
   }
 
   async function createAndAssignTag() {
-    if (!row || !householdId || tagBusy) return;
+    if (!householdId || tagBusy) return;
     const trimmed = newTag.trim();
     if (trimmed.length === 0) return;
     // Typing an existing tag's name assigns it instead of erroring on the
@@ -716,7 +752,7 @@ export function TxnEditDialog({
   }
 
   async function voidTxn() {
-    if (!row || !householdId || !userId) return;
+    if (!householdId || !userId) return;
     setSaving(true);
     try {
       await voidManualTransaction({
@@ -734,20 +770,15 @@ export function TxnEditDialog({
     }
   }
 
-  const original = row?.originalDescription ?? row?.description ?? '';
+  const original = row.originalDescription ?? row.description;
   const categoryOptions = useMemo(
-    () =>
-      row
-        ? categories.filter((c) => (row.categoryKind ? c.kind === row.categoryKind : true))
-        : [],
+    () => categories.filter((c) => (row.categoryKind ? c.kind === row.categoryKind : true)),
     [categories, row],
   );
 
   // Split direction follows the cash sign (expense = money out); every split
   // row offers categories of that one kind, same as manual entry.
-  const splitKind: 'income' | 'expense' = row
-    ? (row.categoryKind ?? inferKindFromAmount(row.amountMinor))
-    : 'expense';
+  const splitKind: 'income' | 'expense' = row.categoryKind ?? inferKindFromAmount(row.amountMinor);
 
   // The transaction's entity, derived from its current classification (the
   // rich read model carries no entityId): the single-offset category or any
@@ -755,7 +786,6 @@ export function TxnEditDialog({
   // rows pass this into the picker so inline-create pins to the RIGHT entity
   // even from a blank row (code review r3603509625).
   const txnEntityId = useMemo(() => {
-    if (!row) return null;
     const candidateIds = [
       row.categoryLedgerAccountId,
       ...(row.splits ?? []).map((s) => s.categoryLedgerAccountId),
@@ -767,15 +797,15 @@ export function TxnEditDialog({
     }
     return null;
   }, [row, categories]);
-  const splitRemainder = row && splitRows ? splitRemainderMinor(row.amountMinor, splitRows) : '0';
-  const splitSaveReady = row !== null && splitRows !== null && splitsReady(row.amountMinor, splitRows);
-  const isExistingSplit = (row?.splits?.length ?? 0) > 0;
+  const splitRemainder = splitRows ? splitRemainderMinor(row.amountMinor, splitRows) : '0';
+  const splitSaveReady = splitRows !== null && splitsReady(row.amountMinor, splitRows);
+  const isExistingSplit = (row.splits?.length ?? 0) > 0;
 
   function splitCategoryName(categoryId: string | null): string | null {
     if (categoryId === null) return null;
     return (
       categories.find((c) => c.ledgerAccountId === categoryId)?.name ??
-      row?.splits?.find((s) => s.categoryLedgerAccountId === categoryId)?.name ??
+      row.splits?.find((s) => s.categoryLedgerAccountId === categoryId)?.name ??
       null
     );
   }
@@ -787,7 +817,7 @@ export function TxnEditDialog({
   }
 
   async function saveSplits() {
-    if (!row || !householdId || !userId || !splitRows) return;
+    if (!householdId || !userId || !splitRows) return;
     // BigInt on integer strings end to end — the payload only exists when the
     // remainder is exactly 0 (Law 3/4; the server re-verifies Σ=0 either way).
     const payload = buildSplitsPayload(row.amountMinor, splitRows);
@@ -816,7 +846,7 @@ export function TxnEditDialog({
   }
 
   async function save() {
-    if (!row || !householdId) return;
+    if (!householdId) return;
     setSaving(true);
     try {
       await overrideTransaction({
@@ -836,10 +866,383 @@ export function TxnEditDialog({
   }
 
   return (
+    <>
+      <div className="space-y-4">
+        <div className="flex items-baseline justify-between gap-3 text-sm">
+          <span className="truncate text-muted-foreground" title={original}>
+            {original}
+          </span>
+          <Money amountMinor={row.amountMinor} currency={row.currency} signed />
+        </div>
+        {/* Account (+ last-4) and status, adjacent to the amount they
+                qualify (Law 8). Status chip mirrors the ledger row's
+                hides-at-absence convention (Auto/Reconciled precedent):
+                'posted' is the overwhelming common case and renders nothing;
+                only the exceptional 'pending' state earns a chip. */}
+        <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+          <span className="truncate">{maskAccountLabel(row.accountName, row.accountMask)}</span>
+          {row.status === 'pending' ? (
+            <Badge variant="outline" className="shrink-0 gap-1 text-[10px] uppercase">
+              Pending
+            </Badge>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+          onClick={() => {
+            flushTagsAndClose();
+            // Renamed rows keep matching their siblings via the bank's
+            // original description.
+            onMerchantSearch(row.originalDescription ?? row.description);
+          }}
+        >
+          See everything from this merchant
+        </button>
+        <div className="space-y-1.5">
+          <Label htmlFor="txn-name">Name</Label>
+          <Input
+            id="txn-name"
+            value={name}
+            maxLength={140}
+            onChange={(e) => {
+              setName(e.target.value);
+            }}
+          />
+        </div>
+        {splitRows !== null && row.transferStatus !== 'confirmed' ? (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>Splits</Label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                disabled={splitBusy || splitRows.length >= 30}
+                onClick={() => {
+                  setSplitRows((prev) =>
+                    prev ? [...prev, { categoryId: null, amount: '' }] : prev,
+                  );
+                }}
+              >
+                <Plus className="size-3.5" />
+                Add split
+              </Button>
+            </div>
+            {/* 390px: each row stacks category over amount; sm+ is one line. */}
+            {splitRows.map((s, i) => (
+              <div key={i} className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div className="min-w-0 flex-1">
+                  <CategoryPicker
+                    row={{
+                      ...row,
+                      categoryLedgerAccountId: s.categoryId,
+                      categoryName: splitCategoryName(s.categoryId) ?? 'Pick category',
+                      categoryKind: splitKind,
+                      splits: null,
+                    }}
+                    categories={categories}
+                    wide
+                    createEntityId={txnEntityId}
+                    onPick={(catId) => {
+                      setSplitRowAt(i, { categoryId: catId });
+                    }}
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    inputMode="decimal"
+                    placeholder="0.00"
+                    className="h-8 flex-1 text-right tabular-nums sm:w-28 sm:flex-none"
+                    aria-label={`Split ${String(i + 1)} amount`}
+                    value={s.amount}
+                    onChange={(e) => {
+                      setSplitRowAt(i, { amount: e.target.value });
+                    }}
+                  />
+                  {splitRows.length > 1 ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Remove split ${String(i + 1)}`}
+                      disabled={splitBusy}
+                      onClick={() => {
+                        setSplitRows((prev) => (prev ? prev.filter((_, idx) => idx !== i) : prev));
+                      }}
+                    >
+                      <X className="size-4" />
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+            {/* Σ=0 as UI: the remainder must land exactly on zero. Sticky so
+                    it stays visible at 390px while the rows scroll. Red only
+                    when negative (over-allocated) — Law 8. */}
+            <div className="sticky bottom-0 z-10 flex items-center justify-between gap-3 rounded-md border border-border bg-background px-3 py-2">
+              <span className="text-sm text-muted-foreground">Left to split</span>
+              <Money
+                amountMinor={splitRemainder}
+                currency={row.currency}
+                signed
+                className="text-sm"
+              />
+            </div>
+            {hasDuplicateCategories(splitRows) ? (
+              <p className="text-xs text-muted-foreground">
+                Each category can appear only once — merge the amounts.
+              </p>
+            ) : null}
+            <div className="flex items-center justify-between gap-2">
+              {!isExistingSplit ? (
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+                  onClick={() => {
+                    setSplitRows(null);
+                  }}
+                >
+                  Cancel split
+                </button>
+              ) : (
+                <span className="text-xs text-muted-foreground">
+                  Splits are the categorization — saved as real ledger postings.
+                </span>
+              )}
+              <Button
+                type="button"
+                size="sm"
+                disabled={splitBusy || !splitSaveReady}
+                onClick={() => {
+                  void saveSplits();
+                }}
+              >
+                {splitBusy ? <Loader2 className="size-4 animate-spin" /> : null}
+                Save splits
+              </Button>
+            </div>
+          </div>
+        ) : null}
+        {row.transferStatus === 'confirmed' ? (
+          <div className="space-y-1.5">
+            <Label>Transfer</Label>
+            <div className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
+              <ArrowLeftRight className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 truncate">
+                {BigInt(row.amountMinor) < 0n ? 'To ' : 'From '}
+                {row.counterpartyAccountName ?? 'another account'}
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Confirmed as a transfer on the Review page — excluded from income/expense totals. Not
+              editable here.
+            </p>
+          </div>
+        ) : null}
+        {row.transferStatus !== 'confirmed' && splitRows === null && categoryOptions.length > 0 ? (
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label>Category</Label>
+              {/* Teardown C7: every competitor has this. Expands into two
+                      rows with the full amount seeded on row 1. */}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => {
+                  setSplitRows(
+                    seedRowsForNewSplit(row.amountMinor, picked?.id ?? row.categoryLedgerAccountId),
+                  );
+                }}
+              >
+                <Split className="size-3.5" />
+                Split…
+              </Button>
+            </div>
+            <CategoryPicker
+              // Overlay the in-dialog pick so the trigger shows the NEW
+              // category while the strike-through below keeps the old one.
+              row={
+                picked
+                  ? { ...row, categoryLedgerAccountId: picked.id, categoryName: picked.name }
+                  : row
+              }
+              categories={categories}
+              wide
+              // Once picked in THIS session the badge would be stale —
+              // saving always writes source='user' regardless of pick.
+              auto={!picked && isAutoCategorized(row)}
+              onPick={(catId, catName) => {
+                setPicked({
+                  id: catId,
+                  name:
+                    catName ??
+                    categories.find((c) => c.ledgerAccountId === catId)?.name ??
+                    'Updated',
+                });
+                onRecategorize(row.transactionId, catId);
+              }}
+            />
+            {picked && picked.id !== row.categoryLedgerAccountId ? (
+              <p className="text-xs text-muted-foreground">
+                <span className="line-through">{row.categoryName ?? 'Uncategorized'}</span>
+                <span aria-hidden="true"> → </span>
+                <span className="text-foreground">{picked.name}</span>
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+        <div className="space-y-1.5">
+          <Label>Tags</Label>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {[
+              ...allTags,
+              ...createdTags.filter((c) => !allTags.some((a) => a.tagId === c.tagId)),
+            ].map((t) => {
+              const active = rowTags.some((x) => x.tagId === t.tagId);
+              return (
+                <button
+                  key={t.tagId}
+                  type="button"
+                  disabled={tagBusy}
+                  className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
+                    active
+                      ? 'border-foreground/40 bg-secondary text-foreground'
+                      : 'border-dashed border-border text-muted-foreground hover:text-foreground'
+                  }`}
+                  onClick={() => {
+                    void toggleTag({ tagId: t.tagId, name: t.name });
+                  }}
+                >
+                  #{t.name}
+                </button>
+              );
+            })}
+            <Input
+              className="h-7 w-28 text-xs"
+              placeholder="New tag"
+              maxLength={40}
+              value={newTag}
+              onChange={(e) => {
+                setNewTag(e.target.value);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void createAndAssignTag();
+              }}
+            />
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="txn-note">Note</Label>
+          <Textarea
+            id="txn-note"
+            value={note}
+            maxLength={2000}
+            rows={3}
+            placeholder="Anything worth remembering about this transaction"
+            onChange={(e) => {
+              setNote(e.target.value);
+            }}
+          />
+        </div>
+      </div>
+      <DialogFooter className="gap-2 sm:justify-between">
+        {row.source === 'manual' && !voiding ? (
+          <Button
+            variant="ghost"
+            className="text-destructive hover:text-destructive"
+            disabled={saving}
+            onClick={() => {
+              setVoiding(true);
+            }}
+          >
+            <Trash2 className="size-4" />
+            Void
+          </Button>
+        ) : row.source === 'manual' ? (
+          <Button
+            variant="destructive"
+            disabled={saving}
+            onClick={() => {
+              void voidTxn();
+            }}
+          >
+            {saving ? <Loader2 className="size-4 animate-spin" /> : null}
+            Confirm void
+          </Button>
+        ) : (
+          <span />
+        )}
+        <span className="flex gap-2">
+          <Button variant="outline" onClick={flushTagsAndClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() => {
+              void save();
+            }}
+            disabled={saving || name.trim().length === 0}
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </Button>
+        </span>
+      </DialogFooter>
+    </>
+  );
+}
+
+/**
+ * Mobile/narrow shell for TxnEditForm — a centered modal. Behavior is
+ * unchanged from before the master-detail slice (teardown C6): every
+ * existing caller, including the Accounts register page, keeps this exact
+ * modal with zero prop changes. The ledger page (below the desktop
+ * breakpoint, or always on the Accounts page) is the only caller; at desktop
+ * widths the ledger page passes `row={null}` here and shows TxnDetailPanel
+ * instead.
+ */
+export function TxnEditDialog({
+  row,
+  householdId,
+  userId,
+  categories,
+  allTags,
+  onTagsMutated,
+  onClose,
+  onSaved,
+  onRecategorize,
+  onMerchantSearch,
+  formRef,
+}: {
+  row: RichTransactionRow | null;
+  householdId: string | null;
+  userId: string | null;
+  categories: CategoryRow[];
+  allTags: TagRow[];
+  onTagsMutated: () => void;
+  onClose: () => void;
+  onSaved: () => void;
+  onRecategorize: (txnId: string, categoryId: string) => void;
+  onMerchantSearch: (description: string) => void;
+  /**
+   * Optional external handle (ledger page master-detail): lets the caller
+   * trigger the SAME flush-then-close path this dialog already uses for
+   * Escape/overlay/× — e.g. right before switching the desktop panel to a
+   * different transaction. Falls back to a local ref, so every other caller
+   * (Accounts register) is unaffected.
+   */
+  formRef?: RefObject<TxnEditFormHandle | null>;
+}) {
+  const localRef = useRef<TxnEditFormHandle>(null);
+  const activeRef = formRef ?? localRef;
+
+  return (
     <Dialog
       open={row !== null}
       onOpenChange={(open) => {
-        if (!open) flushTagsAndClose();
+        if (!open) activeRef.current?.requestClose();
       }}
     >
       <DialogContent className="sm:max-w-md">
@@ -850,340 +1253,96 @@ export function TxnEditDialog({
           </DialogDescription>
         </DialogHeader>
         {row ? (
-          <div className="space-y-4">
-            <div className="flex items-baseline justify-between gap-3 text-sm">
-              <span className="truncate text-muted-foreground" title={original}>
-                {original}
-              </span>
-              <Money amountMinor={row.amountMinor} currency={row.currency} signed />
-            </div>
-            {/* Account (+ last-4) and status, adjacent to the amount they
-                qualify (Law 8). Status chip mirrors the ledger row's
-                hides-at-absence convention (Auto/Reconciled precedent):
-                'posted' is the overwhelming common case and renders nothing;
-                only the exceptional 'pending' state earns a chip. */}
-            <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-              <span className="truncate">{maskAccountLabel(row.accountName, row.accountMask)}</span>
-              {row.status === 'pending' ? (
-                <Badge variant="outline" className="shrink-0 gap-1 text-[10px] uppercase">
-                  Pending
-                </Badge>
-              ) : null}
-            </div>
-            <button
-              type="button"
-              className="text-xs text-muted-foreground underline-offset-2 hover:underline"
-              onClick={() => {
-                flushTagsAndClose();
-                // Renamed rows keep matching their siblings via the bank's
-                // original description.
-                onMerchantSearch(row.originalDescription ?? row.description);
-              }}
-            >
-              See everything from this merchant
-            </button>
-            <div className="space-y-1.5">
-              <Label htmlFor="txn-name">Name</Label>
-              <Input
-                id="txn-name"
-                value={name}
-                maxLength={140}
-                onChange={(e) => {
-                  setName(e.target.value);
-                }}
-              />
-            </div>
-            {splitRows !== null && row.transferStatus !== 'confirmed' ? (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label>Splits</Label>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 text-xs"
-                    disabled={splitBusy || splitRows.length >= 30}
-                    onClick={() => {
-                      setSplitRows((prev) =>
-                        prev ? [...prev, { categoryId: null, amount: '' }] : prev,
-                      );
-                    }}
-                  >
-                    <Plus className="size-3.5" />
-                    Add split
-                  </Button>
-                </div>
-                {/* 390px: each row stacks category over amount; sm+ is one line. */}
-                {splitRows.map((s, i) => (
-                  <div
-                    key={i}
-                    className="flex flex-col gap-2 sm:flex-row sm:items-center"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <CategoryPicker
-                        row={{
-                          ...row,
-                          categoryLedgerAccountId: s.categoryId,
-                          categoryName: splitCategoryName(s.categoryId) ?? 'Pick category',
-                          categoryKind: splitKind,
-                          splits: null,
-                        }}
-                        categories={categories}
-                        wide
-                        createEntityId={txnEntityId}
-                        onPick={(catId) => {
-                          setSplitRowAt(i, { categoryId: catId });
-                        }}
-                      />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        inputMode="decimal"
-                        placeholder="0.00"
-                        className="h-8 flex-1 text-right tabular-nums sm:w-28 sm:flex-none"
-                        aria-label={`Split ${String(i + 1)} amount`}
-                        value={s.amount}
-                        onChange={(e) => {
-                          setSplitRowAt(i, { amount: e.target.value });
-                        }}
-                      />
-                      {splitRows.length > 1 ? (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`Remove split ${String(i + 1)}`}
-                          disabled={splitBusy}
-                          onClick={() => {
-                            setSplitRows((prev) =>
-                              prev ? prev.filter((_, idx) => idx !== i) : prev,
-                            );
-                          }}
-                        >
-                          <X className="size-4" />
-                        </Button>
-                      ) : null}
-                    </div>
-                  </div>
-                ))}
-                {/* Σ=0 as UI: the remainder must land exactly on zero. Sticky so
-                    it stays visible at 390px while the rows scroll. Red only
-                    when negative (over-allocated) — Law 8. */}
-                <div className="sticky bottom-0 z-10 flex items-center justify-between gap-3 rounded-md border border-border bg-background px-3 py-2">
-                  <span className="text-sm text-muted-foreground">Left to split</span>
-                  <Money
-                    amountMinor={splitRemainder}
-                    currency={row.currency}
-                    signed
-                    className="text-sm"
-                  />
-                </div>
-                {hasDuplicateCategories(splitRows) ? (
-                  <p className="text-xs text-muted-foreground">
-                    Each category can appear only once — merge the amounts.
-                  </p>
-                ) : null}
-                <div className="flex items-center justify-between gap-2">
-                  {!isExistingSplit ? (
-                    <button
-                      type="button"
-                      className="text-xs text-muted-foreground underline-offset-2 hover:underline"
-                      onClick={() => {
-                        setSplitRows(null);
-                      }}
-                    >
-                      Cancel split
-                    </button>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">
-                      Splits are the categorization — saved as real ledger postings.
-                    </span>
-                  )}
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={splitBusy || !splitSaveReady}
-                    onClick={() => {
-                      void saveSplits();
-                    }}
-                  >
-                    {splitBusy ? <Loader2 className="size-4 animate-spin" /> : null}
-                    Save splits
-                  </Button>
-                </div>
-              </div>
-            ) : null}
-            {row.transferStatus === 'confirmed' ? (
-              <div className="space-y-1.5">
-                <Label>Transfer</Label>
-                <div className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
-                  <ArrowLeftRight className="size-3.5 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 truncate">
-                    {BigInt(row.amountMinor) < 0n ? 'To ' : 'From '}
-                    {row.counterpartyAccountName ?? 'another account'}
-                  </span>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Confirmed as a transfer on the Review page — excluded from
-                  income/expense totals. Not editable here.
-                </p>
-              </div>
-            ) : null}
-            {row.transferStatus !== 'confirmed' &&
-            splitRows === null &&
-            categoryOptions.length > 0 ? (
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <Label>Category</Label>
-                  {/* Teardown C7: every competitor has this. Expands into two
-                      rows with the full amount seeded on row 1. */}
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 text-xs"
-                    onClick={() => {
-                      setSplitRows(
-                        seedRowsForNewSplit(
-                          row.amountMinor,
-                          picked?.id ?? row.categoryLedgerAccountId,
-                        ),
-                      );
-                    }}
-                  >
-                    <Split className="size-3.5" />
-                    Split…
-                  </Button>
-                </div>
-                <CategoryPicker
-                  // Overlay the in-dialog pick so the trigger shows the NEW
-                  // category while the strike-through below keeps the old one.
-                  row={
-                    picked
-                      ? { ...row, categoryLedgerAccountId: picked.id, categoryName: picked.name }
-                      : row
-                  }
-                  categories={categories}
-                  wide
-                  // Once picked in THIS session the badge would be stale —
-                  // saving always writes source='user' regardless of pick.
-                  auto={!picked && isAutoCategorized(row)}
-                  onPick={(catId, catName) => {
-                    setPicked({
-                      id: catId,
-                      name:
-                        catName ??
-                        categories.find((c) => c.ledgerAccountId === catId)?.name ??
-                        'Updated',
-                    });
-                    onRecategorize(row.transactionId, catId);
-                  }}
-                />
-                {picked && picked.id !== row.categoryLedgerAccountId ? (
-                  <p className="text-xs text-muted-foreground">
-                    <span className="line-through">{row.categoryName ?? 'Uncategorized'}</span>
-                    <span aria-hidden="true"> → </span>
-                    <span className="text-foreground">{picked.name}</span>
-                  </p>
-                ) : null}
-              </div>
-            ) : null}
-            <div className="space-y-1.5">
-              <Label>Tags</Label>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {[...allTags, ...createdTags.filter((c) => !allTags.some((a) => a.tagId === c.tagId))].map(
-                  (t) => {
-                    const active = rowTags.some((x) => x.tagId === t.tagId);
-                    return (
-                      <button
-                        key={t.tagId}
-                        type="button"
-                        disabled={tagBusy}
-                        className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
-                          active
-                            ? 'border-foreground/40 bg-secondary text-foreground'
-                            : 'border-dashed border-border text-muted-foreground hover:text-foreground'
-                        }`}
-                        onClick={() => {
-                          void toggleTag({ tagId: t.tagId, name: t.name });
-                        }}
-                      >
-                        #{t.name}
-                      </button>
-                    );
-                  },
-                )}
-                <Input
-                  className="h-7 w-28 text-xs"
-                  placeholder="New tag"
-                  maxLength={40}
-                  value={newTag}
-                  onChange={(e) => {
-                    setNewTag(e.target.value);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') void createAndAssignTag();
-                  }}
-                />
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="txn-note">Note</Label>
-              <Textarea
-                id="txn-note"
-                value={note}
-                maxLength={2000}
-                rows={3}
-                placeholder="Anything worth remembering about this transaction"
-                onChange={(e) => {
-                  setNote(e.target.value);
-                }}
-              />
-            </div>
-          </div>
+          <TxnEditForm
+            ref={activeRef}
+            row={row}
+            householdId={householdId}
+            userId={userId}
+            categories={categories}
+            allTags={allTags}
+            onTagsMutated={onTagsMutated}
+            onClose={onClose}
+            onSaved={onSaved}
+            onRecategorize={onRecategorize}
+            onMerchantSearch={onMerchantSearch}
+          />
         ) : null}
-        <DialogFooter className="gap-2 sm:justify-between">
-          {row?.source === 'manual' && !voiding ? (
-            <Button
-              variant="ghost"
-              className="text-destructive hover:text-destructive"
-              disabled={saving}
-              onClick={() => {
-                setVoiding(true);
-              }}
-            >
-              <Trash2 className="size-4" />
-              Void
-            </Button>
-          ) : row?.source === 'manual' ? (
-            <Button
-              variant="destructive"
-              disabled={saving}
-              onClick={() => {
-                void voidTxn();
-              }}
-            >
-              {saving ? <Loader2 className="size-4 animate-spin" /> : null}
-              Confirm void
-            </Button>
-          ) : (
-            <span />
-          )}
-          <span className="flex gap-2">
-            <Button variant="outline" onClick={flushTagsAndClose} disabled={saving}>
-              Cancel
-            </Button>
-            <Button
-              onClick={() => {
-                void save();
-              }}
-              disabled={saving || name.trim().length === 0}
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </Button>
-          </span>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Desktop-width master-detail side panel (teardown C6 residual): the SAME
+ * TxnEditForm as the modal, hosted in a static bordered card next to the
+ * list instead of a Dialog overlay — the list stays visible and clickable,
+ * no navigation-losing modal (Law 8). Only the ledger page mounts this, and
+ * only with a non-null row at `lg`+ widths; renders nothing otherwise so it
+ * never reserves layout space when no transaction is selected.
+ */
+export function TxnDetailPanel({
+  row,
+  householdId,
+  userId,
+  categories,
+  allTags,
+  onTagsMutated,
+  onClose,
+  onSaved,
+  onRecategorize,
+  onMerchantSearch,
+  formRef,
+}: {
+  row: RichTransactionRow | null;
+  householdId: string | null;
+  userId: string | null;
+  categories: CategoryRow[];
+  allTags: TagRow[];
+  onTagsMutated: () => void;
+  onClose: () => void;
+  onSaved: () => void;
+  onRecategorize: (txnId: string, categoryId: string) => void;
+  onMerchantSearch: (description: string) => void;
+  /** Lets the ledger page pre-flush this panel before switching selection. */
+  formRef: RefObject<TxnEditFormHandle | null>;
+}) {
+  if (!row) return null;
+  return (
+    <div className="flex flex-col overflow-hidden rounded-xl border border-border bg-popover text-sm text-popover-foreground ring-1 ring-foreground/10">
+      <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
+        <div>
+          <h2 className="font-heading text-base font-medium">Edit transaction</h2>
+          <p className="text-sm text-muted-foreground">
+            Rename it or add a note. The bank&apos;s original description is kept.
+          </p>
+        </div>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Close detail panel"
+          className="shrink-0"
+          onClick={() => {
+            formRef.current?.requestClose();
+          }}
+        >
+          <X className="size-4" />
+        </Button>
+      </div>
+      <div className="p-4">
+        <TxnEditForm
+          ref={formRef}
+          row={row}
+          householdId={householdId}
+          userId={userId}
+          categories={categories}
+          allTags={allTags}
+          onTagsMutated={onTagsMutated}
+          onClose={onClose}
+          onSaved={onSaved}
+          onRecategorize={onRecategorize}
+          onMerchantSearch={onMerchantSearch}
+        />
+      </div>
+    </div>
   );
 }
