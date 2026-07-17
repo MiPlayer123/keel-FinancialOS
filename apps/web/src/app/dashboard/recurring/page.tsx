@@ -8,6 +8,7 @@ import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
+import { relativeDueLabel } from '@/lib/relative-date';
 import { BalanceTrendChart, type BalancePoint } from '@/components/keel/charts';
 import {
   advanceSchedule,
@@ -61,7 +62,7 @@ export default function RecurringPage() {
     <>
       <PageHeader
         title="Recurring"
-        description="Subscriptions and bills KEEL has detected — confirm, pause or cancel them."
+        description="Subscriptions and bills KEEL has detected — confirm, pause or stop tracking them."
       />
       <div className="p-6">
         <RecurringBody />
@@ -349,6 +350,9 @@ function SeriesCard({
                 {accountName ? ' · ' : ''}
                 next <Money amountMinor={next.expectedAmountMinor} currency={next.currency} /> on{' '}
                 <span className="font-mono">{next.expectedDate}</span>
+                {relativeDueLabel(next.expectedDate, todayIso()) ? (
+                  <span> ({relativeDueLabel(next.expectedDate, todayIso())})</span>
+                ) : null}
               </>
             ) : null}
           </p>
@@ -753,8 +757,16 @@ function ScheduledSection({
                     {s.categoryName ? ` · ${s.categoryName}` : ''}
                   </span>
                 </p>
-                {isDue ? <Badge variant="secondary">Due</Badge> : null}
-                {dueSoon ? <Badge variant="outline">Due soon</Badge> : null}
+                {isDue ? (
+                  <Badge variant="secondary">
+                    {s.nextDueDate < today
+                      ? `Overdue · ${relativeDueLabel(s.nextDueDate, today) ?? s.nextDueDate}`
+                      : 'Due today'}
+                  </Badge>
+                ) : null}
+                {dueSoon ? (
+                  <Badge variant="outline">{relativeDueLabel(s.nextDueDate, today) ?? 'Due soon'}</Badge>
+                ) : null}
                 {s.status === 'paused' ? <Badge variant="outline">Paused</Badge> : null}
                 <Money
                   amountMinor={s.amountMinor}
