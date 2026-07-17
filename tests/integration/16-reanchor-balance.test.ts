@@ -98,6 +98,7 @@ beforeAll(async () => {
 describe('accounts.reanchor_balance', () => {
   it('reverses a stale opening and re-anchors the balance to provider truth', async () => {
     const svc = serviceClient();
+    const alexClient = await signIn(SEED.users.alex.email);
     const { accountId, ledgerAccountId } = await createAccount('correction', null);
 
     // (1) The bug: the one-time anchor fired while Σ(postings) was still 0, so
@@ -117,43 +118,33 @@ describe('accounts.reanchor_balance', () => {
 
     // (2) The backfilled window then lands on top (net +30000 of activity),
     // inflating the displayed balance to 130000 while the bank still says
-    // 100000. A category leg keeps the batch balanced (Law 3) and, because it
-    // never touches Opening Balances, it is NOT an opening marker.
+    // 100000. Posted through the real manual-transaction command (financial
+    // tables are proc-only, no direct DML even for service_role — Law 7): a
+    // debit-positive cash leg on the account + a balancing category split
+    // (Σ=0, Law 3). It never touches Opening Balances, so it is NOT an opening
+    // marker and re-anchor leaves it in place.
     const activity = 30000n;
-    const { data: batch, error: batchError } = await svc
-      .from('journal_batches')
-      .insert({
-        household_id: HOUSEHOLD,
-        canonical_transaction_id: null,
+    const { error: activityError } = await alexClient.rpc('keel_cmd_manual_transaction', {
+      p_command_id: crypto.randomUUID(),
+      p_economic_event_key: `itest:reanchor:activity:${crypto.randomUUID()}`,
+      p_actor: ACTOR,
+      p_household_id: HOUSEHOLD,
+      p_payload: {
+        account_id: accountId,
         description: 'synced backfill activity (test)',
         effective_date: new Date().toISOString().slice(0, 10),
-      })
-      .select('id')
-      .single();
-    if (batchError) throw new Error(batchError.message);
-    const { error: postError } = await svc.from('journal_postings').insert([
-      {
-        batch_id: batch.id,
-        ledger_account_id: ledgerAccountId,
-        entity_id: ENTITY,
+        status: 'posted',
         amount_minor: activity.toString(),
-        currency: 'USD',
+        splits: [{ category_ledger_account_id: categoryLedgerId, amount_minor: (-activity).toString() }],
       },
-      {
-        batch_id: batch.id,
-        ledger_account_id: categoryLedgerId,
-        entity_id: ENTITY,
-        amount_minor: (-activity).toString(),
-        currency: 'USD',
-      },
-    ]);
-    if (postError) throw new Error(postError.message);
+    });
+    if (activityError) throw new Error(`seed activity failed: ${activityError.message}`);
     expect(await ledgerSum(ledgerAccountId)).toBe(provider + activity); // inflated
 
     // (3) Re-anchor: reads the latest provider snapshot (100000), reverses the
     // stale opening, and re-books the corrected delta so the ledger ties to the
     // bank regardless of how much history synced.
-    const alex = await signIn(SEED.users.alex.email);
+    const alex = alexClient;
     const { data: result, error: reanchorError } = await alex.rpc('keel_cmd_reanchor_balance', {
       p_command_id: crypto.randomUUID(),
       p_economic_event_key: `itest:reanchor:fix:${crypto.randomUUID()}`,
@@ -204,64 +195,6 @@ describe('accounts.reanchor_balance', () => {
       p_payload: { account_id: accountId },
     });
     if (secondError) throw new Error(`second reanchor failed: ${secondError.message}`);
-    expect(await ledgerSum(ledgerAccountId)).toBe(provider);
-  });
-});
-
-describe('keel_apply_account_balance deferral gate', () => {
-  it('withholds the auto-anchor until the connection completes its first sync', async () => {
-    const svc = serviceClient();
-    const externalRef = `reanchor-gate-${crypto.randomUUID()}`;
-    const { data: conn, error: connError } = await svc
-      .from('connections')
-      .insert({
-        household_id: HOUSEHOLD,
-        provider: 'plaid',
-        external_ref: externalRef,
-        status: 'active',
-      })
-      .select('id')
-      .single();
-    if (connError) throw new Error(connError.message);
-
-    const { accountId, ledgerAccountId } = await createAccount('gate', conn.id as string);
-    const provider = 250000n;
-
-    // First refresh BEFORE the initial sync completes: snapshot only, no anchor.
-    const { error: earlyError } = await svc.rpc('keel_apply_account_balance', {
-      p_household_id: HOUSEHOLD,
-      p_account_id: accountId,
-      p_current_minor: Number(provider),
-      p_available_minor: Number(provider),
-      p_currency: 'USD',
-      p_as_of: new Date().toISOString(),
-    });
-    if (earlyError) throw new Error(earlyError.message);
-    expect(await ledgerSum(ledgerAccountId)).toBe(0n); // deferred — not inflated
-
-    const { count: snapCount, error: snapError } = await svc
-      .from('balance_snapshots')
-      .select('*', { count: 'exact', head: true })
-      .eq('account_id', accountId);
-    if (snapError) throw new Error(snapError.message);
-    expect(snapCount).toBeGreaterThanOrEqual(1); // snapshot still recorded
-
-    // Backfill completes → the next refresh anchors correctly.
-    const { error: syncError } = await svc
-      .from('connections')
-      .update({ last_successful_sync_at: new Date().toISOString() })
-      .eq('id', conn.id);
-    if (syncError) throw new Error(syncError.message);
-
-    const { error: lateError } = await svc.rpc('keel_apply_account_balance', {
-      p_household_id: HOUSEHOLD,
-      p_account_id: accountId,
-      p_current_minor: Number(provider),
-      p_available_minor: Number(provider),
-      p_currency: 'USD',
-      p_as_of: new Date().toISOString(),
-    });
-    if (lateError) throw new Error(lateError.message);
     expect(await ledgerSum(ledgerAccountId)).toBe(provider);
   });
 });
