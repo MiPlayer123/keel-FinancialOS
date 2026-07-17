@@ -1801,3 +1801,27 @@ hypotheses (verified against the run's logs):
   category_suggestions) and an explicit accept-INSERTS-on-absent count
   assert (pgTAP T1 has no pre-existing overlay, so that path was already
   proven green — kept explicit now).
+
+## 2026-07-17 — C16: Home "Needs attention" module (teardown item C16)
+
+One card near the top of Home aggregating actionable counts into deep-linked
+rows (Card + list-row grammar, divide-y like the projected-bills list; hides
+entirely at zero). Pure aggregation in `apps/web/src/lib/needs-attention.ts`
+(unit-tested, todayIso injected); component fetches only the two Review
+sources Home didn't already load (transfers.list + categorization.suggestions
+via useKeelQuerySilent — recurring.list, forecast bills, connections, and
+transactions.rich ride the page's existing fetches). Rows: pending review
+(same three sources as ReviewBadge) → /dashboard/review; outflow forecast
+bills due within 7 days (inclusive both ends) → /dashboard/recurring;
+reauth_required connections → /dashboard/connections; uncategorized
+transactions (rich rows already on the page — no new query) →
+/dashboard/ledger?category=uncategorized. Counts neutral per Law 8.
+Decisions:
+- TransferNudgeBanner REMOVED from Home (its count folds into the review
+  row); component file stays — Reports still renders it with its
+  spending-specific copy.
+- `isUncategorized` moved from txn-edit-dialog.tsx to lib/needs-attention.ts
+  (structural UncategorizedLike input) so the count shares ONE definition;
+  txn-edit-dialog re-exports it, so ledger/page.tsx imports are untouched.
+- SyncStatus now takes connections as a prop; HomeBody fetches connections
+  once and shares them with the reauth row (was a second identical fetch).
