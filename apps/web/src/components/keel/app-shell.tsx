@@ -198,13 +198,21 @@ function SidebarAccounts({
   const byLedger = new Map((data?.balances ?? []).map((r) => [r.ledgerAccountId, r]));
 
   if (accounts.length === 0) return null;
-  const assets = accounts.filter((a) => kinds.get(a.ledgerAccountId) !== 'liability');
+  // Mirror the Accounts page's three-way split (asset / liability / other) so
+  // each group subtotal reconciles with that page (review finding); folding
+  // 'other' kinds into Assets made the per-group subtotals disagree.
+  const assets = accounts.filter((a) => kinds.get(a.ledgerAccountId) === 'asset');
   const liabilities = accounts.filter((a) => kinds.get(a.ledgerAccountId) === 'liability');
+  const other = accounts.filter((a) => {
+    const kind = kinds.get(a.ledgerAccountId);
+    return kind !== 'asset' && kind !== 'liability';
+  });
   const CAP = 6;
 
-  // Net worth across every account in the dominant currency — matches the
-  // Accounts page (single-currency households sum identically); mixed-currency
-  // households never mis-sum across currencies (Law 4).
+  // Net worth across every account in the dominant currency. Equals the
+  // Accounts-page net worth for single-currency households (the common case);
+  // for mixed-currency households the rail deliberately shows the dominant
+  // currency only rather than mis-summing across currencies (Law 4).
   const netWorth = currencySubtotal(accounts, byLedger);
 
   const group = (title: string, rows: AccountRow[]) => {
@@ -273,6 +281,7 @@ function SidebarAccounts({
     <div className="mb-1">
       {group('Assets', assets)}
       {group('Liabilities', liabilities)}
+      {group('Other', other)}
       <div className="mt-1.5 flex items-baseline justify-between border-t border-border/60 px-3 pt-1.5">
         <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
           Net worth
