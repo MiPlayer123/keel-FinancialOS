@@ -30,12 +30,29 @@ export type AmortizationInput = {
   extraMinor?: bigint;
 };
 
-export type AmortizationResult = {
-  /** Whole months to reach a zero balance. */
-  months: number;
-  /** Sum of all interest charged across the schedule, in minor units. */
-  totalInterestMinor: bigint;
-};
+/**
+ * `exceeds_horizon` (a finite schedule, just longer than MAX_MONTHS — e.g. a
+ * low payment on a 0%-APR balance) is a DIFFERENT fact than
+ * `negative_amortization` (the payment never even covers a month's interest,
+ * so the balance never shrinks at all — no finite schedule exists at any
+ * horizon). Review r3604731467: collapsing both into one `null` told a user
+ * paying down a real, payable-eventually debt that their payment "never gets
+ * ahead of interest," which is false — only the second case means that.
+ * `invalid_input` covers the defensive guards (non-positive balance/payment,
+ * negative rate/extra) for callers other than this module's own UI, which
+ * already validates before calling.
+ */
+export type AmortizationFailureReason = 'invalid_input' | 'negative_amortization' | 'exceeds_horizon';
+
+export type AmortizationResult =
+  | {
+      ok: true;
+      /** Whole months to reach a zero balance. */
+      months: number;
+      /** Sum of all interest charged across the schedule, in minor units. */
+      totalInterestMinor: bigint;
+    }
+  | { ok: false; reason: AmortizationFailureReason };
 
 /** Basis-point/annual-to-monthly divisor: bps/10000 (percent) / 12 (months) = bps/120000. */
 const BPS_MONTHLY_DIVISOR = 120_000n;
@@ -47,26 +64,31 @@ const MAX_MONTHS = 600;
 /**
  * Projects a fixed-payment amortization schedule to payoff.
  *
- * Returns null when the inputs can't produce a real schedule: a non-positive
- * balance or minimum payment, a negative rate or extra payment, or a payment
- * that never exceeds a month's interest on the starting balance (negative
- * amortization — the balance would never shrink). Also returns null if the
- * schedule would still be open after `MAX_MONTHS` (50 years) — reported as
- * "not payoff-able under these terms" rather than a runaway loop.
+ * Returns `{ ok: false, reason: 'invalid_input' }` for inputs that can't
+ * produce a schedule at all: a non-positive balance or minimum payment, or a
+ * negative rate or extra payment. Returns `{ ok: false, reason:
+ * 'negative_amortization' }` when the payment never exceeds a month's
+ * interest on the starting balance — the balance would only ever grow, so no
+ * finite schedule exists at ANY horizon. Returns `{ ok: false, reason:
+ * 'exceeds_horizon' }` when a finite schedule DOES exist but runs past
+ * `MAX_MONTHS` (50 years, e.g. a small payment on a large low/no-interest
+ * balance) — this is a real, payable-eventually debt, not a stuck one, and
+ * callers must not present it the same way as negative amortization (review
+ * r3604731467).
  */
-export function simulatePayoff(input: AmortizationInput): AmortizationResult | null {
+export function simulatePayoff(input: AmortizationInput): AmortizationResult {
   const { balanceMinor, minPaymentMinor } = input;
   const extraMinor = input.extraMinor ?? 0n;
   const aprBps = input.aprBps;
 
-  if (balanceMinor <= 0n) return null;
-  if (minPaymentMinor <= 0n) return null;
-  if (extraMinor < 0n) return null;
+  if (balanceMinor <= 0n) return { ok: false, reason: 'invalid_input' };
+  if (minPaymentMinor <= 0n) return { ok: false, reason: 'invalid_input' };
+  if (extraMinor < 0n) return { ok: false, reason: 'invalid_input' };
   // aprBps must already be a whole basis-point integer (parseAprBps produces
   // one) — rounding a rate here would be one Math.round hop from rounding
   // money (Law 4's own lint rule bans Math.round in financial code for that
   // reason), so a fractional/negative rate is refused rather than coerced.
-  if (!Number.isInteger(aprBps) || aprBps < 0) return null;
+  if (!Number.isInteger(aprBps) || aprBps < 0) return { ok: false, reason: 'invalid_input' };
 
   const aprBpsBig = BigInt(aprBps);
   const paymentMinor = minPaymentMinor + extraMinor;
@@ -74,7 +96,9 @@ export function simulatePayoff(input: AmortizationInput): AmortizationResult | n
   // Negative-amortization guard: if the payment can't even cover interest on
   // the STARTING (largest) balance, it never will as the balance only grows.
   const firstMonthInterest = (balanceMinor * aprBpsBig) / BPS_MONTHLY_DIVISOR;
-  if (aprBpsBig > 0n && paymentMinor <= firstMonthInterest) return null;
+  if (aprBpsBig > 0n && paymentMinor <= firstMonthInterest) {
+    return { ok: false, reason: 'negative_amortization' };
+  }
 
   let balance = balanceMinor;
   let totalInterest = 0n;
@@ -89,9 +113,12 @@ export function simulatePayoff(input: AmortizationInput): AmortizationResult | n
     months += 1;
   }
 
-  if (balance > 0n) return null; // hit the horizon cap without reaching zero
+  // Hit the horizon cap without reaching zero — a real, finite schedule may
+  // still exist beyond MAX_MONTHS; this is distinct from negative
+  // amortization (guarded above) and must be reported as such.
+  if (balance > 0n) return { ok: false, reason: 'exceeds_horizon' };
 
-  return { months, totalInterestMinor: totalInterest };
+  return { ok: true, months, totalInterestMinor: totalInterest };
 }
 
 /**

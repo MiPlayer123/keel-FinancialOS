@@ -10,7 +10,7 @@ describe('simulatePayoff', () => {
       aprBps: 0,
       minPaymentMinor: 10_000n,
     });
-    expect(r).toEqual({ months: 12, totalInterestMinor: 0n });
+    expect(r).toEqual({ ok: true, months: 12, totalInterestMinor: 0n });
   });
 
   it('handles an uneven final payment at 0% APR (13th month is a partial payment)', () => {
@@ -20,7 +20,7 @@ describe('simulatePayoff', () => {
       aprBps: 0,
       minPaymentMinor: 10_000n,
     });
-    expect(r).toEqual({ months: 13, totalInterestMinor: 0n });
+    expect(r).toEqual({ ok: true, months: 13, totalInterestMinor: 0n });
   });
 
   it('amortizes a realistic balance/rate/payment to payoff, floor-dividing interest', () => {
@@ -33,7 +33,7 @@ describe('simulatePayoff', () => {
       aprBps: 1200,
       minPaymentMinor: 20_000n,
     });
-    expect(r).toEqual({ months: 13, totalInterestMinor: 16_951n });
+    expect(r).toEqual({ ok: true, months: 13, totalInterestMinor: 16_951n });
   });
 
   it('an extra payment on the same debt finishes sooner and pays less total interest', () => {
@@ -44,7 +44,7 @@ describe('simulatePayoff', () => {
       minPaymentMinor: 20_000n,
       extraMinor: 10_000n,
     });
-    expect(r).toEqual({ months: 9, totalInterestMinor: 11_427n });
+    expect(r).toEqual({ ok: true, months: 9, totalInterestMinor: 11_427n });
   });
 
   it('pays off in exactly 1 month when the payment covers balance + interest outright', () => {
@@ -56,18 +56,32 @@ describe('simulatePayoff', () => {
       minPaymentMinor: 2_500n,
       extraMinor: 10_000_000n,
     });
-    expect(r).toEqual({ months: 1, totalInterestMinor: 832n });
+    expect(r).toEqual({ ok: true, months: 1, totalInterestMinor: 832n });
   });
 
-  it('reports negative amortization (payment never covers interest) as unpayable, not an infinite loop', () => {
+  it('reports negative amortization (payment never covers interest) distinctly, not an infinite loop', () => {
     // $1000 at 24% APR: month-1 interest = 100000*2400/120000 = 2000. A $0.01
-    // payment can never even cover interest, let alone shrink principal.
+    // payment can never even cover interest, let alone shrink principal —
+    // no finite schedule exists at ANY horizon.
     const r = simulatePayoff({
       balanceMinor: 100_000n,
       aprBps: 2400,
       minPaymentMinor: 1n,
     });
-    expect(r).toBeNull();
+    expect(r).toEqual({ ok: false, reason: 'negative_amortization' });
+  });
+
+  it('reports a payment exceeding the 50-year horizon distinctly from negative amortization (review r3604731467)', () => {
+    // $10,000 at 0% APR with a $10/mo payment pays off in exactly 1000
+    // months — a REAL, finite, payoff-eventually schedule, just longer than
+    // the 600-month cap. This must NOT read the same as "never gets ahead
+    // of interest" (negative_amortization) — the debt IS payable, just slowly.
+    const r = simulatePayoff({
+      balanceMinor: 1_000_000n,
+      aprBps: 0,
+      minPaymentMinor: 1_000n,
+    });
+    expect(r).toEqual({ ok: false, reason: 'exceeds_horizon' });
   });
 
   it('property: more extra payment never finishes later and never costs more interest', () => {
@@ -76,13 +90,13 @@ describe('simulatePayoff', () => {
     const results = extras.map((extraMinor) => simulatePayoff({ ...base, extraMinor }));
 
     for (const r of results) {
-      expect(r).not.toBeNull();
+      expect(r.ok).toBe(true);
     }
-    const nonNull = results as { months: number; totalInterestMinor: bigint }[];
+    const ok = results as { ok: true; months: number; totalInterestMinor: bigint }[];
 
-    for (let i = 1; i < nonNull.length; i++) {
-      const prev = nonNull[i - 1]!;
-      const cur = nonNull[i]!;
+    for (let i = 1; i < ok.length; i++) {
+      const prev = ok[i - 1]!;
+      const cur = ok[i]!;
       // Strictly better (this scenario's extras are all large enough to move
       // the needle), and never worse in either dimension.
       expect(cur.months).toBeLessThanOrEqual(prev.months);
@@ -94,13 +108,28 @@ describe('simulatePayoff', () => {
   });
 
   it('rejects invalid inputs rather than guessing', () => {
-    expect(simulatePayoff({ balanceMinor: 0n, aprBps: 1000, minPaymentMinor: 10_000n })).toBeNull();
-    expect(simulatePayoff({ balanceMinor: -1n, aprBps: 1000, minPaymentMinor: 10_000n })).toBeNull();
-    expect(simulatePayoff({ balanceMinor: 10_000n, aprBps: 1000, minPaymentMinor: 0n })).toBeNull();
+    expect(simulatePayoff({ balanceMinor: 0n, aprBps: 1000, minPaymentMinor: 10_000n })).toEqual({
+      ok: false,
+      reason: 'invalid_input',
+    });
+    expect(simulatePayoff({ balanceMinor: -1n, aprBps: 1000, minPaymentMinor: 10_000n })).toEqual({
+      ok: false,
+      reason: 'invalid_input',
+    });
     expect(
-      simulatePayoff({ balanceMinor: 10_000n, aprBps: 1000, minPaymentMinor: 100n, extraMinor: -1n }),
-    ).toBeNull();
-    expect(simulatePayoff({ balanceMinor: 10_000n, aprBps: -5, minPaymentMinor: 100n })).toBeNull();
+      simulatePayoff({ balanceMinor: 10_000n, aprBps: 1000, minPaymentMinor: 0n }),
+    ).toEqual({ ok: false, reason: 'invalid_input' });
+    expect(
+      simulatePayoff({
+        balanceMinor: 10_000n,
+        aprBps: 1000,
+        minPaymentMinor: 100n,
+        extraMinor: -1n,
+      }),
+    ).toEqual({ ok: false, reason: 'invalid_input' });
+    expect(
+      simulatePayoff({ balanceMinor: 10_000n, aprBps: -5, minPaymentMinor: 100n }),
+    ).toEqual({ ok: false, reason: 'invalid_input' });
   });
 
   it('never overstates interest: floor division on a fractional monthly rate', () => {
@@ -111,9 +140,11 @@ describe('simulatePayoff', () => {
       aprBps: 1999,
       minPaymentMinor: 50_832n, // exactly covers month 1's principal + floored interest
     });
-    expect(r).not.toBeNull();
-    expect(r!.months).toBe(1);
-    expect(r!.totalInterestMinor).toBe(832n);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.months).toBe(1);
+      expect(r.totalInterestMinor).toBe(832n);
+    }
   });
 });
 

@@ -408,6 +408,23 @@ function GoalCard({
 }
 
 /**
+ * Distinct copy per failure reason (review r3604731467): "never gets ahead
+ * of interest" is only true for negative_amortization — a payment on a real,
+ * payable-eventually debt that just runs past the 50-year horizon cap must
+ * read differently, or a low-payment/0%-APR debt looks falsely unpayable.
+ */
+function payoffFailureMessage(reason: 'invalid_input' | 'negative_amortization' | 'exceeds_horizon'): string {
+  switch (reason) {
+    case 'negative_amortization':
+      return 'At this rate, this payment never gets ahead of interest — try a higher payment.';
+    case 'exceeds_horizon':
+      return 'At this payment, payoff takes more than 50 years to estimate — try a higher payment.';
+    case 'invalid_input':
+      return 'Enter an APR and a minimum monthly payment to see a projection.';
+  }
+}
+
+/**
  * Debt payoff simulator (teardown runner-up, Class C preview-only — Law 10).
  * Pure client-side math against the debt's CURRENT ledger balance; rate and
  * payment inputs are ephemeral scenario values, never persisted, never sent
@@ -523,10 +540,9 @@ function DebtPayoffSimulator({
             </p>
           ) : (
             <div className="space-y-1.5 text-xs">
-              {scenario.minOnly === null ? (
+              {!scenario.minOnly.ok ? (
                 <p className="text-muted-foreground">
-                  At this rate, the minimum payment never gets ahead of interest — try a higher
-                  payment.
+                  {payoffFailureMessage(scenario.minOnly.reason)}
                 </p>
               ) : (
                 <p>
@@ -538,11 +554,9 @@ function DebtPayoffSimulator({
                   total interest
                 </p>
               )}
-              {scenario.extraMinor > 0n ? (
-                scenario.withExtra === null ? (
-                  <p className="text-muted-foreground">
-                    Even with the extra payment, this rate never gets ahead of interest.
-                  </p>
+              {scenario.extraMinor > 0n && scenario.withExtra ? (
+                !scenario.withExtra.ok ? (
+                  <p className="text-muted-foreground">{payoffFailureMessage(scenario.withExtra.reason)}</p>
                 ) : (
                   <p>
                     <span className="text-muted-foreground">
@@ -555,7 +569,7 @@ function DebtPayoffSimulator({
                     </span>
                     , {formatMoney(scenario.withExtra.totalInterestMinor.toString(), { currency })}{' '}
                     total interest
-                    {scenario.minOnly !== null ? (
+                    {scenario.minOnly.ok ? (
                       <>
                         {' — save '}
                         <span className="font-medium">
