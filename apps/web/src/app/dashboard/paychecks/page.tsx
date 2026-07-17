@@ -16,6 +16,7 @@ import {
 } from '@/lib/keel-api';
 import { TxnPicker } from '@/components/keel/txn-picker';
 import { sha256Hex, parseSignedDollars, minorToDollars } from '@/lib/hash';
+import { relativeDueLabel } from '@/lib/relative-date';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -185,12 +186,11 @@ function PaychecksBody() {
           </h2>
           <div className="space-y-2">
             {detectedIncome.map((series) => {
+              const todayIso = new Date().toISOString().slice(0, 10);
               const upcoming = series.occurrences
                 .filter((o) => o.status === 'expected')
                 .sort((a, b) => a.expectedDate.localeCompare(b.expectedDate));
-              const next = upcoming.find(
-                (o) => o.expectedDate >= new Date().toISOString().slice(0, 10),
-              );
+              const next = upcoming.find((o) => o.expectedDate >= todayIso);
               const amount = next ?? upcoming[0];
               return (
                 <div
@@ -212,6 +212,9 @@ function PaychecksBody() {
                           {next ? (
                             <>
                               {' '}next on <span className="font-mono">{next.expectedDate}</span>
+                              {relativeDueLabel(next.expectedDate, todayIso) ? (
+                                <span> ({relativeDueLabel(next.expectedDate, todayIso)})</span>
+                              ) : null}
                             </>
                           ) : null}
                         </>

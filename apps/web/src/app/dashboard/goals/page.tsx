@@ -20,6 +20,7 @@ import {
 } from '@/lib/keel-api';
 import { minorToDollars, parseSignedDollars } from '@/lib/hash';
 import { formatMoney } from '@/lib/money';
+import { relativeDueLabel } from '@/lib/relative-date';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -235,6 +236,11 @@ function GoalCard({
     // Ceiling division keeps the plan honest (Law 4 — integer math).
     return ((remaining + BigInt(months) - 1n) / BigInt(months)).toString();
   }, [goal.targetDate, remaining]);
+  // Teardown C19: near target dates read "in N days" instead of a bare ISO
+  // date; goal targets are usually months out so this is almost always null
+  // (the absolute date renders unchanged) — it only fires once a target is
+  // within the ±7-day window.
+  const targetRelative = goal.targetDate ? relativeDueLabel(goal.targetDate, todayIso()) : null;
 
   async function move(direction: 1n | -1n) {
     if (!householdId) return;
@@ -290,7 +296,7 @@ function GoalCard({
               <Money amountMinor={isDebt ? (goal.paidMinor ?? '0') : goal.savedMinor} currency={goal.currency} className="text-xs" />{' '}
               of <Money amountMinor={goal.targetMinor} currency={goal.currency} className="text-xs" />
               {isDebt ? ' paid off' : ''}
-              {goal.targetDate ? ` · by ${goal.targetDate}` : ''}
+              {goal.targetDate ? ` · by ${goal.targetDate}${targetRelative ? ` (${targetRelative})` : ''}` : ''}
             </p>
             {isDebt ? (
               <p className="text-xs text-muted-foreground">

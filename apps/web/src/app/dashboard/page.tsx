@@ -26,6 +26,7 @@ import {
 } from '@/lib/keel-api';
 import { merchantDisplayName } from '@/lib/merchant-name';
 import { stepScheduleDue } from '@/lib/recurring';
+import { relativeDueLabel } from '@/lib/relative-date';
 import { Badge } from '@/components/ui/badge';
 import { CashFlowCard } from '@/components/keel/cash-flow-card';
 import { BalanceTrendChart, CashFlowMonthlyChart, CategoryBarList } from '@/components/keel/charts';
@@ -537,6 +538,7 @@ function HomeBody() {
     forecast !== null &&
     forecast.rows.length > 1 &&
     new Set(forecast.rows.map((r) => r.balanceMinor)).size > 1;
+  const todayIso = new Date().toISOString().slice(0, 10);
 
   return (
     <>
@@ -607,8 +609,8 @@ function HomeBody() {
                         key={`${b.seriesId}-${b.date}`}
                         className="flex items-center gap-3 text-sm"
                       >
-                        <span className="w-14 shrink-0 font-mono text-xs text-muted-foreground">
-                          {b.date.slice(5)}
+                        <span className="w-16 shrink-0 text-xs text-muted-foreground">
+                          {relativeDueLabel(b.date, todayIso) ?? b.date.slice(5)}
                         </span>
                         <span className="min-w-0 flex-1 truncate">{b.name}</span>
                         <Money
