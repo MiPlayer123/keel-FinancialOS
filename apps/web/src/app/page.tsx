@@ -5,6 +5,7 @@ import {
   Building2,
   CalendarClock,
   DownloadCloud,
+  Equal,
   Scale,
   ShieldCheck,
   Sparkles,
@@ -18,12 +19,28 @@ import { LandingNav } from '@/components/keel/landing/landing-nav';
 import { Reveal } from '@/components/keel/landing/reveal';
 import { cn } from '@/lib/utils';
 
-/* Honest system facts — no invented social proof. */
-const PROOF_FACTS = [
-  { stat: 'Σ = 0', label: 'every transaction balances, enforced in the database' },
-  { stat: '0 floats', label: 'money is exact integer minor units, never rounded' },
-  { stat: '100%', label: 'of changes audited — and every one undoable' },
-  { stat: '4 formats', label: 'full export in CSV, JSON, QIF & Beancount, always' },
+/* Honest guarantees, benefit-first — no invented social proof. */
+const GUARANTEES = [
+  {
+    icon: Equal,
+    claim: 'Never off by a cent',
+    detail: 'Every transaction must balance to zero — the database itself enforces it.',
+  },
+  {
+    icon: Undo2,
+    claim: 'Nothing is ever lost',
+    detail: 'History is append-only. Every change is audited, and every one is undoable.',
+  },
+  {
+    icon: ShieldCheck,
+    claim: 'AI never acts alone',
+    detail: 'Material changes wait for your approval, with confidence and evidence attached.',
+  },
+  {
+    icon: DownloadCloud,
+    claim: 'Leave with everything',
+    detail: 'One click exports it all — CSV, JSON, QIF & Beancount. Always.',
+  },
 ];
 
 const FEATURES = [
@@ -126,16 +143,17 @@ export default function LandingPage() {
           </div>
         </section>
 
-        {/* ————— Proof strip: honest system facts ————— */}
+        {/* ————— Guarantee strip: honest promises, benefit-first ————— */}
         <section className="border-y border-border bg-muted/30">
-          <div className="mx-auto grid w-full max-w-6xl grid-cols-2 gap-px px-6 py-10 sm:py-12 lg:grid-cols-4">
-            {PROOF_FACTS.map((fact, i) => (
-              <Reveal key={fact.stat} delayMs={i * 90} className="px-4 py-3 text-center">
-                <p className="font-mono text-2xl font-semibold tabular-nums tracking-tight text-primary">
-                  {fact.stat}
+          <div className="mx-auto grid w-full max-w-6xl gap-x-10 gap-y-8 px-6 py-10 sm:grid-cols-2 sm:py-12 lg:grid-cols-4">
+            {GUARANTEES.map((g, i) => (
+              <Reveal key={g.claim} delayMs={i * 90}>
+                <p className="flex items-center gap-2 text-sm font-semibold tracking-tight">
+                  <g.icon aria-hidden className="size-4 text-primary" />
+                  {g.claim}
                 </p>
-                <p className="mx-auto mt-1.5 max-w-[16rem] text-xs leading-relaxed text-muted-foreground">
-                  {fact.label}
+                <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                  {g.detail}
                 </p>
               </Reveal>
             ))}
