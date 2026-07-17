@@ -47,7 +47,6 @@ export function HoldingsCard({
   }, [householdId, accountId]);
 
   const total = (rows ?? []).reduce((acc, r) => acc + BigInt(r.valueMinor || '0'), 0n);
-  const asOf = rows?.[0]?.asOf ?? null;
 
   return (
     <Card>
@@ -119,9 +118,7 @@ export function HoldingsCard({
               ))}
             </div>
             <div className="flex items-center justify-between border-t pt-2 text-sm">
-              <span className="text-muted-foreground">
-                Total{asOf ? ` · as of ${asOf}` : ''}
-              </span>
+              <span className="text-muted-foreground">Total</span>
               <Money amountMinor={total.toString()} currency={currency} className="font-medium" />
             </div>
           </>

@@ -207,10 +207,13 @@ export async function reassignAccountEntity(input: {
 }
 
 /**
- * One position in an account's latest holdings snapshot (S-inv-1a,
- * docs/harness/plans/investments-v1.md). Descriptive only — never derived
- * from or fed into the ledger. `qty` is a decimal string (fractional
- * shares are real; Law 4 keeps money BIGINT but quantities are not money).
+ * One current position in an account (S-inv-1a,
+ * docs/harness/plans/investments-v1.md) — at most one row per
+ * (account, symbol, source), upserted in place, not a dated history.
+ * Descriptive only — never derived from or fed into the ledger. `qty` is
+ * a decimal string (fractional shares are real; Law 4 keeps money BIGINT
+ * but quantities are not money). `asOf` reflects when the row was last
+ * touched, not a shared snapshot date across an account's positions.
  */
 export type HoldingRow = {
   holdingId: string;
@@ -227,7 +230,7 @@ export type HoldingRow = {
   updatedAt: string;
 };
 
-/** Latest holdings snapshot, optionally scoped to one account. */
+/** Every current holding in scope, optionally limited to one account. */
 export async function fetchHoldings(householdId: string, accountId?: string): Promise<HoldingRow[]> {
   const data = await invoke<{ rows?: HoldingRow[] }>('api/queries', {
     query: 'holdings.list',

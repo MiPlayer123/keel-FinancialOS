@@ -90,21 +90,24 @@ mergeable on its own and de-risks the sync half.
   created_at). RLS member-read; SECURITY DEFINER write procs
   (`keel_holding_upsert`, `keel_holding_delete`) following the
   keel_rename_account / keel_manual_transaction auth shape
-  (keel_assert_member_write + audit_log + keel_api owner). A holdings
-  snapshot is keyed (account_id, as_of, symbol) so re-entry replaces rather
-  than duplicates (idempotent economics, Law 9 §9.1).
-- **Read model**: `keel_list_holdings(household_id, account_id)` returning
-  the latest as_of snapshot per account, symbol/qty/price/value rows +
-  the snapshot's total, with the account's authoritative balance passed
-  through alongside so the UI can show both without asserting equality.
+  (keel_assert_member_write + audit_log). **Shipped shape (revised from
+  the original as_of-keyed design during build, after review caught that
+  it silently hid older positions):** unique on `(account_id, symbol,
+  source)` — one current row per position, upserted in place, not a
+  dated snapshot history. `as_of` is a per-row "last touched" date, not a
+  shared account-level snapshot date. That changes when S-inv-1b's Plaid
+  sync actually needs real dated history for its own source.
+- **Read model**: `keel_list_holdings(household_id, account_id)` returns
+  every current row in scope, plus the account's authoritative balance
+  passed through alongside so the UI can show both without asserting
+  equality.
 - **Edge route + client**: `/holdings/list` query, `/holdings/upsert` +
   `/holdings/delete` commands in api/index.ts + keel-api.ts.
 - **UI**: on the account detail page (`accounts/[id]`), when
   `subtype ∈ {brokerage, ira, roth, 401k, investment, …}`, render a
-  "Holdings" card: positions table (symbol · shares · price · value), the
-  snapshot total, and an "as of <date>" stamp. A manual "Add / edit
-  holding" dialog (reuses the EntityPicker-style shared-dialog pattern).
-  Non-investment accounts never see it.
+  "Holdings" card: positions list (symbol · shares · price · value) and a
+  total. A manual "Add / edit holding" dialog. Non-investment accounts
+  never see it.
 - **Frozen tests**: a pure `packages/…` or web-lib helper for
   value_minor = round(qty × price_minor) done in integer/decimal space (no
   float) with property tests (value never drifts on re-render); read-model
