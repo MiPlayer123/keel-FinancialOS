@@ -17,7 +17,7 @@ Things ≥3 competitors ALL do that KEEL does not:
 
 5. **A populated review/approve queue that shows the suggestion, its reasoning/evidence, and per-item + bulk approve.** Copilot ("Transactions To Review" with per-row category pill + checkbox + "Mark all as reviewed"; `To Review` status on detail), Ramp (AI verdict card with plain-language rationale + evidence + bulk auto-approve disclosure), Brex (Prepare/Review/Exported queue with counts). KEEL's Review page is empty and auto-categorization happens silently (`review-desktop.png`; audit row "Auto-categorized new transactions · KEEL (automatic)" in `settings-desktop.png`).
 
-6. **Normalized merchant name is the primary label; the raw bank memo is secondary/preserved.** Copilot, Monarch, Ramp (merchant name bold + category subtext), Rocket Money (merchant logo + name), Simplifi. KEEL renders raw ACH/processor strings verbatim as the primary bold label ("ORIG CO NAME:DEEPTUNE CO ENTRY DESCR:PAYROLL…", "FID BKG SVC LLC MONEYLINE Z347266911HG4B8") with visibly inconsistent normalization row-to-row (`ledger-desktop.png`, `keel-core-01.md`).
+6. **Normalized merchant name is the primary label; the raw bank memo is secondary/preserved.** Copilot, Monarch, Ramp (merchant name bold + category subtext), Rocket Money (merchant logo + name), Simplifi. KEEL renders raw ACH/processor strings verbatim as the primary bold label ("ORIG CO NAME:ACMELABS CO ENTRY DESCR:PAYROLL…", "FID BKG SVC LLC MONEYLINE Z347266911HG4B8") with visibly inconsistent normalization row-to-row (`ledger-desktop.png`, `keel-core-01.md`).
 
 ## Findings
 
@@ -57,7 +57,7 @@ Things ≥3 competitors ALL do that KEEL does not:
 - **Maps to:** W2.3.
 
 ### CATEGORIZATIONRULES-6 — Raw ACH/processor memos are the primary transaction label; no clean merchant name with the original preserved beneath [P1]
-- **Evidence:** `ledger-desktop.png` / `ledger-mobile-390.png` ("ORIG CO NAME:DEEPTUNE…", "FID BKG SVC LLC MONEYLINE Z347266911HG4B8", normalization "visibly inconsistent row-to-row"), `keel-core-01.md`, `keel-mobile-04.md`. Contrasts `copilot-community-01.md`, `monarch-community-01.md`, `ramp-community-01.md`, `rocket-money-community-01.md`.
+- **Evidence:** `ledger-desktop.png` / `ledger-mobile-390.png` ("ORIG CO NAME:ACMELABS…", "FID BKG SVC LLC MONEYLINE Z347266911HG4B8", normalization "visibly inconsistent row-to-row"), `keel-core-01.md`, `keel-mobile-04.md`. Contrasts `copilot-community-01.md`, `monarch-community-01.md`, `ramp-community-01.md`, `rocket-money-community-01.md`.
 - **Competitors:** Copilot/Monarch/Ramp/Rocket Money all show a normalized merchant name (often with a logo) as the bold primary label and keep the raw string as data behind the detail view — the register reads as merchants, not bank noise.
 - **KEEL today:** The bold primary label is the raw memo verbatim (Law 5 source-preservation is satisfied, but display is not). Some rows are clean ("Panda Express", "Lyft") and adjacent rows are raw — inconsistent. There is no dedicated merchant-normalization surface; the only lever is the per-rule "friendly name."
 - **Fix:** Show a normalized display name as the primary label with the immutable original one tap away (detail view / hover), keeping the raw text as data-tier (Law 5). Add a merchant-normalization layer (deterministic dictionary + rule-driven friendly names) distinct from the rule-rename layer W2.1 already separates (`rule_renames`).

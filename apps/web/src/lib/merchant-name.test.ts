@@ -145,7 +145,7 @@ describe('merchantDisplayName', () => {
     // No ORIG CO NAME → normal pipeline, not the ACH path.
     expect(merchantDisplayName('ENTRY DESCR:PAYROLL')).not.toContain('·');
     // Deterministic under the cache: same input, same output, twice.
-    const memo = 'ORIG CO NAME:DEEPTUNE CO ENTRY DESCR:PAYROLL SEC:PPD';
+    const memo = 'ORIG CO NAME:ACMELABS CO ENTRY DESCR:PAYROLL SEC:PPD';
     expect(merchantDisplayName(memo)).toBe(merchantDisplayName(memo));
   });
 });

@@ -1628,7 +1628,7 @@ CI (integration job) surfaced that `16-reanchor-balance.test.ts` set up ledger s
   memoized (bounded cache) for uncapped grouped-ledger renders.
 - Live-UI verification on the real account, before and after the fix pass:
   no crashes, zero console errors, no 390px horizontal overflow; ACH payroll
-  row renders "Deeptune · Payroll" with the raw memo in the tooltip.
+  row renders "Acmelabs · Payroll" with the raw memo in the tooltip.
 ## 2026-07-17 — D-039: AI chat POC slice (packages/ai + /ai/chat + Assistant preview page)
 
 Smallest honest slice of docs/research/AI-CHAT-2026-07-16.md §6 ("ask KEEL
