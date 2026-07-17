@@ -4,6 +4,8 @@ import {
   CanonicalTransactionIdSchema,
   CategorySuggestionIdSchema,
   CommandIdSchema,
+  DocumentAttachmentIdSchema,
+  DocumentIdSchema,
   EconomicEventKeySchema,
   EntityIdSchema,
   HouseholdIdSchema,
@@ -21,6 +23,8 @@ import {
 import { CurrencyCodeSchema, MinorUnitsStringSchema } from './money.js';
 import {
   BankProviderNameSchema,
+  DocumentKindSchema,
+  DocumentTargetTypeSchema,
   LedgerAccountKindSchema,
   TransactionSourceSchema,
 } from './enums.js';
@@ -292,6 +296,49 @@ export const DecideCategorySuggestionPayloadSchema = z.object({
   accept: z.boolean(),
 }).strict();
 
+/**
+ * Attach-only documents (receipts/statements) — no auto-extract/match (that
+ * fuller pipeline is deferred, see docs/research/RECEIPTS-2026-07-16.md).
+ * The upload URL itself is minted by a bespoke route, not a command (nothing
+ * durable is written until the object actually exists in Storage); this
+ * command is the durable, audited step: verify the uploaded object
+ * server-side (size/mime/hash) and record it, optionally attaching it to
+ * exactly one target in the same call.
+ */
+export const ConfirmDocumentUploadPayloadSchema = z
+  .object({
+    documentId: DocumentIdSchema,
+    entityId: EntityIdSchema,
+    kind: DocumentKindSchema,
+    storageBucket: z.enum(['receipts', 'statements']),
+    storagePath: z.string().min(1).max(1024),
+    originalFilename: z.string().min(1).max(255),
+    targetType: DocumentTargetTypeSchema.optional(),
+    targetId: z.uuid().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if ((value.targetType === undefined) !== (value.targetId === undefined)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['targetId'],
+        message: 'targetType and targetId must both be present or both absent',
+      });
+    }
+  });
+
+/** Detach = undo (Law 2); the document and its versions are untouched. */
+export const DetachDocumentPayloadSchema = z.object({
+  attachmentId: DocumentAttachmentIdSchema,
+  reason: z.string().min(1).max(500),
+}).strict();
+
+/** Soft-delete only — the storage object and versions persist for the export/audit window. */
+export const DeleteDocumentPayloadSchema = z.object({
+  documentId: DocumentIdSchema,
+  reason: z.string().min(1).max(500),
+}).strict();
+
 export const COMMAND_PAYLOAD_SCHEMAS = {
   'accounts.create': CreateAccountPayloadSchema,
   'ingest.record_raw_event': RecordRawEventPayloadSchema,
@@ -319,6 +366,9 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'accounts.set_opening_balance': SetOpeningBalancePayloadSchema,
   'accounts.reanchor_balance': ReanchorBalancePayloadSchema,
   'categorization.decide_suggestion': DecideCategorySuggestionPayloadSchema,
+  'documents.confirm_upload': ConfirmDocumentUploadPayloadSchema,
+  'documents.detach': DetachDocumentPayloadSchema,
+  'documents.delete': DeleteDocumentPayloadSchema,
 } as const;
 export type CommandProcedureName = keyof typeof COMMAND_PAYLOAD_SCHEMAS;
 export type CommandName =
