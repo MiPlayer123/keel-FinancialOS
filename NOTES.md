@@ -3155,3 +3155,58 @@ never done. Delegated the redeploy (regenerate
 push `api` and `worker` plus their full dependency trees) to an isolated
 subagent — the vendor bundle alone is ~690KB, too large to shuttle through
 the main session's own context.
+
+## Personal Plaid history backfill investigation (real accounts, temp function)
+
+User asked whether disconnect+reconnect would pull more transaction
+history. Built a TEMPORARY edge function (`backfill-temp`, deployed then
+retired to an inert 410 stub — never committed to this repo) that
+decrypted the real Plaid access tokens and called `/transactions/get`
+directly across a wide date range for both real connections (Chase,
+Venmo), reusing the existing tested ingestion primitives
+(`keel_worker_record_raw_event` → manually enqueued `promote_raw_event`
+job → the already-deployed worker's `processPromoteJob`/
+`keel_worker_apply_promotion`) rather than reimplementing ledger logic.
+
+First pass concluded "nothing more exists" — wrong conclusion, caught on
+follow-up. Both connections were linked July 13–14 (days before this
+session), and their synced history only goes back to ~April 15/16 — almost
+exactly 90 days. Plaid's Transactions product only pulls the
+`days_requested` window *at Link time*; neither `/transactions/get` nor
+`/transactions/sync` can retroactively pull more for an existing Item
+regardless of which one you call — the earlier assumption that
+`/transactions/get` could reach further back than `/transactions/sync` was
+wrong. `PLAID_TRANSACTIONS_DAYS_REQUESTED` currently defaults to 730 in
+`/connections/link-token` (`supabase/functions/api/index.ts`), so a FRESH
+Link should request the full 2 years — whether that env var was actually
+in effect back on July 13–14 is unknown (link_attempts doesn't log the
+request params).
+
+Resolution: user relinked both accounts (disconnect + fresh Plaid Link)
+to force a new historical pull. This creates a brand-new `connections` row
+with a new `external_ref`/account `external_ref`s — the old connection's
+already-synced `canonical_transactions` are NOT deleted on disconnect, so
+the new connection's initial sync will re-pull the same April–July window
+under a different economic-key namespace (`txn:plaid:<external_ref>:...`),
+i.e. duplicate transactions unless corrected. **Follow-up in progress**:
+match new accounts to old (by name/mask), then VOID (reversal, not
+delete — Law 2) the new connection's transactions that fall inside the old
+connection's already-covered `[earliest_synced, latest_synced]` window per
+account, keeping the old connection's records (with any existing
+categorization/notes/tags) authoritative for that window, and letting the
+new connection own everything before/after it.
+
+## Docket / follow-up (not yet built, flagged by user 2026-07-17)
+
+Connections page UX after a disconnect+relink is bad: the old disconnected
+connection row keeps showing indefinitely (cluttering the list — screen
+showed 4 rows for 2 real institutions after relinking Venmo+Chase), and a
+fresh reconnect of the same institution doesn't detect/merge into the
+existing account record — it just creates a parallel new one. Needs:
+(1) some archival/hide-by-default treatment for `disconnected` connections
+instead of leaving them in the primary list forever, and (2) real
+account-matching on reconnect (by institution + account mask/name, or a
+Plaid `item_id`/`account_id` correlation where available) so relinking the
+same real-world account doesn't silently fork it into a second `accounts`
+row with fresh history and zero prior categorization/notes/tags. Flagged,
+not designed or scoped yet.

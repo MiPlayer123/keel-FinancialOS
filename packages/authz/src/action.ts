@@ -29,6 +29,9 @@ export const WRITE_ACTIONS = [
   'accounts.set_opening_balance',
   'accounts.reanchor_balance',
   'categorization.decide_suggestion',
+  'documents.confirm_upload',
+  'documents.detach',
+  'documents.delete',
 ] as const satisfies readonly CommandName[];
 
 export const EXPORT_ACTIONS = ['admin.export_all'] as const satisfies readonly CommandName[];
@@ -40,6 +43,7 @@ export const READ_ACTIONS = [
   'paychecks.list',
   'reimbursements.list',
   'statements.list',
+  'documents.list_for_target',
   'audit.read',
   ...EXPORT_ACTIONS,
 ] as const;
@@ -79,12 +83,16 @@ export const ACTION_MINIMUM_ROLES = {
   'accounts.set_opening_balance': 'partner',
   'accounts.reanchor_balance': 'partner',
   'categorization.decide_suggestion': 'partner',
+  'documents.confirm_upload': 'partner',
+  'documents.detach': 'partner',
+  'documents.delete': 'partner',
   'ledger.trial_balance': 'viewer',
   'transactions.list': 'viewer',
   'recurring.list': 'viewer',
   'paychecks.list': 'viewer',
   'reimbursements.list':'viewer',
   'statements.list':'viewer',
+  'documents.list_for_target': 'viewer',
   'audit.read': 'viewer',
   'admin.export_all': 'owner',
 } as const satisfies Readonly<Record<Action, MinimumRole>>;

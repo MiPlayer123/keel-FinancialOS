@@ -9,12 +9,14 @@ import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery } from '@/lib/use-keel-query';
 import {
+  fetchEntities,
   keelCommand,
   newId,
   type RecurringSeriesRow,
   type RichTransactionRow,
 } from '@/lib/keel-api';
 import { TxnPicker } from '@/components/keel/txn-picker';
+import { AttachmentsSection } from '@/components/keel/attachments-section';
 import { sha256Hex, parseSignedDollars, minorToDollars } from '@/lib/hash';
 import { relativeDueLabel } from '@/lib/relative-date';
 import { Badge } from '@/components/ui/badge';
@@ -129,6 +131,21 @@ function PaychecksBody() {
   const [creating, setCreating] = useState(false);
   const [prefill, setPrefill] = useState<PaycheckPrefill | null>(null);
   const [openDetail, setOpenDetail] = useState<string | null>(null);
+  // Paychecks have no entity_id of their own; a paystub attachment needs
+  // SOME entity, so the household's first (personal households only ever
+  // have one) stands in — same fallback pattern as the Plaid connect flow.
+  const [entityId, setEntityId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!householdId) return;
+    void fetchEntities(householdId)
+      .then((entities) => {
+        setEntityId(entities[0]?.entityId ?? null);
+      })
+      .catch(() => {
+        setEntityId(null);
+      });
+  }, [householdId]);
 
   // Detected income = recurring INFLOW series (the detector already found
   // the payday cadence); recording stays explicit (suggest→approve).
@@ -264,6 +281,7 @@ function PaychecksBody() {
               }}
               householdId={householdId}
               userId={userId}
+              entityId={entityId}
               onChanged={() => {
                 void refetch();
               }}
@@ -298,6 +316,7 @@ function PaycheckCard({
   onToggle,
   householdId,
   userId,
+  entityId,
   onChanged,
 }: {
   paycheck: PaycheckFull;
@@ -305,6 +324,7 @@ function PaycheckCard({
   onToggle: () => void;
   householdId: string | null;
   userId: string | null;
+  entityId: string | null;
   onChanged: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -370,6 +390,15 @@ function PaycheckCard({
               </div>
             ))}
           </div>
+
+          <AttachmentsSection
+            householdId={householdId}
+            userId={userId}
+            entityId={entityId}
+            targetType="paycheck"
+            targetId={p.paycheckId}
+            kind="receipt"
+          />
 
           {confirming ? (
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end">

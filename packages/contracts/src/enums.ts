@@ -33,6 +33,21 @@ export const BANK_PROVIDERS = ['simulator', 'plaid'] as const;
 export type BankProviderName = (typeof BANK_PROVIDERS)[number];
 export const BankProviderNameSchema = z.enum(BANK_PROVIDERS);
 
+/** Attach-only document feature (no auto-extract/match — see docs/research/RECEIPTS-2026-07-16.md §5 for the deferred full pipeline). */
+export const DOCUMENT_KINDS = ['receipt', 'statement'] as const;
+export type DocumentKind = (typeof DOCUMENT_KINDS)[number];
+export const DocumentKindSchema = z.enum(DOCUMENT_KINDS);
+
+/** What a document can be attached to — exactly one of these per attachment row. */
+export const DOCUMENT_TARGET_TYPES = [
+  'transaction',
+  'paycheck',
+  'reimbursement_claim',
+  'statement',
+] as const;
+export type DocumentTargetType = (typeof DOCUMENT_TARGET_TYPES)[number];
+export const DocumentTargetTypeSchema = z.enum(DOCUMENT_TARGET_TYPES);
+
 /**
  * AI risk ladder (CLAUDE.md Law 10). Confidence routes within a class, never
  * across classes.
