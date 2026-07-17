@@ -31,11 +31,19 @@ Research context (why decisions were made): docs/00–08, 12.
 - Commit small; every commit message references stage/gate + spec section.
 
 ## Repo shape (`INFRA.md` controls)
-`pnpm` monorepo: `apps/web` (Next.js) · `packages/ledger` (pure domain, 100% unit-tested) · `packages/contracts` · `packages/authz` · `packages/imports` · `packages/detectors` · `packages/documents` · `packages/reports` · `packages/ai` · `supabase/migrations` · `supabase/functions/{api,worker,webhook-provider,scheduled}` · `docs/`.
+`pnpm` monorepo: `apps/web` (Next.js) · `packages/ledger` (pure domain, 100% unit-tested) · `packages/contracts` · `packages/authz` · `packages/imports` · `packages/detectors` · `packages/documents` · `packages/reports` · `packages/ai` · `supabase/migrations` · `supabase/functions/{api,worker,webhook-provider,scheduled}` · `docs/` · `docs/harness/` (evidence→plan→slice pipeline) · `design/` (teardown evidence + tokens) · `tests/integration` · `scripts/`. Historical phase plans (PLAN-*, C*-BUILD-SPEC, etc.) live in `docs/archive/` — cited by name elsewhere, superseded in content.
 
 Stage 0–2 uses Supabase CLI/Docker locally and one Supabase Free project in the cloud: Postgres, Auth, Storage, Edge Functions, `pgmq`, and `pg_cron`. There is no `apps/api`, external MCP listener, Redis, Graphile Worker, Fly.io, or Render dependency during these stages. Pure financial packages may not import Supabase, Next.js, provider SDKs, or model SDKs.
 
 The web app may use the publishable key for Auth, function invocation, and explicitly approved reads/uploads. It may never write canonical financial tables directly. User-facing functions use authenticated user JWTs plus KEEL authorization; internal functions use named server secrets. Plaid webhooks are public at the transport layer but must pass Plaid JWT/body-hash verification before ingestion.
+
+## Ops facts (hard-won — do not relearn)
+- Work on a branch and open a PR to `main`; never push `main` directly. Vercel deploys `main` automatically.
+- Before pushing web changes run `cd apps/web && pnpm build` — it runs ESLint, which Vercel enforces. A clean typecheck alone is NOT sufficient; a lint failure silently serves the stale build.
+- Migrations go straight to the live cloud project (user directive 2026-07-13): `source supabase/.env.remote` then `psql "postgresql://postgres@db.<ref>.supabase.co:5432/postgres" -v ON_ERROR_STOP=1 --single-transaction -f <file>`. No local Docker step. There is no migration-history table for manual applies — verify by diffing declared objects against `pg_proc`/`pg_tables`. `CREATE POLICY` is not idempotent; pre-drop guarded by `to_regclass`.
+- Edge functions deploy: `node scripts/build-functions.mjs && supabase functions deploy api worker --project-ref <ref>`.
+- On dependency changes commit the root `pnpm-lock.yaml` or the Vercel build fails.
+- Demo and fixture data must be fictional. Never commit real merchant/employer/payroll strings (a real employer name leaked once and needed a multi-file scrub). Never commit screenshots (`.screenshots/` is gitignored; `design/current/` captures contain real data — do not add more).
 
 ## Quality bars
 - `packages/ledger` 100% line coverage; property tests for invariants (splits conserve, transfers excluded once confirmed, reconciliation locks block writes, lot allocations ≤ lot qty, replay produces one economic history).
