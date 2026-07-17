@@ -551,7 +551,12 @@ export default {
         const result = await plaid.linkTokenCreate(`linktoken:${householdId.data}:${userId}`, {
           user: { client_user_id: userId },
           client_name: 'KEEL',
-          products: splitEnv('PLAID_PRODUCTS', 'transactions'),
+          // S-inv-1b: 'investments' lets Link authorize the Investments
+          // product on new items so the worker's holdings sync
+          // (processRefreshBalances) can call /investments/holdings/get.
+          // Sandbox and existing trial-tier Plaid access both cover this
+          // with no dashboard step; only true production needs one later.
+          products: splitEnv('PLAID_PRODUCTS', 'transactions,investments'),
           country_codes: splitEnv('PLAID_COUNTRY_CODES', 'US'),
           language: 'en',
           ...(Number.isSafeInteger(daysRequested) && daysRequested > 0

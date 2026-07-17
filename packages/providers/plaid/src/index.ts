@@ -4,5 +4,6 @@ export * from './adapter.js';
 export * from './accounts.js';
 export * from './decimal.js';
 export * from './fixtures.js';
+export * from './investments.js';
 export * from './lossless.js';
 export * from './sign.js';
