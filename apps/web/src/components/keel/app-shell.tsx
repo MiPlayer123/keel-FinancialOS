@@ -35,7 +35,14 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { KeelLogo, KeelMark } from '@/components/keel/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { useHousehold } from '@/components/keel/household-context';
-import { fetchAccounts, fetchLedgerKinds, type AccountRow } from '@/lib/keel-api';
+import {
+  fetchAccounts,
+  fetchLedgerKinds,
+  keelQuery,
+  type AccountRow,
+  type TrialBalanceRow,
+} from '@/lib/keel-api';
+import { Money } from '@/components/keel/money';
 import { QuickNav } from '@/components/keel/quick-nav';
 import { ReviewBadge } from '@/components/keel/review-badge';
 
@@ -108,9 +115,51 @@ function NavLinks({
   );
 }
 
+/** Currency shared by the most accounts in a set (ties → first seen). */
+function dominantCurrency(rows: AccountRow[]): string | null {
+  const counts = new Map<string, number>();
+  for (const a of rows) counts.set(a.currency, (counts.get(a.currency) ?? 0) + 1);
+  let best: string | null = null;
+  let bestN = 0;
+  for (const [currency, n] of counts) {
+    if (n > bestN) {
+      best = currency;
+      bestN = n;
+    }
+  }
+  return best;
+}
+
+/**
+ * Σ balances for the dominant currency only — never add across currencies
+ * (Law 4). Returns null when no account in the dominant currency has a known
+ * balance (so the caller omits rather than shows a misleading 0).
+ */
+function currencySubtotal(
+  rows: AccountRow[],
+  byLedger: Map<string, TrialBalanceRow>,
+): { minor: string; currency: string } | null {
+  const currency = dominantCurrency(rows);
+  if (currency === null) return null;
+  let sum = 0n;
+  let any = false;
+  for (const a of rows) {
+    if (a.currency !== currency) continue;
+    const bal = byLedger.get(a.ledgerAccountId);
+    if (!bal) continue;
+    sum += BigInt(bal.balanceMinor || '0');
+    any = true;
+  }
+  return any ? { minor: sum.toString(), currency } : null;
+}
+
 /**
  * Accounts inline in the nav, grouped assets / liabilities — the Quicken
- * left rail. Names only (balances stay on the pages); caps keep the rail calm.
+ * left rail. Each row carries a right-aligned balance, each group header its
+ * subtotal, and net worth is pinned at the foot — the same figures the
+ * Accounts page shows (both read `ledger.trial_balance`, so the rows sum to
+ * the net worth exactly). Caps keep the rail calm; balances hide when the
+ * sidebar is collapsed because the whole subnav is (see NavLinks).
  */
 function SidebarAccounts({
   pathname,
@@ -128,47 +177,90 @@ function SidebarAccounts({
   // navigation — 2026-07-14), this component no longer refetches on its own;
   // without a shared cache key it would show a stale account name/list until
   // the household changed (Codex review, PR #9).
+  // Balances (ledger.trial_balance) ride the same query as the account list so
+  // they refetch/invalidate together and stay under the shared 'keel-query'
+  // cache-key prefix — see the note above and use-keel-query.ts.
   const { data } = useQuery({
     queryKey: ['keel-query', 'sidebar-accounts', householdId],
     queryFn: async () => {
       if (!householdId) throw new Error('sidebar-accounts: disabled (no household)');
-      const [a, k] = await Promise.all([fetchAccounts(householdId), fetchLedgerKinds(householdId)]);
-      return { accounts: a, kinds: k };
+      const [a, k, b] = await Promise.all([
+        fetchAccounts(householdId),
+        fetchLedgerKinds(householdId),
+        keelQuery<TrialBalanceRow>('ledger.trial_balance', householdId),
+      ]);
+      return { accounts: a, kinds: k, balances: b.rows };
     },
     enabled: householdId !== null,
   });
   const accounts = data?.accounts ?? [];
   const kinds = data?.kinds ?? new Map<string, string>();
+  const byLedger = new Map((data?.balances ?? []).map((r) => [r.ledgerAccountId, r]));
 
   if (accounts.length === 0) return null;
-  const assets = accounts.filter((a) => kinds.get(a.ledgerAccountId) !== 'liability');
+  // Mirror the Accounts page's three-way split (asset / liability / other) so
+  // each group subtotal reconciles with that page (review finding); folding
+  // 'other' kinds into Assets made the per-group subtotals disagree.
+  const assets = accounts.filter((a) => kinds.get(a.ledgerAccountId) === 'asset');
   const liabilities = accounts.filter((a) => kinds.get(a.ledgerAccountId) === 'liability');
+  const other = accounts.filter((a) => {
+    const kind = kinds.get(a.ledgerAccountId);
+    return kind !== 'asset' && kind !== 'liability';
+  });
   const CAP = 6;
+
+  // Net worth across every account in the dominant currency. Equals the
+  // Accounts-page net worth for single-currency households (the common case);
+  // for mixed-currency households the rail deliberately shows the dominant
+  // currency only rather than mis-summing across currencies (Law 4).
+  const netWorth = currencySubtotal(accounts, byLedger);
 
   const group = (title: string, rows: AccountRow[]) => {
     if (rows.length === 0) return null;
+    const subtotal = currencySubtotal(rows, byLedger);
     return (
       <div className="mt-1">
-        <p className="px-3 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
-          {title}
-        </p>
+        <div className="flex items-baseline justify-between px-3">
+          <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+            {title}
+          </p>
+          {subtotal ? (
+            <Money
+              amountMinor={subtotal.minor}
+              currency={subtotal.currency}
+              className="text-[10px] text-muted-foreground/70"
+            />
+          ) : null}
+        </div>
         {rows.slice(0, CAP).map((a) => {
           const href = `/dashboard/accounts/${a.id}`;
           const active = pathname === href;
+          const bal = byLedger.get(a.ledgerAccountId);
           return (
             <Link
               key={a.id}
               href={href}
               onClick={() => onNavigate?.()}
               className={cn(
-                'block truncate rounded-md py-1 pl-6 pr-3 text-xs transition-colors',
+                'flex items-center justify-between gap-2 rounded-md py-1 pl-6 pr-3 text-xs transition-colors',
                 active
                   ? 'bg-secondary text-foreground'
                   : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
               )}
               title={a.name}
             >
-              {a.name}
+              <span className="truncate">{a.name}</span>
+              {bal ? (
+                <Money
+                  amountMinor={bal.balanceMinor}
+                  currency={a.currency}
+                  className="shrink-0 text-[11px]"
+                />
+              ) : (
+                // Missing from the read model — a genuine 0 stays a real
+                // balance, so only an absent one shows the em dash.
+                <span className="shrink-0 font-mono text-muted-foreground/70">—</span>
+              )}
             </Link>
           );
         })}
@@ -189,6 +281,22 @@ function SidebarAccounts({
     <div className="mb-1">
       {group('Assets', assets)}
       {group('Liabilities', liabilities)}
+      {group('Other', other)}
+      <div className="mt-1.5 flex items-baseline justify-between border-t border-border/60 px-3 pt-1.5">
+        <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+          Net worth
+        </span>
+        {netWorth ? (
+          <Money
+            amountMinor={netWorth.minor}
+            currency={netWorth.currency}
+            className="text-[11px] font-medium"
+            muteZero={false}
+          />
+        ) : (
+          <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70">—</span>
+        )}
+      </div>
     </div>
   );
 }
