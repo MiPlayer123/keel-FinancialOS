@@ -12,9 +12,11 @@ function link(overrides: Partial<TransferLinkRow>): TransferLinkRow {
     currency: 'USD',
     outTxnId: 'out-1',
     outDescription: 'Transfer out',
+    outAccountId: 'acct-checking',
     outAccountName: 'Checking',
     inTxnId: 'in-1',
     inDescription: 'Transfer in',
+    inAccountId: 'acct-savings',
     inAccountName: 'Savings',
     dayGap: 0,
     ...overrides,
@@ -35,9 +37,9 @@ describe('groupTransfersByAccountPair', () => {
 
   it('keeps distinct account pairs in separate groups, preserving first-seen order', () => {
     const rows = [
-      link({ linkId: 'a', outAccountName: 'Checking', inAccountName: 'Savings' }),
-      link({ linkId: 'b', outAccountName: 'Business Checking', inAccountName: 'Business Savings' }),
-      link({ linkId: 'c', outAccountName: 'Checking', inAccountName: 'Savings' }),
+      link({ linkId: 'a', outAccountId: 'acct-checking', inAccountId: 'acct-savings' }),
+      link({ linkId: 'b', outAccountId: 'acct-biz-checking', inAccountId: 'acct-biz-savings' }),
+      link({ linkId: 'c', outAccountId: 'acct-checking', inAccountId: 'acct-savings' }),
     ];
     const groups = groupTransfersByAccountPair(rows);
     expect(groups).toHaveLength(2);
@@ -47,8 +49,29 @@ describe('groupTransfersByAccountPair', () => {
 
   it('treats the reverse direction as a different pair', () => {
     const rows = [
-      link({ linkId: 'a', outAccountName: 'Checking', inAccountName: 'Savings' }),
-      link({ linkId: 'b', outAccountName: 'Savings', inAccountName: 'Checking' }),
+      link({ linkId: 'a', outAccountId: 'acct-checking', inAccountId: 'acct-savings' }),
+      link({ linkId: 'b', outAccountId: 'acct-savings', inAccountId: 'acct-checking' }),
+    ];
+    const groups = groupTransfersByAccountPair(rows);
+    expect(groups).toHaveLength(2);
+  });
+
+  it('does not merge two different accounts that happen to share a display name', () => {
+    const rows = [
+      link({
+        linkId: 'a',
+        outAccountId: 'acct-personal-checking',
+        outAccountName: 'Checking',
+        inAccountId: 'acct-personal-savings',
+        inAccountName: 'Savings',
+      }),
+      link({
+        linkId: 'b',
+        outAccountId: 'acct-business-checking',
+        outAccountName: 'Checking',
+        inAccountId: 'acct-business-savings',
+        inAccountName: 'Savings',
+      }),
     ];
     const groups = groupTransfersByAccountPair(rows);
     expect(groups).toHaveLength(2);

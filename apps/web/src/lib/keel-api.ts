@@ -528,9 +528,11 @@ export type TransferLinkRow = {
   currency: string;
   outTxnId: string;
   outDescription: string;
+  outAccountId: string;
   outAccountName: string;
   inTxnId: string;
   inDescription: string;
+  inAccountId: string;
   inAccountName: string;
   dayGap: number;
 };
