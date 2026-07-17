@@ -70,6 +70,7 @@ export function AddAccountDialog({ onCreated }: { onCreated: () => void }) {
   // dropdown only appears once a second entity exists.
   const [entities, setEntities] = useState<EntityRow[] | null>(null);
   const [entityId, setEntityId] = useState<string>('');
+  const [creatingEntity, setCreatingEntity] = useState(false);
 
   const spec =
     SUBTYPES.find((s) => s.value === subtype) ??
@@ -239,6 +240,7 @@ export function AddAccountDialog({ onCreated }: { onCreated: () => void }) {
                   onEntityCreated={(created) => {
                     setEntities((prev) => [...(prev ?? []), created]);
                   }}
+                  onCreatingNewChange={setCreatingEntity}
                 />
               ) : (
                 <p className="text-sm text-muted-foreground">Loading…</p>
@@ -256,7 +258,7 @@ export function AddAccountDialog({ onCreated }: { onCreated: () => void }) {
               Cancel
             </Button>
             <Button
-              disabled={busy || name.trim().length === 0}
+              disabled={busy || name.trim().length === 0 || creatingEntity}
               onClick={() => {
                 void create();
               }}

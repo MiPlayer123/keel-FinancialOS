@@ -14,15 +14,36 @@
 -- membership + write-role gate, GUC-based uid resolution for the audit
 -- actor.
 --
--- Deliberately does NOT touch historical journal_postings.entity_id: every
--- posting proc stamps entity_id from the ledger account's entity_id AT
--- POST TIME (see command_procs.sql:189 among others), so it is already a
--- frozen fact about what entity a transaction belonged to when it happened
--- -- rewriting it retroactively would violate source preservation (BC-v2.1
--- Law 9) and could silently change the scope of an already-generated
--- as-of report. Reassigning accounts.entity_id + ledger_accounts.entity_id
--- only changes where NEW activity on this account posts going forward;
--- past history keeps the entity it was actually recorded under.
+-- Historical journal_postings.entity_id is left untouched: every posting
+-- proc stamps entity_id from the ledger account's entity_id AT POST TIME
+-- (see command_procs.sql:189 among others), so that column is a frozen fact
+-- about what entity a transaction belonged to when it happened -- rewriting
+-- it retroactively would violate source preservation (BC-v2.1 Law 9).
+--
+-- IMPORTANT: this does NOT mean reassignment is invisible to reporting.
+-- Entity-scoped reports resolve their account set from accounts.entity_id
+-- (the CURRENT value -- see apps/web/src/lib/report-scope.ts's
+-- scopedAccountIdSet, which filters accounts by entityId and then pulls
+-- every transaction on those accounts, all dates) and never consult
+-- journal_postings.entity_id at all. So reassigning an account
+-- intentionally moves its ENTIRE transaction history -- past and future --
+-- into the new entity's reports. That is the correct behavior for what
+-- this command is *for*: correcting a mis-tagged account (the account was
+-- always really the LLC's; the entity_id was just wrong from day one), not
+-- transferring ownership mid-history. If a future use case needs to split
+-- an account's history at a point in time instead of moving all of it,
+-- that is a different, bigger feature (report scoping would need to key
+-- off journal_postings.entity_id, not accounts.entity_id) -- out of scope
+-- here.
+--
+-- Blocks reassignment when the account has a live (active/paused)
+-- scheduled_transaction whose category belongs to a different entity than
+-- the target: keel_cmd_manual_transaction (called by schedule-enter) hard
+-- rejects a split category outside the account's entity
+-- (manual_transactions.sql: "split category belongs to a different
+-- entity"), so an unguarded reassignment would silently break that
+-- schedule's next auto-enter with an opaque error days or weeks later.
+-- Ended schedules are exempt -- they never fire again.
 create or replace function public.keel_reassign_account_entity(
   p_household_id uuid,
   p_account_id uuid,
@@ -60,8 +81,22 @@ begin
     return;
   end if;
 
+  if exists (
+    select 1
+      from public.scheduled_transactions st
+      join public.ledger_accounts la on la.id = st.category_ledger_account_id
+     where st.account_id = v_row.id
+       and st.status in ('active', 'paused')
+       and la.entity_id <> p_entity_id
+  ) then
+    raise exception
+      'KEEL_INVALID_COMMAND: account has a scheduled transaction whose category belongs to a different entity -- update or clear its category first'
+      using errcode = 'P0009';
+  end if;
+
   update public.accounts set entity_id = p_entity_id where id = v_row.id;
-  update public.ledger_accounts set entity_id = p_entity_id where id = v_row.ledger_account_id;
+  update public.ledger_accounts set entity_id = p_entity_id
+    where id = v_row.ledger_account_id and household_id = p_household_id;
 
   insert into public.audit_log (household_id, actor, action, object_type, object_id, before, after)
   values (p_household_id, jsonb_build_object('kind', 'user', 'userId', v_uid),

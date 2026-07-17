@@ -43,17 +43,28 @@ export function EntityPicker({
   value,
   onChange,
   onEntityCreated,
+  onCreatingNewChange,
 }: {
   householdId: string;
   entities: EntityRow[];
   value: string;
   onChange: (entityId: string) => void;
   onEntityCreated: (entity: EntityRow) => void;
+  /** Fires whenever the inline "create a new entity" sub-form opens/closes,
+   *  so a caller with its own confirm button (e.g. a "Continue"/"Save" in a
+   *  parent dialog) can disable it while an entity is mid-creation — the
+   *  currently-selected `value` is stale by definition until this closes. */
+  onCreatingNewChange?: (creating: boolean) => void;
 }) {
-  const [showNewEntity, setShowNewEntity] = useState(false);
+  const [showNewEntity, setShowNewEntityState] = useState(false);
   const [newEntityName, setNewEntityName] = useState('');
   const [newEntityKind, setNewEntityKind] = useState<EntityKind>('personal');
   const [creating, setCreating] = useState(false);
+
+  function setShowNewEntity(next: boolean) {
+    setShowNewEntityState(next);
+    onCreatingNewChange?.(next);
+  }
 
   async function createNewEntity() {
     if (newEntityName.trim().length === 0) return;
@@ -123,7 +134,7 @@ export function EntityPicker({
             size="sm"
             className="h-auto p-0 text-xs"
             onClick={() => {
-              setShowNewEntity((s) => !s);
+              setShowNewEntity(!showNewEntity);
             }}
           >
             + Add a new entity

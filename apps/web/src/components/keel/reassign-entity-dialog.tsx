@@ -20,8 +20,10 @@ import { Label } from '@/components/ui/label';
  * Move an account (manual or Plaid-connected) to a different entity — the
  * repair path for a connection that landed under the wrong books at connect
  * time (docs/harness/plans/entities-investments-transfers.md, ENTITY-2).
- * Only the account's own scope moves; already-posted history keeps the
- * entity it was actually recorded under (see the migration for why).
+ * Every entity-scoped view resolves from the account's current entity, so
+ * this moves the account's FULL transaction history, not just new activity
+ * — the correct behavior for correcting a mistake (see the migration for
+ * the reasoning and what stays untouched at the raw-ledger level).
  */
 export function ReassignEntityDialog({
   open,
@@ -41,6 +43,7 @@ export function ReassignEntityDialog({
   const [entities, setEntities] = useState<EntityRow[] | null>(null);
   const [entityId, setEntityId] = useState(currentEntityId);
   const [saving, setSaving] = useState(false);
+  const [creatingEntity, setCreatingEntity] = useState(false);
 
   useEffect(() => {
     if (!open || !householdId) return;
@@ -87,8 +90,8 @@ export function ReassignEntityDialog({
         <DialogHeader>
           <DialogTitle>Change entity</DialogTitle>
           <DialogDescription>
-            Move this account to a different entity&apos;s books. New activity posts under the new
-            entity; already-recorded history keeps the entity it happened under.
+            Move this account — and its full transaction history — to a different entity&apos;s
+            books. Use this to correct an account that was connected under the wrong entity.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-1.5">
@@ -102,6 +105,7 @@ export function ReassignEntityDialog({
               onEntityCreated={(created) => {
                 setEntities((prev) => [...(prev ?? []), created]);
               }}
+              onCreatingNewChange={setCreatingEntity}
             />
           ) : (
             <p className="text-sm text-muted-foreground">Loading…</p>
@@ -115,7 +119,7 @@ export function ReassignEntityDialog({
             onClick={() => {
               void save();
             }}
-            disabled={saving || !entityId}
+            disabled={saving || !entityId || creatingEntity}
           >
             {saving ? 'Saving…' : 'Save'}
           </Button>

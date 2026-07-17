@@ -46,6 +46,7 @@ export function PlaidLinkButton({
   const [entities, setEntities] = useState<EntityRow[] | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerEntityId, setPickerEntityId] = useState('');
+  const [pickerCreatingEntity, setPickerCreatingEntity] = useState(false);
 
   const onSuccess = useCallback<PlaidLinkOnSuccess>(
     (publicToken, metadata) => {
@@ -108,8 +109,11 @@ export function PlaidLinkButton({
   async function connect() {
     setBusy(true);
     try {
-      const rows = entities ?? (await fetchEntities(householdId));
-      if (entities === null) setEntities(rows);
+      // Always fetch fresh — a cached list could be stale (an entity
+      // created since the last click, or reassignment work done elsewhere)
+      // and silently pick the wrong entity or skip the picker it should show.
+      const rows = await fetchEntities(householdId);
+      setEntities(rows);
       if (rows.length === 0) {
         toast.error('No entity to attach the connection to. Add one from Accounts first.');
         setBusy(false);
@@ -122,9 +126,8 @@ export function PlaidLinkButton({
       }
       // 2+ entities: which books this connection belongs to isn't obvious —
       // ask instead of silently guessing (BC-v2.1 §9.1 explicit ownership).
-      setPickerEntityId((current) =>
-        rows.some((r) => r.entityId === current) ? current : (first?.entityId ?? ''),
-      );
+      setPickerCreatingEntity(false);
+      setPickerEntityId(first?.entityId ?? '');
       setPickerOpen(true);
       setBusy(false);
     } catch (err) {
@@ -165,6 +168,7 @@ export function PlaidLinkButton({
                 onEntityCreated={(created) => {
                   setEntities((prev) => [...(prev ?? []), created]);
                 }}
+                onCreatingNewChange={setPickerCreatingEntity}
               />
             ) : null}
           </div>
@@ -178,7 +182,7 @@ export function PlaidLinkButton({
               Cancel
             </Button>
             <Button
-              disabled={!pickerEntityId}
+              disabled={!pickerEntityId || pickerCreatingEntity}
               onClick={() => {
                 setPickerOpen(false);
                 void beginPlaidFlow(pickerEntityId);
