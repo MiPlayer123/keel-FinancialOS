@@ -1928,3 +1928,11 @@ read-only with "void and re-enter". Full slice built:
   confirmed-transfer backend guard (keel_categorize_transaction has none
   either; the UI hides both category picker and split editor for confirmed
   transfers — smallest deterministic version, flagged here).
+- CI run 29585819168 hit two unrelated flakes outside this diff: a 404 on
+  02-commands.test.ts (the known cold-boot-race class the ci.yml warmup step
+  targets) and a duplicate `ingestion_skips` row in 08-plaid-sync.test.ts
+  (unrelated to split editing — the unique constraint is
+  (raw_event_id, provider_transaction_id, reason); a second distinct
+  raw_provider_events row for the same webhook page implies the sync worker
+  re-archived under retry/redelivery — a pre-existing webhook-idempotency
+  edge case worth a follow-up slice, not a C7 regression). Re-triggering.
