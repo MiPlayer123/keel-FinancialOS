@@ -19,7 +19,7 @@ export function Reveal({
   delayMs?: number;
   as?: 'div' | 'section';
 }) {
-  const ref = useRef<HTMLDivElement | null>(null);
+  const ref = useRef<HTMLElement | null>(null);
   const [shown, setShown] = useState(false);
 
   useEffect(() => {
@@ -49,7 +49,9 @@ export function Reveal({
 
   return (
     <Tag
-      ref={ref}
+      // data-reveal: a global <noscript> rule forces these visible without JS
+      data-reveal
+      ref={ref as React.Ref<HTMLDivElement>}
       style={delayMs ? { transitionDelay: `${String(delayMs)}ms` } : undefined}
       className={cn(
         'transition-[opacity,transform] duration-700 ease-out will-change-transform',

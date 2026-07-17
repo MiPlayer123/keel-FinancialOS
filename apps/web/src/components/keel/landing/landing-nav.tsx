@@ -36,10 +36,16 @@ export function LandingNav() {
           <KeelLogo />
         </Link>
         <nav className="hidden items-center gap-6 text-sm text-muted-foreground sm:flex">
-          <a href="#principles" className="transition-colors hover:text-foreground">
+          <a
+            href="#principles"
+            className="rounded-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
             Principles
           </a>
-          <a href="#features" className="transition-colors hover:text-foreground">
+          <a
+            href="#features"
+            className="rounded-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
             Features
           </a>
         </nav>

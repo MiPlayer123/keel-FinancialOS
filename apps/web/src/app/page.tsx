@@ -13,7 +13,7 @@ import {
 import { buttonVariants } from '@/components/ui/button';
 import { KeelMark } from '@/components/keel/logo';
 import { RedirectIfAuthed } from '@/components/keel/redirect-if-authed';
-import { HeroMockup } from '@/components/keel/landing/hero-mockup';
+import { HeroMockupLazy } from '@/components/keel/landing/hero-mockup-lazy';
 import { LandingNav } from '@/components/keel/landing/landing-nav';
 import { Reveal } from '@/components/keel/landing/reveal';
 import { cn } from '@/lib/utils';
@@ -72,6 +72,10 @@ const RISK_LADDER = [
 export default function LandingPage() {
   return (
     <div className="flex min-h-dvh flex-col overflow-x-clip">
+      {/* Without JS the reveal-on-scroll content must simply be visible. */}
+      <noscript>
+        <style>{`[data-reveal]{opacity:1 !important;transform:none !important}`}</style>
+      </noscript>
       <RedirectIfAuthed />
       <LandingNav />
 
@@ -85,20 +89,20 @@ export default function LandingPage() {
           />
           <div className="mx-auto w-full max-w-6xl px-6 pb-16 pt-32 sm:pb-24 sm:pt-40">
             <div className="mx-auto max-w-3xl text-center">
-              <p className="animate-in fade-in slide-in-from-bottom-2 fill-mode-backwards inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground duration-700">
+              <p className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:fill-mode-backwards inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground duration-700">
                 <KeelMark className="size-3.5" />
                 Personal + entity finance, on one spine
               </p>
-              <h1 className="animate-in fade-in slide-in-from-bottom-4 fill-mode-backwards mt-6 text-balance text-4xl font-semibold tracking-tight delay-100 duration-700 sm:text-6xl">
+              <h1 className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-4 motion-safe:fill-mode-backwards mt-6 text-balance text-4xl font-semibold tracking-tight delay-100 duration-700 sm:text-6xl">
                 Every dollar,{' '}
                 <span className="text-primary">accounted for.</span>
               </h1>
-              <p className="animate-in fade-in slide-in-from-bottom-4 fill-mode-backwards mx-auto mt-6 max-w-2xl text-balance text-lg leading-relaxed text-muted-foreground delay-200 duration-700">
+              <p className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-4 motion-safe:fill-mode-backwards mx-auto mt-6 max-w-2xl text-balance text-lg leading-relaxed text-muted-foreground delay-200 duration-700">
                 KEEL is a double-entry system of record for everything you and your
                 entities own, owe, earn and spend — with AI that does the tedious
                 parts and asks before it acts.
               </p>
-              <div className="animate-in fade-in slide-in-from-bottom-4 fill-mode-backwards mt-9 flex flex-wrap items-center justify-center gap-3 delay-300 duration-700">
+              <div className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-4 motion-safe:fill-mode-backwards mt-9 flex flex-wrap items-center justify-center gap-3 delay-300 duration-700">
                 <Link href="/login#signup" className={buttonVariants({ size: 'lg' })}>
                   Get started
                   <ArrowRight className="size-4" />
@@ -110,14 +114,14 @@ export default function LandingPage() {
                   Sign in
                 </Link>
               </div>
-              <p className="animate-in fade-in fill-mode-backwards mt-5 flex items-center justify-center gap-1.5 text-xs text-muted-foreground delay-500 duration-700">
-                <ShieldCheck className="size-3.5" />
+              <p className="motion-safe:animate-in motion-safe:fade-in motion-safe:fill-mode-backwards mt-5 flex items-center justify-center gap-1.5 text-xs text-muted-foreground delay-500 duration-700">
+                <ShieldCheck aria-hidden className="size-3.5" />
                 Bank connections via Plaid · your data exports in full, always
               </p>
             </div>
 
             <Reveal className="mx-auto mt-14 max-w-5xl sm:mt-20" delayMs={150}>
-              <HeroMockup />
+              <HeroMockupLazy />
             </Reveal>
           </div>
         </section>
@@ -248,7 +252,7 @@ export default function LandingPage() {
                 </Link>
               </div>
               <p className="mt-5 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-                <Undo2 className="size-3.5" />
+                <Undo2 aria-hidden className="size-3.5" />
                 Every AI write is suggest → approve. Every mutation is audited.
               </p>
             </Reveal>
@@ -266,13 +270,22 @@ export default function LandingPage() {
             your financial system of record
           </span>
           <span className="flex items-center gap-5">
-            <a href="#principles" className="transition-colors hover:text-foreground">
+            <a
+              href="#principles"
+              className="rounded-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
               Principles
             </a>
-            <a href="#features" className="transition-colors hover:text-foreground">
+            <a
+              href="#features"
+              className="rounded-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
               Features
             </a>
-            <Link href="/login" className="transition-colors hover:text-foreground">
+            <Link
+              href="/login"
+              className="rounded-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
               Sign in
             </Link>
           </span>

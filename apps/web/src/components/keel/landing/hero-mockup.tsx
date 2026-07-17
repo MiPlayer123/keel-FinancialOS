@@ -52,7 +52,7 @@ function DemoBadge({ kind }: { kind: 'transfer' | 'split' }) {
 
 export function HeroMockup({ className }: { className?: string }) {
   return (
-    <div aria-hidden className={cn('pointer-events-none select-none', className)}>
+    <div aria-hidden tabIndex={-1} className={cn('pointer-events-none select-none', className)}>
       <div className="overflow-hidden rounded-xl border border-border bg-card shadow-2xl shadow-stone-900/10 dark:shadow-black/40">
         {/* window chrome */}
         <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2.5">
