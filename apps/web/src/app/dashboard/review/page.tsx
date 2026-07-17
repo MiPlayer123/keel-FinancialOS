@@ -17,6 +17,7 @@ import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery } from '@/lib/use-keel-query';
+import { relativeDueLabel } from '@/lib/relative-date';
 import {
   keelCommand,
   newId,
@@ -768,6 +769,9 @@ function SuggestionCard({
             <p className="text-sm text-muted-foreground">
               Next <Money amountMinor={first.expectedAmountMinor} currency={first.currency} /> on{' '}
               <span className="font-mono text-xs">{first.expectedDate}</span>
+              {relativeDueLabel(first.expectedDate, today()) ? (
+                <span> ({relativeDueLabel(first.expectedDate, today())})</span>
+              ) : null}
             </p>
           ) : (
             <p className="text-sm text-muted-foreground">Detected recurring series</p>
@@ -792,7 +796,12 @@ function SuggestionCard({
                       key={occ.occurrenceId}
                       className="flex items-baseline justify-between gap-3"
                     >
-                      <span className="font-mono text-muted-foreground">{occ.expectedDate}</span>
+                      <span className="font-mono text-muted-foreground">
+                        {occ.expectedDate}
+                        {relativeDueLabel(occ.expectedDate, today()) ? (
+                          <> ({relativeDueLabel(occ.expectedDate, today())})</>
+                        ) : null}
+                      </span>
                       <Money amountMinor={occ.expectedAmountMinor} currency={occ.currency} />
                     </li>
                   ))}

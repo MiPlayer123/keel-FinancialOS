@@ -2350,3 +2350,97 @@ closed."
   task brief) — flagged here per protocol, not silently skipped.
 - Deliberately not built (per task scope): no new reconciliation command,
   no changes to the Statements page's own close/reopen flow.
+
+## 2026-07-17 — D-049: C19 relative due dates
+
+Teardown item C19 ("Relative due dates" — `design/TEARDOWN-STATUS-2026-07-17.md`
+row 38, still marked NOT COVERED). That doc is stale: PR #19 (commit
+59823b4, 2026-07-17 01:43) already shipped `relativeDueLabel` /
+`relativeSyncLabel` in `apps/web/src/lib/relative-date.ts` and wired
+`relativeDueLabel` into the Recurring page's next-occurrence line and its
+due-today/overdue/due-soon badges. Audited every other bare due/expected/
+target date in the app (git log + direct read of each candidate page, not
+trusting the ledger doc) before touching anything:
+
+- **Genuine gaps found and fixed** (`relativeDueLabel` applied, no changes to
+  the helper itself):
+  - `apps/web/src/app/dashboard/page.tsx` (Home) — "Projected cash · next 30
+    days" bill list showed bare `MM-DD` with zero relative context; now shows
+    `relativeDueLabel(b.date, todayIso) ?? b.date.slice(5)` (bills are always
+    strictly future per `keel_cash_flow_forecast`'s `> current_date` filter,
+    so "today" never appears here — only tomorrow/in-N-days or the MM-DD
+    fallback beyond +7 days).
+  - `apps/web/src/app/dashboard/paychecks/page.tsx` — "Detected income" card's
+    "next on `{date}`" line (structurally identical to the recurring page's
+    already-fixed pattern) now appends `(relative)` in parens, same
+    absolute-plus-parenthetical convention as recurring. Also collapsed two
+    separate `new Date().toISOString().slice(0, 10)` call sites in that map
+    body into one `todayIso` local (trivial, in-place, not a refactor).
+  - `apps/web/src/app/dashboard/review/page.tsx` — `SuggestionCard`'s "Next
+    … on `{date}`" headline (same pattern) and the `WhyDisclosure` evidence
+    panel's per-occurrence list (Law 11 proof-on-demand surface) both gained
+    the parenthetical relative label; the exact ISO date is never removed,
+    only annotated, so the evidence panel stays reproducible (Law 9).
+  - `apps/web/src/app/dashboard/goals/page.tsx` — goal card's "· by
+    `{targetDate}`" line gained the same parenthetical treatment. In
+    practice this is almost always a no-op (`targetRelative` stays null)
+    because savings/debt target dates are typically months out; it only
+    activates for a goal due within the ±7-day window, which is the correct
+    behavior, not a special case.
+- **Checked and deliberately left alone** (bare dates that are NOT due/
+  expected/target semantics, so a relative label would misrepresent them):
+  `apps/web/src/app/dashboard/paychecks/page.tsx`'s `PaycheckCard` `payDate`
+  (a *recorded* deposit that already happened, not a due date);
+  `apps/web/src/app/dashboard/statements/page.tsx`'s `periodStart`/
+  `periodEnd`/line dates (closed reconciliation periods being reconciled,
+  historical, not upcoming obligations); `apps/web/src/app/dashboard/
+  reimbursements/page.tsx` (no due-date field exists at all). The Needs-
+  attention module (`apps/web/src/lib/needs-attention.ts`) only ever renders
+  an aggregate count ("3 bills due within 7 days") — never an individual
+  bill's date — so there is nothing to attach a label to there.
+- **Noted, not touched** (out of scope for C19): Home's `SyncStatus`
+  component (`apps/web/src/app/dashboard/page.tsx`, local `agoLabel`
+  function) is a third near-duplicate of the sync-freshness concept already
+  consolidated into `relativeSyncLabel` for the Accounts pages under C8
+  (D-043). It predates that slice and was missed. Leaving it alone here —
+  this task is scoped to due-date phrasing (C19), not sync-freshness
+  dedup (C8's own follow-up), and swapping it risks an unrelated visual
+  regression on Home with no test coverage to catch it. Flagged for a
+  future small D-043 follow-up, not silently dropped.
+- **Cutover point** (unchanged from PR #19, reaffirmed rather than
+  re-litigated): relative phrasing inside ±7 days (today / tomorrow / in N
+  days / yesterday / N days ago), absolute ISO beyond that window. This
+  matches how most consumer finance apps phrase near-term due dates and
+  keeps the far-future case honest — a goal target 8 months out reading "in
+  241 days" would be more confusing than informative, and Law 9
+  (reproducible numbers) is best served by absolute dates once the
+  near-term urgency framing no longer helps. No change to
+  `relativeDueLabel`'s implementation or its existing test suite
+  (`apps/web/src/lib/relative-date.test.ts`) was needed — every edge case
+  this task asked for (today, tomorrow, yesterday, N-days-out, N-days-
+  overdue, the ±7-day boundary in both directions, month-crossing, garbage
+  input) was already covered by PR #19's tests. This session only added
+  *consumers* of the existing, already-tested helper.
+- Presentation convention used consistently across all four fixed sites:
+  keep the absolute ISO date/MM-DD visible, append the relative phrase in
+  parens when non-null (`on 2026-07-24 (in 2 days)`) — mirrors the
+  established recurring-page pattern rather than inventing a new one. The
+  one exception is the Home forecast bill list's compact single-column date
+  cell, where the relative label *replaces* the MM-DD (falling back to
+  MM-DD beyond the window) to match that row's existing narrow-column
+  layout — same substitution convention already used by the recurring
+  page's due-soon/overdue badges.
+- Verified: `pnpm typecheck` clean (0 errors); `pnpm lint` clean at 0 errors,
+  4 warnings — identical in file/line/rule to a `git stash` baseline run
+  (three pre-existing `react-hooks/exhaustive-deps` warnings plus one
+  pre-existing unused-eslint-disable in `needs-attention.tsx`, none in files
+  this change touches beyond the pre-existing goals/page.tsx one shifting by
+  one line number for the same pre-existing hook); `pnpm --filter @keel/web
+  exec vitest run` 242/242 green across 13 files. Web-only diff (4 files
+  under `apps/web/src/app/dashboard/`, no migrations, no edge functions) —
+  confirmed before skipping `pnpm test`/`build:functions`. No local
+  Supabase/Docker stack was needed or touched (pure client-side date
+  formatting, Law 3/4 untouched — no money math, no BigInt involved). CI
+  could not run (GitHub Actions minutes exhausted this session) — this full
+  local gate battery is the only verification and is pasted into the PR
+  description per protocol.
