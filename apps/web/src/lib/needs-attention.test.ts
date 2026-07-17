@@ -16,8 +16,15 @@ const EMPTY: NeedsAttentionInput = {
   todayIso: '2026-07-17',
 };
 
-const occ = (expectedDate: string, status = 'expected') =>
-  ({ expectedDate, status, expectedAmountMinor: '-1000', currency: 'USD', occurrenceId: expectedDate }) as never;
+const occ = (expectedDate: string, status = 'expected', matchedTxnId: string | null = null) =>
+  ({
+    expectedDate,
+    status,
+    expectedAmountMinor: '-1000',
+    currency: 'USD',
+    occurrenceId: expectedDate,
+    matchedTxnId,
+  }) as never;
 
 describe('buildNeedsAttention', () => {
   it('returns no rows when everything is zero (module hides)', () => {
@@ -46,7 +53,10 @@ describe('buildNeedsAttention', () => {
         { status: 'confirmed', sign: 'outflow', occurrences: [] },
         { status: 'rejected', sign: 'outflow', occurrences: [] },
       ],
-      transfers: [{ status: 'suggested' }, { status: 'confirmed' }],
+      transfers: [
+        { status: 'suggested', outTxnId: 't1', inTxnId: 't2' },
+        { status: 'confirmed', outTxnId: 't3', inTxnId: 't4' },
+      ],
       categorizations: [
         { status: 'suggested' },
         { status: 'accepted' },
@@ -160,7 +170,7 @@ describe('buildNeedsAttention', () => {
   it('emits rows in fixed order and drops zero-count rows', () => {
     const rows = buildNeedsAttention({
       ...EMPTY,
-      transfers: [{ status: 'suggested' }],
+      transfers: [{ status: 'suggested', outTxnId: 't1', inTxnId: 't2' }],
       connections: [{ status: 'reauth_required' }],
       transactions: [{ categoryName: null }],
     });
@@ -171,9 +181,53 @@ describe('buildNeedsAttention', () => {
   it('uses singular labels at count 1', () => {
     const rows = buildNeedsAttention({
       ...EMPTY,
-      transfers: [{ status: 'suggested' }],
+      transfers: [{ status: 'suggested', outTxnId: 't1', inTxnId: 't2' }],
     });
     expect(rows[0]?.label).toBe('suggestion to review');
+  });
+
+  it('excludes a due-today series with a confirmed transfer link (review r3603814911)', () => {
+    const rows = buildNeedsAttention({
+      ...EMPTY,
+      recurring: [
+        // Matched to txn 'out-1', which a confirmed transfer link claims —
+        // this series is an internal transfer, not a bill.
+        {
+          status: 'confirmed',
+          sign: 'outflow',
+          occurrences: [occ('2026-07-17', 'expected', 'out-1')],
+        } as never,
+        // A genuine bill due today, unmatched — still counts.
+        {
+          status: 'confirmed',
+          sign: 'outflow',
+          occurrences: [occ('2026-07-17')],
+        } as never,
+      ],
+      transfers: [{ status: 'confirmed', outTxnId: 'out-1', inTxnId: 'in-1' }],
+      bills: [],
+      todayIso: '2026-07-17',
+    });
+    const bills = rows.find((r) => r.key === 'bills');
+    expect(bills?.count).toBe(1);
+  });
+
+  it('does NOT exclude a series matched only to a SUGGESTED (unconfirmed) transfer', () => {
+    const rows = buildNeedsAttention({
+      ...EMPTY,
+      recurring: [
+        {
+          status: 'confirmed',
+          sign: 'outflow',
+          occurrences: [occ('2026-07-17', 'expected', 'out-1')],
+        } as never,
+      ],
+      transfers: [{ status: 'suggested', outTxnId: 'out-1', inTxnId: 'in-1' }],
+      bills: [],
+      todayIso: '2026-07-17',
+    });
+    const bills = rows.find((r) => r.key === 'bills');
+    expect(bills?.count).toBe(1);
   });
 });
 

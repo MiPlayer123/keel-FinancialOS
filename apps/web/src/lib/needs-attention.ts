@@ -50,8 +50,10 @@ export type NeedsAttentionInput = {
    *  due-TODAY bills the forecast proc excludes (its window is strictly
    *  after today — review finding r3603384614). */
   recurring: Pick<RecurringSeriesRow, 'status' | 'sign' | 'occurrences'>[] | null;
-  /** transfers.list — same source ReviewBadge counts. */
-  transfers: Pick<TransferLinkRow, 'status'>[] | null;
+  /** transfers.list — same source ReviewBadge counts; outTxnId/inTxnId let
+   *  the due-today supplement exclude internal-transfer series the same way
+   *  keel_cash_flow_forecast does (review finding r3603814911). */
+  transfers: Pick<TransferLinkRow, 'status' | 'outTxnId' | 'inTxnId'>[] | null;
   /** categorization.suggestions — same source ReviewBadge counts. */
   categorizations: Pick<CategorySuggestionRow, 'status'>[] | null;
   /** dashboard.cash_flow_forecast bills (already fetched for Projected cash). */
@@ -88,12 +90,28 @@ export function buildNeedsAttention(input: NeedsAttentionInput): AttentionRow[] 
     countSuggested(input.categorizations);
 
   const horizonIso = addDaysIso(input.todayIso, BILLS_DUE_HORIZON_DAYS);
+  // Same no-double-count rule as keel_cash_flow_forecast: a series with ANY
+  // occurrence matched to a confirmed transfer is an internal transfer, not
+  // a bill (review finding r3603814911) — checked series-wide, not just on
+  // today's occurrence, mirroring the proc's un-dated `exists` check.
+  const confirmedTransferTxnIds = new Set(
+    (input.transfers ?? [])
+      .filter((t) => t.status === 'confirmed')
+      .flatMap((t) => [t.outTxnId, t.inTxnId]),
+  );
   // Forecast bills are strictly future (the proc filters > current_date), so
   // "due within 7 days" would silently exclude the most actionable case —
   // due TODAY. Today's expected recurring outflows fill that gap; the two
   // sources are disjoint by construction (== today vs > today), so no dedupe.
   const dueTodayCount = (input.recurring ?? [])
-    .filter((r) => r.status === 'confirmed' && r.sign === 'outflow')
+    .filter(
+      (r) =>
+        r.status === 'confirmed' &&
+        r.sign === 'outflow' &&
+        !r.occurrences.some(
+          (o) => o.matchedTxnId !== null && confirmedTransferTxnIds.has(o.matchedTxnId),
+        ),
+    )
     .flatMap((r) => r.occurrences)
     .filter((o) => o.status === 'expected' && o.expectedDate === input.todayIso).length;
   const billsCount =
