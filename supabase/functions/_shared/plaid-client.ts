@@ -67,6 +67,7 @@ export interface PlaidClient {
   sandboxPublicTokenCreate(scopeKey: string, requestBody?: Record<string, unknown>): Promise<{ public_token: string }>;
   publicTokenExchange(scopeKey: string, requestBody: { public_token: string }): Promise<{ access_token: string; item_id: string }>;
   accountsGet(scopeKey: string, requestBody: { access_token: string }): Promise<Record<string, unknown>>;
+  investmentsHoldingsGet(scopeKey: string, requestBody: { access_token: string }): Promise<Record<string, unknown>>;
   itemRemove(scopeKey: string, requestBody: { access_token: string }): Promise<boolean>;
 }
 
@@ -276,6 +277,9 @@ export const createPlaidClient = (
 
     accountsGet: (scopeKey, requestBody) =>
       request(scopeKey, 'accounts_get', '/accounts/get', requestBody),
+
+    investmentsHoldingsGet: (scopeKey, requestBody) =>
+      request(scopeKey, 'investments_holdings_get', '/investments/holdings/get', requestBody),
 
     itemRemove: async (scopeKey, requestBody) => {
       let body: Record<string, unknown>;

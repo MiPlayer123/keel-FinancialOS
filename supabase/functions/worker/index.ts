@@ -16,6 +16,7 @@ import {
   DETECTOR_VERSION,
   NORMALIZER_VERSION,
   detectRecurringSeries,
+  mapHoldingsGetToKeel,
   planEvent,
   reconcileSyncBatch,
   type CanonicalTxnView,
@@ -27,6 +28,7 @@ import {
 import { json, mapDbError } from '../_shared/http.ts';
 import { decryptToken, type EncryptedRecord } from '../_shared/credential-crypto.ts';
 import { getKek } from '../_shared/credential-kek.ts';
+import { looksLikeInvestmentAccount } from '../_shared/investment-subtype.ts';
 import {
   createPlaidClient,
   PlaidClientError,
@@ -864,6 +866,7 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
   if (error) return mapDbError(error);
 
   const results: Array<{ connectionId: string; accounts: number; error?: string }> = [];
+  const holdingsResults: Array<{ connectionId: string; holdings: number; error?: string }> = [];
   for (const c of (conns ?? []) as Array<{ id: string; household_id: string }>) {
     try {
       const { data: envData } = await admin.rpc('keel_get_connection_credential_envelope', {
@@ -901,7 +904,7 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
       };
       const { data: dbAccts } = await admin
         .from('accounts')
-        .select('id, external_ref')
+        .select('id, external_ref, subtype')
         .eq('connection_id', c.id);
       const byRef = new Map(
         ((dbAccts ?? []) as Array<{ id: string; external_ref: string | null }>).map((a) => [
@@ -941,6 +944,36 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
         if (!applyErr) applied++;
       }
       results.push({ connectionId: c.id, accounts: applied });
+
+      // S-inv-1b (docs/harness/plans/investments-v1.md): a separate
+      // try/catch, deliberately -- a holdings failure must never mark the
+      // balance refresh (already applied above) as failed, and skipping
+      // the sync call on ANY error (network, parse, RPC) is the safety
+      // rule: keel_worker_sync_holdings does a full replace, so calling it
+      // with a wrong/partial result because of a bug would wipe correct
+      // existing data. Only call it after a clean parse of a clean fetch.
+      const investmentAccounts = ((dbAccts ?? []) as Array<{ subtype: string | null }>).filter(
+        (a) => typeof a.subtype === 'string' && looksLikeInvestmentAccount(a.subtype),
+      );
+      if (investmentAccounts.length > 0) {
+        try {
+          const holdingsBody = await plaid.investmentsHoldingsGet(c.id, { access_token: token });
+          const mapped = mapHoldingsGetToKeel(holdingsBody);
+          const { data: synced, error: syncErr } = await admin.rpc('keel_worker_sync_holdings', {
+            p_household_id: c.household_id,
+            p_connection_id: c.id,
+            p_holdings: mapped.holdings,
+          });
+          if (syncErr) throw new Error(syncErr.message ?? 'holdings sync failed');
+          holdingsResults.push({ connectionId: c.id, holdings: (synced as number | null) ?? 0 });
+        } catch (he) {
+          holdingsResults.push({
+            connectionId: c.id,
+            holdings: 0,
+            error: he instanceof Error ? he.message : 'error',
+          });
+        }
+      }
     } catch (e) {
       results.push({
         connectionId: c.id,
@@ -980,7 +1013,7 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
     classified.push(entry);
   }
 
-  return json(200, { refreshed: results, classified });
+  return json(200, { refreshed: results, holdings: holdingsResults, classified });
 };
 
 export default {

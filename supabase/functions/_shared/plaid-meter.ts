@@ -13,6 +13,7 @@ export type ProviderCallKind =
   | 'item_remove'
   | 'webhook_key_get'
   | 'transactions_sync'
+  | 'investments_holdings_get'
   | 'cron_enqueue_syncs'
   | 'quarantine_capped'
   | 'budget_refused';
