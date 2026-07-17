@@ -266,12 +266,21 @@ export function CategoryPicker({
   categories,
   onPick,
   wide,
+  createEntityId,
 }: {
   row: RichTransactionRow;
   categories: CategoryRow[];
   onPick: (categoryLedgerAccountId: string, categoryName?: string) => void;
   /** Full-width dialog variant; default is the compact ledger-row trigger. */
   wide?: boolean;
+  /**
+   * Pin inline-create to THIS entity. Split rows must pass the transaction's
+   * entity (code review r3603509625): a blank row has no current category to
+   * infer from, and the options[0] fallback can land on the WRONG entity in a
+   * multi-entity household — the server would then reject the save against
+   * the category the user just created.
+   */
+  createEntityId?: string | null;
 }) {
   const { householdId } = useHousehold();
   const [open, setOpen] = useState(false);
@@ -351,9 +360,11 @@ export function CategoryPicker({
     if (name.length === 0) return;
     setCreating(true);
     try {
-      // Same-entity scope: the current category pins the entity; otherwise
-      // the eligible list's entity; null lets the server use its default.
+      // Same-entity scope: an explicit caller pin wins (split rows pass the
+      // transaction's entity); else the current category pins the entity;
+      // else the eligible list's entity; null lets the server use its default.
       const entityId =
+        createEntityId ??
         merged.find((c) => c.ledgerAccountId === currentId)?.entityId ??
         options[0]?.entityId ??
         null;
@@ -691,6 +702,25 @@ export function TxnEditDialog({
   const splitKind: 'income' | 'expense' = row
     ? (row.categoryKind ?? inferKindFromAmount(row.amountMinor))
     : 'expense';
+
+  // The transaction's entity, derived from its current classification (the
+  // rich read model carries no entityId): the single-offset category or any
+  // existing split's category resolves it through the categories list. Split
+  // rows pass this into the picker so inline-create pins to the RIGHT entity
+  // even from a blank row (code review r3603509625).
+  const txnEntityId = useMemo(() => {
+    if (!row) return null;
+    const candidateIds = [
+      row.categoryLedgerAccountId,
+      ...(row.splits ?? []).map((s) => s.categoryLedgerAccountId),
+    ];
+    for (const id of candidateIds) {
+      if (id === null) continue;
+      const entityId = categories.find((c) => c.ledgerAccountId === id)?.entityId;
+      if (entityId) return entityId;
+    }
+    return null;
+  }, [row, categories]);
   const splitRemainder = row && splitRows ? splitRemainderMinor(row.amountMinor, splitRows) : '0';
   const splitSaveReady = row !== null && splitRows !== null && splitsReady(row.amountMinor, splitRows);
   const isExistingSplit = (row?.splits?.length ?? 0) > 0;
@@ -841,6 +871,7 @@ export function TxnEditDialog({
                         }}
                         categories={categories}
                         wide
+                        createEntityId={txnEntityId}
                         onPick={(catId) => {
                           setSplitRowAt(i, { categoryId: catId });
                         }}

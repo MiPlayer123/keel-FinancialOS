@@ -177,6 +177,22 @@ begin
     if v_cat.entity_id <> v_cash.entity_id then
       raise exception 'KEEL_INVALID_COMMAND: split category belongs to a different entity' using errcode = 'P0009';
     end if;
+    -- Direction rule (code review r3603509629): a split category's kind must
+    -- match the transaction's direction — expense categories on a money-out
+    -- (negative cash) transaction, income categories on money-in. Precedent
+    -- followed: the promoter's landing-pad sign convention (negative cash →
+    -- uncategorized_expense; keel_pfc_to_category_key routes by the SAME
+    -- offset kind), keel_apply_rules' rule_kind = txn_kind guard
+    -- (20260713100000 §5b), and the UI's inferKindFromAmount — all define
+    -- direction as sign(cash): negative = expense, positive = income. The UI
+    -- already constrains this; without the server check a direct API caller
+    -- could post an income share onto a cash-out transaction, which the
+    -- split-aware read models would then sum as an income credit (corrupt
+    -- income/expense totals).
+    if v_cat.kind::text <> (case when v_amount < 0 then 'expense' else 'income' end) then
+      raise exception 'KEEL_INVALID_COMMAND: split category direction does not match the transaction'
+        using errcode = 'P0009';
+    end if;
     if v_cat.currency <> v_cash.currency then
       raise exception 'KEEL_CURRENCY_MISMATCH: split currency % on % transaction',
         v_cat.currency, v_cash.currency using errcode = 'P0010';
