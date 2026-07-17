@@ -1409,9 +1409,9 @@ function ReportsBody() {
           <CardContent className="space-y-3">
             <CategoryBarList items={allocation} />
             <p className="pt-1 text-xs text-muted-foreground">
-              What you currently hold across every investment account, by asset class — not a
-              date-range view like the rest of this page. Descriptive only; doesn&apos;t affect net
-              worth (that already comes from each account&apos;s balance).
+              What you currently hold, by asset class (USD holdings only) — not a date-range view
+              like the rest of this page. Descriptive only; doesn&apos;t affect net worth (that
+              already comes from each account&apos;s balance).
             </p>
           </CardContent>
         </Card>
