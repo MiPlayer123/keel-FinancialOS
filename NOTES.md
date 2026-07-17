@@ -1699,3 +1699,105 @@ no tool-use loop yet). Law compliance encoded structurally:
   when no trend exists. (3) 30d pill is always enabled: with <30d of history
   there is nothing shorter to fall back to, and the chart still shows only
   real days.
+## 2026-07-17 — D-041: categorization suggest→approve loop (P0-B core, teardown queue item 1)
+
+Categories were the last silent class-A write: PFC auto-categorization
+(20260712200100/20260713090000) and rule application filed transactions with
+no visible approve step (Laws 2/10 put category assignment in class B).
+Slice makes the loop real without turning off the existing machinery:
+
+- `category_suggestions` (20260717160000): typed suggestion records
+  (source pfc|rule, reason_code, evidence jsonb, status
+  suggested→accepted|dismissed once, unique (household, txn, category,
+  source) so re-detection is idempotent and a dismissed proposal is never
+  re-raised). RLS member-read + keel_api policy pair (grant alone yields
+  zero rows — reanchor ritual); INCLUDED in export (Law 6; same footing as
+  transfer_links) via the keel_export_household wrapper chain
+  (`_pre_category_suggestions`); 008_export inventory updated to 68.
+- `keel_detect_category_suggestions` (keel_api-owned): deterministic — for
+  transactions whose EFFECTIVE category is an Uncategorized landing pad or a
+  plaid_pfc overlay, proposes the rule winner (keel_apply_rules lattice:
+  priority, created_at, id; kind- and entity-safe) else the PFC mapping;
+  rules beat PFC; never suggests the current category; 200-row cap per call.
+  Settled 'user'/'rule' overlays on real categories are never re-litigated.
+- `keel_cmd_decide_category_suggestion`: full envelope (idempotency, actor
+  from JWT, keel_finish_command). Accept replicates the
+  keel_categorize_transaction overlay-upsert effect with source='user' — an
+  approval is a human decision, so the rules engine's never-a-user-row guard
+  now protects it. Dismiss records the decision only.
+- Wiring mirrors transfers exactly: `/categorization/detect` route,
+  `categorization.suggestions` query, command through the dispatch map +
+  contracts payload schema (strict) + authz WRITE_ACTIONS('partner').
+- Review page third section reuses the PR #15 card/WhyDisclosure grammar;
+  raw bank memo, rule pattern or PFC key, and current→suggested change in
+  the Why panel; ReviewBadge now counts pending categorizations (silent-
+  failure contract kept). Deterministic reason lines (categorizationReasonLine)
+  — no invented confidence (Law 9).
+- Deviations/choices logged: (1) "uncategorized" target = effective category
+  pfc_key ∈ uncategorized_* regardless of overlay provenance — a user filing
+  onto the landing pad is still unresolved, and it makes the loop testable
+  through the manual-transaction command (Law 7). (2) Suggestion rows carry
+  no FK to category_rules (evidence keeps ruleId/pattern copy; the read model
+  joins the live rule when it still exists) so rule deletion cannot destroy
+  decision provenance. (3) Existing PFC/rule auto-apply is left running —
+  this slice adds visibility for what they DIDN'T settle; routing sub-
+  threshold confidence away from auto-apply is the follow-up
+  (reviewed/unreviewed txn state + visible "auto" badge, still open on the
+  teardown ledger).
+
+## 2026-07-17 — D-041 cont.: adversarial review fixes (P1-1/P1-2/P2-1/P2-2)
+
+Four findings against ed36b51, fixed in place in the same migration file
+(never deployed, so no follow-up migration):
+- P1-1 detection starvation: `limit 200` applied BEFORE `on conflict do
+  nothing`, so pending/dismissed rows permanently occupied the deterministic
+  ordered prefix — with ≥200 undecided proposals, rows 201+ were never
+  suggested. Fix: anti-join category_suggestions on the FULL unique key
+  before the LIMIT (only genuinely-new proposals consume slots); ON CONFLICT
+  retained as the concurrency backstop.
+- P1-2 stale accept clobbered user decisions (Law 9): decide-accept never
+  re-checked that the overlay was still machine-defaulted, and the read
+  model filtered on status only. Fix: shared predicate ("effective category
+  is an Uncategorized landing pad, or a plaid_pfc overlay") re-checked under
+  the FOR UPDATE in decide-accept (typed P0009 'suggestion is stale' when a
+  user/rule classification settled it) AND mirrored in
+  keel_list_category_suggestions so settled cards drop off Review. pgTAP +
+  integration both cover: user recategorizes after detection → card gone,
+  accept fails P0009, overlay untouched.
+- P2-1 contradictory PFC cards: pfc_proposals joined ALL source links of a
+  canonical transaction (pending + posted with different primaries → two
+  pending cards). Fix: `distinct on (t.txn_id)` ordered (posted first,
+  newest normalized record, id). pgTAP now seeds the contradictory two-link
+  case and asserts exactly one suggestion with the posted record winning.
+- P2-2 reason line asserted a present-tense match from the LIVE rule
+  pattern while proposing the frozen category. Fix: `rulePattern` in the
+  read model is now the FROZEN evidence pattern and the line reads past
+  tense ("Matched your rule '<as-detected>'"); the live pattern rides as
+  `ruleLivePattern` and renders only inside the Why panel, labeled "Rule as
+  of now", and only when it differs.
+
+## 2026-07-17 — D-041 cont. 2: CI round-3 fixes (run 29559262657) — export manifest + admin-read grant
+
+Two integration failures; BOTH root causes differed from the review notes'
+hypotheses (verified against the run's logs):
+- 11-export:210 — the SQL export chain was wired correctly all along (pgTAP
+  008's 68-array snapshot check was green on the same run). What was missing
+  was the TS-side audited export contract: `packages/exports/src/manifest.ts`
+  INCLUDE — the registry the api function's manifest/CSV/JSON writers and the
+  live-table completeness check are built from. Added the
+  category_suggestions entry (11 columns, sortKey id, timestamps
+  created_at/decided_at); manifest + CSV count tests 67→68.
+- 17:162 — the accept path DID write the overlay; the read lied.
+  transaction_categories was created after 20260710210500's ONE-TIME
+  `grant select on all tables to service_role` and never re-granted (the
+  exact trap the transfer_links comment in 20260710210700 documents), so
+  every admin-client overlay read returned 42501, which supabase-js
+  surfaces as data:null. That also invalidates the round-2 diagnosis
+  ("landing-pad manual transactions have no overlay row" — they DO, per
+  20260713100000 §1; the row was just unreadable). Fixes: re-grant SELECT to
+  service_role in 20260717160000; integration overlay reads now THROW on
+  error so a permission failure can never masquerade as "no row"; pgTAP 016
+  gained has_table_privilege regression asserts (transaction_categories +
+  category_suggestions) and an explicit accept-INSERTS-on-absent count
+  assert (pgTAP T1 has no pre-existing overlay, so that path was already
+  proven green — kept explicit now).

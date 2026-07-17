@@ -22,11 +22,14 @@ import {
   keelQuery,
   detectTransfers,
   decideTransfer,
+  detectCategorySuggestions,
+  type CategorySuggestionRow,
   type RecurringSeriesRow,
   type TransferLinkRow,
 } from '@/lib/keel-api';
 import {
   cadenceLabel,
+  categorizationReasonLine,
   recurringReasonLine,
   transferReasonLine,
 } from '@/lib/recurring-evidence';
@@ -58,10 +61,11 @@ function ReviewBody() {
     householdId,
   );
   const transfers = useTransferSuggestions(householdId);
+  const categorizations = useCategorySuggestions(householdId);
 
   const suggested = rows.filter((r) => r.status === 'suggested');
 
-  if (!ready || (loading && transfers.loading)) {
+  if (!ready || (loading && transfers.loading && categorizations.loading)) {
     return (
       <div className="space-y-3">
         {Array.from({ length: 3 }).map((_, i) => (
@@ -73,8 +77,9 @@ function ReviewBody() {
 
   const nothingRecurring = Boolean(error) || suggested.length === 0;
   const nothingTransfers = transfers.suggested.length === 0;
+  const nothingCategorizations = categorizations.suggested.length === 0;
 
-  if (error && nothingTransfers) {
+  if (error && nothingTransfers && nothingCategorizations) {
     return (
       <EmptyState
         icon={<BadgeCheck className="size-6" />}
@@ -84,7 +89,7 @@ function ReviewBody() {
     );
   }
 
-  if (!householdId || (nothingRecurring && nothingTransfers)) {
+  if (!householdId || (nothingRecurring && nothingTransfers && nothingCategorizations)) {
     return (
       <EmptyState
         icon={<BadgeCheck className="size-6" />}
@@ -136,6 +141,29 @@ function ReviewBody() {
           ))}
         </section>
       ) : null}
+
+      {categorizations.suggested.length > 0 ? (
+        <section className="space-y-3">
+          <h2 className="text-sm font-medium text-muted-foreground">
+            Categorizations · {categorizations.suggested.length}
+          </h2>
+          <p className="text-xs text-muted-foreground">
+            Deterministic matches from your rules and the bank&apos;s own categories.
+            Nothing is filed until you accept it.
+          </p>
+          {categorizations.suggested.map((row) => (
+            <CategorizationCard
+              key={row.suggestionId}
+              row={row}
+              householdId={householdId}
+              userId={userId}
+              onDone={() => {
+                void categorizations.refetch();
+              }}
+            />
+          ))}
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -160,6 +188,54 @@ function useTransferSuggestions(householdId: string | null) {
       try {
         await detectTransfers(householdId).catch(() => 0);
         const res = await keelQuery<TransferLinkRow>('transfers.list', householdId);
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- flag flips in cleanup
+        if (active) setRows(res.rows);
+      } catch {
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- flag flips in cleanup
+        if (active) setRows([]);
+      } finally {
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- flag flips in cleanup
+        if (active) setLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [householdId, reload]);
+
+  return {
+    suggested: rows.filter((r) => r.status === 'suggested'),
+    loading,
+    refetch: () => {
+      setReload((n) => n + 1);
+      return Promise.resolve();
+    },
+  };
+}
+
+/**
+ * Detect (deterministic, idempotent) then list categorization suggestions.
+ * Same degrade contract as useTransferSuggestions: any failure renders as an
+ * empty section, never a broken page.
+ */
+function useCategorySuggestions(householdId: string | null) {
+  const [rows, setRows] = useState<CategorySuggestionRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    if (!householdId) {
+      setLoading(false);
+      return;
+    }
+    let active = true;
+    void (async () => {
+      try {
+        await detectCategorySuggestions(householdId).catch(() => 0);
+        const res = await keelQuery<CategorySuggestionRow>(
+          'categorization.suggestions',
+          householdId,
+        );
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- flag flips in cleanup
         if (active) setRows(res.rows);
       } catch {
@@ -335,6 +411,146 @@ function TransferCard({
               <Check className="size-4" />
             )}
             Confirm transfer
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function CategorizationCard({
+  row,
+  householdId,
+  userId,
+  onDone,
+}: {
+  row: CategorySuggestionRow;
+  householdId: string;
+  userId: string | null;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState<null | 'accept' | 'dismiss'>(null);
+  // Raw bank descriptions (not detector fingerprints) — pass through as-is;
+  // the lib's uppercase-only cleanup rule applies naturally.
+  const displayName = merchantDisplayName(row.description);
+  const reasonLine = categorizationReasonLine({
+    reasonCode: row.reasonCode,
+    rulePattern: row.rulePattern,
+    pfcPrimary: row.evidence.pfcPrimary ?? null,
+  });
+
+  async function act(accept: boolean) {
+    if (!userId) return;
+    setBusy(accept ? 'accept' : 'dismiss');
+    try {
+      await keelCommand({
+        commandId: newId(),
+        command: 'categorization.decide_suggestion',
+        // Deterministic per decision: a retry replays, never re-executes.
+        economicEventKey: `catdecide:${row.suggestionId}:${accept ? 'accept' : 'dismiss'}`,
+        actor: { kind: 'user', userId },
+        householdId,
+        payload: { suggestionId: row.suggestionId, accept },
+      });
+      toast.success(
+        accept ? `Filed under ${row.suggestedCategoryName}.` : 'Suggestion dismissed.',
+      );
+      onDone();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Action failed.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Card>
+      <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 space-y-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <p className="truncate font-medium" title={row.originalDescription}>
+              {displayName}
+            </p>
+            <Badge variant="secondary" className="max-w-40 shrink-0">
+              <span className="truncate">{row.suggestedCategoryName}</span>
+            </Badge>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            <Money amountMinor={row.amountMinor} currency={row.currency} /> on{' '}
+            <span className="font-mono text-xs">{row.effectiveDate}</span>
+            {' · '}
+            {row.accountName}
+          </p>
+          {/* Law 11: deterministic reason code — a rule or the bank's PFC, never invented confidence. */}
+          <p className="text-xs text-muted-foreground">{reasonLine}</p>
+          <WhyDisclosure subject={`the ${row.suggestedCategoryName} categorization for ${displayName}`}>
+            <div className="space-y-1.5 rounded-md border border-border bg-muted/30 p-3 text-xs">
+              {/* Raw description reachable without hover (touch parity). */}
+              <p className="break-all text-muted-foreground/80">
+                Bank memo: <span className="font-mono">{row.originalDescription}</span>
+              </p>
+              <p className="break-all text-muted-foreground/80">
+                {row.source === 'rule' ? (
+                  <>
+                    {/* FROZEN as-detected pattern (Law 9) — matches the reason line. */}
+                    Matched rule (as detected):{' '}
+                    <span className="font-mono">{row.rulePattern ?? row.evidence.pattern ?? '—'}</span>
+                  </>
+                ) : (
+                  <>
+                    Bank category key:{' '}
+                    <span className="font-mono">{row.evidence.pfcPrimary ?? row.evidence.pfcKey ?? '—'}</span>
+                  </>
+                )}
+              </p>
+              {/* The rule's PRESENT text may only appear here, explicitly
+                  labeled — never in the reason line (adversarial review P2-2). */}
+              {row.source === 'rule' &&
+              row.ruleLivePattern !== null &&
+              row.ruleLivePattern !== (row.rulePattern ?? row.evidence.pattern) ? (
+                <p className="break-all text-muted-foreground/80">
+                  Rule as of now:{' '}
+                  <span className="font-mono">{row.ruleLivePattern}</span>
+                </p>
+              ) : null}
+              <p className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+                {/* Current vs suggested: the change being approved, spelled out. */}
+                <span className="truncate line-through decoration-muted-foreground/60">
+                  {row.currentCategoryName}
+                </span>
+                <ArrowRight className="size-3 shrink-0" aria-hidden />
+                <span className="truncate font-medium text-foreground">
+                  {row.suggestedCategoryName}
+                </span>
+              </p>
+            </div>
+          </WhyDisclosure>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy !== null}
+            onClick={() => {
+              void act(false);
+            }}
+          >
+            {busy === 'dismiss' ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
+            Dismiss
+          </Button>
+          <Button
+            size="sm"
+            disabled={busy !== null}
+            onClick={() => {
+              void act(true);
+            }}
+          >
+            {busy === 'accept' ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Check className="size-4" />
+            )}
+            Accept
           </Button>
         </div>
       </CardContent>

@@ -2,12 +2,18 @@
 
 import { useEffect, useState } from 'react';
 
-import { keelQuery, type RecurringSeriesRow, type TransferLinkRow } from '@/lib/keel-api';
+import {
+  keelQuery,
+  type CategorySuggestionRow,
+  type RecurringSeriesRow,
+  type TransferLinkRow,
+} from '@/lib/keel-api';
 
 /**
- * Pending-review count for the nav (suggested transfers + recurring). Reads
- * the saved household id directly so it works outside HouseholdProvider;
- * silent on any failure — a badge must never break navigation.
+ * Pending-review count for the nav (suggested transfers + recurring +
+ * categorizations). Reads the saved household id directly so it works outside
+ * HouseholdProvider; silent on any failure — a badge must never break
+ * navigation.
  */
 export function ReviewBadge() {
   const [count, setCount] = useState(0);
@@ -19,7 +25,8 @@ export function ReviewBadge() {
     void Promise.allSettled([
       keelQuery<RecurringSeriesRow>('recurring.list', householdId),
       keelQuery<TransferLinkRow>('transfers.list', householdId),
-    ]).then(([recurring, transfers]) => {
+      keelQuery<CategorySuggestionRow>('categorization.suggestions', householdId),
+    ]).then(([recurring, transfers, categorizations]) => {
       if (!active) return;
       let n = 0;
       if (recurring.status === 'fulfilled') {
@@ -27,6 +34,9 @@ export function ReviewBadge() {
       }
       if (transfers.status === 'fulfilled') {
         n += transfers.value.rows.filter((t) => t.status === 'suggested').length;
+      }
+      if (categorizations.status === 'fulfilled') {
+        n += categorizations.value.rows.filter((c) => c.status === 'suggested').length;
       }
       setCount(n);
     });

@@ -127,3 +127,40 @@ export function transferReasonLine(dayGap: number): string {
       : `${String(dayGap)} day${dayGap === 1 ? '' : 's'} apart`;
   return `Same amount · opposite directions · ${timing}`;
 }
+
+/** Human label for a Plaid PFC primary, e.g. "FOOD_AND_DRINK" → "Food and drink". */
+export function pfcPrimaryLabel(pfcPrimary: string): string {
+  const words = pfcPrimary.trim().toLowerCase().split('_').filter(Boolean).join(' ');
+  if (words.length === 0) return 'Unknown';
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/**
+ * Reason-code line for a categorization suggestion (deterministic — the
+ * detector matched a user rule or the bank's own category; no invented
+ * confidence). E.g. "Matched your rule 'blue bottle'" or
+ * "Bank category: Food and drink".
+ *
+ * `rulePattern` must be the FROZEN as-detected pattern from the suggestion's
+ * evidence, and the wording is past tense: the line describes the match that
+ * actually produced the suggestion, not the rule's present-day text (Law 9 —
+ * the rule may have been edited since; the live pattern belongs in the Why
+ * panel, explicitly labeled).
+ */
+export function categorizationReasonLine(input: {
+  reasonCode: string;
+  rulePattern?: string | null;
+  pfcPrimary?: string | null;
+}): string {
+  if (input.reasonCode === 'rule_match') {
+    return input.rulePattern
+      ? `Matched your rule '${input.rulePattern}'`
+      : 'Matched one of your rules';
+  }
+  if (input.reasonCode === 'pfc_mapping') {
+    return input.pfcPrimary
+      ? `Bank category: ${pfcPrimaryLabel(input.pfcPrimary)}`
+      : 'Mapped from the bank category';
+  }
+  return 'Suggested by a deterministic detector';
+}
