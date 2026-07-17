@@ -233,6 +233,17 @@ export const SetOpeningBalancePayloadSchema = z.object({
   asOfDate: IsoDateSchema,
 }).strict();
 
+/**
+ * Re-anchor a synced account's opening balance from provider truth. The client
+ * supplies ONLY the account — the server reads the latest provider balance
+ * snapshot and books a corrected delta so the displayed balance ties to the
+ * bank, no matter how shallow the synced history is (Law 1: no ledger
+ * arithmetic on the client). Reverses any prior opening entry first (Law 2).
+ */
+export const ReanchorBalancePayloadSchema = z.object({
+  accountId: AccountIdSchema,
+}).strict();
+
 export const COMMAND_PAYLOAD_SCHEMAS = {
   'accounts.create': CreateAccountPayloadSchema,
   'ingest.record_raw_event': RecordRawEventPayloadSchema,
@@ -257,6 +268,7 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'transactions.manual_create': ManualTransactionPayloadSchema,
   'transactions.manual_void': ManualVoidPayloadSchema,
   'accounts.set_opening_balance': SetOpeningBalancePayloadSchema,
+  'accounts.reanchor_balance': ReanchorBalancePayloadSchema,
 } as const;
 export type CommandProcedureName = keyof typeof COMMAND_PAYLOAD_SCHEMAS;
 export type CommandName =
