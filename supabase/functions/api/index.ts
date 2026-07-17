@@ -93,6 +93,7 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'transactions.manual_void': 'keel_cmd_manual_void',
   'transactions.set_splits': 'keel_cmd_set_splits',
   'transactions.set_date': 'keel_cmd_set_date',
+  'accounts.dedupe_reconnect': 'keel_cmd_dedupe_reconnect_account',
   'accounts.set_opening_balance': 'keel_cmd_set_opening_balance',
   'accounts.reanchor_balance': 'keel_cmd_reanchor_balance',
   'categorization.decide_suggestion': 'keel_cmd_decide_category_suggestion',
@@ -126,6 +127,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'entities.list': 'keel_list_entities',
   'dashboard.cash_flow_forecast': 'keel_cash_flow_forecast',
   'holdings.list': 'keel_list_holdings',
+  'connections.list_reconnect_matches': 'keel_list_reconnect_matches',
 };
 
 // deno-lint-ignore no-explicit-any

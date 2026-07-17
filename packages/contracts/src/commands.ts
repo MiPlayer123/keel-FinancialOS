@@ -273,6 +273,18 @@ export const SetTransactionDatePayloadSchema = z.object({
 }).strict();
 
 /**
+ * Docket item (disconnect+relink UX): void the NEW account's transactions
+ * that duplicate ones already on an old, now-disconnected account at the
+ * same real-world institution. Does not merge the two account rows (see
+ * 20260718060000) — user-triggered, re-runnable, no-op if nothing new to
+ * dedupe.
+ */
+export const DedupeReconnectAccountPayloadSchema = z.object({
+  newAccountId: AccountIdSchema,
+  oldAccountId: AccountIdSchema,
+}).strict();
+
+/**
  * "As of [date], this account's balance was $X" — a one-time statement that
  * anchors the running balance for a synced account whose transaction history
  * doesn't reach back far enough. balanceMinor is the REAL-WORLD magnitude
@@ -378,6 +390,7 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'transactions.manual_void': ManualVoidPayloadSchema,
   'transactions.set_splits': SetSplitsPayloadSchema,
   'transactions.set_date': SetTransactionDatePayloadSchema,
+  'accounts.dedupe_reconnect': DedupeReconnectAccountPayloadSchema,
   'accounts.set_opening_balance': SetOpeningBalancePayloadSchema,
   'accounts.reanchor_balance': ReanchorBalancePayloadSchema,
   'categorization.decide_suggestion': DecideCategorySuggestionPayloadSchema,

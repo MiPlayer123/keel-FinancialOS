@@ -334,6 +334,52 @@ export async function renameConnection(input: {
   });
 }
 
+/**
+ * A currently-active account that looks like the same real-world account as
+ * an old, now-disconnected one at the same institution (matched by mask, or
+ * by name+subtype when either side lacks a mask). Purely a suggestion —
+ * nothing is merged until dedupeReconnectAccount is explicitly called.
+ */
+export type ReconnectMatchRow = {
+  newAccountId: string;
+  newAccountName: string;
+  oldAccountId: string;
+  oldAccountName: string;
+  oldConnectionId: string;
+  oldConnectionDisplayName: string | null;
+  oldLastSyncedAt: string | null;
+};
+
+export async function fetchReconnectMatches(householdId: string): Promise<ReconnectMatchRow[]> {
+  const result = await keelQuery<ReconnectMatchRow>('connections.list_reconnect_matches', householdId);
+  return result.rows;
+}
+
+/**
+ * Void the new account's transactions that duplicate ones already on the
+ * old (disconnected) account for the overlapping window — the old account's
+ * copies (with any existing categorization) stay authoritative. Does not
+ * merge the two account rows; safe to call more than once.
+ */
+export async function dedupeReconnectAccount(input: {
+  householdId: string;
+  userId: string;
+  newAccountId: string;
+  oldAccountId: string;
+}): Promise<CommandResult> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'accounts.dedupe_reconnect',
+    economicEventKey: `dedupe-reconnect:${input.newAccountId}:${input.oldAccountId}:${newId()}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: {
+      newAccountId: input.newAccountId,
+      oldAccountId: input.oldAccountId,
+    },
+  });
+}
+
 /** Map of ledger_account_id → kind (asset/liability/income/expense/equity), RLS-scoped. */
 export async function fetchLedgerKinds(householdId: string): Promise<Map<string, string>> {
   const { data, error } = await getSupabaseBrowserClient()
