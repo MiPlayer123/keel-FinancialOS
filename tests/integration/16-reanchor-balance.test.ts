@@ -181,11 +181,15 @@ describe('accounts.reanchor_balance', () => {
       expect(await batchSum(svc, effects.batchId)).toBe(0n);
     }
 
-    // Law 2 (audit): the mutation is on the append-only trail.
+    // Law 2 (audit): the mutation is on the append-only trail. keel_finish_command
+    // writes audit_log.action = the COMMAND name (see command_procs.sql); the
+    // domain-event name 'accounts.balance_reanchored' lands in domain_events,
+    // not here (review finding — was asserting the wrong value, which also
+    // short-circuited the idempotency block below).
     const { count: auditCount, error: auditError } = await svc
       .from('audit_log')
       .select('*', { count: 'exact', head: true })
-      .eq('action', 'accounts.balance_reanchored')
+      .eq('action', 'accounts.reanchor_balance')
       .eq('object_id', accountId);
     if (auditError) throw new Error(auditError.message);
     expect(auditCount).toBeGreaterThanOrEqual(1);

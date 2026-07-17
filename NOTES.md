@@ -1569,3 +1569,12 @@ the adversarial pass that nothing was dropped from either side.
   audit row present, idempotent convergence on a second call; plus the deferral
   gate (snapshot-only before first sync, correct anchor after). Contracts/authz
   action vocabulary tests extended for the new command.
+
+## 2026-07-17 — D-036: Wave 1 backfill/re-anchor review fixes
+
+Six-angle-style review of `keel_cmd_reanchor_balance` confirmed the ledger math correct (sign traced on asset/liability, Σ=0 reversal+redelta, replay-convergent, cron-race-safe, authz + Law 1 correct). Four findings, dispositioned:
+- **F1 (CI-blocking, fixed):** integration test asserted `audit_log.action='accounts.balance_reanchored'` — that's the domain-event name (→ domain_events); `keel_finish_command` writes `action` = the COMMAND name `accounts.reanchor_balance`. The runtime audit write was correct; the test was wrong and short-circuited the idempotency assertion after it. Fixed the assertion.
+- **F2 (fixed):** period-lock precheck only covered `current_date`; a prior opening dated in a now-locked period would fail the reversal deep in the loop with a raw trigger error. Added an up-front precheck over the prior openings' effective_dates raising a clear KEEL_PERIOD_LOCKED ("reopen that period before re-anchoring"). Fail-closed either way (Law 2 never bypassed).
+- **F3 (fixed):** snapshot currency was not validated against `ledger_currency` — a foreign-currency provider snapshot would anchor a wrong magnitude (Law 4). Added a currency guard that fails closed; FX re-anchor deferred until an as-of rate + formula version exists (Law 9).
+- **F4 (accepted limitation, documented):** a connection that reaches partial sync then gets stuck (reauth/error) never sets `last_successful_sync_at`, so its accounts are never auto-anchored and display Σ(partial synced window) — a silent wrong-low balance. Recovery is the manual "Fix balance" (re-anchor) button. Acceptable for v1; a later slice may auto-anchor on partial-sync-with-provider-balance or surface a "needs anchoring" nudge.
+- Pre-existing note (not introduced here): the internal `keel_apply_account_balance` snapshot-anchor posts journal batches without an audit_log row; a later slice may route it through the audit trail.

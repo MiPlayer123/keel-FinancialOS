@@ -227,7 +227,7 @@ begin
   -- current_minor is the real-world magnitude the provider reported (positive =
   -- money in the account for an asset, or amount owed for a liability), exactly
   -- as keel_apply_account_balance consumes it.
-  select current_minor, as_of into v_snapshot
+  select current_minor, as_of, currency into v_snapshot
     from public.balance_snapshots
     where household_id = p_household_id and account_id = v_account_id
     order by as_of desc, id desc
@@ -235,6 +235,19 @@ begin
   if not found then
     raise exception
       'KEEL_INVALID_COMMAND: no provider balance snapshot yet; refresh balances before re-anchoring'
+      using errcode = 'P0009';
+  end if;
+
+  -- Currency guard (review finding): the anchor magnitude is booked in the
+  -- ledger account's currency, so a provider snapshot in a different currency
+  -- would silently anchor a foreign amount as if it were the ledger currency
+  -- (Law 4 — never conflate currencies). Fail closed rather than write a wrong
+  -- number; FX re-anchoring is out of scope until an as-of rate + formula
+  -- version exists (Law 9).
+  if v_snapshot.currency is distinct from v_account.ledger_currency then
+    raise exception
+      'KEEL_INVALID_COMMAND: provider balance is in % but the account ledger is in %; cannot re-anchor across currencies',
+      v_snapshot.currency, v_account.ledger_currency
       using errcode = 'P0009';
   end if;
 
@@ -255,6 +268,41 @@ begin
     where entity_id = v_account.entity_id and name = 'Opening Balances' and archived_at is null;
   if v_opening_ledger_id is null then
     raise exception 'KEEL_INVALID_COMMAND: opening balances account missing' using errcode = 'P0009';
+  end if;
+
+  -- Period-lock precheck on the PRIOR openings we're about to reverse (review
+  -- finding). A reversal batch inherits its target's effective_date, and the
+  -- journal_postings trigger enforces the lock on that date — so a prior
+  -- opening dated inside a now-locked period would make the reversal (and the
+  -- whole re-anchor) fail deep in the loop with a raw trigger error. Surface a
+  -- clear, actionable message up front instead (fail closed either way; Law 2
+  -- locks are never bypassed).
+  if exists (
+    select 1
+      from public.journal_batches jb
+      join public.period_locks l
+        on l.household_id = jb.household_id
+       and (l.entity_id is null or l.entity_id = v_account.entity_id)
+       and l.reopened_at is null
+       and jb.effective_date between l.start_date and l.end_date
+     where jb.household_id = p_household_id
+       and jb.canonical_transaction_id is null
+       and jb.reverses_batch_id is null
+       and not exists (
+         select 1 from public.journal_revisions rev where rev.original_batch_id = jb.id
+       )
+       and exists (
+         select 1 from public.journal_postings jp
+         where jp.batch_id = jb.id and jp.ledger_account_id = v_account.ledger_account_id
+       )
+       and exists (
+         select 1 from public.journal_postings jp2
+         where jp2.batch_id = jb.id and jp2.ledger_account_id = v_opening_ledger_id
+       )
+  ) then
+    raise exception
+      'KEEL_PERIOD_LOCKED: a prior opening-balance entry sits in a locked period; reopen that period before re-anchoring this account'
+      using errcode = 'P0003';
   end if;
 
   -- Reverse every currently-live opening-balance marker batch for this ledger
