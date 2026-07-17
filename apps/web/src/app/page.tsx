@@ -28,19 +28,19 @@ const FEATURES = [
   {
     icon: Sparkles,
     title: 'AI that asks first',
-    body: 'Suggestions arrive typed — verdict, confidence, evidence — and wait for your approve. Nothing fuzzy ever touches the arithmetic.',
+    body: 'Every suggestion shows its confidence and its evidence, then waits for your approval. Nothing fuzzy ever touches the math.',
     ladder: true,
     wide: true,
   },
   {
     icon: Building2,
     title: 'Built for entities',
-    body: 'Your personal accounts and your LLC on one spine — cleanly scoped, reported separately, never mixed.',
+    body: 'Your personal accounts and your LLC in one place: cleanly separated, reported separately, never mixed.',
   },
   {
     icon: CalendarClock,
     title: 'Plans that stay honest',
-    body: 'Budgets with rollover, recurring detection, goals and cash-flow forecast — all computed from the ledger, all reproducible.',
+    body: 'Budgets with rollover, recurring bills, goals and a cash-flow forecast, all computed straight from the ledger.',
   },
   {
     icon: BookOpenCheck,
@@ -70,7 +70,7 @@ const JSON_LD = {
   applicationCategory: 'FinanceApplication',
   operatingSystem: 'Web',
   description:
-    'KEEL is an AI-first personal and entity finance system of record: a deterministic double-entry ledger with exact integer money, append-only audited history, undoable changes, full data export (CSV, JSON, QIF, Beancount), and AI that only suggests — every material change waits for user approval.',
+    'KEEL is an AI-first personal and entity finance system of record: a deterministic double-entry ledger with exact integer money, append-only audited history, undoable changes, full data export (CSV, JSON, QIF, Beancount), and AI that only suggests; every material change waits for user approval.',
   featureList: [
     'Double-entry ledger with balanced postings',
     'AI categorization with suggest-and-approve workflow',
@@ -98,27 +98,22 @@ export default function LandingPage() {
       {/* ————— Hero ————— */}
       <main className="flex-1">
         <section className="relative">
-          {/* calm emerald wash behind the hero — never neon */}
+          {/* calm emerald wash behind the hero, never neon */}
           <div
             aria-hidden
             className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[40rem] bg-[radial-gradient(60rem_28rem_at_50%_-4rem,color-mix(in_oklab,var(--primary)_9%,transparent),transparent_70%)]"
           />
           <div className="mx-auto w-full max-w-6xl px-6 pb-16 pt-32 sm:pb-24 sm:pt-40">
             <div className="mx-auto max-w-3xl text-center">
-              <p className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:fill-mode-backwards inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground duration-700">
-                <KeelMark className="size-3.5" />
-                Personal + entity finance, on one spine
-              </p>
-              <h1 className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-4 motion-safe:fill-mode-backwards mt-6 text-balance text-4xl font-semibold tracking-tight delay-100 duration-700 sm:text-6xl">
+              <h1 className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-4 motion-safe:fill-mode-backwards text-balance text-4xl font-semibold tracking-tight duration-700 sm:text-6xl">
                 Every dollar,{' '}
                 <span className="text-primary">accounted for.</span>
               </h1>
-              <p className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-4 motion-safe:fill-mode-backwards mx-auto mt-6 max-w-2xl text-balance text-lg leading-relaxed text-muted-foreground delay-200 duration-700">
-                KEEL is a double-entry system of record for everything you and your
-                entities own, owe, earn and spend — with AI that does the tedious
-                parts and asks before it acts.
+              <p className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-4 motion-safe:fill-mode-backwards mx-auto mt-6 max-w-2xl text-balance text-lg leading-relaxed text-muted-foreground delay-100 duration-700">
+                All of your accounts, spending, and businesses in one place. AI does
+                the busywork and always asks before making changes.
               </p>
-              <div className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-4 motion-safe:fill-mode-backwards mt-9 flex flex-wrap items-center justify-center gap-3 delay-300 duration-700">
+              <div className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-4 motion-safe:fill-mode-backwards mt-9 flex flex-wrap items-center justify-center gap-3 delay-200 duration-700">
                 <Link href="/login#signup" className={buttonVariants({ size: 'lg' })}>
                   Get started
                   <ArrowRight className="size-4" />
@@ -130,9 +125,9 @@ export default function LandingPage() {
                   Sign in
                 </Link>
               </div>
-              <p className="motion-safe:animate-in motion-safe:fade-in motion-safe:fill-mode-backwards mt-5 flex items-center justify-center gap-1.5 text-xs text-muted-foreground delay-500 duration-700">
+              <p className="motion-safe:animate-in motion-safe:fade-in motion-safe:fill-mode-backwards mt-5 flex items-center justify-center gap-1.5 text-xs text-muted-foreground delay-300 duration-700">
                 <ShieldCheck aria-hidden className="size-3.5" />
-                Bank connections via Plaid · your data exports in full, always
+                Banks connect securely through Plaid. Export your data anytime.
               </p>
             </div>
 
@@ -155,7 +150,7 @@ export default function LandingPage() {
               <p className="mt-4 text-pretty leading-relaxed text-muted-foreground">
                 They round with floating point, silently “fix” your history, bury how a
                 number was computed, and hold your data hostage when you want out. You
-                stop trusting the numbers — then you stop opening the app.
+                stop trusting the numbers. Then you stop opening the app.
               </p>
             </Reveal>
             <Reveal delayMs={120}>
@@ -166,8 +161,8 @@ export default function LandingPage() {
                 Built like an accounting system. Feels like a consumer app.
               </h2>
               <p className="mt-4 text-pretty leading-relaxed text-muted-foreground">
-                A deterministic double-entry spine does all the arithmetic. AI works only
-                the fuzzy edges — categorizing, matching, narrating — and every material
+                A deterministic double-entry ledger does all the arithmetic. AI works only
+                the fuzzy edges: categorizing, matching, narrating. Every material
                 suggestion carries its confidence and evidence, then waits for your yes.
                 Every result answers <em>as of when, from which rows, by which formula</em>.
               </p>
@@ -241,7 +236,7 @@ export default function LandingPage() {
               </p>
               <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
                 <Link href="/login#signup" className={buttonVariants({ size: 'lg' })}>
-                  Create your ledger
+                  Get started
                   <ArrowRight className="size-4" />
                 </Link>
                 <Link
@@ -253,7 +248,7 @@ export default function LandingPage() {
               </div>
               <p className="mt-5 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
                 <Undo2 aria-hidden className="size-3.5" />
-                Every AI write is suggest → approve. Every mutation is audited.
+                The AI suggests, you approve. Every change is tracked and undoable.
               </p>
             </Reveal>
           </div>

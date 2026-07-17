@@ -180,7 +180,7 @@ function stripTrailingLocation(input: string): string {
 }
 
 /**
- * NACHA/ACH key:value memos ("ORIG CO NAME:DEEPTUNE CO ENTRY DESCR:PAYROLL
+ * NACHA/ACH key:value memos ("ORIG CO NAME:ACMELABS CO ENTRY DESCR:PAYROLL
  * SEC:PPD ORIG ID:…") carry the counterparty in ORIG CO NAME and the purpose
  * in CO ENTRY DESCR — title-casing the raw boilerplate is worse than useless
  * (live-UI finding). Extract "Company · Purpose" instead; each part is run

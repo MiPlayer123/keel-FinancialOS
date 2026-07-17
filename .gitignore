@@ -45,3 +45,4 @@ supabase/functions/_shared/vendor/
 .claude/*
 !.claude/skills/
 docs/superpowers/
+.screenshots/

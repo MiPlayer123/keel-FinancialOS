@@ -1,7 +1,7 @@
 import { ImageResponse } from 'next/og';
 
 export const runtime = 'edge';
-export const alt = 'KEEL — your financial system of record';
+export const alt = 'KEEL · your financial system of record';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
@@ -48,7 +48,7 @@ export default function OpenGraphImage() {
           <span style={{ color: '#10b981' }}>accounted for.</span>
         </div>
         <div style={{ marginTop: 40, fontSize: 30, color: '#a8a29e', maxWidth: 900 }}>
-          Your financial system of record — a double-entry ledger with AI that asks before it
+          All of your money and your business, in one place, with AI that asks before it
           acts.
         </div>
       </div>
