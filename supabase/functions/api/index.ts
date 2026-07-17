@@ -80,6 +80,7 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'recurring.cancel': 'keel_recurring_cancel',
   'recurring.reject': 'keel_recurring_reject',
   'paychecks.create': 'keel_paycheck_create',
+  'paychecks.edit': 'keel_paycheck_edit',
   'paychecks.reverse': 'keel_paycheck_reverse',
   'paychecks.restore': 'keel_paycheck_restore',
   'reimbursements.create_claim': 'keel_reimbursement_create_claim',

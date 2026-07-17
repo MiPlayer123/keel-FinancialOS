@@ -157,6 +157,14 @@ export const CreatePaycheckPayloadSchema = z.object({
 const PaycheckStatusPayloadSchema = z.object({
   paycheckId: PaycheckIdSchema, reason: z.string().min(1).max(500),
 }).strict();
+// Paychecks are immutable (Law 2) -- "edit" is reverse-the-old +
+// create-the-corrected under one command, not an in-place mutation. Same
+// shape as create, plus which paycheck it replaces; reason is optional
+// (the proc defaults it) since not every correction needs an explanation.
+export const EditPaycheckPayloadSchema = CreatePaycheckPayloadSchema.extend({
+  paycheckId: PaycheckIdSchema,
+  reason: z.string().min(1).max(500).optional(),
+}).strict();
 
 export const CreateReimbursementClaimPayloadSchema=z.object({
   originalTransactionId:CanonicalTransactionIdSchema,counterpartyName:z.string().min(1).max(200),
@@ -365,6 +373,7 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'recurring.cancel': RecurringCancelPayloadSchema,
   'recurring.reject': RecurringRejectPayloadSchema,
   'paychecks.create': CreatePaycheckPayloadSchema,
+  'paychecks.edit': EditPaycheckPayloadSchema,
   'paychecks.reverse': PaycheckStatusPayloadSchema,
   'paychecks.restore': PaycheckStatusPayloadSchema,
   'reimbursements.create_claim':CreateReimbursementClaimPayloadSchema,
