@@ -180,6 +180,45 @@ function stripTrailingLocation(input: string): string {
 }
 
 /**
+ * NACHA/ACH key:value memos ("ORIG CO NAME:DEEPTUNE CO ENTRY DESCR:PAYROLL
+ * SEC:PPD ORIG ID:…") carry the counterparty in ORIG CO NAME and the purpose
+ * in CO ENTRY DESCR — title-casing the raw boilerplate is worse than useless
+ * (live-UI finding). Extract "Company · Purpose" instead; each part is run
+ * back through the normal pipeline for casing.
+ */
+const NACHA_KEY =
+  /\s+(?:CO\s+ENTRY\s+DESCR|ENTRY\s+DESCR|ORIG\s+ID|IND\s+ID|IND\s+NAME|CO\s+ID|SEC|TRN|TRACE#?|EED|TEL|WEB|CCD|PPD|CTX)\s*:/i;
+
+function achDisplayName(s: string): string | undefined {
+  const co = /ORIG\s+CO\s+NAME\s*:\s*(.+)$/i.exec(s);
+  if (!co?.[1]) return undefined;
+  const cutAtNextKey = (v: string): string => {
+    const k = NACHA_KEY.exec(v);
+    return (k ? v.slice(0, k.index) : v).trim();
+  };
+  const company = cutAtNextKey(co[1]);
+  if (company.length === 0) return undefined;
+  const descrMatch = /(?:CO\s+)?ENTRY\s+DESCR\s*:\s*(.+)$/i.exec(s);
+  const descr = descrMatch?.[1] ? cutAtNextKey(descrMatch[1]) : '';
+  const cleanCompany = merchantDisplayName(company);
+  // Generic purposes that add no information next to the company name.
+  const cleanDescr =
+    descr.length > 0 && !/^(?:payment|pymt|purchase|debit|credit|ach)$/i.test(descr)
+      ? merchantDisplayName(descr)
+      : '';
+  return cleanDescr.length > 0 ? `${cleanCompany} · ${cleanDescr}` : cleanCompany;
+}
+
+/**
+ * Memoized wrapper: bank memos repeat heavily and grouped ledger views render
+ * uncapped row lists, so cache cleaned names (review finding — the ~35-regex
+ * pipeline was running per row per render). Pure function + bounded cache
+ * changes nothing about outputs.
+ */
+const displayNameCache = new Map<string, string>();
+const DISPLAY_NAME_CACHE_MAX = 5000;
+
+/**
  * Clean a raw transaction description into a display-friendly merchant name.
  *
  * Never returns an empty string for non-empty input: if cleanup strips
@@ -187,8 +226,21 @@ function stripTrailingLocation(input: string): string {
  * trimmed original is returned instead.
  */
 export function merchantDisplayName(description: string): string {
+  const cached = displayNameCache.get(description);
+  if (cached !== undefined) return cached;
+  const result = computeMerchantDisplayName(description);
+  if (displayNameCache.size >= DISPLAY_NAME_CACHE_MAX) displayNameCache.clear();
+  displayNameCache.set(description, result);
+  return result;
+}
+
+function computeMerchantDisplayName(description: string): string {
   const original = description.trim();
   if (original.length === 0) return original;
+
+  // NACHA key:value memos get structured extraction, not token cleanup.
+  const ach = achDisplayName(original);
+  if (ach !== undefined) return ach;
 
   let s = original;
   let processorFallback: string | undefined;
@@ -215,40 +267,57 @@ export function merchantDisplayName(description: string): string {
     }
   }
 
-  // Mixed upper+lower case reads as human-typed: keep edits minimal there.
-  // Bank memos and detector fingerprints are single-case (ALL CAPS or all
-  // lower), which is where the aggressive stripping is safe.
+  // Three-way casing classification (review findings P1-2/P1-3):
+  //  - mixed upper+lower  → human-typed: minimal edits, no stripping/recase.
+  //  - all-lowercase      → human-typed on mobile OR a detector fingerprint:
+  //                         recase only, never strip (a stripped "trip to
+  //                         boston ma" → "Trip To" is worse than raw).
+  //  - ALL CAPS           → bank feed: the only class where aggressive
+  //                         date/ref/location stripping is safe.
   const humanCased = /[a-z]/.test(s) && /[A-Z]/.test(s);
+  // No lowercase at all → ALL CAPS bank feed OR bare digits/punctuation;
+  // both are machine output and safe to strip aggressively. (Lowercase
+  // machine strings — detector fingerprints — must be .toUpperCase()d by
+  // the CALLER; the lib cannot tell "blue bottle coff ca" from a human's
+  // "trip to boston ma", so lowercase is always treated as human.)
+  const bankCased = !/[a-z]/.test(s);
 
-  // 2. Distinctive noise, safe to remove anywhere.
-  for (const re of DATE_RES) s = s.replace(re, ' ');
-  s = s.replace(PHONE_RE, ' ');
-  s = s.replace(CARD_LAST4_RE, ' ');
-  s = s.replace(STORE_NUMBER_RE, '$1');
-  s = s.replace(HASH_NUMBER_RE, ' ');
+  if (bankCased) {
+    // 2. Distinctive noise (dates, phones, card fragments, store numbers).
+    for (const re of DATE_RES) s = s.replace(re, ' ');
+    s = s.replace(PHONE_RE, ' ');
+    s = s.replace(CARD_LAST4_RE, ' ');
+    s = s.replace(STORE_NUMBER_RE, '$1');
+    s = s.replace(HASH_NUMBER_RE, ' ');
 
-  // 3. Reference-code tokens: 4+ pure digits always; 6+ alphanumeric
-  //    (letters+digits, no lowercase unless the whole string is
-  //    single-case) — "Z12AB34CD", "F32544", "00012345".
-  s = s
-    .split(/\s+/)
-    .filter((token) => {
-      const core = token.replace(/^[*#.,-]+|[*#.,-]+$/g, '');
-      if (/^\d{4,}$/.test(core)) return false;
-      const refShaped =
-        core.length >= 6 &&
-        // No '-' in the charset: hyphenated names ("7-ELEVEN") are names.
-        /^[A-Za-z0-9*]+$/.test(core) &&
-        /\d/.test(core) &&
-        /[A-Za-z]/.test(core);
-      if (refShaped && (!humanCased || !/[a-z]/.test(core))) return false;
-      return true;
-    })
-    .join(' ');
+    // 3. Reference-code tokens: 4+ pure digits; 6+ letter+digit mixes —
+    //    "Z12AB34CD", "F32544", "00012345".
+    s = s
+      .split(/\s+/)
+      .filter((token) => {
+        const core = token.replace(/^[*#.,-]+|[*#.,-]+$/g, '');
+        if (/^\d{4,}$/.test(core)) return false;
+        const refShaped =
+          core.length >= 6 &&
+          // No '-' in the charset: hyphenated names ("7-ELEVEN") are names.
+          /^[A-Za-z0-9*]+$/.test(core) &&
+          /\d/.test(core) &&
+          /[A-Za-z]/.test(core);
+        return !refShaped;
+      })
+      .join(' ');
 
-  // 4. Trailing "CITY ST [US]" — single-case strings only ("Dinner in
-  //    Savannah GA" typed by a human is left alone).
-  if (!humanCased) s = stripTrailingLocation(s);
+    // 4. Trailing "CITY ST [US]".
+    s = stripTrailingLocation(s);
+
+    // 2b. When stripping collapses the memo to a lone generic banking word,
+    //     the number WAS the identity ("CHECK 1042" must not become the same
+    //     row label as every other check — review finding). Fall back to the
+    //     un-stripped form and let recasing handle it.
+    if (/^(?:check|cheque|invoice|transfer|payment|deposit|withdrawal|atm)$/i.test(s.trim())) {
+      s = original;
+    }
+  }
 
   // 5. Tidy separators and whitespace.
   s = s
@@ -260,8 +329,9 @@ export function merchantDisplayName(description: string): string {
   // 6. Never lose information: empty/1-char results fall back.
   if (s.length <= 1) return processorFallback ?? original;
 
-  // 7. Casing: human-cased strings pass through; single-case strings get
-  //    title-cased with brand-aware exceptions.
+  // 7. Casing: mixed-case strings pass through; single-case strings
+  //    (ALL CAPS bank feeds, lowercase fingerprints) get title-cased with
+  //    brand-aware exceptions.
   if (humanCased) return s;
   return s.split(' ').map(recaseToken).join(' ');
 }

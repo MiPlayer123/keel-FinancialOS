@@ -79,17 +79,30 @@ describe('amountsConsistent', () => {
 });
 
 describe('reason lines', () => {
-  it('builds the recurring reason line from real evidence only', () => {
+  it('builds the recurring reason line, honestly worded as projection (Law 9)', () => {
     expect(
       recurringReasonLine({
         sign: 'outflow',
         expectedDates: ['2026-01-01', '2026-01-31', '2026-03-02'],
         amountsMinor: ['-150000', '-150000', '-150000'],
       }),
-    ).toBe('Repeating outflow · monthly · consistent amount');
+    ).toBe('Repeating outflow · projected monthly · consistent projected amount');
     expect(
       recurringReasonLine({ sign: 'inflow', expectedDates: [], amountsMinor: [] }),
     ).toBe('Repeating inflow');
+  });
+  it('labels daily and survives duplicate-date zero gaps (review findings)', () => {
+    expect(cadenceLabel(['2026-01-01', '2026-01-02', '2026-01-03'])).toBe('daily');
+    // A same-day duplicate must not drag the median to 0 and erase the signal.
+    expect(cadenceLabel(['2026-01-01', '2026-01-01', '2026-01-31'])).toBe('monthly');
+    // All-duplicate dates: no gaps at all -> no cadence claim.
+    expect(cadenceLabel(['2026-01-01', '2026-01-01'])).toBeNull();
+  });
+  it('rejects malformed amount strings instead of coercing them to 0n', () => {
+    expect(amountsConsistent(['', '0'])).toBe(false);
+    expect(amountsConsistent(['  ', '0'])).toBe(false);
+    expect(amountsConsistent(['1e2', '100'])).toBe(false);
+    expect(amountsConsistent(['-100', '-100'])).toBe(true);
   });
   it('builds the transfer reason line with day-gap phrasing', () => {
     expect(transferReasonLine(0)).toBe('Same amount · opposite directions · same day');

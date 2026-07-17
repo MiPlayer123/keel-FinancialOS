@@ -190,13 +190,16 @@ function useTransferSuggestions(householdId: string | null) {
  * primitive exists in components/ui, and adding a dep is out of scope).
  * The TLDR/reason line stays visible; evidence renders only when opened.
  */
-function WhyDisclosure({ children }: { children: ReactNode }) {
+function WhyDisclosure({ subject, children }: { subject: string; children: ReactNode }) {
   const [open, setOpen] = useState(false);
   return (
     <div>
       <button
         type="button"
         aria-expanded={open}
+        // N cards render N "Why?" buttons; the label ties each to its card
+        // for screen readers (review finding).
+        aria-label={`Why is ${subject} suggested?`}
         onClick={() => {
           setOpen((o) => !o);
         }}
@@ -256,7 +259,9 @@ function TransferCard({
           </p>
           {/* Law 11: deterministic reason codes from real row fields — no invented confidence. */}
           <p className="text-xs text-muted-foreground">{transferReasonLine(link.dayGap)}</p>
-          <WhyDisclosure>
+          <WhyDisclosure
+            subject={`the ${link.outAccountName} to ${link.inAccountName} transfer`}
+          >
             {/*
              * Evidence table (proof on demand). Limitation: TransferLinkRow
              * carries a single shared effectiveDate + dayGap, not per-side
@@ -276,10 +281,15 @@ function TransferCard({
                   label: 'In',
                   account: link.inAccountName,
                   description: link.inDescription,
+                  // day_gap is symmetric (abs(in − out) in the detector) and
+                  // the row carries only the out side's date — the in side
+                  // may post BEFORE the out side, so never assert a
+                  // direction we don't know (review finding: "+Nd" showed a
+                  // fabricated date in the evidence panel).
                   date:
                     link.dayGap === 0
                       ? link.effectiveDate
-                      : `${link.effectiveDate} +${String(link.dayGap)}d`,
+                      : `${link.effectiveDate} ±${String(link.dayGap)}d`,
                 },
               ].map((side) => (
                 <div key={side.label} className="flex min-w-0 flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-2">
@@ -392,8 +402,11 @@ function SuggestionCard({
           <div className="flex items-center gap-2">
             {/* counterpartyKey is the detector's lowercased fingerprint —
                 render it like a merchant; the raw key stays in the tooltip. */}
+            {/* Fingerprints are lowercase machine strings — uppercase to opt
+                into the lib's aggressive bank-memo cleanup (lowercase is
+                treated as human-typed and left unstripped). */}
             <p className="truncate font-medium" title={series.counterpartyKey}>
-              {merchantDisplayName(series.counterpartyKey)}
+              {merchantDisplayName(series.counterpartyKey.toUpperCase())}
             </p>
             <Badge variant="secondary" className="capitalize">
               {series.sign}
@@ -409,11 +422,17 @@ function SuggestionCard({
           )}
           <p className="text-xs text-muted-foreground">{reasonLine}</p>
           {series.occurrences.length > 0 ? (
-            <WhyDisclosure>
+            <WhyDisclosure subject={`the ${merchantDisplayName(series.counterpartyKey.toUpperCase())} recurring series`}>
               <div className="space-y-1.5 rounded-md border border-border bg-muted/30 p-3 text-xs">
                 <p className="text-muted-foreground">
                   {series.occurrences.length} upcoming projected
-                  {cadence ? ` · ${cadence}` : ''}
+                  {cadence ? ` · projected ${cadence}` : ''}
+                </p>
+                {/* Raw detector fingerprint, reachable without hover — the
+                    title attr on the card name is unreachable on touch
+                    (Law 8/9; review finding). */}
+                <p className="break-all text-muted-foreground/80">
+                  Matched on: <span className="font-mono">{series.counterpartyKey}</span>
                 </p>
                 <ul className="space-y-1">
                   {series.occurrences.map((occ) => (

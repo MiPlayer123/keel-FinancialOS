@@ -60,8 +60,13 @@ export function median(values: readonly number[]): number | null {
  * 84–98 quarterly · otherwise "~every N days". Needs ≥2 valid dates.
  */
 export function cadenceLabel(expectedDates: readonly string[]): string | null {
-  const gap = median(dayGapsBetween(expectedDates));
+  // Duplicate dates produce zero gaps that drag the median to 0 and erase an
+  // obvious cadence (review finding) — a same-day double charge is still the
+  // same series. Zero gaps carry no cadence signal; drop them.
+  const gaps = dayGapsBetween(expectedDates).filter((g) => g > 0);
+  const gap = median(gaps);
   if (gap === null || gap < 1) return null;
+  if (gap === 1) return 'daily';
   if (gap >= 5 && gap <= 9) return 'weekly';
   if (gap >= 11 && gap <= 17) return 'every 2 weeks';
   if (gap >= 23 && gap <= 36) return 'monthly';
@@ -76,18 +81,22 @@ export function cadenceLabel(expectedDates: readonly string[]): string | null {
 export function amountsConsistent(amountsMinor: readonly string[]): boolean {
   const first = amountsMinor[0];
   if (first === undefined) return true;
-  try {
-    const ref = BigInt(first);
-    return amountsMinor.every((a) => BigInt(a) === ref);
-  } catch {
-    // Malformed amount strings: don't claim consistency we can't prove.
-    return false;
-  }
+  // BigInt('') and BigInt('  ') are 0n, so shape-validate BEFORE converting —
+  // otherwise ['', '0'] would "prove" consistency (review finding).
+  if (!amountsMinor.every((a) => /^-?\d+$/.test(a))) return false;
+  const ref = BigInt(first);
+  return amountsMinor.every((a) => BigInt(a) === ref);
 }
 
 /**
  * Reason-code line for a recurring-series suggestion, e.g.
- * "Repeating outflow · monthly · consistent amount".
+ * "Repeating outflow · projected monthly · consistent projected amount".
+ *
+ * The inputs are the detector's PROJECTED occurrences (the contract does not
+ * expose the observed source transactions here), so the wording must say
+ * "projected" — otherwise the line restates the detector's conclusion dressed
+ * as observed history (Law 9: inference is never presented as fact; review
+ * finding).
  */
 export function recurringReasonLine(input: {
   sign: 'inflow' | 'outflow';
@@ -96,9 +105,13 @@ export function recurringReasonLine(input: {
 }): string {
   const parts = [`Repeating ${input.sign}`];
   const cadence = cadenceLabel(input.expectedDates);
-  if (cadence) parts.push(cadence);
+  if (cadence) parts.push(`projected ${cadence}`);
   if (input.amountsMinor.length > 0) {
-    parts.push(amountsConsistent(input.amountsMinor) ? 'consistent amount' : 'varying amounts');
+    parts.push(
+      amountsConsistent(input.amountsMinor)
+        ? 'consistent projected amount'
+        : 'varying projected amounts',
+    );
   }
   return parts.join(' · ');
 }

@@ -54,8 +54,9 @@ const FIXTURES: [memo: string, expected: string][] = [
   ['THE UPS STORE #1701 BOSTON MA', 'The UPS Store'],
   ['BED BATH AND BEYOND 5734 TAMPA FL', 'Bed Bath And Beyond'],
 
-  // Detector fingerprints are lowercased — same cleanup applies.
-  ['sq *blue bottle coff 4155551234 ca', 'Blue Bottle Coff'],
+  // Detector fingerprints are lowercased and must be uppercased by the
+  // caller to opt into aggressive cleanup (lowercase = human-typed here).
+  ['sq *blue bottle coff 4155551234 ca'.toUpperCase(), 'Blue Bottle Coff'],
   ['openai chatgpt', 'OpenAI Chatgpt'],
 
   // Human-typed descriptions pass through essentially unchanged.
@@ -110,5 +111,41 @@ describe('merchantDisplayName', () => {
     for (const memo of nasty) {
       expect(merchantDisplayName(memo).length).toBeGreaterThan(0);
     }
+  });
+
+  it('preserves identifying numbers in human-typed memos (review finding)', () => {
+    // Mixed-case: full pass-through, digits and all.
+    expect(merchantDisplayName('Check #1042')).toBe('Check #1042');
+    expect(merchantDisplayName('Transfer to Chase 05/12')).toBe('Transfer to Chase 05/12');
+    expect(merchantDisplayName('Invoice #38 for deck repair')).toBe('Invoice #38 for deck repair');
+    // ALL-CAPS bank memo where the number IS the identity: recased, kept.
+    expect(merchantDisplayName('CHECK 1042')).toBe('Check 1042');
+  });
+
+  it('recases but never strips all-lowercase memos (review finding)', () => {
+    // Lowercase human typing (mobile) — location words are part of the memo.
+    expect(merchantDisplayName('trip to boston ma')).toBe('Trip To Boston Ma');
+    // Detector fingerprints still read cleanly.
+    expect(merchantDisplayName('netflix')).toBe('Netflix');
+    expect(merchantDisplayName('blue bottle coffee')).toBe('Blue Bottle Coffee');
+  });
+
+  it('extracts company · purpose from NACHA/ACH key:value memos (live-UI finding)', () => {
+    expect(
+      merchantDisplayName(
+        'ORIG CO NAME:DEEPTUNE CO ENTRY DESCR:PAYROLL SEC:PPD ORIG ID:1234567890',
+      ),
+    ).toBe('Deeptune · Payroll');
+    // Generic purposes add nothing next to the company.
+    expect(
+      merchantDisplayName('ORIG CO NAME:COMCAST CO ENTRY DESCR:PAYMENT SEC:WEB'),
+    ).toBe('Comcast');
+    // Company only, no descr key.
+    expect(merchantDisplayName('ORIG CO NAME:VANGUARD SEC:PPD')).toBe('Vanguard');
+    // No ORIG CO NAME → normal pipeline, not the ACH path.
+    expect(merchantDisplayName('ENTRY DESCR:PAYROLL')).not.toContain('·');
+    // Deterministic under the cache: same input, same output, twice.
+    const memo = 'ORIG CO NAME:DEEPTUNE CO ENTRY DESCR:PAYROLL SEC:PPD';
+    expect(merchantDisplayName(memo)).toBe(merchantDisplayName(memo));
   });
 });

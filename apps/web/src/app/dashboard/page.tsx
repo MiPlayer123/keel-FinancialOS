@@ -128,7 +128,10 @@ function agoLabel(iso: string): string {
 }
 
 
-type Insight = { label: string; value: string; detail: string };
+// rawDetail: unabbreviated source string (e.g. the raw bank memo behind a
+// cleaned merchant name) — surfaces in the tooltip so the inference never
+// hides the source (Law 9; review finding).
+type Insight = { label: string; value: string; detail: string; rawDetail?: string };
 
 /**
  * Deterministic pocket insights from data already on the page (Law 1 — no
@@ -185,6 +188,7 @@ function buildInsights(rows: RichTransactionRow[]): Insight[] {
       label: 'Biggest purchase · 7 days',
       value: formatMoney(biggest.amountMinor.replace('-', ''), { currency: biggest.currency }),
       detail: merchantDisplayName(biggest.description).slice(0, 40),
+      rawDetail: biggest.description,
     });
   }
   if (mtd > 0n && prevToSameDay > 0n) {
@@ -208,6 +212,7 @@ function buildInsights(rows: RichTransactionRow[]): Insight[] {
       value: formatMoney(topMerchant[1].toString(), { currency: domCurrency }),
       // Display-only cleanup; aggregation stays keyed on the raw memo.
       detail: merchantDisplayName(topMerchant[0]).slice(0, 40),
+      rawDetail: topMerchant[0],
     });
   }
   return out;
@@ -561,7 +566,7 @@ function HomeBody() {
             <div key={i.label} className="rounded-lg border border-border bg-card px-4 py-3">
               <p className="text-xs text-muted-foreground">{i.label}</p>
               <p className="text-lg font-semibold tabular-nums">{i.value}</p>
-              <p className="truncate text-xs text-muted-foreground" title={i.detail}>
+              <p className="truncate text-xs text-muted-foreground" title={i.rawDetail ?? i.detail}>
                 {i.detail}
               </p>
             </div>

@@ -1608,3 +1608,24 @@ CI (integration job) surfaced that `16-reanchor-balance.test.ts` set up ledger s
 - days_requested=730 confirmed live in link-token creation; existing Plaid items
   keep their shallow window until relinked (Plaid re-initializes history only at
   link time; 730d is Plaid's hard cap regardless).
+
+## 2026-07-17 — D-038: merchant-name + review-evidence slice, adversarial review fixes
+- Two parallel build agents produced the slice; two adversarial review agents
+  (correctness+laws lens, React/UX lens) then attacked commit 9ab1d3d. Findings
+  fixed in the same PR: fabricated "+Nd" in-side date in transfer evidence (now
+  "±Nd" — day_gap is symmetric, direction unknown); human-typed memos with
+  identifying numbers no longer stripped ("Check #1042" passes through;
+  ALL-CAPS "CHECK 1042" keeps its number via a generic-word fallback);
+  all-lowercase strings treated as human-typed (recase only — "trip to boston
+  ma" is no longer location-stripped; fingerprint call sites uppercase to opt
+  into cleanup); dashboard tiles regained raw-memo tooltips (Law 9);
+  "projected" wording on recurring reason lines (Law 9 — projections were
+  reading as observed history); daily-cadence label; zero-gap median guard;
+  amountsConsistent shape-validates before BigInt (''→0n coercion); raw
+  fingerprint surfaced inside the Why panel (hover-only title unreachable on
+  touch); NACHA "ORIG CO NAME:X ENTRY DESCR:Y" memos extracted to "X · Y"
+  (live-UI finding on the founder's real payroll row); merchantDisplayName
+  memoized (bounded cache) for uncapped grouped-ledger renders.
+- Live-UI verification on the real account, before and after the fix pass:
+  no crashes, zero console errors, no 390px horizontal overflow; ACH payroll
+  row renders "Deeptune · Payroll" with the raw memo in the tooltip.
