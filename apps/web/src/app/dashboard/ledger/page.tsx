@@ -30,6 +30,7 @@ import {
 } from '@/lib/keel-api';
 import { merchantDisplayName } from '@/lib/merchant-name';
 import { resolveEditingAfterSave } from '@/lib/txn-edit-guard';
+import { useIsDesktopDetail } from '@/lib/use-desktop-detail';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
 import { ImportCsvDialog } from '@/components/keel/import-csv-dialog';
 import { ManageTagsDialog } from '@/components/keel/manage-tags-dialog';
@@ -132,33 +133,6 @@ function amountMatches(amountMinor: string, q: string): boolean {
     return dollars === String(Number(qd)) && cents.startsWith(qc);
   }
   return dollars === q || abs === q;
-}
-
-/**
- * Master-detail (teardown C6 residual): true only at Tailwind's `lg`
- * breakpoint (1024px), the same width already used for the sidebar's
- * collapse-to-icons split (app-shell.tsx) and the query-timing panel — a
- * side panel needs real desktop width to sit next to the list without
- * squeezing it unreadably; below that, TxnEditDialog's existing modal is the
- * only surface (Law 8: must degrade to a usable single column at 390px).
- * Starts `false` (SSR-safe default matching the mobile modal, same one-time-
- * matchMedia pattern as landing/transaction-story.tsx) and stays reactive to
- * live resize so a real browser resize can flip modes without a reload.
- */
-function useIsDesktopDetail(): boolean {
-  const [isDesktop, setIsDesktop] = useState(false);
-  useEffect(() => {
-    const mql = window.matchMedia('(min-width: 1024px)');
-    setIsDesktop(mql.matches);
-    const onChange = (e: MediaQueryListEvent) => {
-      setIsDesktop(e.matches);
-    };
-    mql.addEventListener('change', onChange);
-    return () => {
-      mql.removeEventListener('change', onChange);
-    };
-  }, []);
-  return isDesktop;
 }
 
 function LedgerTable() {

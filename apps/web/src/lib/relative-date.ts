@@ -50,3 +50,15 @@ export function relativeDueLabel(dateIso: string, todayIso: string): string | nu
   if (days < -1 && days >= -7) return `${String(-days)} days ago`;
   return null;
 }
+
+/**
+ * Compact register date: `MM/DD/YY`, always with a year. A bare `MM-DD` (the
+ * previous register format) is ambiguous the moment history spans more than
+ * one calendar year — exactly what a deep Plaid backfill now routinely
+ * produces — so the year is never dropped, not even for the current year.
+ */
+export function shortDateWithYear(dateIso: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateIso);
+  if (!match?.[1] || !match[2] || !match[3]) return dateIso;
+  return `${match[2]}/${match[3]}/${match[1].slice(2)}`;
+}

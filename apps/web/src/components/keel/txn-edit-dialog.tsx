@@ -54,6 +54,7 @@ import {
 } from '@/lib/category-picker';
 import { maskAccountLabel } from '@/lib/account-label';
 import { merchantDisplayName } from '@/lib/merchant-name';
+import { shortDateWithYear } from '@/lib/relative-date';
 import { isUncategorized } from '@/lib/needs-attention';
 import { isAutoCategorized } from '@/lib/review-state';
 import { useHousehold } from '@/components/keel/household-context';
@@ -143,8 +144,8 @@ export function TxnList({
               {selected.has(t.transactionId) ? <Check className="size-3.5" /> : null}
             </button>
           ) : null}
-          <span className="w-14 shrink-0 font-mono text-xs text-muted-foreground">
-            {t.effectiveDate.slice(5)}
+          <span className="w-16 shrink-0 font-mono text-xs text-muted-foreground">
+            {shortDateWithYear(t.effectiveDate)}
           </span>
           {/* min-w-0 + truncate: the description can never push into the
               category picker or the amount, no matter how long the memo is. */}
@@ -173,20 +174,44 @@ export function TxnList({
                   {isAutoCategorized(t) ? ' · Auto' : ''}
                 </span>
               ) : null}
-              {t.note ? (
-                <span className="text-muted-foreground/80">
-                  {' '}
-                  <StickyNote className="inline size-3 align-[-1px]" aria-label="Note" />{' '}
-                  {t.note.length > 40 ? `${t.note.slice(0, 40)}…` : t.note}
-                </span>
-              ) : null}
-              {(t.tags ?? []).slice(0, 2).map((x) => (
-                <span key={x.tagId} className="text-muted-foreground/80"> #{x.name}</span>
-              ))}
-              {(t.tags?.length ?? 0) > 2 ? (
-                <span className="text-muted-foreground/60"> +{String((t.tags?.length ?? 0) - 2)}</span>
-              ) : null}
             </p>
+            {/* Note/tags get their OWN line rather than trailing the account
+                line above: that line already truncates as a single unit, so a
+                long account/category combo silently swallowed the note+tag
+                content behind the ellipsis with nothing ever visible
+                (review feedback: "even a little overflow" should still show
+                something). A dedicated line means these only compete with
+                each other, never with the account name. */}
+            {t.note || (t.tags?.length ?? 0) > 0 ? (
+              <p className="flex items-center gap-1.5 overflow-hidden text-xs text-muted-foreground/80">
+                {/* Review r3605876939: neither group is allowed a fixed/natural
+                    width anymore — both can shrink and clip on their own, and
+                    the row itself clips as a backstop, so a long note AND long
+                    tag names can never bleed into the amount/category columns
+                    on narrow rows (mobile, or the account page with the 22rem
+                    detail panel open). */}
+                {t.note ? (
+                  <span className="flex min-w-0 shrink items-center gap-1">
+                    <StickyNote className="size-3 shrink-0 align-[-1px]" aria-label="Note" />
+                    <span className="truncate">
+                      {t.note.length > 40 ? `${t.note.slice(0, 40)}…` : t.note}
+                    </span>
+                  </span>
+                ) : null}
+                {(t.tags ?? []).length > 0 ? (
+                  <span className="flex min-w-0 shrink items-center gap-1 truncate">
+                    {(t.tags ?? []).slice(0, 2).map((x) => (
+                      <span key={x.tagId} className="shrink-0">#{x.name}</span>
+                    ))}
+                    {(t.tags?.length ?? 0) > 2 ? (
+                      <span className="shrink-0 text-muted-foreground/60">
+                        +{String((t.tags?.length ?? 0) - 2)}
+                      </span>
+                    ) : null}
+                  </span>
+                ) : null}
+              </p>
+            ) : null}
           </button>
           {t.transferStatus === 'confirmed' ? (
             <Badge

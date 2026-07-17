@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 
 import type { RichTransactionRow } from '@/lib/keel-api';
 import { formatMoney } from '@/lib/money';
+import { shortDateWithYear } from '@/lib/relative-date';
 import {
   Select,
   SelectContent,
@@ -14,7 +15,9 @@ import {
 
 /**
  * Pick one canonical transaction, filtered by direction. Options render as
- * "MM-DD · description · amount" (amount formatted from the BIGINT string).
+ * "MM/DD/YY · description · amount" (amount formatted from the BIGINT
+ * string) — the year is never dropped, since picking the wrong year's
+ * transaction here is a real mistake, not just a display nicety.
  */
 export function TxnPicker({
   rows,
@@ -46,7 +49,7 @@ export function TxnPicker({
       Object.fromEntries(
         options.map((t) => [
           t.transactionId,
-          `${t.effectiveDate.slice(5)} · ${t.description.slice(0, 42)} · ${formatMoney(
+          `${shortDateWithYear(t.effectiveDate)} · ${t.description.slice(0, 42)} · ${formatMoney(
             t.amountMinor,
             { currency: t.currency, signed: true },
           )}`,
@@ -69,7 +72,7 @@ export function TxnPicker({
       <SelectContent>
         {options.map((t) => (
           <SelectItem key={t.transactionId} value={t.transactionId}>
-            {t.effectiveDate.slice(5)} · {t.description.slice(0, 42)} ·{' '}
+            {shortDateWithYear(t.effectiveDate)} · {t.description.slice(0, 42)} ·{' '}
             {formatMoney(t.amountMinor, { currency: t.currency, signed: true })}
           </SelectItem>
         ))}
