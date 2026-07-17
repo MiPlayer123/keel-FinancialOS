@@ -2966,7 +2966,7 @@ that one route's chunk, not the shared bundle.
   inset in the main padding: `pb-[calc(4rem+env(safe-area-inset-bottom))]
   lg:pb-0` (4rem = the prior `pb-16`'s pixel value), so the two paddings
   track each other exactly instead of drifting on notched devices.
-## 2026-07-17 — D-053: C6 residual — master-detail panel
+## 2026-07-17 — D-054: C6 residual — master-detail panel
 
 Teardown item C6 ("Master-detail txn surface") was still `◐` after D-050
 closed the account-mask/status-chip half: the ONE remaining gap was the
@@ -3063,3 +3063,32 @@ this session's established fallback):**
 - No Supabase/Docker stack touched or needed: no migration, no RPC change,
   confirmed by `git diff --stat` showing exactly two files, both under
   `apps/web/src/`.
+- **Migration rename note (unrelated to this slice, convergence-only):**
+  this entry originally numbered itself D-053, colliding with the C17
+  residual entry above (also D-053, opened independently and merged first
+  as #44) — renumbered to D-054, no content change from the renumbering
+  alone.
+- **Review fix (chatgpt-codex-connector, P2):** the master-detail panel
+  lets a user switch straight from transaction A to B with no intermediate
+  close — but `save`/`saveSplits`/`voidTxn`'s completion handlers all called
+  a bare `onSaved()` that unconditionally cleared `editing`. If A's save was
+  still in flight when the user switched to B, A's completion later fired
+  `onSaved()` anyway and closed B's panel, discarding whatever draft the
+  user had started there — a real data-loss path master-detail introduced
+  that never existed for the modal-only surface (a modal blocks the list
+  underneath, so this race was never reachable before this slice).
+  Fixed by keying the completion to the transaction it was actually for:
+  `onSaved` now takes `(txnId: string)` (all three call sites in
+  `TxnEditForm` pass `row.transactionId`), and the Ledger page's
+  `savedEditing` only clears `editing` when the completed save's txnId
+  still matches the currently-open row — a stale completion from a
+  transaction the user has switched away from is ignored, though the list
+  still refetches either way since the underlying save was real. Extracted
+  the one-line decision into a tested pure helper,
+  `apps/web/src/lib/txn-edit-guard.ts`'s `resolveEditingAfterSave` (3 new
+  cases in `txn-edit-guard.test.ts`: matching txnId clears, stale/mismatched
+  txnId is ignored, already-null is a no-op) — this is also the first pure
+  helper this slice needed, so the earlier "no new test file" note above no
+  longer fully holds; `pnpm --filter @keel/web exec vitest run` is
+  288/288 across 18 files (was 273/273 across 16) after this fix, `pnpm
+  typecheck`/`pnpm lint`/`cd apps/web && pnpm build` all re-verified clean.

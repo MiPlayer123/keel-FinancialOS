@@ -593,7 +593,14 @@ type TxnEditFormProps = {
   allTags: TagRow[];
   onTagsMutated: () => void;
   onClose: () => void;
-  onSaved: () => void;
+  /**
+   * Called with the transactionId that just saved/voided/split — NOT a bare
+   * signal — so a caller hosting more than one row over this form's lifetime
+   * (the master-detail panel; teardown C6 review finding) can tell a stale
+   * completion from row A apart from the row currently open, and ignore it
+   * instead of yanking the panel out from under row B's in-progress draft.
+   */
+  onSaved: (txnId: string) => void;
   onRecategorize: (txnId: string, categoryId: string) => void;
   onMerchantSearch: (description: string) => void;
   ref?: Ref<TxnEditFormHandle>;
@@ -762,7 +769,7 @@ function TxnEditForm({
         reason: 'Voided from ledger',
       });
       toast.success('Transaction voided — the reversal is on the books, nothing deleted.');
-      onSaved();
+      onSaved(row.transactionId);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not void the transaction.');
     } finally {
@@ -837,7 +844,7 @@ function TxnEditForm({
           ? `Split across ${String(payload.length)} categories — the original entry stays on the books.`
           : 'Back to a single category — the split was reversed, not erased.',
       );
-      onSaved();
+      onSaved(row.transactionId);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not save the splits.');
     } finally {
@@ -857,7 +864,7 @@ function TxnEditForm({
         note,
       });
       toast.success('Transaction updated.');
-      onSaved();
+      onSaved(row.transactionId);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not save changes.');
     } finally {
@@ -1223,7 +1230,7 @@ export function TxnEditDialog({
   allTags: TagRow[];
   onTagsMutated: () => void;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (txnId: string) => void;
   onRecategorize: (txnId: string, categoryId: string) => void;
   onMerchantSearch: (description: string) => void;
   /**
@@ -1300,7 +1307,7 @@ export function TxnDetailPanel({
   allTags: TagRow[];
   onTagsMutated: () => void;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (txnId: string) => void;
   onRecategorize: (txnId: string, categoryId: string) => void;
   onMerchantSearch: (description: string) => void;
   /** Lets the ledger page pre-flush this panel before switching selection. */

@@ -29,6 +29,7 @@ import {
   type TagRow,
 } from '@/lib/keel-api';
 import { merchantDisplayName } from '@/lib/merchant-name';
+import { resolveEditingAfterSave } from '@/lib/txn-edit-guard';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
 import { ImportCsvDialog } from '@/components/keel/import-csv-dialog';
 import { ManageTagsDialog } from '@/components/keel/manage-tags-dialog';
@@ -497,8 +498,16 @@ function LedgerTable() {
   const closeEditing = () => {
     setEditing(null);
   };
-  const savedEditing = () => {
-    setEditing(null);
+  // Review finding (teardown C6 master-detail): the desktop panel lets a
+  // user switch straight from row A to row B while A's save/void/split-save
+  // is still in flight. If that stale completion unconditionally cleared
+  // `editing`, it would close row B's panel and discard whatever draft the
+  // user had started there — a real data-loss path master-detail introduced
+  // that never existed for the modal-only surface. The list always refetches
+  // (A's change is real and should show up), but `editing` only clears when
+  // the completed save's transactionId is STILL the one currently open.
+  const savedEditing = (txnId: string) => {
+    setEditing((cur) => resolveEditingAfterSave(cur, txnId));
     void refetch();
   };
   const tagsMutatedEditing = () => {
