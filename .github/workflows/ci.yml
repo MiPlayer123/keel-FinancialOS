@@ -82,18 +82,25 @@ jobs:
         # the first test to hit a cold function raced its boot and flaked a
         # transient 404 on main (runs 29552336466 / 29553427394, both green on
         # their PRs). Readiness = all four /health endpoints answer 200.
+        # "Warm" means the function's worker EXECUTED a request — some /health
+        # routes sit behind auth wrappers (api returns 401 unauthenticated), so
+        # any definitive HTTP answer except 404 counts. 404 is exactly the
+        # cold-boot symptom we are guarding against; 000/5xx are gateway
+        # not-ready. (curl -sf treated the 401 as failure and killed run
+        # 29556666882 — the fix that broke the fix.)
         run: |
           supabase functions serve --env-file supabase/functions/.env &
           for fn in api worker webhook-provider scheduled; do
             ok=0
             for i in $(seq 1 30); do
-              if curl -sf "http://127.0.0.1:55321/functions/v1/${fn}/health" > /dev/null; then
-                ok=1; break
-              fi
+              code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:55321/functions/v1/${fn}/health" || echo 000)
+              case "$code" in
+                2*|400|401|403|405) ok=1; break;;
+              esac
               sleep 2
             done
             if [ "$ok" != "1" ]; then
-              echo "::error::function ${fn} never became healthy"; exit 1
+              echo "::error::function ${fn} never answered (last code ${code})"; exit 1
             fi
           done
       - run: pnpm test:integration
