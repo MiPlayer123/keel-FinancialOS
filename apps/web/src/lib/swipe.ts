@@ -36,7 +36,13 @@ export function resolveSwipeDecision(offsetX: number, velocityX: number): SwipeD
   if (absOffset < FLICK_MIN_DISTANCE_PX) return null;
 
   const passedDistance = absOffset >= DISTANCE_THRESHOLD_PX;
-  const passedFlick = Math.abs(velocityX) >= FLICK_VELOCITY_THRESHOLD_PX_PER_S;
+  // Review finding: a flick's velocity must agree in direction with the net
+  // offset — otherwise a drag-right-then-flick-back-left release (e.g.
+  // offsetX=30, velocityX=-800, someone pulling back to cancel) qualified on
+  // |velocity| alone and resolved by the (unrelated) offset sign, filing the
+  // opposite of what the user's final motion meant.
+  const passedFlick =
+    Math.abs(velocityX) >= FLICK_VELOCITY_THRESHOLD_PX_PER_S && Math.sign(velocityX) === Math.sign(offsetX);
   if (!passedDistance && !passedFlick) return null;
 
   return offsetX > 0 ? 'accept' : 'dismiss';

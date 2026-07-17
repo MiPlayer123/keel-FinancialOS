@@ -2947,3 +2947,22 @@ that one route's chunk, not the shared bundle.
   snaps back and disappears via the existing refetch-driven list update,
   matching every other suggestion card's mutation pattern in this session
   rather than introducing new choreography.
+- **Review fixes (two P2 findings, chatgpt-codex-connector):**
+  (1) `resolveSwipeDecision`'s flick path qualified on `|velocityX|` alone
+  with no check that the velocity's DIRECTION agreed with the net offset —
+  a user dragging right ~30px then flicking back left at release
+  (`offsetX=30, velocityX=-800`, a pull-back-to-cancel gesture) still
+  cleared the flick bar and resolved by the (unrelated) offset's sign,
+  filing `accept` for a gesture that meant the opposite. Fixed by requiring
+  `Math.sign(velocityX) === Math.sign(offsetX)` as part of the flick
+  qualification (`swipe.ts`); two new tests in `swipe.test.ts` prove a
+  disagreeing-direction flick now resolves to no-decision (`null`) while an
+  agreeing-direction short flick still resolves as before (no regression).
+  (2) The bottom tab bar's own height grows by
+  `env(safe-area-inset-bottom)` on phones with a home indicator, but
+  `AppShell`'s `<main>` only reserved a flat `pb-16` — on those devices the
+  bar is taller than the reserved padding, so the last row of content could
+  still sit partly hidden under the inset area. Fixed by reserving the same
+  inset in the main padding: `pb-[calc(4rem+env(safe-area-inset-bottom))]
+  lg:pb-0` (4rem = the prior `pb-16`'s pixel value), so the two paddings
+  track each other exactly instead of drifting on notched devices.

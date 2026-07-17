@@ -50,4 +50,18 @@ describe('resolveSwipeDecision', () => {
     expect(resolveSwipeDecision(120, 0.001)).toBe('accept');
     expect(resolveSwipeDecision(-120, -0.001)).toBe('dismiss');
   });
+
+  it('never fires on a flick whose velocity direction disagrees with the net offset (review fix)', () => {
+    // A user drags right 30px (short of the 96px distance bar) then flicks
+    // back left at release — the final motion means "cancel," not "accept."
+    // |velocity| alone used to qualify this as a flick and resolved by the
+    // (unrelated) offset sign, filing the opposite of the user's intent.
+    expect(resolveSwipeDecision(30, -800)).toBeNull();
+    expect(resolveSwipeDecision(-30, 800)).toBeNull();
+  });
+
+  it('still resolves a genuine short flick when velocity direction agrees with the offset', () => {
+    expect(resolveSwipeDecision(30, 800)).toBe('accept');
+    expect(resolveSwipeDecision(-30, -800)).toBe('dismiss');
+  });
 });
