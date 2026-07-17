@@ -11,6 +11,7 @@ import {
   Split,
   StickyNote,
   Trash2,
+  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -19,11 +20,21 @@ import {
   createCategory,
   saveTag,
   overrideTransaction,
+  setTransactionSplits,
   voidManualTransaction,
   type CategoryRow,
   type RichTransactionRow,
   type TagRow,
 } from '@/lib/keel-api';
+import {
+  buildSplitsPayload,
+  hasDuplicateCategories,
+  seedRowsForNewSplit,
+  seedRowsFromSplits,
+  splitRemainderMinor,
+  splitsReady,
+  type SplitDraftRow,
+} from '@/lib/split-editor';
 import {
   groupForPicker,
   hasExactName,
@@ -528,6 +539,14 @@ export function TxnEditDialog({
   // category until close, so old→new stays visible (teardown C4: the change
   // you just made is legible, not silent).
   const [picked, setPicked] = useState<{ id: string; name: string } | null>(null);
+  // Split editor rows (teardown C7): null = not splitting (single-category
+  // picker shown); non-null = editable rows whose "Left to split" remainder
+  // must reach exactly 0 before Save splits enables (Law 3 made visible).
+  const [splitRows, setSplitRows] = useState<SplitDraftRow[] | null>(null);
+  const [splitBusy, setSplitBusy] = useState(false);
+  // One idempotency key per dialog session: a retry after a timeout REPLAYS
+  // the same revision instead of double-revising (invariant 3).
+  const [splitAttemptKey, setSplitAttemptKey] = useState(() => crypto.randomUUID());
   // Optimistic tag state for THIS row; parent data refreshes on close.
   const [rowTags, setRowTags] = useState<{ tagId: string; name: string }[]>([]);
   const [createdTags, setCreatedTags] = useState<TagRow[]>([]);
@@ -561,6 +580,12 @@ export function TxnEditDialog({
     setNote(row.note ?? '');
     setVoiding(false);
     setPicked(null);
+    // Multi-split rows open straight into the editor, seeded from the real
+    // postings; single-category rows start in picker mode with a "Split…"
+    // affordance.
+    setSplitRows(row.splits && row.splits.length > 0 ? seedRowsFromSplits(row.splits) : null);
+    setSplitBusy(false);
+    setSplitAttemptKey(crypto.randomUUID());
     setRowTags(row.tags ?? []);
     setCreatedTags([]);
     setNewTag('');
@@ -661,6 +686,59 @@ export function TxnEditDialog({
     [categories, row],
   );
 
+  // Split direction follows the cash sign (expense = money out); every split
+  // row offers categories of that one kind, same as manual entry.
+  const splitKind: 'income' | 'expense' = row
+    ? (row.categoryKind ?? inferKindFromAmount(row.amountMinor))
+    : 'expense';
+  const splitRemainder = row && splitRows ? splitRemainderMinor(row.amountMinor, splitRows) : '0';
+  const splitSaveReady = row !== null && splitRows !== null && splitsReady(row.amountMinor, splitRows);
+  const isExistingSplit = (row?.splits?.length ?? 0) > 0;
+
+  function splitCategoryName(categoryId: string | null): string | null {
+    if (categoryId === null) return null;
+    return (
+      categories.find((c) => c.ledgerAccountId === categoryId)?.name ??
+      row?.splits?.find((s) => s.categoryLedgerAccountId === categoryId)?.name ??
+      null
+    );
+  }
+
+  function setSplitRowAt(i: number, patch: Partial<SplitDraftRow>) {
+    setSplitRows((prev) =>
+      prev ? prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)) : prev,
+    );
+  }
+
+  async function saveSplits() {
+    if (!row || !householdId || !userId || !splitRows) return;
+    // BigInt on integer strings end to end — the payload only exists when the
+    // remainder is exactly 0 (Law 3/4; the server re-verifies Σ=0 either way).
+    const payload = buildSplitsPayload(row.amountMinor, splitRows);
+    if (!payload) return;
+    setSplitBusy(true);
+    try {
+      await setTransactionSplits({
+        householdId,
+        userId,
+        transactionId: row.transactionId,
+        amountMinor: row.amountMinor,
+        splits: payload,
+        attemptKey: splitAttemptKey,
+      });
+      toast.success(
+        payload.length > 1
+          ? `Split across ${String(payload.length)} categories — the original entry stays on the books.`
+          : 'Back to a single category — the split was reversed, not erased.',
+      );
+      onSaved();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save the splits.');
+    } finally {
+      setSplitBusy(false);
+    }
+  }
+
   async function save() {
     if (!row || !householdId) return;
     setSaving(true);
@@ -726,29 +804,123 @@ export function TxnEditDialog({
                 }}
               />
             </div>
-            {row.splits && row.splits.length > 0 ? (
-              <div className="space-y-1.5">
-                <Label>Splits</Label>
-                <div className="space-y-1 rounded-md border border-border px-3 py-2">
-                  {row.splits.map((s) => (
-                    <div
-                      key={s.categoryLedgerAccountId}
-                      className="flex items-center justify-between gap-3 text-sm"
-                    >
-                      <span className="min-w-0 truncate">{s.name}</span>
-                      <Money
-                        amountMinor={(-BigInt(s.amountMinor)).toString()}
-                        currency={row.currency}
-                        signed
-                        className="shrink-0 text-sm"
+            {splitRows !== null && row.transferStatus !== 'confirmed' ? (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label>Splits</Label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs"
+                    disabled={splitBusy || splitRows.length >= 30}
+                    onClick={() => {
+                      setSplitRows((prev) =>
+                        prev ? [...prev, { categoryId: null, amount: '' }] : prev,
+                      );
+                    }}
+                  >
+                    <Plus className="size-3.5" />
+                    Add split
+                  </Button>
+                </div>
+                {/* 390px: each row stacks category over amount; sm+ is one line. */}
+                {splitRows.map((s, i) => (
+                  <div
+                    key={i}
+                    className="flex flex-col gap-2 sm:flex-row sm:items-center"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <CategoryPicker
+                        row={{
+                          ...row,
+                          categoryLedgerAccountId: s.categoryId,
+                          categoryName: splitCategoryName(s.categoryId) ?? 'Pick category',
+                          categoryKind: splitKind,
+                          splits: null,
+                        }}
+                        categories={categories}
+                        wide
+                        onPick={(catId) => {
+                          setSplitRowAt(i, { categoryId: catId });
+                        }}
                       />
                     </div>
-                  ))}
+                    <div className="flex items-center gap-2">
+                      <Input
+                        inputMode="decimal"
+                        placeholder="0.00"
+                        className="h-8 flex-1 text-right tabular-nums sm:w-28 sm:flex-none"
+                        aria-label={`Split ${String(i + 1)} amount`}
+                        value={s.amount}
+                        onChange={(e) => {
+                          setSplitRowAt(i, { amount: e.target.value });
+                        }}
+                      />
+                      {splitRows.length > 1 ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Remove split ${String(i + 1)}`}
+                          disabled={splitBusy}
+                          onClick={() => {
+                            setSplitRows((prev) =>
+                              prev ? prev.filter((_, idx) => idx !== i) : prev,
+                            );
+                          }}
+                        >
+                          <X className="size-4" />
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+                {/* Σ=0 as UI: the remainder must land exactly on zero. Sticky so
+                    it stays visible at 390px while the rows scroll. Red only
+                    when negative (over-allocated) — Law 8. */}
+                <div className="sticky bottom-0 z-10 flex items-center justify-between gap-3 rounded-md border border-border bg-background px-3 py-2">
+                  <span className="text-sm text-muted-foreground">Left to split</span>
+                  <Money
+                    amountMinor={splitRemainder}
+                    currency={row.currency}
+                    signed
+                    className="text-sm"
+                  />
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Split transactions are categorized by their splits. To change them,
-                  void and re-enter.
-                </p>
+                {hasDuplicateCategories(splitRows) ? (
+                  <p className="text-xs text-muted-foreground">
+                    Each category can appear only once — merge the amounts.
+                  </p>
+                ) : null}
+                <div className="flex items-center justify-between gap-2">
+                  {!isExistingSplit ? (
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+                      onClick={() => {
+                        setSplitRows(null);
+                      }}
+                    >
+                      Cancel split
+                    </button>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">
+                      Splits are the categorization — saved as real ledger postings.
+                    </span>
+                  )}
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={splitBusy || !splitSaveReady}
+                    onClick={() => {
+                      void saveSplits();
+                    }}
+                  >
+                    {splitBusy ? <Loader2 className="size-4 animate-spin" /> : null}
+                    Save splits
+                  </Button>
+                </div>
               </div>
             ) : null}
             {row.transferStatus === 'confirmed' ? (
@@ -768,10 +940,31 @@ export function TxnEditDialog({
               </div>
             ) : null}
             {row.transferStatus !== 'confirmed' &&
-            !(row.splits && row.splits.length > 0) &&
+            splitRows === null &&
             categoryOptions.length > 0 ? (
               <div className="space-y-1.5">
-                <Label>Category</Label>
+                <div className="flex items-center justify-between">
+                  <Label>Category</Label>
+                  {/* Teardown C7: every competitor has this. Expands into two
+                      rows with the full amount seeded on row 1. */}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => {
+                      setSplitRows(
+                        seedRowsForNewSplit(
+                          row.amountMinor,
+                          picked?.id ?? row.categoryLedgerAccountId,
+                        ),
+                      );
+                    }}
+                  >
+                    <Split className="size-3.5" />
+                    Split…
+                  </Button>
+                </div>
                 <CategoryPicker
                   // Overlay the in-dialog pick so the trigger shows the NEW
                   // category while the strike-through below keeps the old one.

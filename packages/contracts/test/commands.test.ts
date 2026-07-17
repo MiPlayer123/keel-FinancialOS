@@ -233,6 +233,53 @@ describe('command payloads', () => {
     ).toThrow();
   });
 
+  it('transactions.set_splits enforces splits sum to -amount (BigInt, no floats)', () => {
+    const good = parseCommandPayload('transactions.set_splits', {
+      transactionId: uuid,
+      amountMinor: '-4300',
+      splits: [
+        { categoryLedgerAccountId: uuid, amountMinor: '3000' },
+        { categoryLedgerAccountId: uuid, amountMinor: '1300' },
+      ],
+    });
+    expect(good.splits).toHaveLength(2);
+
+    // Unbalanced splits fail closed (Law 3 at the contract layer).
+    expect(() =>
+      parseCommandPayload('transactions.set_splits', {
+        transactionId: uuid,
+        amountMinor: '-4300',
+        splits: [{ categoryLedgerAccountId: uuid, amountMinor: '4200' }],
+      }),
+    ).toThrow();
+
+    // Zero amounts are meaningless economics.
+    expect(() =>
+      parseCommandPayload('transactions.set_splits', {
+        transactionId: uuid,
+        amountMinor: '0',
+        splits: [{ categoryLedgerAccountId: uuid, amountMinor: '0' }],
+      }),
+    ).toThrow();
+
+    // Floats never ride money fields.
+    expect(() =>
+      parseCommandPayload('transactions.set_splits', {
+        transactionId: uuid,
+        amountMinor: -43.0,
+        splits: [{ categoryLedgerAccountId: uuid, amountMinor: '4300' }],
+      }),
+    ).toThrow();
+
+    // Income direction: positive cash, negative splits.
+    const income = parseCommandPayload('transactions.set_splits', {
+      transactionId: uuid,
+      amountMinor: '4300',
+      splits: [{ categoryLedgerAccountId: uuid, amountMinor: '-4300' }],
+    });
+    expect(income.amountMinor).toBe('4300');
+  });
+
   it('transactions.manual_void requires a reason', () => {
     expect(
       parseCommandPayload('transactions.manual_void', {

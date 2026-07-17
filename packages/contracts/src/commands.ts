@@ -220,6 +220,41 @@ export const ManualVoidPayloadSchema = z.object({
 }).strict();
 
 /**
+ * Re-split an EXISTING transaction across categories (teardown C7). The cash
+ * posting is untouched; the category offsets of the live batch are replaced
+ * through the house correction model (reversal + replacement batch — Law 2
+ * reversible correction, Law 3 balanced). amountMinor is the signed cash
+ * amount the CLIENT is looking at — a stale-view guard the server verifies
+ * against the live batch before rebalancing anything. Splits must sum to its
+ * exact negation; arithmetic is BigInt on integer strings, never floats.
+ */
+export const SetSplitsPayloadSchema = z.object({
+  transactionId: CanonicalTransactionIdSchema,
+  amountMinor: MinorUnitsStringSchema,
+  splits: z.array(ManualTransactionSplitSchema).min(1).max(30),
+}).strict().superRefine((value, ctx) => {
+  if (BigInt(value.amountMinor) === 0n) {
+    ctx.addIssue({ code: 'custom', path: ['amountMinor'], message: 'amount cannot be zero' });
+    return;
+  }
+  let sum = 0n;
+  for (const split of value.splits) {
+    if (BigInt(split.amountMinor) === 0n) {
+      ctx.addIssue({ code: 'custom', path: ['splits'], message: 'split amounts cannot be zero' });
+      return;
+    }
+    sum += BigInt(split.amountMinor);
+  }
+  if (sum !== -BigInt(value.amountMinor)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['splits'],
+      message: `splits must sum to ${(-BigInt(value.amountMinor)).toString()} (got ${sum.toString()})`,
+    });
+  }
+});
+
+/**
  * "As of [date], this account's balance was $X" — a one-time statement that
  * anchors the running balance for a synced account whose transaction history
  * doesn't reach back far enough. balanceMinor is the REAL-WORLD magnitude
@@ -280,6 +315,7 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'reconciliations.reopen':ReopenReconciliationPayloadSchema,
   'transactions.manual_create': ManualTransactionPayloadSchema,
   'transactions.manual_void': ManualVoidPayloadSchema,
+  'transactions.set_splits': SetSplitsPayloadSchema,
   'accounts.set_opening_balance': SetOpeningBalancePayloadSchema,
   'accounts.reanchor_balance': ReanchorBalancePayloadSchema,
   'categorization.decide_suggestion': DecideCategorySuggestionPayloadSchema,

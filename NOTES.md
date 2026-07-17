@@ -1874,3 +1874,57 @@ design/TEARDOWN-STATUS-2026-07-17.md.
   pre-existing warnings in untouched files), web build, build:functions;
   migration executed end-to-end against a scratch Postgres 16 with stub
   schema (both call shapes; read model emits limitMinor incl. JSON null).
+
+## 2026-07-17 — D-044: C7 split editor (transactions.set_splits + editable splits in TxnEditDialog)
+
+Teardown C7 (build-queue item 5). Audit first: NO split-write command existed
+anywhere — splits were real balanced postings created only at manual ENTRY
+(keel_cmd_manual_transaction, 20260713100000); TxnEditDialog rendered them
+read-only with "void and re-enter". Full slice built:
+
+- Contract amendment (versioned here per protocol): new command
+  `transactions.set_splits` — `SetSplitsPayloadSchema`
+  { transactionId, amountMinor, splits[1..30] } with the same BigInt Σ
+  superRefine as manual_create. `amountMinor` is a stale-view guard: the
+  server rejects the command when the live cash posting disagrees with the
+  amount the client was looking at, so a concurrent sync revision can never
+  be silently rebalanced (Law 9 explicit ownership).
+- Migration 20260717190000_set_splits.sql: `keel_cmd_set_splits`, full
+  envelope ritual mirrored from keel_cmd_manual_transaction /
+  keel_cmd_decide_category_suggestion (member-write assert, actor-from-JWT
+  forgery guard, idempotency replay, typed errors, finish_command audit,
+  keel_api ownership). Semantics: cash posting untouched; category offsets of
+  the live batch replaced via the house correction model — reversal batch +
+  replacement batch + journal_revisions row with replacement_batch_id (Law 2
+  reversible correction; Σ=0 re-checked in-proc AND by the deferred trigger).
+  Splits validated with the exact manual-entry lattice (live same-entity
+  expense/income category, cash currency, no dupes, sum = -cash). Overlay
+  coherence per 20260713100000 §1/§5: 1 split → USER overlay pin; >1 split →
+  overlay row deleted (new `grant delete on transaction_categories to
+  keel_api` — first deleter on that table). Period-lock precheck on the
+  batch's effective date; voided rows immutable (P0001).
+- authz: 'transactions.set_splits' partner-tier write; api COMMAND_TO_PROC
+  entry; keel-api.ts setTransactionSplits (economicEventKey
+  `set-splits:<txn>:<attemptKey>`, one attemptKey per dialog session).
+- UI (TxnEditDialog): multi-split rows open straight into an editable split
+  section seeded from the real postings; single-category rows get a "Split…"
+  affordance that expands to two rows with the full amount seeded on row 1.
+  Rows = CategoryPicker (reused, wide) + magnitude input; live "Left to
+  split" remainder rendered with Money (red only when negative — over-
+  allocated; Law 8) and Save splits disabled until the remainder is exactly 0
+  (Σ=0 as UI). 390px: rows stack (flex-col → sm:flex-row); the remainder line
+  is sticky-bottom so it stays visible. All remainder math lives in the pure
+  lib apps/web/src/lib/split-editor.ts (BigInt on strings via the house
+  parseSignedDollars; unit-tested incl. past-2^53 magnitudes).
+- Tests: supabase/tests/018_set_splits.sql (ownership, correction-model
+  shape, Σ=0, overlay delete/pin, replay, stale/unbalanced/dup/zero/scope/
+  voided/period-lock lattice, rich-list splits) mirroring 016;
+  tests/integration/18-set-splits.test.ts mirroring 17 (RPC happy path,
+  revision links, replay+audit-once, typed failures, collapse-to-single,
+  scope safety); contracts test for the new schema; authz action-list test
+  updated.
+- Deliberately NOT built: per-split notes (journal_postings has no memo
+  column — teardown says "if the backend supports it"; it does not) and a
+  confirmed-transfer backend guard (keel_categorize_transaction has none
+  either; the UI hides both category picker and split editor for confirmed
+  transfers — smallest deterministic version, flagged here).
