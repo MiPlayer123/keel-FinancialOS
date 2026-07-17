@@ -3210,3 +3210,30 @@ Plaid `item_id`/`account_id` correlation where available) so relinking the
 same real-world account doesn't silently fork it into a second `accounts`
 row with fresh history and zero prior categorization/notes/tags. Flagged,
 not designed or scoped yet.
+
+## Post-merge catch-up: PR #51 deploy + 3 stale migrations
+
+After PR #51 (documents/attachments, task #23) merged, `main` also carried
+three migrations from other already-merged PRs (#48/#49-adjacent —
+`account_entity_reassign`, `transfer_manual_link`,
+`transfer_list_account_ids`) that had never been applied live, discovered
+only by diffing `pg_proc` against the migrations directory before
+deploying. All three are additive (`create or replace function`, one new
+column-scoped grant) and already reviewed on `main`, so applied them
+live via `apply_migration` to bring the DB in sync with merged code before
+redeploying edge functions.
+
+Then rebuilt the vendor bundle (`node scripts/build-functions.mjs`) and
+redeployed `api`+`worker` (v40→v41, both ACTIVE) via
+`mcp__Supabase__deploy_edge_function`, file-by-file with the full
+dependency tree (delegated to a subagent per established convention — the
+vendor bundle is ~690KB, too large to shuttle through the main session).
+Verified live: `GET /documents/list` now returns 401 (no JWT) instead of
+404 — the new documents routes are deployed and auth-gated correctly. The
+attachment feature (task #23) is now actually usable end-to-end, not just
+merged.
+
+`backfill-temp` (the one-off Plaid history investigation function) is
+still listed ACTIVE in `list_edge_functions` but was already retired to an
+inert 410 stub in an earlier pass this session — no live secret access,
+left as-is.
