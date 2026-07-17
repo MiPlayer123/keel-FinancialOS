@@ -10,7 +10,7 @@ import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { taxLineLabel, taxLineSchedule } from '@/lib/tax-lines';
 import { useHousehold } from '@/components/keel/household-context';
-import { useKeelQuery } from '@/lib/use-keel-query';
+import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
 import {
   fetchAccounts,
   fetchCategories,
@@ -19,17 +19,20 @@ import {
   type AccountRow,
   type CategoryRow,
   type EntityRow,
+  type HoldingRow,
   type RichTransactionRow,
 } from '@/lib/keel-api';
 import {
   CashFlowMonthlyChart,
   CashFlowSankey,
+  CategoryBarList,
   CategoryDonut,
   type MonthlyFlow,
   type SankeyFlowLink,
   type SankeyFlowNode,
 } from '@/components/keel/charts';
 import { isDebtOrTransferLike, suggestedTransferCount } from '@/lib/spending';
+import { allocationMix } from '@/lib/holdings-allocation';
 import {
   clampMonthToRange,
   dominantCurrency,
@@ -860,6 +863,10 @@ function ReportsBody() {
   const months = useMemo(() => scopeMonths(scope.from, scope.to), [scope.from, scope.to]);
   const tagReport = useMemo(() => tagTotals(rangedRows), [rangedRows]);
   const tags = tagReport.totals;
+  // Household-wide (unscoped by date/account) — allocation describes what
+  // you currently hold, not a range of activity like the rest of this page.
+  const holdings = useKeelQuerySilent<HoldingRow>('holdings.list', householdId);
+  const allocation = useMemo(() => allocationMix(holdings ?? []), [holdings]);
   // Month chips: the months the scope range touches (last 6). Default to the
   // last FULL month — the newest month is usually still in progress.
   const reviewMonths = useMemo(() => months.slice(-6), [months]);
@@ -1392,6 +1399,23 @@ function ReportsBody() {
       </Card>
 
 
+      {allocation.length > 0 ? (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Investment allocation
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <CategoryBarList items={allocation} />
+            <p className="pt-1 text-xs text-muted-foreground">
+              What you currently hold, by asset class (USD holdings only) — not a date-range view
+              like the rest of this page. Descriptive only; doesn&apos;t affect net worth (that
+              already comes from each account&apos;s balance).
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
       {tags.length > 0 ? (
         <Card>
           <CardHeader className="pb-2">

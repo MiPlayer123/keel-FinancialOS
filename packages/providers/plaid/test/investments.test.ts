@@ -48,10 +48,27 @@ describe('mapHoldingsGetToKeel', () => {
           priceMinor: '25100',
           costBasisMinor: '200000',
           currency: 'USD',
+          securityType: 'etf',
         },
       ],
       skipped: [],
     });
+  });
+
+  it('maps the security type through for allocation bucketing', () => {
+    const result = mapHoldingsGetToKeel({
+      holdings: [holding('acct-1', 'sec-1')],
+      securities: [security('sec-1', { type: 'fixed income' })],
+    });
+    expect(result.holdings[0]?.securityType).toBe('fixed income');
+  });
+
+  it('maps a missing security type to null', () => {
+    const result = mapHoldingsGetToKeel({
+      holdings: [holding('acct-1', 'sec-1')],
+      securities: [security('sec-1', { type: null })],
+    });
+    expect(result.holdings[0]?.securityType).toBeNull();
   });
 
   it('falls back to the security close_price when institution_price is missing', () => {
