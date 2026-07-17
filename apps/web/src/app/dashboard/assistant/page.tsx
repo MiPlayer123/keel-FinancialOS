@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   AssistantRuntimeProvider,
   AuiIf,
@@ -14,13 +14,32 @@ import {
   type MessageStatus,
   type ThreadMessage,
 } from '@assistant-ui/react';
-import { CircleStop, Loader2, ShieldCheck, Sparkles } from 'lucide-react';
+import {
+  ArrowUp,
+  CircleStop,
+  Check,
+  Loader2,
+  MessageSquareText,
+  ShieldCheck,
+  Sparkles,
+  X,
+} from 'lucide-react';
 
 import { PageHeader } from '@/components/keel/page-header';
 import { useHousehold } from '@/components/keel/household-context';
-import { askKeel, type AiChatRecord } from '@/lib/keel-api';
+import { askKeel, saveNote, saveTask, type AiChatRecord } from '@/lib/keel-api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
+import { toast } from 'sonner';
 
 /**
  * KEEL Assistant (Preview) — read-only AI chat POC on @assistant-ui/react.
@@ -39,9 +58,9 @@ import { Button } from '@/components/ui/button';
 
 const EVIDENCE_LABELS: Record<string, string> = {
   accounts: 'Accounts & balances',
-  transactions: 'Recent transactions (up to 50)',
+  transactions: 'Recent transactions',
   categories: 'Category list',
-  budgets: 'Budgets (current month)',
+  budgets: 'Budgets',
 };
 
 const SUGGESTED_QUESTIONS = [
@@ -54,6 +73,11 @@ const QUESTION_MAX = 500;
 
 /** Key under which the typed AI record rides on assistant-message metadata. */
 const RECORD_KEY = 'keelRecord';
+const PROPOSAL_KEY = 'keelProposal';
+
+type AssistantProposal =
+  | { kind: 'task'; title: string; source: 'local-intent@v1' }
+  | { kind: 'note'; body: string; source: 'local-intent@v1' };
 
 function formatAsOf(iso: string): string {
   const parsed = new Date(iso);
@@ -80,6 +104,46 @@ function failedRun(text: string): ChatModelRunResult {
 }
 
 /** Backend is single-shot: extract only the latest user question from the thread. */
+
+function parseAssistantProposal(question: string): AssistantProposal | null {
+  const text = question.trim().replace(/\s+/g, ' ');
+  if (text.length === 0) return null;
+
+  const notePrefixes = [
+    'note:',
+    'remember:',
+    'remember that ',
+    'make a note that ',
+    'add a note that ',
+    'add note:',
+  ];
+  const taskPrefixes = [
+    'task:',
+    'todo:',
+    'to do:',
+    'remind me to ',
+    'create a task to ',
+    'add a task to ',
+    'add task:',
+  ];
+  const lower = text.toLowerCase();
+
+  for (const prefix of notePrefixes) {
+    if (lower.startsWith(prefix)) {
+      const body = text.slice(prefix.length).trim();
+      return body.length > 0 ? { kind: 'note', body, source: 'local-intent@v1' } : null;
+    }
+  }
+  for (const prefix of taskPrefixes) {
+    if (lower.startsWith(prefix)) {
+      const title = text.slice(prefix.length).trim();
+      return title.length > 0 ? { kind: 'task', title, source: 'local-intent@v1' } : null;
+    }
+  }
+
+  return null;
+}
+
 function latestUserQuestion(messages: readonly ThreadMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const m = messages[i];
@@ -126,6 +190,18 @@ function AssistantChat() {
         if (question.length === 0) {
           return failedRun('Type a question to ask the assistant.');
         }
+        const proposal = parseAssistantProposal(question);
+        if (proposal !== null) {
+          const text =
+            proposal.kind === 'task'
+              ? 'I drafted a task. Review it before I save anything.'
+              : 'I drafted a note. Review it before I save anything.';
+          return {
+            content: [{ type: 'text', text }],
+            metadata: { custom: { [PROPOSAL_KEY]: proposal } },
+          };
+        }
+
         let record: AiChatRecord;
         try {
           record = await askKeel({ householdId: targetHousehold, question });
@@ -137,8 +213,7 @@ function AssistantChat() {
         if (abortSignal.aborted) {
           throw new DOMException('The request was cancelled.', 'AbortError');
         }
-        const text =
-          record.body !== record.tldr ? `${record.tldr}\n\n${record.body}` : record.tldr;
+        const text = record.body !== record.tldr ? `${record.tldr}\n\n${record.body}` : record.tldr;
         return {
           content: [{ type: 'text', text }],
           metadata: { custom: { [RECORD_KEY]: record } },
@@ -152,7 +227,7 @@ function AssistantChat() {
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <div className="mx-auto flex h-[calc(100dvh-9.5rem)] min-h-[420px] w-full max-w-2xl flex-col p-4 sm:p-6 lg:h-[calc(100dvh-6rem)]">
+      <div className="mx-auto flex h-[calc(100dvh-9.5rem)] min-h-[520px] w-full max-w-3xl flex-col px-4 py-5 sm:px-6 lg:h-[calc(100dvh-6rem)]">
         <ChatThread />
       </div>
     </AssistantRuntimeProvider>
@@ -161,14 +236,16 @@ function AssistantChat() {
 
 function ChatThread() {
   return (
-    <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col">
-      <ThreadPrimitive.Viewport autoScroll className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pb-4">
-        <AuiIf condition={(s) => s.thread.isEmpty}>
-          <EmptyThread />
-        </AuiIf>
-        <ThreadPrimitive.Messages>
-          {({ message }) => (message.role === 'user' ? <UserMessage /> : <AssistantMessage />)}
-        </ThreadPrimitive.Messages>
+    <ThreadPrimitive.Root className="flex min-h-0 flex-1 flex-col gap-4">
+      <ThreadPrimitive.Viewport autoScroll className="min-h-0 flex-1 overflow-y-auto pb-2">
+        <div className="flex min-h-full flex-col justify-end gap-5">
+          <AuiIf condition={(s) => s.thread.isEmpty}>
+            <EmptyThread />
+          </AuiIf>
+          <ThreadPrimitive.Messages>
+            {({ message }) => (message.role === 'user' ? <UserMessage /> : <AssistantMessage />)}
+          </ThreadPrimitive.Messages>
+        </div>
       </ThreadPrimitive.Viewport>
       <Composer />
     </ThreadPrimitive.Root>
@@ -177,27 +254,34 @@ function ChatThread() {
 
 function EmptyThread() {
   return (
-    <div className="flex flex-1 flex-col justify-end gap-4">
-      <p className="flex items-start gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-2 text-xs text-muted-foreground">
-        <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
-        <span>
-          Preview, read-only. Every figure is computed by KEEL&apos;s ledger — the assistant only
-          narrates it, and it can never move money or change your books.
-        </span>
-      </p>
-      <div className="flex flex-wrap gap-2">
-        {SUGGESTED_QUESTIONS.map((suggestion) => (
-          <ThreadPrimitive.Suggestion key={suggestion} prompt={suggestion} send asChild>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-auto whitespace-normal py-1.5 text-left text-xs"
-            >
-              {suggestion}
-            </Button>
-          </ThreadPrimitive.Suggestion>
-        ))}
-      </div>
+    <div className="flex flex-1 flex-col justify-end gap-5 pb-4">
+      <Card size="sm" className="bg-secondary/30">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <ShieldCheck className="size-4 text-muted-foreground" />
+            Read-only finance copilot
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3 text-sm text-muted-foreground">
+          <p>
+            Every figure is computed by KEEL&apos;s ledger. The assistant narrates your books and
+            cannot move money or change records without an explicit reviewed action.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {SUGGESTED_QUESTIONS.map((suggestion) => (
+              <ThreadPrimitive.Suggestion key={suggestion} prompt={suggestion} send asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-auto whitespace-normal py-1.5 text-left"
+                >
+                  {suggestion}
+                </Button>
+              </ThreadPrimitive.Suggestion>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -205,9 +289,9 @@ function EmptyThread() {
 function UserMessage() {
   return (
     <MessagePrimitive.Root className="flex justify-end">
-      <div className="max-w-[85%] whitespace-pre-wrap rounded-lg bg-secondary px-3 py-2 text-sm">
+      <UserBubble>
         <MessagePrimitive.Parts />
-      </div>
+      </UserBubble>
     </MessagePrimitive.Root>
   );
 }
@@ -216,13 +300,114 @@ function AssistantMessage() {
   const record = useAuiState(
     (s) => s.message.metadata.custom[RECORD_KEY] as AiChatRecord | undefined,
   );
+  const proposal = useAuiState(
+    (s) => s.message.metadata.custom[PROPOSAL_KEY] as AssistantProposal | undefined,
+  );
   const status = useAuiState((s) => s.message.status);
   return (
     <MessagePrimitive.Root className="flex justify-start">
-      <div className="w-full space-y-3 rounded-lg border border-border bg-card px-4 py-3 text-card-foreground sm:max-w-[92%]">
-        {record !== undefined ? <KeelAnswer record={record} /> : <PendingOrFailed status={status} />}
+      <div className="w-full max-w-2xl py-1 text-card-foreground">
+        {record !== undefined ? (
+          <KeelAnswer record={record} />
+        ) : proposal !== undefined ? (
+          <ProposalReviewCard proposal={proposal} />
+        ) : (
+          <PendingOrFailed status={status} />
+        )}
       </div>
     </MessagePrimitive.Root>
+  );
+}
+
+function ProposalReviewCard({ proposal }: { proposal: AssistantProposal }) {
+  const { householdId } = useHousehold();
+  const [state, setState] = useState<'idle' | 'saving' | 'saved' | 'cancelled'>('idle');
+  const isTask = proposal.kind === 'task';
+
+  async function confirm() {
+    if (householdId === null || state !== 'idle') return;
+    setState('saving');
+    try {
+      if (proposal.kind === 'task') {
+        await saveTask({ householdId, title: proposal.title });
+      } else {
+        await saveNote({ householdId, body: proposal.body });
+      }
+      setState('saved');
+      toast.success(isTask ? 'Task saved.' : 'Note saved.');
+    } catch (err) {
+      setState('idle');
+      toast.error(err instanceof Error ? err.message : 'Could not save the proposal.');
+    }
+  }
+
+  return (
+    <Card size="sm" className="max-w-xl">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <Sparkles className="size-4 text-muted-foreground" />
+          Review assistant proposal
+        </CardTitle>
+        <CardDescription>
+          Nothing changes until you confirm. This uses KEEL&apos;s normal notes/tasks API.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <div className="rounded-lg border bg-secondary/20 px-3 py-2">
+          <div className="mb-1 flex items-center gap-2">
+            <Badge variant="secondary">{isTask ? 'Task' : 'Note'}</Badge>
+            <Badge variant="outline" className="font-normal">
+              Draft
+            </Badge>
+          </div>
+          <p className="text-sm text-foreground">
+            {proposal.kind === 'task' ? proposal.title : proposal.body}
+          </p>
+        </div>
+        {state === 'saved' ? (
+          <p className="text-sm text-muted-foreground">Saved. You can manage it from Home.</p>
+        ) : state === 'cancelled' ? (
+          <p className="text-sm text-muted-foreground">Cancelled. No note or task was created.</p>
+        ) : null}
+      </CardContent>
+      <CardFooter className="justify-end gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={state !== 'idle'}
+          onClick={() => {
+            setState('cancelled');
+          }}
+        >
+          <X data-icon="inline-start" />
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          disabled={householdId === null || state !== 'idle'}
+          onClick={() => {
+            void confirm();
+          }}
+        >
+          {state === 'saving' ? (
+            <Loader2 data-icon="inline-start" className="animate-spin" />
+          ) : (
+            <Check data-icon="inline-start" />
+          )}
+          Confirm
+        </Button>
+      </CardFooter>
+    </Card>
+  );
+}
+
+function UserBubble({ children }: { children: ReactNode }) {
+  return (
+    <div className="max-w-[88%] whitespace-pre-wrap rounded-2xl rounded-tr-md bg-secondary px-4 py-2.5 text-sm leading-relaxed text-secondary-foreground shadow-sm sm:max-w-[72%]">
+      {children}
+    </div>
   );
 }
 
@@ -233,7 +418,7 @@ function PendingOrFailed({ status }: { status: MessageStatus | undefined }) {
       return <p className="text-sm text-muted-foreground">Stopped — no answer was produced.</p>;
     }
     return (
-      <div className="space-y-1">
+      <div className="flex flex-col gap-1">
         <p className="text-sm font-medium">The assistant couldn&apos;t answer</p>
         <p className="text-sm text-muted-foreground">
           {typeof status.error === 'string' ? status.error : 'The assistant is unavailable.'}
@@ -259,75 +444,95 @@ function dedupedBody(record: { tldr: string; body: string }): string {
 
 /** Law 11 rendering: TLDR first, body, then as-of + scope + evidence labels. */
 function KeelAnswer({ record }: { record: AiChatRecord }) {
+  const body = dedupedBody(record);
   return (
-    <>
-      <p className="text-base font-medium leading-snug">{record.tldr}</p>
-      {/* Models often open the body by restating the tldr verbatim — strip
-          that leading repeat so the card reads TLDR-then-detail (Law 11),
-          never the same sentence twice. */}
-      {dedupedBody(record) !== '' ? (
-        <p className="whitespace-pre-wrap text-sm text-muted-foreground">{dedupedBody(record)}</p>
-      ) : null}
+    <article className="flex flex-col gap-3 text-sm leading-relaxed">
+      <div className="flex flex-col gap-2">
+        <p className="text-base font-medium leading-snug text-foreground">{record.tldr}</p>
+        {body !== '' ? (
+          <p className="whitespace-pre-wrap text-sm text-muted-foreground">{body}</p>
+        ) : null}
+      </div>
 
-      <p className="text-xs text-muted-foreground">
-        As of {formatAsOf(record.asOf)} · scope: this household
-        {record.scope.entityIds.length > 0
-          ? ` (${String(record.scope.entityIds.length)} ${
-              record.scope.entityIds.length === 1 ? 'entity' : 'entities'
-            })`
-          : ''}
-      </p>
+      <Separator />
 
-      <details className="rounded-md border border-border px-3 py-2">
-        <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
-          What the model saw
-        </summary>
-        <ul className="mt-2 list-disc space-y-0.5 pl-4 text-xs text-muted-foreground">
-          {record.evidenceRefs.map((ref) => (
-            <li key={ref}>{EVIDENCE_LABELS[ref] ?? ref}</li>
-          ))}
-        </ul>
-        <p className="mt-2 text-[11px] text-muted-foreground/80">
-          Precomputed summaries only — model {record.modelVersion}, prompt {record.promptVersion}.
-          Display-only; no actions were proposed or taken.
-        </p>
-      </details>
-    </>
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <Badge variant="outline" className="font-normal">
+            As of {formatAsOf(record.asOf)}
+          </Badge>
+          <Badge variant="secondary" className="font-normal">
+            Household scope
+            {record.scope.entityIds.length > 0
+              ? ` · ${String(record.scope.entityIds.length)} ${
+                  record.scope.entityIds.length === 1 ? 'entity' : 'entities'
+                }`
+              : ''}
+          </Badge>
+        </div>
+
+        <details className="group/provenance rounded-lg border bg-secondary/20 px-3 py-2">
+          <summary className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
+            <MessageSquareText className="size-3.5" />
+            What the model saw
+          </summary>
+          <div className="mt-2 flex flex-col gap-2">
+            <div className="flex flex-wrap gap-1.5">
+              {record.evidenceRefs.map((ref) => (
+                <Badge key={ref} variant="outline" className="font-normal">
+                  {EVIDENCE_LABELS[ref] ?? ref}
+                </Badge>
+              ))}
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Precomputed summaries only — model {record.modelVersion}, prompt{' '}
+              {record.promptVersion}. Display-only; no actions were proposed or taken.
+            </p>
+          </div>
+        </details>
+      </div>
+    </article>
   );
 }
 
 function Composer() {
   return (
-    <div className="space-y-1.5">
-      <ComposerPrimitive.Root className="flex items-end gap-2">
+    <div className="flex flex-col gap-2">
+      <ComposerPrimitive.Root className="rounded-2xl border bg-card p-2 shadow-sm transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
         <ComposerPrimitive.Input
           minRows={1}
           maxRows={5}
           maxLength={QUESTION_MAX}
-          placeholder="Ask about your finances…"
+          placeholder="Ask KEEL about your finances…"
           aria-label="Question for KEEL Assistant"
-          className="min-h-9 w-full resize-none rounded-lg border border-input bg-transparent px-2.5 py-2 text-base outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm dark:bg-input/30"
+          className="max-h-36 min-h-12 w-full resize-none bg-transparent px-2 py-2 text-base outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
         />
-        <AuiIf condition={(s) => !s.thread.isRunning}>
-          <ComposerPrimitive.Send asChild>
-            <Button type="submit" className="h-9 shrink-0">
-              <Sparkles className="size-4" />
-              Ask
-            </Button>
-          </ComposerPrimitive.Send>
-        </AuiIf>
-        <AuiIf condition={(s) => s.thread.isRunning}>
-          <ComposerPrimitive.Cancel asChild>
-            <Button type="button" variant="outline" className="h-9 shrink-0">
-              <CircleStop className="size-4" />
-              Stop
-            </Button>
-          </ComposerPrimitive.Cancel>
-        </AuiIf>
+        <div className="flex items-center justify-between gap-2 px-1 pb-1">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Sparkles className="size-3.5" />
+            Preview · explicit confirmation required for writes
+          </div>
+          <AuiIf condition={(s) => !s.thread.isRunning}>
+            <ComposerPrimitive.Send asChild>
+              <Button type="submit" size="sm" className="shrink-0">
+                <ArrowUp data-icon="inline-start" />
+                Ask
+              </Button>
+            </ComposerPrimitive.Send>
+          </AuiIf>
+          <AuiIf condition={(s) => s.thread.isRunning}>
+            <ComposerPrimitive.Cancel asChild>
+              <Button type="button" variant="outline" size="sm" className="shrink-0">
+                <CircleStop data-icon="inline-start" />
+                Stop
+              </Button>
+            </ComposerPrimitive.Cancel>
+          </AuiIf>
+        </div>
       </ComposerPrimitive.Root>
-      <p className="text-[11px] text-muted-foreground/80">
-        Read-only preview — answers narrate KEEL&apos;s ledger and can never move money or change
-        your books.
+      <p className="px-2 text-[11px] text-muted-foreground">
+        Answers narrate KEEL&apos;s ledger. Actions will appear as reviewable proposals before
+        anything changes.
       </p>
     </div>
   );
