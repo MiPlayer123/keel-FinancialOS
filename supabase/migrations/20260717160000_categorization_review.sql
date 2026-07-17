@@ -83,7 +83,7 @@ create policy category_rules_api_read on public.category_rules
 -- ---------------------------------------------------------------------------
 -- 2. Detection (deterministic, Law 1). Mirrors keel_detect_transfers'
 -- auth posture: a user-driven call requires membership; the service path
--- (auth.uid() null) is for the api function's future cron/worker use.
+-- (null JWT claim) is for the api function's future cron/worker use.
 -- ---------------------------------------------------------------------------
 create function public.keel_detect_category_suggestions(p_household_id uuid)
 returns integer
@@ -93,10 +93,19 @@ set search_path = public
 as $$
 declare
   v_count int;
+  -- keel_api owns this definer and has NO usage on schema auth (CI run
+  -- 29557956077: "permission denied for schema auth") — the house pattern
+  -- for keel_api-owned procs is the JWT-claims lookup, exactly as
+  -- keel_actor_from_jwt does. Null claim = the api function's future
+  -- cron/worker path.
+  v_uid uuid := coalesce(
+    nullif(pg_catalog.current_setting('request.jwt.claim.sub', true), ''),
+    nullif(pg_catalog.current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'
+  )::uuid;
 begin
-  if auth.uid() is not null and not exists (
+  if v_uid is not null and not exists (
     select 1 from public.household_memberships
-    where household_id = p_household_id and user_id = auth.uid()
+    where household_id = p_household_id and user_id = v_uid
   ) then
     raise exception 'KEEL_NOT_FOUND' using errcode = 'P0006';
   end if;
@@ -232,9 +241,9 @@ begin
   if v_count > 0 then
     insert into public.audit_log (household_id, actor, action, object_type, object_id, after)
     values (p_household_id,
-            case when auth.uid() is null
+            case when v_uid is null
                  then jsonb_build_object('kind', 'system', 'source', 'categorization_detector')
-                 else jsonb_build_object('kind', 'user', 'userId', auth.uid()) end,
+                 else jsonb_build_object('kind', 'user', 'userId', v_uid) end,
             'categorization.detect', 'household', p_household_id,
             jsonb_build_object('suggested', v_count));
   end if;
