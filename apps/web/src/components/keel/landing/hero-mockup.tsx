@@ -34,7 +34,7 @@ const DEMO_ROWS: Array<{
   amountMinor: string;
   badge?: 'transfer' | 'split';
 }> = [
-  { date: 'Jul 16', name: 'Deeptune Co — Payroll', meta: 'Checking · Income', amountMinor: '425000' },
+  { date: 'Jul 16', name: 'Acme Labs Payroll', meta: 'Checking · Income', amountMinor: '425000' },
   { date: 'Jul 15', name: 'Trader Joe’s', meta: 'Credit card · Groceries', amountMinor: '-8412' },
   { date: 'Jul 15', name: 'Transfer to Savings', meta: 'Checking → Savings', amountMinor: '100000', badge: 'transfer' },
   { date: 'Jul 14', name: 'Costco', meta: 'Credit card · 2 categories', amountMinor: '-21376', badge: 'split' },
@@ -59,7 +59,7 @@ export function HeroMockup({ className }: { className?: string }) {
           <span className="size-2.5 rounded-full bg-border" />
           <span className="size-2.5 rounded-full bg-border" />
           <span className="size-2.5 rounded-full bg-border" />
-          <span className="ml-3 text-xs text-muted-foreground">keel — home</span>
+          <span className="ml-3 text-xs text-muted-foreground">keel · home</span>
         </div>
 
         <div className="grid gap-px bg-border md:grid-cols-5">
@@ -123,7 +123,7 @@ export function HeroMockup({ className }: { className?: string }) {
               </p>
               <p className="mt-1.5 text-xs leading-relaxed">
                 Categorize <span className="font-mono text-[11px]">BLUE BOTTLE 0421</span> as{' '}
-                <span className="font-medium">Coffee shops</span> — matched 12 prior transactions.
+                <span className="font-medium">Coffee shops</span>. Matched 12 prior transactions.
               </p>
               <div className="mt-2.5 flex items-center gap-2">
                 <span className="inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-[11px] font-medium text-primary-foreground">

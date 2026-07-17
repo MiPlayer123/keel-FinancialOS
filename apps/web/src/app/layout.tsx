@@ -14,14 +14,14 @@ const geistMono = Geist_Mono({ subsets: ['latin'], variable: '--font-mono' });
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://keel.mikulsaravanan.com'),
-  title: 'KEEL — your financial system of record',
+  title: 'KEEL · your financial system of record',
   description:
     'KEEL is an AI-first personal and entity finance system of record. A deterministic double-entry ledger, with AI that suggests and never silently acts.',
   alternates: { canonical: './' },
   openGraph: {
-    title: 'KEEL — your financial system of record',
+    title: 'KEEL · your financial system of record',
     description:
-      'A double-entry system of record for everything you and your entities own, owe, earn and spend — with AI that does the tedious parts and asks before it acts.',
+      'All of your accounts, spending, and businesses in one place. AI does the busywork and always asks before making changes.',
     url: 'https://keel.mikulsaravanan.com',
     siteName: 'KEEL',
     type: 'website',
@@ -29,9 +29,9 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'KEEL — your financial system of record',
+    title: 'KEEL · your financial system of record',
     description:
-      'A double-entry system of record for you and your entities — AI does the tedious parts and asks before it acts.',
+      'All of your money and your business, in one place. AI does the busywork and asks before it acts.',
   },
 };
 

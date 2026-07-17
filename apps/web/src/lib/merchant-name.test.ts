@@ -133,9 +133,9 @@ describe('merchantDisplayName', () => {
   it('extracts company · purpose from NACHA/ACH key:value memos (live-UI finding)', () => {
     expect(
       merchantDisplayName(
-        'ORIG CO NAME:DEEPTUNE CO ENTRY DESCR:PAYROLL SEC:PPD ORIG ID:1234567890',
+        'ORIG CO NAME:ACMELABS CO ENTRY DESCR:PAYROLL SEC:PPD ORIG ID:1234567890',
       ),
-    ).toBe('Deeptune · Payroll');
+    ).toBe('Acmelabs · Payroll');
     // Generic purposes add nothing next to the company.
     expect(
       merchantDisplayName('ORIG CO NAME:COMCAST CO ENTRY DESCR:PAYMENT SEC:WEB'),
