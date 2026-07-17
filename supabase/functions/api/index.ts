@@ -64,11 +64,13 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'paychecks.create': 'keel_paycheck_create',
   'paychecks.reverse': 'keel_paycheck_reverse',
   'paychecks.restore': 'keel_paycheck_restore',
-  'reimbursements.create_claim':'keel_reimbursement_create_claim',
-  'reimbursements.settle':'keel_reimbursement_settle',
-  'reimbursements.reverse_settlement':'keel_reimbursement_reverse_settlement',
-  'reimbursements.reverse_claim':'keel_reimbursement_reverse_claim',
-  'statements.create':'keel_statement_create','reconciliations.close':'keel_reconciliation_close','reconciliations.reopen':'keel_reconciliation_reopen',
+  'reimbursements.create_claim': 'keel_reimbursement_create_claim',
+  'reimbursements.settle': 'keel_reimbursement_settle',
+  'reimbursements.reverse_settlement': 'keel_reimbursement_reverse_settlement',
+  'reimbursements.reverse_claim': 'keel_reimbursement_reverse_claim',
+  'statements.create': 'keel_statement_create',
+  'reconciliations.close': 'keel_reconciliation_close',
+  'reconciliations.reopen': 'keel_reconciliation_reopen',
   'transactions.manual_create': 'keel_cmd_manual_transaction',
   'transactions.manual_void': 'keel_cmd_manual_void',
   'transactions.set_splits': 'keel_cmd_set_splits',
@@ -85,8 +87,8 @@ const QUERY_TO_PROC: Record<string, string> = {
   'balances.latest': 'keel_latest_balances',
   'recurring.list': 'keel_list_recurring',
   'paychecks.list': 'keel_list_paychecks',
-  'reimbursements.list':'keel_list_reimbursements',
-  'statements.list':'keel_list_statements',
+  'reimbursements.list': 'keel_list_reimbursements',
+  'statements.list': 'keel_list_statements',
   'dashboard.cash_flow': 'keel_cash_flow',
   'dashboard.net_worth': 'keel_net_worth_as_of',
   'dashboard.net_worth_daily': 'keel_net_worth_daily',
@@ -94,6 +96,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'accounts.balance_daily': 'keel_account_balance_daily',
   'transfers.list': 'keel_list_transfers',
   'categorization.suggestions': 'keel_list_category_suggestions',
+  'notes_tasks.list': 'keel_list_notes_tasks',
   'rules.list': 'keel_list_rules',
   'budgets.list': 'keel_list_budgets',
   'tags.list': 'keel_list_tags',
@@ -152,27 +155,25 @@ const credentialFailure = (): Response =>
     details: {},
   });
 
-const loadAuthzContext = async (
-  supabase: UserClient,
-  userId: string,
-): Promise<AuthzContext> => {
-  const [memberships, entityMemberships, accountOwnerships, accountPermissions] = await Promise.all([
-    supabase.from('household_memberships').select('household_id, role').eq('user_id', userId),
-    supabase.from('entity_memberships').select('entity_id, entities(household_id)'),
-    supabase.from('account_owners').select('account_id, accounts(household_id)'),
-    supabase.from('resource_permissions')
-      .select('household_id, resource_id, permission')
-      .eq('user_id', userId)
-      .eq('resource_kind', 'account'),
-  ]);
+const loadAuthzContext = async (supabase: UserClient, userId: string): Promise<AuthzContext> => {
+  const [memberships, entityMemberships, accountOwnerships, accountPermissions] = await Promise.all(
+    [
+      supabase.from('household_memberships').select('household_id, role').eq('user_id', userId),
+      supabase.from('entity_memberships').select('entity_id, entities(household_id)'),
+      supabase.from('account_owners').select('account_id, accounts(household_id)'),
+      supabase
+        .from('resource_permissions')
+        .select('household_id, resource_id, permission')
+        .eq('user_id', userId)
+        .eq('resource_kind', 'account'),
+    ],
+  );
   return {
     userId: userId as AuthzContext['userId'],
-    memberships: (memberships.data ?? []).map(
-      (row: { household_id: string; role: string }) => ({
-        householdId: row.household_id as HouseholdId,
-        role: row.role as HouseholdRole,
-      }),
-    ),
+    memberships: (memberships.data ?? []).map((row: { household_id: string; role: string }) => ({
+      householdId: row.household_id as HouseholdId,
+      role: row.role as HouseholdRole,
+    })),
     entityMemberships: (entityMemberships.data ?? []).map(
       (row: { entity_id: string; entities: { household_id: string } | null }) => ({
         entityId: row.entity_id as AuthzContext['entityMemberships'][number]['entityId'],
@@ -363,11 +364,13 @@ export default {
 
       const entities = (entitiesRes.data ?? []) as { entityId: string }[];
       const balances = new Map(
-        (((trialRes.data as { rows?: unknown[] } | null)?.rows ?? []) as {
-          ledgerAccountId: string;
-          currency: string;
-          balanceMinor: string;
-        }[]).map((row) => [row.ledgerAccountId, row.balanceMinor]),
+        (
+          ((trialRes.data as { rows?: unknown[] } | null)?.rows ?? []) as {
+            ledgerAccountId: string;
+            currency: string;
+            balanceMinor: string;
+          }[]
+        ).map((row) => [row.ledgerAccountId, row.balanceMinor]),
       );
       const accountRows = (accountsRes.data ?? []) as {
         id: string;
@@ -376,24 +379,29 @@ export default {
         currency: string;
         ledger_account_id: string;
       }[];
-      const txRows = (((txRes.data as { rows?: unknown[] } | null)?.rows ?? []) as {
-        transactionId: string;
-        effectiveDate: string;
-        description: string;
-        amountMinor: string;
-        currency: string;
-        accountName: string;
-        categoryName: string | null;
-        status: string;
-      }[]).slice(0, 50); // rows arrive newest-first; keep the snapshot bounded
-      const categoryRows = ((catRes.data ?? []) as { name: string; kind: 'income' | 'expense' }[])
-        .slice(0, 100);
-      const budgetRows = (((budgetRes.data as { rows?: unknown[] } | null)?.rows ?? []) as {
-        categoryName: string;
-        currency: string;
-        budgetMinor: string | null;
-        spentMinor: string;
-      }[]).slice(0, 100);
+      const txRows = (
+        ((txRes.data as { rows?: unknown[] } | null)?.rows ?? []) as {
+          transactionId: string;
+          effectiveDate: string;
+          description: string;
+          amountMinor: string;
+          currency: string;
+          accountName: string;
+          categoryName: string | null;
+          status: string;
+        }[]
+      ).slice(0, 50); // rows arrive newest-first; keep the snapshot bounded
+      const categoryRows = (
+        (catRes.data ?? []) as { name: string; kind: 'income' | 'expense' }[]
+      ).slice(0, 100);
+      const budgetRows = (
+        ((budgetRes.data as { rows?: unknown[] } | null)?.rows ?? []) as {
+          categoryName: string;
+          currency: string;
+          budgetMinor: string | null;
+          spentMinor: string;
+        }[]
+      ).slice(0, 100);
 
       const snapshot: FinancialContextSnapshot = {
         asOf: nowIso,
@@ -640,7 +648,9 @@ export default {
       } catch (error) {
         return error instanceof ProviderBudgetExhaustedError
           ? providerBudgetFailure()
-          : error instanceof PlaidClientError ? providerFailure(error) : internalFailure();
+          : error instanceof PlaidClientError
+            ? providerFailure(error)
+            : internalFailure();
       }
 
       let encrypted: EncryptedRecord;
@@ -719,7 +729,9 @@ export default {
         });
         return error instanceof ProviderBudgetExhaustedError
           ? providerBudgetFailure()
-          : error instanceof PlaidClientError ? providerFailure(error) : internalFailure();
+          : error instanceof PlaidClientError
+            ? providerFailure(error)
+            : internalFailure();
       }
 
       if (mapped.accounts.length === 0) {
@@ -891,10 +903,16 @@ export default {
       const kind = EntityKindSchema.safeParse(input['kind']);
       if (
         !householdId.success ||
-        typeof name !== 'string' || name.trim().length === 0 || name.length > 200 ||
+        typeof name !== 'string' ||
+        name.trim().length === 0 ||
+        name.length > 200 ||
         !kind.success
       ) {
-        return json(400, { code: 'invalid_command', message: 'Entity request failed validation.', details: {} });
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Entity request failed validation.',
+          details: {},
+        });
       }
       const { data, error } = await ctx.supabase.rpc('keel_create_entity', {
         p_household_id: householdId.data,
@@ -915,14 +933,22 @@ export default {
       const uuidReCat = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (
         !householdId.success ||
-        typeof name !== 'string' || name.trim().length === 0 || name.length > 80 ||
+        typeof name !== 'string' ||
+        name.trim().length === 0 ||
+        name.length > 80 ||
         (kind !== 'expense' && kind !== 'income') ||
-        (parent !== undefined && parent !== null &&
+        (parent !== undefined &&
+          parent !== null &&
           (typeof parent !== 'string' || !uuidReCat.test(parent))) ||
-        (entityId !== undefined && entityId !== null &&
+        (entityId !== undefined &&
+          entityId !== null &&
           (typeof entityId !== 'string' || !uuidReCat.test(entityId)))
       ) {
-        return json(400, { code: 'invalid_command', message: 'Category request failed validation.', details: {} });
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Category request failed validation.',
+          details: {},
+        });
       }
       const { data, error } = await ctx.supabase.rpc('keel_create_category', {
         p_household_id: householdId.data,
@@ -948,7 +974,11 @@ export default {
         !uuidReTax.test(categoryId) ||
         (taxLine !== null && (typeof taxLine !== 'string' || taxLine.length > 40))
       ) {
-        return json(400, { code: 'invalid_command', message: 'Tax line request failed validation.', details: {} });
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Tax line request failed validation.',
+          details: {},
+        });
       }
       const { error } = await ctx.supabase.rpc('keel_set_category_tax_line', {
         p_household_id: householdId.data,
@@ -959,18 +989,30 @@ export default {
       return json(200, { ok: true });
     }
 
-    if (path === '/categories/rename' || path === '/categories/archive' || path === '/categories/reparent') {
+    if (
+      path === '/categories/rename' ||
+      path === '/categories/archive' ||
+      path === '/categories/reparent'
+    ) {
       const input = body as Record<string, unknown>;
       const householdId = HouseholdIdSchema.safeParse(input['householdId']);
       const uuidReCat = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       const categoryId = input['categoryLedgerAccountId'];
       if (!householdId.success || typeof categoryId !== 'string' || !uuidReCat.test(categoryId)) {
-        return json(400, { code: 'invalid_command', message: 'Category request failed validation.', details: {} });
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Category request failed validation.',
+          details: {},
+        });
       }
       if (path === '/categories/rename') {
         const name = input['name'];
         if (typeof name !== 'string' || name.trim().length === 0 || name.length > 80) {
-          return json(400, { code: 'invalid_command', message: 'Category request failed validation.', details: {} });
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Category request failed validation.',
+            details: {},
+          });
         }
         const { error } = await ctx.supabase.rpc('keel_rename_category', {
           p_household_id: householdId.data,
@@ -982,9 +1024,16 @@ export default {
       }
       if (path === '/categories/archive') {
         const reassignTo = input['reassignTo'];
-        if (reassignTo !== undefined && reassignTo !== null &&
-            (typeof reassignTo !== 'string' || !uuidReCat.test(reassignTo))) {
-          return json(400, { code: 'invalid_command', message: 'Category request failed validation.', details: {} });
+        if (
+          reassignTo !== undefined &&
+          reassignTo !== null &&
+          (typeof reassignTo !== 'string' || !uuidReCat.test(reassignTo))
+        ) {
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Category request failed validation.',
+            details: {},
+          });
         }
         const { data, error } = await ctx.supabase.rpc('keel_archive_category', {
           p_household_id: householdId.data,
@@ -995,9 +1044,16 @@ export default {
         return json(200, data ?? { ok: true });
       }
       const parentId = input['parentLedgerAccountId'];
-      if (parentId !== undefined && parentId !== null &&
-          (typeof parentId !== 'string' || !uuidReCat.test(parentId))) {
-        return json(400, { code: 'invalid_command', message: 'Category request failed validation.', details: {} });
+      if (
+        parentId !== undefined &&
+        parentId !== null &&
+        (typeof parentId !== 'string' || !uuidReCat.test(parentId))
+      ) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Category request failed validation.',
+          details: {},
+        });
       }
       const { error } = await ctx.supabase.rpc('keel_reparent_category', {
         p_household_id: householdId.data,
@@ -1013,12 +1069,12 @@ export default {
       const householdId = HouseholdIdSchema.safeParse(input['householdId']);
       const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       const month = input['month'];
-      if (
-        !householdId.success ||
-        typeof month !== 'string' ||
-        !/^\d{4}-\d{2}-\d{2}$/.test(month)
-      ) {
-        return json(400, { code: 'invalid_command', message: 'Budget request failed validation.', details: {} });
+      if (!householdId.success || typeof month !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(month)) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Budget request failed validation.',
+          details: {},
+        });
       }
       if (path === '/budgets/copy') {
         const { data, error } = await ctx.supabase.rpc('keel_copy_budgets', {
@@ -1031,14 +1087,23 @@ export default {
       const categoryId = input['categoryLedgerAccountId'];
       const amountMinor = input['amountMinor'];
       if (
-        typeof categoryId !== 'string' || !uuidRe.test(categoryId) ||
+        typeof categoryId !== 'string' ||
+        !uuidRe.test(categoryId) ||
         (amountMinor !== null && (typeof amountMinor !== 'string' || !/^\d+$/.test(amountMinor)))
       ) {
-        return json(400, { code: 'invalid_command', message: 'Budget request failed validation.', details: {} });
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Budget request failed validation.',
+          details: {},
+        });
       }
       const rollover = input['rollover'];
       if (rollover !== undefined && rollover !== null && typeof rollover !== 'boolean') {
-        return json(400, { code: 'invalid_command', message: 'Budget request failed validation.', details: {} });
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Budget request failed validation.',
+          details: {},
+        });
       }
       const { error } = await ctx.supabase.rpc('keel_set_budget', {
         p_household_id: householdId.data,
@@ -1056,16 +1121,28 @@ export default {
       const householdId = HouseholdIdSchema.safeParse(input['householdId']);
       const uuidReTag = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!householdId.success) {
-        return json(400, { code: 'invalid_command', message: 'Tag request failed validation.', details: {} });
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Tag request failed validation.',
+          details: {},
+        });
       }
       if (path === '/tags/save') {
         const tagId = input['tagId'];
         const name = input['name'];
         if (
-          (tagId !== undefined && tagId !== null && (typeof tagId !== 'string' || !uuidReTag.test(tagId))) ||
-          typeof name !== 'string' || name.trim().length === 0 || name.length > 40
+          (tagId !== undefined &&
+            tagId !== null &&
+            (typeof tagId !== 'string' || !uuidReTag.test(tagId))) ||
+          typeof name !== 'string' ||
+          name.trim().length === 0 ||
+          name.length > 40
         ) {
-          return json(400, { code: 'invalid_command', message: 'Tag request failed validation.', details: {} });
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Tag request failed validation.',
+            details: {},
+          });
         }
         const { data, error } = await ctx.supabase.rpc('keel_tag_save', {
           p_household_id: householdId.data,
@@ -1078,7 +1155,11 @@ export default {
       if (path === '/tags/delete') {
         const tagId = input['tagId'];
         if (typeof tagId !== 'string' || !uuidReTag.test(tagId)) {
-          return json(400, { code: 'invalid_command', message: 'Tag request failed validation.', details: {} });
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Tag request failed validation.',
+            details: {},
+          });
         }
         const { error } = await ctx.supabase.rpc('keel_tag_delete', {
           p_household_id: householdId.data,
@@ -1091,11 +1172,17 @@ export default {
       const tagId = input['tagId'];
       const assigned = input['assigned'];
       if (
-        typeof txnId !== 'string' || !uuidReTag.test(txnId) ||
-        typeof tagId !== 'string' || !uuidReTag.test(tagId) ||
+        typeof txnId !== 'string' ||
+        !uuidReTag.test(txnId) ||
+        typeof tagId !== 'string' ||
+        !uuidReTag.test(tagId) ||
         typeof assigned !== 'boolean'
       ) {
-        return json(400, { code: 'invalid_command', message: 'Tag request failed validation.', details: {} });
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Tag request failed validation.',
+          details: {},
+        });
       }
       const { error } = await ctx.supabase.rpc('keel_tag_assign', {
         p_household_id: householdId.data,
@@ -1107,13 +1194,131 @@ export default {
       return json(200, { ok: true });
     }
 
+    if (
+      path === '/notes/save' ||
+      path === '/notes/archive' ||
+      path === '/tasks/save' ||
+      path === '/tasks/set-status'
+    ) {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const uuidReNoteTask = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const dateReNoteTask = /^\d{4}-\d{2}-\d{2}$/;
+      if (!householdId.success) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Notes/tasks request failed validation.',
+          details: {},
+        });
+      }
+      if (path === '/notes/save') {
+        const noteId = input['noteId'] ?? null;
+        const bodyText = input['body'];
+        const pinned = input['pinned'] ?? false;
+        if (
+          (noteId !== null && (typeof noteId !== 'string' || !uuidReNoteTask.test(noteId))) ||
+          typeof bodyText !== 'string' ||
+          bodyText.trim().length === 0 ||
+          bodyText.length > 1000 ||
+          typeof pinned !== 'boolean'
+        ) {
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Note request failed validation.',
+            details: {},
+          });
+        }
+        const { data, error } = await ctx.supabase.rpc('keel_note_save', {
+          p_household_id: householdId.data,
+          p_note_id: noteId,
+          p_body: bodyText,
+          p_pinned: pinned,
+        });
+        if (error) return mapDbError(error);
+        return json(200, { noteId: data });
+      }
+      if (path === '/notes/archive') {
+        const noteId = input['noteId'];
+        if (typeof noteId !== 'string' || !uuidReNoteTask.test(noteId)) {
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Note request failed validation.',
+            details: {},
+          });
+        }
+        const { error } = await ctx.supabase.rpc('keel_note_archive', {
+          p_household_id: householdId.data,
+          p_note_id: noteId,
+        });
+        if (error) return mapDbError(error);
+        return json(200, { ok: true });
+      }
+      if (path === '/tasks/save') {
+        const taskId = input['taskId'] ?? null;
+        const title = input['title'];
+        const description = input['description'] ?? null;
+        const dueOn = input['dueOn'] ?? null;
+        const priority = input['priority'] ?? 'normal';
+        if (
+          (taskId !== null && (typeof taskId !== 'string' || !uuidReNoteTask.test(taskId))) ||
+          typeof title !== 'string' ||
+          title.trim().length === 0 ||
+          title.length > 160 ||
+          (description !== null &&
+            (typeof description !== 'string' || description.length > 1000)) ||
+          (dueOn !== null && (typeof dueOn !== 'string' || !dateReNoteTask.test(dueOn))) ||
+          (priority !== 'low' && priority !== 'normal' && priority !== 'high')
+        ) {
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Task request failed validation.',
+            details: {},
+          });
+        }
+        const { data, error } = await ctx.supabase.rpc('keel_task_save', {
+          p_household_id: householdId.data,
+          p_task_id: taskId,
+          p_title: title,
+          p_description: description,
+          p_due_on: dueOn,
+          p_priority: priority,
+        });
+        if (error) return mapDbError(error);
+        return json(200, { taskId: data });
+      }
+      const taskId = input['taskId'];
+      const status = input['status'];
+      if (
+        typeof taskId !== 'string' ||
+        !uuidReNoteTask.test(taskId) ||
+        (status !== 'open' && status !== 'done' && status !== 'dismissed')
+      ) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Task request failed validation.',
+          details: {},
+        });
+      }
+      const { error } = await ctx.supabase.rpc('keel_task_set_status', {
+        p_household_id: householdId.data,
+        p_task_id: taskId,
+        p_status: status,
+      });
+      if (error) return mapDbError(error);
+      return json(200, { ok: true });
+    }
+
     if (path === '/goals/save' || path === '/goals/contribute' || path === '/goals/set-status') {
       const input = body as Record<string, unknown>;
       const householdId = HouseholdIdSchema.safeParse(input['householdId']);
       const uuidReGoal = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       const dateReGoal = /^\d{4}-\d{2}-\d{2}$/;
       if (!householdId.success) {
-        return json(400, { code: 'invalid_command', message: 'Goal request failed validation.', details: {} });
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Goal request failed validation.',
+          details: {},
+        });
       }
       if (path === '/goals/save') {
         const goalId = input['goalId'] ?? null;
@@ -1124,13 +1329,21 @@ export default {
         const kind = input['kind'] ?? 'savings';
         if (
           (goalId !== null && (typeof goalId !== 'string' || !uuidReGoal.test(goalId))) ||
-          typeof name !== 'string' || name.trim().length === 0 || name.length > 80 ||
-          typeof targetMinor !== 'string' || !/^\d{1,18}$/.test(targetMinor) ||
-          (targetDate !== null && (typeof targetDate !== 'string' || !dateReGoal.test(targetDate))) ||
+          typeof name !== 'string' ||
+          name.trim().length === 0 ||
+          name.length > 80 ||
+          typeof targetMinor !== 'string' ||
+          !/^\d{1,18}$/.test(targetMinor) ||
+          (targetDate !== null &&
+            (typeof targetDate !== 'string' || !dateReGoal.test(targetDate))) ||
           (accountId !== null && (typeof accountId !== 'string' || !uuidReGoal.test(accountId))) ||
           (kind !== 'savings' && kind !== 'debt')
         ) {
-          return json(400, { code: 'invalid_command', message: 'Goal request failed validation.', details: {} });
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Goal request failed validation.',
+            details: {},
+          });
         }
         const { data, error } = await ctx.supabase.rpc('keel_goal_save', {
           p_household_id: householdId.data,
@@ -1149,11 +1362,19 @@ export default {
         const amountMinor = input['amountMinor'];
         const contributedOn = input['contributedOn'];
         if (
-          typeof goalId !== 'string' || !uuidReGoal.test(goalId) ||
-          typeof amountMinor !== 'string' || !/^-?\d{1,18}$/.test(amountMinor) || amountMinor === '0' ||
-          typeof contributedOn !== 'string' || !dateReGoal.test(contributedOn)
+          typeof goalId !== 'string' ||
+          !uuidReGoal.test(goalId) ||
+          typeof amountMinor !== 'string' ||
+          !/^-?\d{1,18}$/.test(amountMinor) ||
+          amountMinor === '0' ||
+          typeof contributedOn !== 'string' ||
+          !dateReGoal.test(contributedOn)
         ) {
-          return json(400, { code: 'invalid_command', message: 'Goal request failed validation.', details: {} });
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Goal request failed validation.',
+            details: {},
+          });
         }
         const { data, error } = await ctx.supabase.rpc('keel_goal_contribute', {
           p_household_id: householdId.data,
@@ -1167,10 +1388,16 @@ export default {
       const goalId = input['goalId'];
       const status = input['status'];
       if (
-        typeof goalId !== 'string' || !uuidReGoal.test(goalId) ||
-        typeof status !== 'string' || status.length > 10
+        typeof goalId !== 'string' ||
+        !uuidReGoal.test(goalId) ||
+        typeof status !== 'string' ||
+        status.length > 10
       ) {
-        return json(400, { code: 'invalid_command', message: 'Goal request failed validation.', details: {} });
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Goal request failed validation.',
+          details: {},
+        });
       }
       const { error } = await ctx.supabase.rpc('keel_goal_set_status', {
         p_household_id: householdId.data,
@@ -1192,7 +1419,11 @@ export default {
       const uuidReSched = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       const dateRe = /^\d{4}-\d{2}-\d{2}$/;
       if (!householdId.success) {
-        return json(400, { code: 'invalid_command', message: 'Schedule request failed validation.', details: {} });
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Schedule request failed validation.',
+          details: {},
+        });
       }
       if (path === '/schedules/save') {
         const scheduleId = input['scheduleId'] ?? null;
@@ -1204,16 +1435,29 @@ export default {
         const nextDueDate = input['nextDueDate'];
         const autoEnterDays = input['autoEnterDays'] ?? null;
         if (
-          (scheduleId !== null && (typeof scheduleId !== 'string' || !uuidReSched.test(scheduleId))) ||
-          typeof accountId !== 'string' || !uuidReSched.test(accountId) ||
-          typeof description !== 'string' || description.trim().length === 0 || description.length > 140 ||
-          typeof amountMinor !== 'string' || !/^-?\d{1,18}$/.test(amountMinor) ||
-          (categoryId !== null && (typeof categoryId !== 'string' || !uuidReSched.test(categoryId))) ||
-          typeof frequency !== 'string' || frequency.length > 20 ||
-          typeof nextDueDate !== 'string' || !dateRe.test(nextDueDate) ||
-          (autoEnterDays !== null && (typeof autoEnterDays !== 'number' || !Number.isInteger(autoEnterDays)))
+          (scheduleId !== null &&
+            (typeof scheduleId !== 'string' || !uuidReSched.test(scheduleId))) ||
+          typeof accountId !== 'string' ||
+          !uuidReSched.test(accountId) ||
+          typeof description !== 'string' ||
+          description.trim().length === 0 ||
+          description.length > 140 ||
+          typeof amountMinor !== 'string' ||
+          !/^-?\d{1,18}$/.test(amountMinor) ||
+          (categoryId !== null &&
+            (typeof categoryId !== 'string' || !uuidReSched.test(categoryId))) ||
+          typeof frequency !== 'string' ||
+          frequency.length > 20 ||
+          typeof nextDueDate !== 'string' ||
+          !dateRe.test(nextDueDate) ||
+          (autoEnterDays !== null &&
+            (typeof autoEnterDays !== 'number' || !Number.isInteger(autoEnterDays)))
         ) {
-          return json(400, { code: 'invalid_command', message: 'Schedule request failed validation.', details: {} });
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Schedule request failed validation.',
+            details: {},
+          });
         }
         const { data, error } = await ctx.supabase.rpc('keel_schedule_save', {
           p_household_id: householdId.data,
@@ -1233,10 +1477,16 @@ export default {
         const scheduleId = input['scheduleId'];
         const status = input['status'];
         if (
-          typeof scheduleId !== 'string' || !uuidReSched.test(scheduleId) ||
-          typeof status !== 'string' || status.length > 10
+          typeof scheduleId !== 'string' ||
+          !uuidReSched.test(scheduleId) ||
+          typeof status !== 'string' ||
+          status.length > 10
         ) {
-          return json(400, { code: 'invalid_command', message: 'Schedule request failed validation.', details: {} });
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Schedule request failed validation.',
+            details: {},
+          });
         }
         const { error } = await ctx.supabase.rpc('keel_schedule_set_status', {
           p_household_id: householdId.data,
@@ -1250,10 +1500,16 @@ export default {
         const scheduleId = input['scheduleId'];
         const fromDue = input['fromDueDate'];
         if (
-          typeof scheduleId !== 'string' || !uuidReSched.test(scheduleId) ||
-          typeof fromDue !== 'string' || !dateRe.test(fromDue)
+          typeof scheduleId !== 'string' ||
+          !uuidReSched.test(scheduleId) ||
+          typeof fromDue !== 'string' ||
+          !dateRe.test(fromDue)
         ) {
-          return json(400, { code: 'invalid_command', message: 'Schedule request failed validation.', details: {} });
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Schedule request failed validation.',
+            details: {},
+          });
         }
         const { data, error } = await ctx.supabase.rpc('keel_schedule_enter', {
           p_household_id: householdId.data,
@@ -1267,11 +1523,17 @@ export default {
       const fromDue = input['fromDueDate'];
       const reason = input['reason'];
       if (
-        typeof scheduleId !== 'string' || !uuidReSched.test(scheduleId) ||
-        typeof fromDue !== 'string' || !dateRe.test(fromDue) ||
+        typeof scheduleId !== 'string' ||
+        !uuidReSched.test(scheduleId) ||
+        typeof fromDue !== 'string' ||
+        !dateRe.test(fromDue) ||
         (reason !== 'entered' && reason !== 'skipped')
       ) {
-        return json(400, { code: 'invalid_command', message: 'Schedule request failed validation.', details: {} });
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Schedule request failed validation.',
+          details: {},
+        });
       }
       const { data, error } = await ctx.supabase.rpc('keel_schedule_advance', {
         p_household_id: householdId.data,
@@ -1291,7 +1553,11 @@ export default {
       const householdId = HouseholdIdSchema.safeParse(input['householdId']);
       const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!householdId.success) {
-        return json(400, { code: 'invalid_command', message: 'Rule request failed validation.', details: {} });
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Rule request failed validation.',
+          details: {},
+        });
       }
       if (path === '/rules/apply') {
         const { data, error } = await ctx.supabase.rpc('keel_apply_rules', {
@@ -1304,7 +1570,11 @@ export default {
       if (path === '/rules/delete') {
         const ruleId = input['ruleId'];
         if (typeof ruleId !== 'string' || !uuidRe.test(ruleId)) {
-          return json(400, { code: 'invalid_command', message: 'Rule request failed validation.', details: {} });
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Rule request failed validation.',
+            details: {},
+          });
         }
         const { error } = await ctx.supabase.rpc('keel_rule_delete', {
           p_household_id: householdId.data,
@@ -1321,15 +1591,22 @@ export default {
       const active = input['active'];
       if (
         (ruleId !== undefined && (typeof ruleId !== 'string' || !uuidRe.test(ruleId))) ||
-        typeof pattern !== 'string' || pattern.length > 140 ||
-        (categoryId !== undefined && categoryId !== null &&
+        typeof pattern !== 'string' ||
+        pattern.length > 140 ||
+        (categoryId !== undefined &&
+          categoryId !== null &&
           (typeof categoryId !== 'string' || !uuidRe.test(categoryId))) ||
-        (renameTo !== undefined && renameTo !== null &&
+        (renameTo !== undefined &&
+          renameTo !== null &&
           (typeof renameTo !== 'string' || renameTo.length > 140)) ||
         (priority !== undefined && typeof priority !== 'number') ||
         (active !== undefined && typeof active !== 'boolean')
       ) {
-        return json(400, { code: 'invalid_command', message: 'Rule request failed validation.', details: {} });
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Rule request failed validation.',
+          details: {},
+        });
       }
       const { data, error } = await ctx.supabase.rpc('keel_rule_save', {
         p_household_id: householdId.data,
@@ -1448,11 +1725,7 @@ export default {
       const householdId = HouseholdIdSchema.safeParse(input['householdId']);
       const connectionId = ConnectionIdSchema.safeParse(input['connectionId']);
       const displayName = input['displayName'];
-      if (
-        !householdId.success ||
-        !connectionId.success ||
-        typeof displayName !== 'string'
-      ) {
+      if (!householdId.success || !connectionId.success || typeof displayName !== 'string') {
         return json(400, {
           code: 'invalid_command',
           message: 'Connection rename request failed validation.',
@@ -1499,14 +1772,11 @@ export default {
           : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
       }
 
-      const { data: begin, error: beginError } = await ctx.supabase.rpc(
-        'keel_disconnect_begin',
-        {
-          p_household_id: householdId.data,
-          p_connection_id: connectionId.data,
-          p_reason: 'user_requested',
-        },
-      );
+      const { data: begin, error: beginError } = await ctx.supabase.rpc('keel_disconnect_begin', {
+        p_household_id: householdId.data,
+        p_connection_id: connectionId.data,
+        p_reason: 'user_requested',
+      });
       if (beginError) return mapDbError(beginError);
 
       let removed = false;
@@ -1546,9 +1816,10 @@ export default {
             try {
               removed = await plaid.itemRemove(connectionId.data, { access_token: token });
             } catch (error) {
-              failure = error instanceof PlaidClientError
-                ? (error.errorCode ?? 'provider_error')
-                : 'provider_error';
+              failure =
+                error instanceof PlaidClientError
+                  ? (error.errorCode ?? 'provider_error')
+                  : 'provider_error';
             }
           }
         }
@@ -1556,16 +1827,13 @@ export default {
         failure = 'no_credentials';
       }
 
-      const { error: completeError } = await ctx.supabaseAdmin.rpc(
-        'keel_disconnect_complete',
-        {
-          p_household_id: householdId.data,
-          p_connection_id: connectionId.data,
-          p_removal_attempt_id: begin.removalAttemptId,
-          p_removed: removed,
-          p_failure: failure,
-        },
-      );
+      const { error: completeError } = await ctx.supabaseAdmin.rpc('keel_disconnect_complete', {
+        p_household_id: householdId.data,
+        p_connection_id: connectionId.data,
+        p_removal_attempt_id: begin.removalAttemptId,
+        p_removed: removed,
+        p_failure: failure,
+      });
       if (completeError) return mapDbError(completeError);
       return json(200, { status: removed ? 'disconnected' : 'disconnecting' });
     }
@@ -1643,19 +1911,26 @@ export default {
     }
 
     if (path === '/queries') {
+      const edgeStartedAt = performance.now();
       const query = body as { query?: string; householdId?: string };
       const proc = query.query ? QUERY_TO_PROC[query.query] : undefined;
       if (!proc || typeof query.householdId !== 'string') {
         return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });
       }
-      if (query.query === 'recurring.list' || query.query === 'paychecks.list' || query.query === 'reimbursements.list' || query.query === 'statements.list') {
+      if (
+        query.query === 'recurring.list' ||
+        query.query === 'paychecks.list' ||
+        query.query === 'reimbursements.list' ||
+        query.query === 'statements.list'
+      ) {
         const parsedHousehold = HouseholdIdSchema.safeParse(query.householdId);
         if (!parsedHousehold.success) {
           return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });
         }
         const authzCtx = await loadAuthzContext(ctx.supabase, userId);
         const decision = authorize(authzCtx, query.query as Action, {
-          kind: 'household', householdId: parsedHousehold.data,
+          kind: 'household',
+          householdId: parsedHousehold.data,
         });
         if (!decision.allowed) {
           return decision.code === 'household_scope_violation'
@@ -1711,9 +1986,19 @@ export default {
         const db = body as { asOf?: unknown };
         rpcArgs.p_as_of = isoDate(db.asOf) ?? todayIso;
       }
+      const rpcStartedAt = performance.now();
       const { data, error } = await ctx.supabase.rpc(proc, rpcArgs);
+      const rpcMs = Math.trunc(performance.now() - rpcStartedAt);
       if (error) return mapDbError(error);
-      return json(200, data);
+      const edgeMs = Math.trunc(performance.now() - edgeStartedAt);
+      const responseBody =
+        data !== null && typeof data === 'object' && !Array.isArray(data)
+          ? {
+              ...(data as Record<string, unknown>),
+              diagnostics: { query: query.query, rpcMs, edgeMs },
+            }
+          : data;
+      return json(200, responseBody);
     }
 
     return json(404, { code: 'not_found', message: 'Not found.', details: {} });
