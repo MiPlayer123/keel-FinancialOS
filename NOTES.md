@@ -1874,7 +1874,6 @@ design/TEARDOWN-STATUS-2026-07-17.md.
   pre-existing warnings in untouched files), web build, build:functions;
   migration executed end-to-end against a scratch Postgres 16 with stub
   schema (both call shapes; read model emits limitMinor incl. JSON null).
-
 ## 2026-07-17 — D-044: C7 split editor (transactions.set_splits + editable splits in TxnEditDialog)
 
 Teardown C7 (build-queue item 5). Audit first: NO split-write command existed
@@ -1936,3 +1935,27 @@ read-only with "void and re-enter". Full slice built:
   raw_provider_events row for the same webhook page implies the sync worker
   re-archived under retry/redelivery — a pre-existing webhook-idempotency
   edge case worth a follow-up slice, not a C7 regression). Re-triggering.
+
+## 2026-07-17 — C16: Home "Needs attention" module (teardown item C16)
+
+One card near the top of Home aggregating actionable counts into deep-linked
+rows (Card + list-row grammar, divide-y like the projected-bills list; hides
+entirely at zero). Pure aggregation in `apps/web/src/lib/needs-attention.ts`
+(unit-tested, todayIso injected); component fetches only the two Review
+sources Home didn't already load (transfers.list + categorization.suggestions
+via useKeelQuerySilent — recurring.list, forecast bills, connections, and
+transactions.rich ride the page's existing fetches). Rows: pending review
+(same three sources as ReviewBadge) → /dashboard/review; outflow forecast
+bills due within 7 days (inclusive both ends) → /dashboard/recurring;
+reauth_required connections → /dashboard/connections; uncategorized
+transactions (rich rows already on the page — no new query) →
+/dashboard/ledger?category=uncategorized. Counts neutral per Law 8.
+Decisions:
+- TransferNudgeBanner REMOVED from Home (its count folds into the review
+  row); component file stays — Reports still renders it with its
+  spending-specific copy.
+- `isUncategorized` moved from txn-edit-dialog.tsx to lib/needs-attention.ts
+  (structural UncategorizedLike input) so the count shares ONE definition;
+  txn-edit-dialog re-exports it, so ledger/page.tsx imports are untouched.
+- SyncStatus now takes connections as a prop; HomeBody fetches connections
+  once and shares them with the reauth row (was a second identical fetch).

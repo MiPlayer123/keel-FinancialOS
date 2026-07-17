@@ -15,6 +15,7 @@ import {
   fetchSchedules,
   syncConnection,
   type AccountRow,
+  type ConnectionRow,
   type DailyBalanceRow,
   type ForecastBill,
   type MonthlyCashFlowRow,
@@ -32,9 +33,9 @@ import {
   CashFlowMonthlyChart,
   CategoryBarList,
 } from '@/components/keel/charts';
-import { spendingMix, isDebtOrTransferLike, suggestedTransferCount } from '@/lib/spending';
+import { spendingMix, isDebtOrTransferLike } from '@/lib/spending';
 import { NetWorthHero } from '@/components/keel/net-worth-hero';
-import { TransferNudgeBanner } from '@/components/keel/transfer-nudge-banner';
+import { NeedsAttention } from '@/components/keel/needs-attention';
 import { formatMoney } from '@/lib/money';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -57,30 +58,23 @@ export default function HomePage() {
  * "Do I have to sync manually?" — no: KEEL syncs itself every few minutes
  * (a 3-minute drain cron plus a 15-minute scheduler). This shows when data
  * last landed and offers an immediate refresh for the impatient moment.
+ * Connections arrive as a prop — HomeBody fetches them once and shares the
+ * result with the Needs-attention module (reauth row).
  */
-function SyncStatus({ householdId }: { householdId: string }) {
-  const [lastSync, setLastSync] = useState<string | null>(null);
-  const [connectionId, setConnectionId] = useState<string | null>(null);
+function SyncStatus({
+  householdId,
+  connections,
+}: {
+  householdId: string;
+  connections: ConnectionRow[];
+}) {
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    let active = true;
-    fetchConnections(householdId)
-      .then((conns) => {
-        if (!active) return;
-        const synced = conns
-          .filter((c) => c.lastSuccessfulSyncAt !== null)
-          .sort((a, b) => (b.lastSuccessfulSyncAt ?? '').localeCompare(a.lastSuccessfulSyncAt ?? ''));
-        setLastSync(synced[0]?.lastSuccessfulSyncAt ?? null);
-        setConnectionId(conns[0]?.id ?? null);
-      })
-      .catch(() => {
-        if (active) setLastSync(null);
-      });
-    return () => {
-      active = false;
-    };
-  }, [householdId]);
+  const synced = connections
+    .filter((c) => c.lastSuccessfulSyncAt !== null)
+    .sort((a, b) => (b.lastSuccessfulSyncAt ?? '').localeCompare(a.lastSuccessfulSyncAt ?? ''));
+  const lastSync = synced[0]?.lastSuccessfulSyncAt ?? null;
+  const connectionId = connections[0]?.id ?? null;
 
   if (!connectionId) return null;
 
@@ -435,6 +429,7 @@ function HomeBody() {
   const richTxns = useKeelQuerySilent<RichTransactionRow>('transactions.rich', householdId);
   const recurringSeries = useKeelQuerySilent<RecurringSeriesRow>('recurring.list', householdId);
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
+  const [connections, setConnections] = useState<ConnectionRow[] | null>(null);
   const [schedules, setSchedules] = useState<ScheduleRow[]>([]);
   const [forecast, setForecast] = useState<{
     rows: DailyBalanceRow[];
@@ -467,6 +462,23 @@ function HomeBody() {
     };
   }, [householdId]);
 
+  // One connections fetch for the whole page: the Needs-attention reauth row
+  // and the Accounts section's SyncStatus both read from it.
+  useEffect(() => {
+    if (!householdId) return;
+    let active = true;
+    void fetchConnections(householdId)
+      .then((c) => {
+        if (active) setConnections(c);
+      })
+      .catch(() => {
+        if (active) setConnections([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [householdId]);
+
   useEffect(() => {
     if (!householdId) return;
     let active = true;
@@ -490,7 +502,6 @@ function HomeBody() {
   // whole dashboard — caught by the live UI verification pass).
   const spending = useMemo(() => spendingMix(richTxns ?? []), [richTxns]);
   const insights = useMemo(() => buildInsights(richTxns ?? []), [richTxns]);
-  const suggestedTransfers = useMemo(() => suggestedTransferCount(richTxns ?? []), [richTxns]);
 
   if (loading) {
     return (
@@ -533,7 +544,16 @@ function HomeBody() {
 
   return (
     <>
-      <TransferNudgeBanner count={suggestedTransfers} />
+      {/* Unified actionable inbox (C16). Absorbs the old TransferNudgeBanner:
+          suggested transfers are part of the review row's count, and Review is
+          where confirming them (excluding from spending) actually happens. */}
+      <NeedsAttention
+        householdId={householdId}
+        recurring={recurringSeries}
+        bills={forecast?.bills ?? null}
+        connections={connections}
+        transactions={richTxns}
+      />
 
       <FreeToSpendCard
         richTxns={richTxns ?? []}
@@ -656,7 +676,7 @@ function HomeBody() {
       <section className="space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-medium text-muted-foreground">Accounts</h2>
-          <SyncStatus householdId={householdId} />
+          <SyncStatus householdId={householdId} connections={connections ?? []} />
         </div>
         {accountList.length === 0 ? (
           <EmptyState

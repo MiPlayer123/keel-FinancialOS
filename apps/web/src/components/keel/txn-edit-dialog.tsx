@@ -44,6 +44,7 @@ import {
   recentCategoriesKey,
 } from '@/lib/category-picker';
 import { merchantDisplayName } from '@/lib/merchant-name';
+import { isUncategorized } from '@/lib/needs-attention';
 import { useHousehold } from '@/components/keel/household-context';
 import { Money } from '@/components/keel/money';
 import { Badge } from '@/components/ui/badge';
@@ -69,16 +70,9 @@ import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Textarea } from '@/components/ui/textarea';
 
-/**
- * Rename-proof "is it still on a landing pad?" check: the stable pfc_key when
- * the migration has landed, the seeded name as a fallback until then. Split
- * transactions are categorized by their splits — never "uncategorized".
- */
-export function isUncategorized(t: RichTransactionRow): boolean {
-  if (t.splits && t.splits.length > 0) return false;
-  if (t.categoryPfcKey != null) return t.categoryPfcKey.startsWith('uncategorized');
-  return t.categoryName ? t.categoryName.startsWith('Uncategorized') : true;
-}
+// Single definition now lives in lib (Home's "Needs attention" module counts
+// with it too); re-exported here so existing consumers keep their import path.
+export { isUncategorized } from '@/lib/needs-attention';
 
 export type ListCallbacks = {
   onRecategorize: (txnId: string, categoryId: string) => void;
