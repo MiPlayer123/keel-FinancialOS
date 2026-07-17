@@ -968,6 +968,10 @@ export type RecurringOccurrence = {
   expectedAmountMinor: string;
   currency: string;
   status: string;
+  /** Set once this occurrence is matched to a real transaction — used to
+   *  detect internal-transfer series (a confirmed transfer_links row on the
+   *  matched txn) the same way keel_cash_flow_forecast excludes them. */
+  matchedTxnId: string | null;
 };
 
 export type RecurringStatusEvent = {
