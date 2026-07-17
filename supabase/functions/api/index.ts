@@ -899,6 +899,31 @@ export default {
       return json(200, { ok: true });
     }
 
+    if (path === '/accounts/reassign-entity') {
+      // Plain ownership correction (Law 9 explicit ownership), same shape
+      // as /accounts/rename -- no economic-event key, no suggest/approve
+      // gate. Fixes accounts (esp. Plaid-connected ones) that landed under
+      // the wrong entity at connect time.
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const accountId = AccountIdSchema.safeParse(input['accountId']);
+      const entityId = EntityIdSchema.safeParse(input['entityId']);
+      if (!householdId.success || !accountId.success || !entityId.success) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Reassign-entity request failed validation.',
+          details: {},
+        });
+      }
+      const { error: reassignError } = await ctx.supabase.rpc('keel_reassign_account_entity', {
+        p_household_id: householdId.data,
+        p_account_id: accountId.data,
+        p_entity_id: entityId.data,
+      });
+      if (reassignError) return mapDbError(reassignError);
+      return json(200, { ok: true });
+    }
+
     if (path === '/entities/create') {
       const input = body as Record<string, unknown>;
       const householdId = HouseholdIdSchema.safeParse(input['householdId']);

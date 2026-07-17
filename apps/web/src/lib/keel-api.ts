@@ -193,6 +193,19 @@ export async function renameAccount(input: {
   });
 }
 
+/** Move an already-connected or manual account to a different entity. */
+export async function reassignAccountEntity(input: {
+  householdId: string;
+  accountId: string;
+  entityId: string;
+}): Promise<unknown> {
+  return invoke('api/accounts/reassign-entity', {
+    householdId: input.householdId,
+    accountId: input.accountId,
+    entityId: input.entityId,
+  });
+}
+
 /** Connections for a household (RLS-scoped direct read; credentials never exposed). */
 export type ConnectionRow = {
   id: string;
@@ -278,18 +291,6 @@ export async function fetchCategoryTaxLines(householdId: string): Promise<Map<st
   if (error) throw error;
   const rows = (data as { id: string; tax_line: string }[] | null) ?? [];
   return new Map(rows.map((r) => [r.id, r.tax_line]));
-}
-
-/** First entity of a household (needed to scope a new connection). */
-export async function fetchFirstEntityId(householdId: string): Promise<string | null> {
-  const { data, error } = await getSupabaseBrowserClient()
-    .from('entities')
-    .select('id')
-    .eq('household_id', householdId)
-    .order('created_at')
-    .limit(1);
-  if (error) throw error;
-  return (data as { id: string }[] | null)?.[0]?.id ?? null;
 }
 
 /** A financial entity (personal books, an LLC, a trust, …) within a household. */
