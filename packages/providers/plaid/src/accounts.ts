@@ -4,6 +4,9 @@ export interface KeelPlaidAccount {
   readonly subtype: string;
   readonly currency: 'USD';
   readonly kind: 'asset' | 'liability';
+  /** Masked account-number suffix Plaid reports (e.g. last 4 digits). Some
+   *  institutions/account types omit it — null, never fabricated (Law 9). */
+  readonly mask: string | null;
 }
 
 export interface SkippedPlaidAccount {
@@ -54,12 +57,15 @@ export const mapAccountsGetToKeel = (body: unknown): MappedPlaidAccounts => {
       continue;
     }
 
+    const maskValue = value['mask'];
+
     result.accounts.push({
       externalRef,
       name: stringField(value, 'name'),
       subtype: stringField(value, 'subtype'),
       currency: 'USD',
       kind: accountKind(stringField(value, 'type')),
+      mask: typeof maskValue === 'string' && maskValue.length > 0 ? maskValue : null,
     });
   }
   return result;

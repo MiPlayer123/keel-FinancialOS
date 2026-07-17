@@ -2555,3 +2555,137 @@ field on `savings_goals` (debt kind) would let this simulator default its
 inputs instead of starting blank every time, and would be the natural
 option-(a) migration for a future slice — deliberately not built now to keep
 this an additive, non-schema-touching, no-new-command slice.
+
+## 2026-07-17 — D-050: C6 residual — account last-4 + status chip
+
+Teardown item C6 ("Master-detail txn surface") was marked partial: `TxnEditDialog`
+covers editing including mobile, but was missing an account last-4 suffix and
+a status chip in the transaction detail surface. Two independent gaps closed
+here; both additive, no new command (Law 2/9).
+
+**1. Account last-4 mask.** Checked whether this was an "additive field, zero
+new schema" case like several other slices this session — it was NOT. Grepped
+the whole worker/api/link path (`packages/providers/plaid/src/accounts.ts`,
+`supabase/functions/api/index.ts`'s `keel_finalize_link` call) and confirmed
+Plaid's `mask` field was dropped on the floor at every hop: `accounts` table
+has no `mask` column, `mapAccountsGetToKeel` never read `value['mask']`, and
+the `dbAccounts` payload sent to `keel_finalize_link` never carried it. This
+is a genuine additive migration, not just an unselected column:
+- `supabase/migrations/20260717220000_account_mask.sql` — (a) `alter table
+  accounts add column mask text check (mask is null or length(mask) between
+  1 and 10)`, nullable, no uniqueness (two accounts CAN legitimately share a
+  mask across different institutions); (b) `keel_finalize_link` recreated
+  (create-or-replace, SAME signature `(uuid, uuid, text, timestamptz,
+  jsonb)` — fully additive, preserves existing keel_api ownership/grants)
+  to insert `nullif(v_account->>'mask', '')` into the new column; (c)
+  `keel_list_transactions_rich` recreated (same pattern as D-047) adding one
+  field, `accountMask`, reading `acc.mask` off the account join that already
+  exists for `accountName` — no new join.
+- `packages/providers/plaid/src/accounts.ts`: `KeelPlaidAccount.mask: string
+  | null` captured from Plaid's `/accounts/get` response (empty string also
+  normalized to null — Plaid has been observed to send `""` for accounts
+  with no reported mask). `supabase/functions/api/index.ts`'s `dbAccounts`
+  map now threads `mask: account.mask` into the `keel_finalize_link` RPC
+  call.
+- `apps/web/src/lib/keel-api.ts`: `RichTransactionRow.accountMask?: string |
+  null` — optional/absent-safe, no breaking change to existing consumers
+  (same pattern as `reconciled` in D-047).
+- New pure helper `apps/web/src/lib/account-label.ts` — `maskAccountLabel(name,
+  mask)` — "Chase Checking" + "1234" -> "Chase Checking ••1234", falls back to
+  the plain name on null/undefined/empty/whitespace-only mask (hides-at-
+  absence, Law 8/9: never a guessed suffix). 7 unit tests in
+  `account-label.test.ts` covering presence, absence (null/undefined/empty/
+  whitespace), trimming, and short (<4 char) masks some institutions report.
+  Wired into both `TxnList`'s account-name line and the new account line in
+  `TxnEditDialog`.
+- **Residual gap, explicitly flagged, not faked:** accounts linked BEFORE
+  this migration ships will read `mask: null` until their connection's next
+  full Plaid `/accounts/get` resync (or a manual re-link) — there is no
+  backfill command, and one was deliberately not written, because KEEL has
+  no live Plaid Sandbox re-sync available in this sandbox to source real
+  values from (Law 9 reproducible numbers: no fabricated data). The UI
+  renders the absence as "no suffix," never a placeholder. This is the kind
+  of gap the task brief anticipated ("decide whether adding a new nullable
+  column is warranted... or defer/flag") — the column is warranted (cheap,
+  additive, unblocks all FUTURE links immediately), the backfill is not
+  (would require fabricating Plaid data).
+
+**2. Status chip.** `canonical_transactions.status` (enum `pending | posted |
+reviewed | voided`) was already selected by `keel_list_transactions_rich`
+and typed on `RichTransactionRow`, and `TxnList`'s ledger row already rendered
+a neutral outline "Pending" chip (hidden below `sm`, hidden entirely when not
+pending) — that part of C6 was already done, just not mentioned in the
+teardown doc's note. The actual gap was narrower than the task brief assumed:
+`TxnEditDialog` itself (the detail/edit surface, as opposed to the ledger
+row) rendered no status information at all — not even the account name.
+Added one line to the dialog, directly below the description/amount row:
+account name (+ mask) on the left, the same neutral outline "Pending" chip
+(no icon, matches the ledger row) on the right, shown ONLY when `status ===
+'pending'` — `posted` and `reviewed` render nothing (Law 8 hides-at-absence;
+per this session's Auto/Reconciled precedent, a chip for the overwhelmingly
+common case is chrome, not information). Did not invent a chip for `reviewed`
+transactions — no command in the current codebase transitions a row to that
+status yet (checked: `status in ('posted','reviewed')` appears only as an
+input predicate in recurring/paychecks/reimbursements/reconciliation, never
+as a write target outside `manual_transactions`' `pending|posted` — the
+lifecycle is currently `pending -> posted`, full stop), so a `reviewed` chip
+would be dead code with no way to trigger it; flagging as future scope
+rather than building speculative UI.
+
+**3. Third item ("if time permits"):** none pursued — the two required gaps
+above were each larger than expected (a genuine schema/provider-mapping
+change, not just an unselected column), and Law 8's "financial calm" argues
+against padding the detail surface with more chrome in the same slice.
+
+**Verification:** `pnpm typecheck` clean (0 errors, all 14 workspace
+packages). `pnpm lint` clean — 0 errors; the 4 warnings present are
+pre-existing and in files this slice never touched (`goals/page.tsx`,
+`import-csv-dialog.tsx`, `needs-attention.tsx`), confirmed by grepping the
+lint output for any of this slice's changed paths (none appear). `pnpm
+--filter @keel/web exec vitest run` 249/249 green. `pnpm --filter @keel/plaid
+exec vitest run` (or root `vitest run packages/providers/plaid`) 50/50 green,
+including the new mask-mapping cases. Root `pnpm test` also run for extra
+confidence: 717/717 vitest tests pass; the one failing suite
+(`supabase/functions/worker/test/index.test.ts`, via a missing generated
+`_shared/vendor/keel-domain.mjs`) is a pre-existing environment gap in this
+freshly-installed worktree (no bundling step has been run for the worker's
+vendored contracts bundle) — unrelated to this slice's diff (never touches
+`worker/` or `_shared/`), and outside the task's specified gate list
+(typecheck/lint/`@keel/web` vitest only). No local Supabase/Docker stack
+available in this sandbox (same constraint as D-043/D-047) — the migration
+was hand-verified by re-reading it line-for-line against its unchanged
+predecessor (20260717210000) to confirm the only deltas are the new `mask`
+column, the `mask` insert in `keel_finalize_link`'s existing INSERT (same
+column list plus one), and the single new `accountMask` key in
+`keel_list_transactions_rich`'s existing `jsonb_build_object` (same join,
+no new join added, so no new seq-scan risk of the kind D-047's header
+comment warns about). Flagging this migration as unexecuted-but-hand-
+verified per the task brief.
+
+**Deviation:** none from governing law. One scope call worth citing: the
+task brief hypothesized the account-mask piece might turn out to be "zero
+new schema" like several other slices this session — investigation showed
+it genuinely was not (Plaid's `mask` was never captured anywhere in the
+pipeline), so this slice includes a real additive migration rather than
+just an exposed-but-unselected column, contrary to that initial hypothesis.
+
+**Review fix (r3604673536):** the first draft only persisted `mask` inside
+`keel_finalize_link` — brand-new accounts at link time. Every account
+linked BEFORE this migration ships (the overwhelming majority of real
+accounts) has no later path to ever pick one up: `processRefreshBalances`
+(`supabase/functions/worker/index.ts`) already calls Plaid's
+`/accounts/get` on its own 3-min-cycle resync and already receives `mask`
+in that same response, but selected only `id, external_ref` from `accounts`
+and never wrote it back. Fixed by threading `acct.mask` through
+`keel_apply_account_balance` as a new 8th default parameter (`p_mask text
+default null`, appended via `create or replace` on the current 7-arg
+signature — Postgres preserves the function's OID/ownership/grants across
+this kind of extension, so no revoke/grant restatement was needed, unlike
+the 6-arg→7-arg conversion earlier this session which changed an existing
+parameter and required a full drop+create). The proc writes `mask` via
+`update accounts set mask = p_mask where ... mask is distinct from p_mask`
+whenever the provider reports a non-empty value — it never CLEARS an
+already-known mask just because one particular refresh response omitted
+the field. This closes the residual gap flagged above: a pre-existing
+linked account now picks up its mask on its very next scheduled refresh,
+no manual re-link required.
