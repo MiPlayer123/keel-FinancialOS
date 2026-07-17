@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import {
   categorizeTransaction,
   fetchAccounts,
+  fetchConnections,
   fetchGoals,
   reanchorAccountBalance,
   fetchCategories,
@@ -21,6 +22,7 @@ import {
   fetchTags,
   type AccountRow,
   type CategoryRow,
+  type ConnectionRow,
   type DailyBalanceRow,
   type LatestBalanceRow,
   type GoalRow,
@@ -28,6 +30,9 @@ import {
   type TagRow,
   type TrialBalanceRow,
 } from '@/lib/keel-api';
+import { relativeSyncLabel } from '@/lib/relative-date';
+import { utilizationPercent } from '@/lib/credit-utilization';
+import { ReauthLink } from '@/components/keel/reauth-link';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
 import { RenameAccountDialog } from '@/components/keel/rename-account-dialog';
 import { SetOpeningBalanceDialog } from '@/components/keel/set-opening-balance-dialog';
@@ -55,6 +60,7 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
   const [kinds, setKinds] = useState<Map<string, string> | null>(null);
   const [provider, setProvider] = useState<LatestBalanceRow | null>(null);
+  const [connections, setConnections] = useState<ConnectionRow[]>([]);
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [tags, setTags] = useState<TagRow[]>([]);
   const [goals, setGoals] = useState<GoalRow[]>([]);
@@ -90,6 +96,15 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
       })
       .catch(() => {
         if (active) setProvider(null);
+      });
+    // Per-account freshness/reauth (C8): same member-read the Connections
+    // page uses; best-effort — a failure degrades to the pre-slice header.
+    void fetchConnections(householdId)
+      .then((c) => {
+        if (active) setConnections(c);
+      })
+      .catch(() => {
+        if (active) setConnections([]);
       });
     void fetchCategories(householdId)
       .then((c) => {
@@ -170,6 +185,19 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
   const balanceByLedger = new Map(balances.rows.map((r) => [r.ledgerAccountId, r.balanceMinor]));
   const balanceMinor = balanceByLedger.get(account.ledgerAccountId) ?? '0';
   const kind = kinds.get(account.ledgerAccountId) ?? 'asset';
+  // C8: freshness + reauth from the OWNING connection (manual accounts have none).
+  const connection = account.connectionId
+    ? connections.find((c) => c.id === account.connectionId)
+    : undefined;
+  const syncLabel = connection?.lastSuccessfulSyncAt
+    ? relativeSyncLabel(connection.lastSuccessfulSyncAt, new Date().toISOString())
+    : null;
+  // C9: utilization only when the provider reports a limit; currentMinor is
+  // the positive owed magnitude, so the % is scaled-integer BigInt math.
+  const utilization =
+    kind === 'liability' && provider
+      ? utilizationPercent(provider.currentMinor, provider.limitMinor ?? null)
+      : null;
 
   return (
     <div className="space-y-6 p-6">
@@ -192,9 +220,13 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
               <Pencil className="size-3.5" />
             </Button>
           </div>
-          <p className="text-sm capitalize text-muted-foreground">
-            {kind} · {account.subtype.replaceAll('_', ' ')}
+          <p className="text-sm text-muted-foreground">
+            <span className="capitalize">
+              {kind} · {account.subtype.replaceAll('_', ' ')}
+            </span>
+            {syncLabel ? <> · Updated {syncLabel}</> : null}
           </p>
+          {connection?.status === 'reauth_required' ? <ReauthLink className="mt-1.5" /> : null}
         </div>
         <div className="text-left sm:text-right">
           <p className="text-sm text-muted-foreground">Balance</p>
@@ -212,6 +244,19 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
                 className="text-xs"
               />{' '}
               available at the bank
+            </p>
+          ) : null}
+          {/* C9: shown ONLY when the institution reports a limit; neutral
+              tokens — utilization is status, not negative money (Law 8). */}
+          {utilization !== null && provider?.limitMinor ? (
+            <p className="text-xs text-muted-foreground">
+              {utilization}% of{' '}
+              <Money
+                amountMinor={provider.limitMinor}
+                currency={account.currency}
+                className="text-xs"
+              />{' '}
+              limit used
             </p>
           ) : null}
           <EarmarkLine

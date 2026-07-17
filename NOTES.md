@@ -1839,3 +1839,38 @@ keel_autocategorize_household shared the pattern on the worker path.
   writes. Deviation: the migration-time backfill itself is unobservable in
   pgTAP (runs before seed on an empty DB); it shares the ingestion
   extraction shape and was validated by the prod apply.
+## 2026-07-17 — D-043: C8 per-account freshness/reauth + C9 credit limit/utilization (one slice)
+
+Teardown items C8 + C9 (both enrich account rows/detail), per
+design/TEARDOWN-STATUS-2026-07-17.md.
+
+- C8 needed NO new SQL: `connections` already had an authenticated
+  member-read policy (20260710210500) and `fetchConnections` already returned
+  `status` + `last_successful_sync_at`; `accounts.connection_id` existed but
+  wasn't selected — added to `fetchAccounts`. Rows on the Accounts page and
+  detail header show "Updated 2h ago" (new tested `relativeSyncLabel` in
+  `lib/relative-date.ts`: minutes/hours/days, floor division, null for
+  future/garbage) and a neutral-token `ReauthLink` chip →
+  `/dashboard/connections` when the owning connection is `reauth_required`.
+  Rows switched to the stretched-link pattern so the chip is clickable
+  without nested anchors.
+- Deviation (flagged): the sidebar rail shows freshness via the row `title`
+  tooltip only, not visible text — an 11px two-column row can't carry
+  "Updated 2h ago" without breaking the calm alignment (Law 8 / Addendum §D
+  taste call). The reauth icon IS visible in the rail.
+- C9: no limit was captured anywhere (grep of migrations for a limit column
+  came up empty), so migration 20260717170000 adds nullable
+  `balance_snapshots.limit_minor`, threads `p_limit_minor` through
+  `keel_apply_account_balance` (6-arg signature DROPPED, not overloaded, to
+  keep PostgREST named-arg resolution unambiguous; new param defaults null so
+  an old worker build keeps working across the deploy window), and
+  `keel_latest_balances` now returns `limitMinor`. Worker passes Plaid's
+  `balances.limit` via the existing `dollarsToMinor`. Utilization renders
+  ONLY when a provider limit exists (liability rows/detail), via tested
+  scaled-integer BigInt `utilizationPercent` (floor; >100% honest; negative
+  owed clamps to 0; null limit → null → today's UI unchanged). Neutral
+  tokens, no red/amber (utilization is status, not negative money).
+- Verified: vitest 604 + deno 12 suites green, typecheck, lint (3
+  pre-existing warnings in untouched files), web build, build:functions;
+  migration executed end-to-end against a scratch Postgres 16 with stub
+  schema (both call shapes; read model emits limitMinor incl. JSON null).

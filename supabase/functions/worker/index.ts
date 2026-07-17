@@ -893,6 +893,7 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
           balances?: {
             current?: unknown;
             available?: unknown;
+            limit?: unknown;
             iso_currency_code?: unknown;
           };
         }>;
@@ -915,6 +916,9 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
         const currentMinor = dollarsToMinor(acct.balances?.current);
         if (currentMinor === null) continue;
         const availableMinor = dollarsToMinor(acct.balances?.available);
+        // Credit limit (C9): present for credit accounts, null elsewhere —
+        // stored verbatim so liability surfaces can show utilization.
+        const limitMinor = dollarsToMinor(acct.balances?.limit);
         const currency =
           typeof acct.balances?.iso_currency_code === 'string'
             ? acct.balances.iso_currency_code
@@ -926,6 +930,7 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
           p_available_minor: availableMinor,
           p_currency: currency,
           p_as_of: new Date().toISOString(),
+          p_limit_minor: limitMinor,
         });
         if (!applyErr) applied++;
       }
