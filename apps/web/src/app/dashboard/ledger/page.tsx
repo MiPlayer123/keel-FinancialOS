@@ -174,6 +174,11 @@ function LedgerTable() {
     const isoRe = /^\d{4}-\d{2}-\d{2}$/;
     if (!presetHit && from && to && isoRe.test(from) && isoRe.test(to) && from <= to) {
       setCustomRange({ from, to });
+    } else if (!presetHit) {
+      // Params gone or invalid (e.g. bare /dashboard/ledger via the sidebar
+      // without a remount): a stale custom range must not keep constraining
+      // the register (review r3603410823).
+      setCustomRange(null);
     }
     const q = searchParams.get('q');
     if (q) setQuery(q);

@@ -757,6 +757,7 @@ function ScopeBar({
                 }}
               >
                 {a.name}
+                {a.archivedAt ? ' (closed)' : ''}
               </DropdownMenuCheckboxItem>
             ))}
           </DropdownMenuContent>
@@ -785,7 +786,11 @@ function ReportsBody() {
       .catch(() => {
         if (active) setCategories([]);
       });
-    fetchAccounts(householdId)
+    // includeArchived: reports scope over HISTORY — a closed account's
+    // transactions are still in transactions.rich, and dropping them from
+    // entity/account scopes would understate totals vs the unscoped default
+    // (review r3603410820). The picker labels archived rows.
+    fetchAccounts(householdId, { includeArchived: true })
       .then((a) => {
         if (active) setAccounts(a);
       })

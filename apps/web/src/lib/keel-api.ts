@@ -106,15 +106,23 @@ export type AccountRow = {
   ledgerAccountId: string;
   currency: string;
   entityId: string;
+  /** Set when the account is closed/archived (present so historical scope
+   *  resolution can include closed accounts and pickers can label them). */
+  archivedAt?: string | null;
 };
 
-export async function fetchAccounts(householdId: string): Promise<AccountRow[]> {
-  const { data, error } = await getSupabaseBrowserClient()
+export async function fetchAccounts(
+  householdId: string,
+  opts?: { includeArchived?: boolean },
+): Promise<AccountRow[]> {
+  let query = getSupabaseBrowserClient()
     .from('accounts')
-    .select('id, name, subtype, ledger_account_id, currency, entity_id')
-    .eq('household_id', householdId)
-    .is('archived_at', null)
-    .order('name');
+    .select('id, name, subtype, ledger_account_id, currency, entity_id, archived_at')
+    .eq('household_id', householdId);
+  // Scope resolution over HISTORY must see closed accounts too (review
+  // r3603410820) — pickers default to active only.
+  if (!opts?.includeArchived) query = query.is('archived_at', null);
+  const { data, error } = await query.order('name');
   if (error) throw error;
 
   type Row = {
@@ -124,6 +132,7 @@ export async function fetchAccounts(householdId: string): Promise<AccountRow[]> 
     ledger_account_id: string;
     currency: string;
     entity_id: string;
+    archived_at: string | null;
   };
 
   return ((data as Row[] | null) ?? []).map((r) => ({
@@ -133,6 +142,7 @@ export async function fetchAccounts(householdId: string): Promise<AccountRow[]> 
     ledgerAccountId: r.ledger_account_id,
     currency: r.currency,
     entityId: r.entity_id,
+    archivedAt: r.archived_at,
   }));
 }
 
