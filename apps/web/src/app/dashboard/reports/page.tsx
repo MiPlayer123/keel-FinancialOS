@@ -39,6 +39,7 @@ import {
   reportScopeToSearch,
   scopeLabel,
   scopeMonths,
+  scopeMonthSpan,
   scopeRows,
   scopedAccountIdSet,
   type ReportScope,
@@ -894,7 +895,11 @@ function ReportsBody() {
   // excluded) so this trend honors the scope bar; the server-side
   // dashboard.cash_flow_monthly aggregate stays household-wide (Home uses it).
   const monthlyFlow = useMemo<MonthlyFlow[]>(() => {
-    const currency = dominantCurrency(rangedRows);
+    // Vote on currency using only the rows monthIncomeAndSpending actually
+    // counts (review r3603814918) — a scope heavy on transfer/debt rows in
+    // one currency must not steer the chart onto a currency with zero
+    // reportable activity in it.
+    const currency = dominantCurrency(rangedRows.filter((t) => !isDebtOrTransferLike(t)));
     return months.map((m) => {
       const { incomeMinor, categories: cats } = monthIncomeAndSpending(rangedRows, m, currency);
       const spending = [...cats.values()].reduce((acc, c) => acc + c.amountMinor, 0n);
@@ -955,6 +960,14 @@ function ReportsBody() {
   const showFlow = monthlyFlow.some((m) => m.inflowMinor !== '0' || m.outflowMinor !== '0');
   const monthsLabel =
     months.length === 1 ? monthLabel(months[0] ?? '') : `${String(months.length)} months`;
+  // A custom range longer than the 12-column cap shows only the most recent
+  // 12 months even though scopeText states the full from–to range (review
+  // r3603814914) — disclose the narrowing rather than let the widgets imply
+  // full coverage (Law 9).
+  const monthsTruncated = scopeMonthSpan(scope.from, scope.to) > months.length;
+  const monthsTruncatedNote = monthsTruncated
+    ? ` Showing the most recent ${String(months.length)} of ${String(scopeMonthSpan(scope.from, scope.to))} months in range.`
+    : '';
 
   return (
     <>
@@ -1222,6 +1235,7 @@ function ReportsBody() {
             <p className="mt-2 text-xs text-muted-foreground">
               {scopeText}, dominant currency only, transfers & debt payments excluded. Click a
               month to open it in the ledger.
+              {monthsTruncatedNote}
             </p>
           </CardContent>
         </Card>
@@ -1257,6 +1271,7 @@ function ReportsBody() {
               ? 'Net spending per month (refunds reduce it); transfers & debt payments excluded.'
               : 'Net income per month; transfers & debt payments excluded.'}{' '}
             Click a category to open it in the ledger.
+            {monthsTruncatedNote}
           </p>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[560px] text-sm">

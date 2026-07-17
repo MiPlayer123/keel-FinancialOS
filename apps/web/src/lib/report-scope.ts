@@ -173,10 +173,22 @@ export function scopeRows<T extends { accountId: string; effectiveDate: string }
   });
 }
 
+/** Total calendar months intersecting [from, to], uncapped — lets callers
+ *  detect when `scopeMonths` truncated the range so a wide custom scope
+ *  doesn't silently claim coverage its monthly widgets don't show (review
+ *  r3603814914). */
+export function scopeMonthSpan(from: string, to: string): number {
+  const [fy = 1970, fm = 1] = from.slice(0, 7).split('-').map(Number);
+  const [ty = 1970, tm = 1] = to.slice(0, 7).split('-').map(Number);
+  return ty * 12 + (tm - 1) - (fy * 12 + (fm - 1)) + 1;
+}
+
 /**
  * YYYY-MM keys of every calendar month intersecting [from, to], oldest first,
  * capped to the most recent `cap` (a 12-column table still scrolls; beyond
- * that it stops being a table).
+ * that it stops being a table). A scope wider than `cap` months only shows
+ * the most recent `cap` — callers must disclose this via `scopeMonthSpan`
+ * rather than let the widget's own "N months" label imply full coverage.
  */
 export function scopeMonths(from: string, to: string, cap = 12): string[] {
   const [fy = 1970, fm = 1] = from.slice(0, 7).split('-').map(Number);

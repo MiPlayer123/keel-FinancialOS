@@ -10,6 +10,7 @@ import {
   reportScopeToSearch,
   scopeLabel,
   scopeMonths,
+  scopeMonthSpan,
   scopeRows,
   scopedAccountIdSet,
   type ReportScope,
@@ -178,6 +179,20 @@ describe('scopeMonths', () => {
       '2026-02',
     ]);
     expect(scopeMonths('2024-01-01', '2026-07-17', 3)).toEqual(['2026-05', '2026-06', '2026-07']);
+  });
+});
+
+describe('scopeMonthSpan', () => {
+  it('matches scopeMonths length when the range is under the cap', () => {
+    expect(scopeMonthSpan('2026-05-15', '2026-07-17')).toBe(3);
+    expect(scopeMonthSpan('2026-07-01', '2026-07-17')).toBe(1);
+  });
+
+  it('reports the FULL span even when scopeMonths would cap it (review r3603814914)', () => {
+    // 2024-01 through 2026-07 is 31 months — scopeMonths caps to the most
+    // recent 12; this must still report all 31 so callers can disclose it.
+    expect(scopeMonthSpan('2024-01-01', '2026-07-17')).toBe(31);
+    expect(scopeMonths('2024-01-01', '2026-07-17')).toHaveLength(12);
   });
 });
 
