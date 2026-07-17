@@ -415,6 +415,15 @@ begin
 end;
 $$;
 
+-- keel_cmd_reanchor_balance reads the latest provider balance snapshot
+-- SERVER-side (Law 1 — the client never sends the balance). Unlike
+-- keel_cmd_set_opening_balance (which takes the balance as a parameter), this
+-- is the first keel_api-owned proc to READ balance_snapshots, so the owner
+-- needs SELECT on it. All other tables it reads/writes (accounts,
+-- ledger_accounts, journal_batches/postings/revisions, period_locks) are
+-- already granted to keel_api via the set_opening_balance lineage.
+grant select on public.balance_snapshots to keel_api;
+
 -- Ownership ritual (procs owned by keel_api; execute for authenticated only),
 -- matching keel_cmd_set_opening_balance.
 grant create on schema public to keel_api;

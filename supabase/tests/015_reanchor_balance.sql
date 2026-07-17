@@ -35,7 +35,7 @@ select lives_ok(
       'a9000000-0000-4000-8000-000000000003',250000,250000,'USD',now())$$,
   'apply_account_balance runs on an unsynced connection');
 select is(
-  (select coalesce(sum(amount_minor),0) from public.journal_postings
+  (select coalesce(sum(amount_minor),0)::bigint from public.journal_postings
      where ledger_account_id = 'a9000000-0000-4000-8000-000000000001'),
   0::bigint,'deferred: no opening booked while the connection is unsynced');
 select ok(
@@ -51,7 +51,7 @@ select lives_ok(
       'a9000000-0000-4000-8000-000000000003',250000,250000,'USD',now())$$,
   'apply_account_balance runs after the first full sync');
 select is(
-  (select coalesce(sum(amount_minor),0) from public.journal_postings
+  (select coalesce(sum(amount_minor),0)::bigint from public.journal_postings
      where ledger_account_id = 'a9000000-0000-4000-8000-000000000001'),
   250000::bigint,'anchored to the provider balance once the first full sync completed');
 -- The opening is a proper both-legs equity marker (account ledger + Opening
@@ -76,7 +76,7 @@ select lives_ok(
       'a9000000-0000-4000-8000-000000000003',250000,250000,'USD',now())$$,
   'a second post-sync refresh runs');
 select is(
-  (select coalesce(sum(amount_minor),0) from public.journal_postings
+  (select coalesce(sum(amount_minor),0)::bigint from public.journal_postings
      where ledger_account_id = 'a9000000-0000-4000-8000-000000000001'),
   250000::bigint,'no double-anchor: balance stays at provider truth');
 
