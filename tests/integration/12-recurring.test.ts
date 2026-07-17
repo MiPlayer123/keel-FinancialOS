@@ -103,11 +103,21 @@ describe('suggest-only detector worker', () => {
       requiresApproval: true,
       detectorVersion: 'recurring-grid-v1',
       confidenceVersion: 'recurring-score-bps-v1',
-      // Detection runs with as_of = now(); the candidate is stamped with
-      // the run date, not the authoring date.
-      asOf: new Date().toISOString().slice(0, 10),
       occurrences: [],
     });
+    // as_of is the enqueue proc's idempotency BUCKET start
+    // (floor(epoch/3601)*3601 — keel_cron_enqueue_recurring_detection), not
+    // wall-clock "today": in the first ~hour after midnight UTC the bucket
+    // starts on the previous date. Asserting equality with the runner's
+    // clock made CI red only between 00:00 and ~01:00 UTC (found the hard
+    // way). Accept today or yesterday in UTC.
+    {
+      const now = Date.now();
+      const utcDates = [now, now - 24 * 3600 * 1000].map((t) =>
+        new Date(t).toISOString().slice(0, 10),
+      );
+      expect(utcDates).toContain(candidate.asOf);
+    }
     expect(candidate.evidence).toHaveLength(4);
     expect(Number.isInteger(candidate.scoreBps)).toBe(true);
     expect(candidate.candidateVersionHash).toMatch(/^[a-f0-9]{64}$/u);
