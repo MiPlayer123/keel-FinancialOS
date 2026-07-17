@@ -761,6 +761,9 @@ export default {
         subtype: account.subtype,
         currency: account.currency,
         kind: account.kind,
+        // Teardown C6/D-050: last-4 mask for disambiguating same-institution
+        // accounts. Null passes through keel_finalize_link's nullif() as-is.
+        mask: account.mask,
       }));
       const { data: finalized, error: finalizeError } = await ctx.supabaseAdmin.rpc(
         'keel_finalize_link',

@@ -44,6 +44,7 @@ import {
   pushRecent,
   recentCategoriesKey,
 } from '@/lib/category-picker';
+import { maskAccountLabel } from '@/lib/account-label';
 import { merchantDisplayName } from '@/lib/merchant-name';
 import { isUncategorized } from '@/lib/needs-attention';
 import { isAutoCategorized } from '@/lib/review-state';
@@ -154,7 +155,7 @@ export function TxnList({
               {merchantDisplayName(t.description)}
             </p>
             <p className="truncate text-xs text-muted-foreground">
-              {t.accountName}
+              {maskAccountLabel(t.accountName, t.accountMask)}
               {/* The picker is hidden below sm — keep the category (and its
                   reviewed state) visible without it. */}
               {t.categoryName ? (
@@ -855,6 +856,19 @@ export function TxnEditDialog({
                 {original}
               </span>
               <Money amountMinor={row.amountMinor} currency={row.currency} signed />
+            </div>
+            {/* Account (+ last-4) and status, adjacent to the amount they
+                qualify (Law 8). Status chip mirrors the ledger row's
+                hides-at-absence convention (Auto/Reconciled precedent):
+                'posted' is the overwhelming common case and renders nothing;
+                only the exceptional 'pending' state earns a chip. */}
+            <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+              <span className="truncate">{maskAccountLabel(row.accountName, row.accountMask)}</span>
+              {row.status === 'pending' ? (
+                <Badge variant="outline" className="shrink-0 gap-1 text-[10px] uppercase">
+                  Pending
+                </Badge>
+              ) : null}
             </div>
             <button
               type="button"

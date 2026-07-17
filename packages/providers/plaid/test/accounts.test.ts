@@ -5,6 +5,7 @@ const account = (
   accountId: string,
   type: string,
   currency: string | null = 'USD',
+  mask: string | null = null,
 ) => ({
   account_id: accountId,
   name: `Account ${accountId}`,
@@ -12,6 +13,7 @@ const account = (
   type,
   subtype: type === 'credit' ? 'credit card' : 'checking',
   balances: { iso_currency_code: currency },
+  mask,
 });
 
 describe('mapAccountsGetToKeel', () => {
@@ -28,6 +30,7 @@ describe('mapAccountsGetToKeel', () => {
           subtype: 'checking',
           currency: 'USD',
           kind: 'asset',
+          mask: null,
         },
         {
           externalRef: 'investment-1',
@@ -35,6 +38,7 @@ describe('mapAccountsGetToKeel', () => {
           subtype: 'checking',
           currency: 'USD',
           kind: 'asset',
+          mask: null,
         },
       ],
       skipped: [],
@@ -54,10 +58,33 @@ describe('mapAccountsGetToKeel', () => {
           subtype: 'checking',
           currency: 'USD',
           kind: 'asset',
+          mask: null,
         },
       ],
       skipped: [{ externalRef: 'cad-1', currency: 'CAD' }],
     });
+  });
+
+  it('carries the mask through when Plaid reports one', () => {
+    expect(
+      mapAccountsGetToKeel({
+        accounts: [account('checking-1', 'depository', 'USD', '1234')],
+      }).accounts[0]?.mask,
+    ).toBe('1234');
+  });
+
+  it('maps a missing mask to null rather than an empty string', () => {
+    const withoutMask: Record<string, unknown> = account('checking-1', 'depository');
+    delete withoutMask['mask'];
+    expect(mapAccountsGetToKeel({ accounts: [withoutMask] }).accounts[0]?.mask).toBeNull();
+  });
+
+  it('treats an empty-string mask as absent', () => {
+    expect(
+      mapAccountsGetToKeel({
+        accounts: [account('checking-1', 'depository', 'USD', '')],
+      }).accounts[0]?.mask,
+    ).toBeNull();
   });
 
   it('maps an empty account list', () => {

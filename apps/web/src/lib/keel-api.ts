@@ -403,6 +403,13 @@ export type RichTransactionRow = {
   source?: 'sync' | 'import' | 'manual';
   accountId: string;
   accountName: string;
+  /**
+   * Masked account-number suffix (e.g. "1234" for "••1234"), teardown C6.
+   * Absent/null pre-migration and for accounts linked before the mask
+   * migration shipped (see 20260717220000_account_mask.sql) — the account
+   * name-only display is the correct fallback, never a guessed suffix.
+   */
+  accountMask?: string | null;
   amountMinor: string;
   currency: string;
   categoryLedgerAccountId: string | null;
