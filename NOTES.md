@@ -1662,3 +1662,40 @@ no tool-use loop yet). Law compliance encoded structurally:
 - `apps/web`: /dashboard/assistant page (tldr-first card, as-of + scope line,
   collapsed "what the model saw" listing section LABELS only), nav entry with
   Preview badge. 390px = stacked layout; no new deps; red untouched.
+
+## 2026-07-17 — D-040: C11 net-worth hero fusion + C10 range pills (Home & Accounts)
+- New `components/keel/net-worth-hero.tsx` fuses number + signed Δ + one-decimal
+  % + window label + trend chart into ONE card (teardown C11: every competitor
+  ships this as a unit; ours was three scattered surfaces). Mounted as the
+  Accounts hero (action dialogs move into its top-right slot) and on Home,
+  replacing BOTH the bare "Net position" card and the separate "Net worth ·
+  last 90 days" chart card (no duplicate charts, no duplicate
+  `dashboard.net_worth_daily` fetch).
+- Range pills 30d/90d/1y (C10): ONE fetch of the longest server-supported
+  window (365d; `keel_net_worth_daily` accepts from/to, caps span at 366d),
+  subset client-side per pill — never a second guess at data. A pill whose
+  window exceeds real history is disabled with the reason in its tooltip;
+  "real history" = series length minus the zero-padded lead-in the SQL emits
+  before the household's first posting (a window of padding would fabricate
+  growth from $0).
+- Δ/% math in new pure lib `lib/net-worth-window.ts` (unit-tested): BigInt on
+  minor-unit strings end-to-end; percent label via scaled-integer tenths
+  ((Δ×1000n)/|base|, BigInt division truncates — no floats, no rounding step),
+  matching and hardening the dashboard's existing integer deltaPct pattern
+  (which showed whole percents only). Baseline 0 → no % (not ∞); sub-tenth
+  negative keeps its − sign. Red only when the money Δ is negative (Law 8);
+  % span inherits it since it qualifies that Δ.
+- As-of stamp (Law 9): hero prints the trend envelope's `asOf` under the
+  number; falls back to the trial-balance envelope's `asOf` (new
+  `useKeelQueryEnvelope` hook keeps the envelope that `useKeelQuerySilent`
+  drops).
+- Decisions/deviations: (1) hero plots the household's DOMINANT currency
+  (same convention as free-to-spend/insight cards; BigInt sums are only
+  meaningful per currency) and says "dominant currency only" in the as-of
+  line when >1 currency exists — the old heroes summed across currencies,
+  which was wrong-shaped; (2) when the trend series is present the headline
+  is its last point (so number, Δ and chart can never disagree — both derive
+  from the same postings read model); trial-balance sum remains the fallback
+  when no trend exists. (3) 30d pill is always enabled: with <30d of history
+  there is nothing shorter to fall back to, and the chart still shows only
+  real days.

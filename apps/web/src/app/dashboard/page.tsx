@@ -33,6 +33,7 @@ import {
   CategoryBarList,
 } from '@/components/keel/charts';
 import { spendingMix, isDebtOrTransferLike, suggestedTransferCount } from '@/lib/spending';
+import { NetWorthHero } from '@/components/keel/net-worth-hero';
 import { TransferNudgeBanner } from '@/components/keel/transfer-nudge-banner';
 import { formatMoney } from '@/lib/money';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -425,10 +426,8 @@ function FreeToSpendCard({
 function HomeBody() {
   const { householdId, ready } = useHousehold();
   const balances = useKeelQuery<TrialBalanceRow>('ledger.trial_balance', householdId);
-  const netWorthTrend = useKeelQuerySilent<DailyBalanceRow>(
-    'dashboard.net_worth_daily',
-    householdId,
-  );
+  // Net-worth trend now lives inside NetWorthHero (C11 fusion) — it fetches
+  // the longest supported series once and subsets per range pill (C10).
   const monthlyFlow = useKeelQuerySilent<MonthlyCashFlowRow>(
     'dashboard.cash_flow_monthly',
     householdId,
@@ -542,21 +541,16 @@ function HomeBody() {
         schedules={schedules}
       />
 
+      {/* Fused net-worth hero (C11): number + Δ + % + window + chart as one
+          unit, with range pills (C10). Replaces the old bare Net position
+          card AND the separate 90-day net-worth chart card. */}
+      <NetWorthHero
+        householdId={householdId}
+        fallbackNetMinor={netMinor.toString()}
+        fallbackAsOf={balances.asOf}
+      />
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Net position
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Money
-              amountMinor={netMinor.toString()}
-              className="text-3xl font-semibold"
-              muteZero={false}
-            />
-          </CardContent>
-        </Card>
         <CashFlowCard householdId={householdId} />
       </div>
 
@@ -628,19 +622,6 @@ function HomeBody() {
                 }
               />
             )}
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {netWorthTrend !== null && netWorthTrend.length > 1 ? (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Net worth · last 90 days
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <BalanceTrendChart points={netWorthTrend} />
           </CardContent>
         </Card>
       ) : null}
