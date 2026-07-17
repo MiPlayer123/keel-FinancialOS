@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Link2, RefreshCw, Pencil, Check, X, Loader2 } from 'lucide-react';
+import { Link2, RefreshCw, Pencil, Check, X, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
@@ -11,7 +11,10 @@ import {
   disconnectConnection,
   syncConnection,
   renameConnection,
+  fetchReconnectMatches,
+  dedupeReconnectAccount,
   type ConnectionRow,
+  type ReconnectMatchRow,
 } from '@/lib/keel-api';
 import { PlaidLinkButton } from '@/components/keel/plaid-link-button';
 import { Button } from '@/components/ui/button';
@@ -42,8 +45,11 @@ export default function ConnectionsPage() {
 }
 
 function ConnectionsBody() {
-  const { householdId, ready } = useHousehold();
+  const { householdId, userId, ready } = useHousehold();
   const [rows, setRows] = useState<ConnectionRow[] | null>(null);
+  const [matches, setMatches] = useState<ReconnectMatchRow[]>([]);
+  const [dedupingId, setDedupingId] = useState<string | null>(null);
+  const [showDisconnected, setShowDisconnected] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
@@ -51,6 +57,7 @@ function ConnectionsBody() {
   const load = useCallback(async () => {
     if (!householdId) {
       setRows([]);
+      setMatches([]);
       return;
     }
     try {
@@ -58,11 +65,42 @@ function ConnectionsBody() {
     } catch {
       setRows([]);
     }
+    try {
+      setMatches(await fetchReconnectMatches(householdId));
+    } catch {
+      setMatches([]);
+    }
   }, [householdId]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function dedupe(match: ReconnectMatchRow) {
+    if (!householdId || !userId) return;
+    setDedupingId(match.newAccountId);
+    try {
+      const result = await dedupeReconnectAccount({
+        householdId,
+        userId,
+        newAccountId: match.newAccountId,
+        oldAccountId: match.oldAccountId,
+      });
+      const voided = Number(result.effects['voidedCount'] ?? 0);
+      toast.success(
+        voided > 0
+          ? `Removed ${String(voided)} duplicate transaction${voided === 1 ? '' : 's'} — ${
+              match.oldAccountName
+            }'s history stays authoritative for that window.`
+          : 'No duplicates found yet — the sync may still be in progress. Safe to check again later.',
+      );
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not check for duplicates.');
+    } finally {
+      setDedupingId(null);
+    }
+  }
 
   async function disconnect(connectionId: string) {
     if (!householdId) return;
@@ -104,6 +142,9 @@ function ConnectionsBody() {
   }
 
   const loading = !ready || rows === null;
+  const activeRows = rows?.filter((c) => c.status !== 'disconnected') ?? [];
+  const disconnectedRows = rows?.filter((c) => c.status === 'disconnected') ?? [];
+  const visibleRows = showDisconnected ? [...activeRows, ...disconnectedRows] : activeRows;
 
   return (
     <>
@@ -121,7 +162,39 @@ function ConnectionsBody() {
           ) : null
         }
       />
-      <div className="p-6">
+      <div className="space-y-4 p-6">
+        {matches.length > 0 ? (
+          <div className="space-y-2">
+            {matches.map((m) => (
+              <div
+                key={m.newAccountId}
+                className="flex items-center justify-between gap-4 rounded-lg border border-border bg-card px-4 py-3 text-sm"
+              >
+                <p className="min-w-0 text-muted-foreground">
+                  <span className="font-medium text-foreground">{m.newAccountName}</span> looks
+                  like it replaces your previously disconnected{' '}
+                  <span className="font-medium text-foreground">{m.oldAccountName}</span>
+                  {m.oldConnectionDisplayName ? ` (${m.oldConnectionDisplayName})` : ''}. Want me
+                  to check for duplicate transactions?
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  disabled={dedupingId === m.newAccountId}
+                  onClick={() => {
+                    void dedupe(m);
+                  }}
+                >
+                  {dedupingId === m.newAccountId ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : null}
+                  Check for duplicates
+                </Button>
+              </div>
+            ))}
+          </div>
+        ) : null}
         {loading ? (
           <div className="space-y-2">
             {Array.from({ length: 3 }).map((_, i) => (
@@ -134,9 +207,15 @@ function ConnectionsBody() {
             title="No connections yet"
             description="Connect a Sandbox institution to sync accounts and transactions. Credentials are encrypted and never touch the browser."
           />
+        ) : visibleRows.length === 0 ? (
+          <EmptyState
+            icon={<Link2 className="size-6" />}
+            title="No active connections"
+            description={`All ${String(disconnectedRows.length)} of your connections are disconnected. Reconnect to resume syncing, or show them below.`}
+          />
         ) : (
           <div className="overflow-hidden rounded-lg border border-border">
-            {rows.map((c, i) => (
+            {visibleRows.map((c, i) => (
               <div
                 key={c.id}
                 className={`flex items-center justify-between gap-4 px-4 py-3 ${
@@ -206,30 +285,46 @@ function ConnectionsBody() {
                   <Badge variant="secondary" className={STATUS_TONE[c.status] ?? ''}>
                     {c.status.replaceAll('_', ' ')}
                   </Badge>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={syncingId === c.id}
-                    onClick={() => {
-                      void sync(c.id);
-                    }}
-                  >
-                    {syncingId === c.id ? (
-                      <Loader2 className="size-4 animate-spin" />
-                    ) : (
-                      <RefreshCw className="size-4" />
-                    )}
-                    Sync now
-                  </Button>
-                  <DisconnectDialog
-                    label={c.displayName ?? c.institutionId ?? c.provider}
-                    onConfirm={() => disconnect(c.id)}
-                  />
+                  {c.status === 'disconnected' ? null : (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={syncingId === c.id}
+                        onClick={() => {
+                          void sync(c.id);
+                        }}
+                      >
+                        {syncingId === c.id ? (
+                          <Loader2 className="size-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="size-4" />
+                        )}
+                        Sync now
+                      </Button>
+                      <DisconnectDialog
+                        label={c.displayName ?? c.institutionId ?? c.provider}
+                        onConfirm={() => disconnect(c.id)}
+                      />
+                    </>
+                  )}
                 </div>
               </div>
             ))}
           </div>
         )}
+        {!loading && disconnectedRows.length > 0 ? (
+          <button
+            type="button"
+            className="flex items-center gap-1.5 text-xs text-muted-foreground underline-offset-2 hover:underline"
+            onClick={() => {
+              setShowDisconnected((v) => !v);
+            }}
+          >
+            {showDisconnected ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+            {showDisconnected ? 'Hide' : 'Show'} disconnected ({disconnectedRows.length})
+          </button>
+        ) : null}
       </div>
     </>
   );

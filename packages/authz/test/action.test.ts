@@ -40,6 +40,7 @@ describe('action vocabulary', () => {
       'transactions.manual_void',
       'transactions.set_splits',
       'transactions.set_date',
+      'accounts.dedupe_reconnect',
       'accounts.set_opening_balance',
       'accounts.reanchor_balance',
       'categorization.decide_suggestion',
