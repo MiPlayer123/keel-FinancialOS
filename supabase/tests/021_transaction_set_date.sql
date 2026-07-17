@@ -148,9 +148,8 @@ select is(
 -- zero rather than the entry vanishing outright.
 select is(
   (select effective_date from public.journal_batches
-    where id = 'c7000000-0000-4000-8000-000000000021'
-       or (canonical_transaction_id = 'c7000000-0000-4000-8000-000000000001'
-           and reverses_batch_id = 'c7000000-0000-4000-8000-000000000021')),
+    where canonical_transaction_id = 'c7000000-0000-4000-8000-000000000001'
+      and reverses_batch_id = 'c7000000-0000-4000-8000-000000000021'),
   '2026-06-01'::date, 'the reversal batch stays dated at the ORIGINAL date');
 
 -- Law 2: the mutation is on the append-only audit trail exactly once.
