@@ -21,6 +21,7 @@ import {
   type RichTransactionRow,
   type TagRow,
 } from '@/lib/keel-api';
+import { merchantDisplayName } from '@/lib/merchant-name';
 import { Money } from '@/components/keel/money';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -125,8 +126,11 @@ export function TxnList({
               else onEdit(t);
             }}
           >
+            {/* Cleaned name for display only; the raw memo stays one hover
+                away (Law 9 explicit ownership — inference never silently
+                replaces the source string). */}
             <p className="truncate text-sm font-medium" title={t.description}>
-              {t.description}
+              {merchantDisplayName(t.description)}
             </p>
             <p className="truncate text-xs text-muted-foreground">
               {t.accountName}
