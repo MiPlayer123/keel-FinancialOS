@@ -2282,3 +2282,66 @@ Postgres is available.
 a single field/signal for both "reviewed state" and "auto badge" instead of
 two, justified above under Law 8 (financial calm, not redundant status
 chrome).
+
+## 2026-07-17 — D-047: Ledger reconciled status chip + filter facet
+
+Teardown build-queue item 7, reconciliation half only ("reviewed" state was
+out of scope for this slice — `canonical_transactions.status` already exists
+and is surfaced elsewhere; not touched here). Read first: KEEL already links
+a transaction to a matched bank-statement line via
+`reconciliation_items.transaction_id` (resolution = `matched_transaction`),
+written exactly once, only inside `keel_reconciliation_close`
+(20260712150000). That table carries `keel_forbid_mutation` (no UPDATE/
+DELETE grant), so "this transaction has a matched_transaction item" is a
+permanent fact even if the owning statement's session is later reopened —
+reopening unlocks the PERIOD for corrective entries, it does not retract the
+historical match (Law 2 audit-log-is-append-only; Law 9 reproducible
+numbers). Ruling: reconciled = "has ever been matched," not "session still
+closed."
+
+- Migration `20260717200000_ledger_reconciled_status.sql`: additive only.
+  (1) `create index if not exists reconciliation_items_household_txn on
+  reconciliation_items(household_id, transaction_id) where transaction_id is
+  not null` — the table's FK to `canonical_transactions` (`fk_item_txn_tenant`)
+  is NOT auto-indexed by Postgres on the referencing side, and without this
+  index the new per-row EXISTS check would seq-scan reconciliation_items on
+  every ledger load (the same class of finding that forced 20260717170000's
+  pfc_primary denormalization). (2) `keel_list_transactions_rich` recreated
+  (create-or-replace, same signature/grants) with one new field, `reconciled`,
+  via a correlated `exists(select 1 from reconciliation_items ri where
+  ri.household_id = ct.household_id and ri.transaction_id = ct.id and
+  ri.resolution = 'matched_transaction')`. No new table, no new command —
+  reconciliation still only happens via the Statements page's existing
+  `keel_reconciliation_close` flow.
+- `RichTransactionRow.reconciled?: boolean` (keel-api.ts) — optional/absent-
+  safe, no breaking change to existing consumers.
+  `apps/web/src/components/keel/txn-edit-dialog.tsx`'s `TxnList` row renders
+  a neutral outline "Reconciled" chip (CheckCircle2 icon) immediately next to
+  the amount ONLY when `t.reconciled` is true (Law 8: status adjacent to the
+  number it qualifies; hides-at-absence — same convention as Needs
+  attention's zero-hide, no "not yet" chip cluttering every ordinary row).
+- Ledger filter facet: new `reconciledFilter` select — "All statuses /
+  Reconciled / Unreconciled" — added to `apps/web/src/app/dashboard/ledger/
+  page.tsx` beside the existing tag/category/account selects (identical
+  `Select`/`SelectItem` pattern, no new filter paradigm), wired into the
+  existing `filtered` predicate and `visibleCount` reset effect.
+- Verification: `pnpm typecheck` and `pnpm lint` clean (0 errors; the 4
+  pre-existing warnings are all in files this slice never touched); `pnpm
+  --filter @keel/web exec vitest run` 200/200 green. No local Supabase/Docker
+  stack available in this environment (matches D-043's constraint) — the
+  migration was instead hand-verified against a real Postgres 16 scratch
+  database seeded with a minimal stub schema mirroring the exact tables/
+  columns/types read in step 1 (households, canonical_transactions,
+  journal_batches/postings, ledger_accounts, accounts, statements,
+  reconciliation_sessions, reconciliation_items): applied clean, a
+  matched-transaction row read `reconciled: true`, an unreconciled sibling
+  plus a decoy same-household `reconciliation_items` row with a
+  non-`matched_transaction` resolution and a null `transaction_id` both read
+  `reconciled: false` (proves the filter is on resolution, not mere row
+  existence), and `EXPLAIN` confirmed the planner uses the new
+  `reconciliation_items_household_txn` index rather than a seq scan. pgTAP
+  015-style coverage for this exact read-model shape is deferred to the next
+  CI-capable pass (GitHub Actions minutes exhausted this session per the
+  task brief) — flagged here per protocol, not silently skipped.
+- Deliberately not built (per task scope): no new reconciliation command,
+  no changes to the Statements page's own close/reopen flow.
