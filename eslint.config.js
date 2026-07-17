@@ -1,5 +1,6 @@
 import { defineConfig } from 'eslint/config';
 import tseslint from 'typescript-eslint';
+import reactHooks from 'eslint-plugin-react-hooks';
 
 export default defineConfig(
   {
@@ -12,6 +13,17 @@ export default defineConfig(
     ],
   },
   tseslint.configs.strictTypeChecked,
+  {
+    // Rules of Hooks as a hard gate: a conditional hook crashed the entire
+    // dashboard at runtime while typecheck+lint stayed green (Wave 0 P0,
+    // caught only by live-UI verification). Never again via static means.
+    files: ['apps/web/**/*.{ts,tsx}'],
+    plugins: { 'react-hooks': reactHooks },
+    rules: {
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
+    },
+  },
   {
     languageOptions: {
       parserOptions: {
