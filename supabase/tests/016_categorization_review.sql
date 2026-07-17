@@ -25,6 +25,14 @@ select is(
 select has_function('public','keel_list_category_suggestions',
   array['uuid'],'suggestion read model exists');
 
+-- Admin-read regression guard (CI run 29559262657): tables created after the
+-- one-time 210500 service_role grant pass need their own re-grant, or every
+-- admin-client read 42501s and masquerades as "no rows" downstream.
+select ok(has_table_privilege('service_role', 'public.transaction_categories', 'select'),
+  'service_role can read the category overlay (integration assertions depend on it)');
+select ok(has_table_privilege('service_role', 'public.category_suggestions', 'select'),
+  'service_role can read category_suggestions');
+
 -- ---------------------------------------------------------------------------
 -- Fixtures. Alpha seed: entity a101, account a401 (ledger a301), categories
 -- a311 Groceries / a314 Coffee Shops, a317 Uncategorized Expense (pfc_key
@@ -194,6 +202,14 @@ select is(
   'true', 'replaying the same economic event key is a no-op replay');
 reset role;
 
+-- T1 had NO overlay row before this accept (asserted count=0 above), so this
+-- proves the accept path INSERTS on absence — not merely updates an existing
+-- row (CI round-3 hypothesis; the insert-on-absent path is the normal case
+-- for synced/manual transactions parked on the landing pad).
+select is(
+  (select count(*)::int from public.transaction_categories
+    where canonical_transaction_id = 'c5000000-0000-4000-8000-000000000001'),
+  1, 'accept INSERTS the overlay row when none existed');
 select is(
   (select category_ledger_account_id from public.transaction_categories
     where canonical_transaction_id = 'c5000000-0000-4000-8000-000000000001'),

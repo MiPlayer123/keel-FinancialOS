@@ -106,16 +106,19 @@ describe('categorization.decide_suggestion (P0-B suggest→approve loop)', () =>
     expect(s1!.suggestedCategoryLedgerAccountId).toBe(COFFEE_SHOPS);
     expect(s1!.currentCategoryName).toBe('Uncategorized Expense');
 
-    // The suggestion did NOT touch the classification. A manual transaction
-    // posts its offset straight to the landing pad WITHOUT an overlay row
-    // (the overlay exists only once something categorizes) — so "untouched"
-    // means: no overlay at all, or an overlay still on the landing pad.
-    // (CI run 29558625154 caught the .single() here erroring on zero rows.)
+    // The suggestion did NOT touch the classification: "untouched" means no
+    // overlay at all, or an overlay still on the landing pad (a single-split
+    // manual transaction pins a 'user' overlay on its split category —
+    // 20260713100000 §1 — so the landing-pad row is the expected shape here).
+    // Read errors must THROW: CI runs 29558625154/29559262657 proved a
+    // missing service_role grant surfaces as 42501 → data:null, which
+    // masquerades as "no row" and misdirects the diagnosis.
     const overlayBefore = await svc
       .from('transaction_categories')
       .select('category_ledger_account_id, source')
       .eq('canonical_transaction_id', txn1)
       .maybeSingle();
+    if (overlayBefore.error) throw new Error(`overlay read failed: ${overlayBefore.error.message}`);
     expect(
       overlayBefore.data === null ||
         overlayBefore.data.category_ledger_account_id === UNCATEGORIZED_EXPENSE,
@@ -159,8 +162,9 @@ describe('categorization.decide_suggestion (P0-B suggest→approve loop)', () =>
       .select('category_ledger_account_id, source')
       .eq('canonical_transaction_id', txn1)
       .single();
-    expect(overlayAfter.data?.category_ledger_account_id).toBe(COFFEE_SHOPS);
-    expect(overlayAfter.data?.source).toBe('user');
+    if (overlayAfter.error) throw new Error(`overlay read failed: ${overlayAfter.error.message}`);
+    expect(overlayAfter.data.category_ledger_account_id).toBe(COFFEE_SHOPS);
+    expect(overlayAfter.data.source).toBe('user');
 
     // Law 2: the decision is on the append-only audit trail.
     const { count: auditCount, error: auditError } = await svc
@@ -211,6 +215,7 @@ describe('categorization.decide_suggestion (P0-B suggest→approve loop)', () =>
       .select('category_ledger_account_id')
       .eq('canonical_transaction_id', txn2)
       .maybeSingle();
+    if (overlay2.error) throw new Error(`overlay read failed: ${overlay2.error.message}`);
     expect(
       overlay2.data === null ||
         overlay2.data.category_ledger_account_id === UNCATEGORIZED_EXPENSE,
@@ -269,7 +274,8 @@ describe('categorization.decide_suggestion (P0-B suggest→approve loop)', () =>
       .select('category_ledger_account_id, source')
       .eq('canonical_transaction_id', txn3)
       .single();
-    expect(overlay3.data?.category_ledger_account_id).toBe(SEED.ledgerAccounts.alphaGroceries);
-    expect(overlay3.data?.source).toBe('user');
+    if (overlay3.error) throw new Error(`overlay read failed: ${overlay3.error.message}`);
+    expect(overlay3.data.category_ledger_account_id).toBe(SEED.ledgerAccounts.alphaGroceries);
+    expect(overlay3.data.source).toBe('user');
   });
 });

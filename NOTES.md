@@ -1775,3 +1775,29 @@ Four findings against ed36b51, fixed in place in the same migration file
   tense ("Matched your rule '<as-detected>'"); the live pattern rides as
   `ruleLivePattern` and renders only inside the Why panel, labeled "Rule as
   of now", and only when it differs.
+
+## 2026-07-17 — D-041 cont. 2: CI round-3 fixes (run 29559262657) — export manifest + admin-read grant
+
+Two integration failures; BOTH root causes differed from the review notes'
+hypotheses (verified against the run's logs):
+- 11-export:210 — the SQL export chain was wired correctly all along (pgTAP
+  008's 68-array snapshot check was green on the same run). What was missing
+  was the TS-side audited export contract: `packages/exports/src/manifest.ts`
+  INCLUDE — the registry the api function's manifest/CSV/JSON writers and the
+  live-table completeness check are built from. Added the
+  category_suggestions entry (11 columns, sortKey id, timestamps
+  created_at/decided_at); manifest + CSV count tests 67→68.
+- 17:162 — the accept path DID write the overlay; the read lied.
+  transaction_categories was created after 20260710210500's ONE-TIME
+  `grant select on all tables to service_role` and never re-granted (the
+  exact trap the transfer_links comment in 20260710210700 documents), so
+  every admin-client overlay read returned 42501, which supabase-js
+  surfaces as data:null. That also invalidates the round-2 diagnosis
+  ("landing-pad manual transactions have no overlay row" — they DO, per
+  20260713100000 §1; the row was just unreadable). Fixes: re-grant SELECT to
+  service_role in 20260717160000; integration overlay reads now THROW on
+  error so a permission failure can never masquerade as "no row"; pgTAP 016
+  gained has_table_privilege regression asserts (transaction_categories +
+  category_suggestions) and an explicit accept-INSERTS-on-absent count
+  assert (pgTAP T1 has no pre-existing overlay, so that path was already
+  proven green — kept explicit now).

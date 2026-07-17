@@ -80,6 +80,16 @@ grant select on public.category_rules to keel_api;
 create policy category_rules_api_read on public.category_rules
   for select to keel_api using (true);
 
+-- transaction_categories was created AFTER 20260710210500's one-time
+-- "grant select on all tables to service_role" pass and never got its own
+-- re-grant (same trap the transfer_links comment in 20260710210700 warns
+-- about). The admin client therefore got 42501 on every overlay read, which
+-- PostgREST surfaces as data:null — CI run 29559262657 (integration 17:162)
+-- misread that as "accept never wrote the overlay" when the write was fine
+-- all along. Integration assertions read the overlay through the admin
+-- client, so re-grant here.
+grant select on public.transaction_categories to service_role;
+
 -- ---------------------------------------------------------------------------
 -- 2. Detection (deterministic, Law 1). Mirrors keel_detect_transfers'
 -- auth posture: a user-driven call requires membership; the service path
