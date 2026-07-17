@@ -106,13 +106,20 @@ describe('categorization.decide_suggestion (P0-B suggest→approve loop)', () =>
     expect(s1!.suggestedCategoryLedgerAccountId).toBe(COFFEE_SHOPS);
     expect(s1!.currentCategoryName).toBe('Uncategorized Expense');
 
-    // The suggestion did NOT touch the classification: still on the landing pad.
+    // The suggestion did NOT touch the classification. A manual transaction
+    // posts its offset straight to the landing pad WITHOUT an overlay row
+    // (the overlay exists only once something categorizes) — so "untouched"
+    // means: no overlay at all, or an overlay still on the landing pad.
+    // (CI run 29558625154 caught the .single() here erroring on zero rows.)
     const overlayBefore = await svc
       .from('transaction_categories')
       .select('category_ledger_account_id, source')
       .eq('canonical_transaction_id', txn1)
-      .single();
-    expect(overlayBefore.data?.category_ledger_account_id).toBe(UNCATEGORIZED_EXPENSE);
+      .maybeSingle();
+    expect(
+      overlayBefore.data === null ||
+        overlayBefore.data.category_ledger_account_id === UNCATEGORIZED_EXPENSE,
+    ).toBe(true);
 
     // (2) Idempotent re-detection: no duplicates for already-suggested rows.
     // (Other suites sharing this stack may legitimately add THEIR suggestions,
@@ -197,12 +204,17 @@ describe('categorization.decide_suggestion (P0-B suggest→approve loop)', () =>
     if (dismissError) throw new Error(`dismiss failed: ${dismissError.message}`);
     expect((dismissResult as { effects: { status: string } }).effects.status).toBe('dismissed');
 
+    // Dismiss writes nothing to the classification — same absent-or-landing-pad
+    // shape as the pre-decision check above.
     const overlay2 = await svc
       .from('transaction_categories')
       .select('category_ledger_account_id')
       .eq('canonical_transaction_id', txn2)
-      .single();
-    expect(overlay2.data?.category_ledger_account_id).toBe(UNCATEGORIZED_EXPENSE);
+      .maybeSingle();
+    expect(
+      overlay2.data === null ||
+        overlay2.data.category_ledger_account_id === UNCATEGORIZED_EXPENSE,
+    ).toBe(true);
 
     // A dismissed suggestion holds its unique slot: never re-raised.
     const { error: postDismissError } = await alex.rpc('keel_detect_category_suggestions', {
