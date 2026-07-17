@@ -890,6 +890,7 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
       const body = (await plaid.accountsGet(c.id, { access_token: token })) as {
         accounts?: Array<{
           account_id?: string;
+          mask?: unknown;
           balances?: {
             current?: unknown;
             available?: unknown;
@@ -923,6 +924,10 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
           typeof acct.balances?.iso_currency_code === 'string'
             ? acct.balances.iso_currency_code
             : 'USD';
+        // Account mask (D-050 residual fix, review r3604673536): persisted
+        // on every refresh, not just initial link, so a pre-existing linked
+        // account can still pick one up on its next scheduled resync.
+        const mask = typeof acct.mask === 'string' ? acct.mask : null;
         const { error: applyErr } = await admin.rpc('keel_apply_account_balance', {
           p_household_id: c.household_id,
           p_account_id: accountId,
@@ -931,6 +936,7 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
           p_currency: currency,
           p_as_of: new Date().toISOString(),
           p_limit_minor: limitMinor,
+          p_mask: mask,
         });
         if (!applyErr) applied++;
       }

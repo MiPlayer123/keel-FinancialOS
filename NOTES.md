@@ -2668,3 +2668,24 @@ new schema" like several other slices this session — investigation showed
 it genuinely was not (Plaid's `mask` was never captured anywhere in the
 pipeline), so this slice includes a real additive migration rather than
 just an exposed-but-unselected column, contrary to that initial hypothesis.
+
+**Review fix (r3604673536):** the first draft only persisted `mask` inside
+`keel_finalize_link` — brand-new accounts at link time. Every account
+linked BEFORE this migration ships (the overwhelming majority of real
+accounts) has no later path to ever pick one up: `processRefreshBalances`
+(`supabase/functions/worker/index.ts`) already calls Plaid's
+`/accounts/get` on its own 3-min-cycle resync and already receives `mask`
+in that same response, but selected only `id, external_ref` from `accounts`
+and never wrote it back. Fixed by threading `acct.mask` through
+`keel_apply_account_balance` as a new 8th default parameter (`p_mask text
+default null`, appended via `create or replace` on the current 7-arg
+signature — Postgres preserves the function's OID/ownership/grants across
+this kind of extension, so no revoke/grant restatement was needed, unlike
+the 6-arg→7-arg conversion earlier this session which changed an existing
+parameter and required a full drop+create). The proc writes `mask` via
+`update accounts set mask = p_mask where ... mask is distinct from p_mask`
+whenever the provider reports a non-empty value — it never CLEARS an
+already-known mask just because one particular refresh response omitted
+the field. This closes the residual gap flagged above: a pre-existing
+linked account now picks up its mask on its very next scheduled refresh,
+no manual re-link required.
