@@ -67,17 +67,23 @@ describe('annualizedMinor', () => {
     expect(annualizedMinor('0', 'monthly')).toBe(0n);
   });
 
+  it('accepts SIGNED amounts and preserves the sign (review r3604386188 — real outflow series like rent/bills store negative expectedAmountMinor; an unsigned-only guard silently dropped them all)', () => {
+    expect(annualizedMinor('-4500', 'monthly')).toBe(-54000n);
+    expect(annualizedMinor('-1000', 'weekly')).toBe(-52000n);
+  });
+
   it('handles magnitudes past 2^53 without float precision loss', () => {
     // 2^53 = 9007199254740992; use a per-occurrence amount comfortably past
     // it so a float-based implementation would visibly round.
     expect(annualizedMinor('9007199254740993', 'monthly')).toBe(108086391056891916n);
+    expect(annualizedMinor('-9007199254740993', 'monthly')).toBe(-108086391056891916n);
   });
 
   it('throws rather than silently coercing a malformed amount to 0', () => {
     expect(() => annualizedMinor('', 'monthly')).toThrow();
-    expect(() => annualizedMinor('-100', 'monthly')).toThrow();
     expect(() => annualizedMinor('12.50', 'monthly')).toThrow();
     expect(() => annualizedMinor('1e2', 'monthly')).toThrow();
+    expect(() => annualizedMinor('--100', 'monthly')).toThrow();
   });
 });
 
@@ -139,8 +145,25 @@ describe('annualizedEstimate', () => {
 
   it('degrades to null on a malformed latest amount rather than throwing', () => {
     expect(
-      annualizedEstimate([occ('2026-01-01', '4500'), occ('2026-02-01', '-100')]),
+      annualizedEstimate([occ('2026-01-01', '4500'), occ('2026-02-01', '12.50')]),
     ).toBeNull();
+  });
+
+  it('builds a real (non-null) estimate for a SIGNED outflow series, preserving the sign (review r3604386188)', () => {
+    // Real bills/subscriptions/rent store expectedAmountMinor negative — the
+    // exact shape this row is added to summarize; it must not silently
+    // disappear.
+    const estimate = annualizedEstimate([
+      occ('2026-01-01', '-4500'),
+      occ('2026-02-01', '-4500'),
+      occ('2026-03-01', '-4500'),
+    ]);
+    expect(estimate).toEqual({
+      cadence: 'monthly',
+      amountMinor: '-4500',
+      currency: 'USD',
+      annualMinor: -54000n,
+    });
   });
 });
 

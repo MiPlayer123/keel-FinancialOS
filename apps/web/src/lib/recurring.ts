@@ -214,22 +214,27 @@ export function inferCadence(expectedDates: readonly string[]): RecurringCadence
 
 /**
  * Multiplies a single occurrence's minor-unit amount out to an annual total.
- * Pure BigInt — no floats touch the figure (Law 4). `amountMinor` must be an
- * unsigned decimal integer string (the shape `RecurringOccurrence.
- * expectedAmountMinor` is always in); malformed input throws rather than
+ * Pure BigInt — no floats touch the figure (Law 4). `amountMinor` is a
+ * SIGNED decimal integer string (real outflow occurrences — rent, bills,
+ * subscriptions — are stored negative, same convention `<Money>` already
+ * renders for `estimate.amountMinor`; review r3604386188 caught an
+ * unsigned-only guard here that silently dropped every real outflow
+ * series). The sign passes straight through the multiplication so the
+ * annualized figure keeps the same direction (and red/neutral rendering)
+ * as the per-occurrence amount; malformed input throws rather than
  * silently coercing to 0 (mirrors the validate-before-BigInt rule in
  * `amountsConsistent`).
  */
 export function annualizedMinor(amountMinor: string, cadence: RecurringCadence): bigint {
-  if (!/^\d+$/.test(amountMinor)) {
-    throw new Error(`annualizedMinor: not an unsigned integer string: ${amountMinor}`);
+  if (!/^-?\d+$/.test(amountMinor)) {
+    throw new Error(`annualizedMinor: not a signed integer string: ${amountMinor}`);
   }
   return BigInt(amountMinor) * CADENCE_MULTIPLIER[cadence];
 }
 
 export type RecurringAnnualEstimate = {
   cadence: RecurringCadence;
-  /** The representative (most recent) occurrence's own unsigned amount. */
+  /** The representative (most recent) occurrence's own signed amount. */
   amountMinor: string;
   currency: string;
   /** amountMinor × the cadence's occurrences-per-year, as an unsigned BigInt. */
@@ -254,7 +259,7 @@ export function annualizedEstimate(
   const cadence = inferCadence(occurrences.map((o) => o.expectedDate));
   if (cadence === null) return null;
   const latest = [...occurrences].sort((a, b) => a.expectedDate.localeCompare(b.expectedDate)).at(-1);
-  if (!latest || !/^\d+$/.test(latest.expectedAmountMinor)) return null;
+  if (!latest || !/^-?\d+$/.test(latest.expectedAmountMinor)) return null;
   return {
     cadence,
     amountMinor: latest.expectedAmountMinor,
