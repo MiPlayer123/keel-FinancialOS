@@ -27,7 +27,7 @@ insert into expected_export_tables(table_name, allowed_columns, omitted_columns)
   ('transaction_source_links', array['canonical_transaction_id','normalized_source_record_id','created_at','household_id'], '{}'),
   ('transfer_links', array['id','household_id','txn_out','txn_in','status','decided_by','decided_at','created_at'], '{}'),
   ('raw_provider_events', array['id','household_id','connection_id','provider','provider_event_id','account_external_ref','received_at','recorded_at','body_text','body_sha256'], array['body']),
-  ('normalized_source_records', array['id','raw_event_id','household_id','account_id','provider_transaction_id','amount_minor','currency','effective_date','description','pending','pending_transaction_ref','created_at','kind'], '{}'),
+  ('normalized_source_records', array['id','raw_event_id','household_id','account_id','provider_transaction_id','amount_minor','currency','effective_date','description','pending','pending_transaction_ref','created_at','kind'], array['pfc_primary']),
   ('import_batches', array['id','household_id','account_id','source_kind','filename','row_count','created_at','committed_at','rolled_back_at'], '{}'),
   ('import_rows', array['id','import_batch_id','row_number','raw','created_at'], '{}'),
   ('ingestion_skips', array['id','household_id','connection_id','raw_event_id','provider_transaction_id','currency','reason','created_at'], '{}'),
