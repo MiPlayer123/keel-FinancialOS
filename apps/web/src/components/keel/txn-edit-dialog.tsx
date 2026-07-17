@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeftRight,
   Check,
+  CheckCircle2,
   ChevronDown,
   Loader2,
   Pencil,
@@ -11,6 +12,7 @@ import {
   Split,
   StickyNote,
   Trash2,
+  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -19,11 +21,21 @@ import {
   createCategory,
   saveTag,
   overrideTransaction,
+  setTransactionSplits,
   voidManualTransaction,
   type CategoryRow,
   type RichTransactionRow,
   type TagRow,
 } from '@/lib/keel-api';
+import {
+  buildSplitsPayload,
+  hasDuplicateCategories,
+  seedRowsForNewSplit,
+  seedRowsFromSplits,
+  splitRemainderMinor,
+  splitsReady,
+  type SplitDraftRow,
+} from '@/lib/split-editor';
 import {
   groupForPicker,
   hasExactName,
@@ -33,6 +45,8 @@ import {
   recentCategoriesKey,
 } from '@/lib/category-picker';
 import { merchantDisplayName } from '@/lib/merchant-name';
+import { isUncategorized } from '@/lib/needs-attention';
+import { isAutoCategorized } from '@/lib/review-state';
 import { useHousehold } from '@/components/keel/household-context';
 import { Money } from '@/components/keel/money';
 import { Badge } from '@/components/ui/badge';
@@ -58,16 +72,9 @@ import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Textarea } from '@/components/ui/textarea';
 
-/**
- * Rename-proof "is it still on a landing pad?" check: the stable pfc_key when
- * the migration has landed, the seeded name as a fallback until then. Split
- * transactions are categorized by their splits — never "uncategorized".
- */
-export function isUncategorized(t: RichTransactionRow): boolean {
-  if (t.splits && t.splits.length > 0) return false;
-  if (t.categoryPfcKey != null) return t.categoryPfcKey.startsWith('uncategorized');
-  return t.categoryName ? t.categoryName.startsWith('Uncategorized') : true;
-}
+// Single definition now lives in lib (Home's "Needs attention" module counts
+// with it too); re-exported here so existing consumers keep their import path.
+export { isUncategorized } from '@/lib/needs-attention';
 
 export type ListCallbacks = {
   onRecategorize: (txnId: string, categoryId: string) => void;
@@ -148,9 +155,14 @@ export function TxnList({
             </p>
             <p className="truncate text-xs text-muted-foreground">
               {t.accountName}
-              {/* The picker is hidden below sm — keep the category visible. */}
+              {/* The picker is hidden below sm — keep the category (and its
+                  reviewed state) visible without it. */}
               {t.categoryName ? (
-                <span className="sm:hidden"> · {t.categoryName}</span>
+                <span className="sm:hidden">
+                  {' '}
+                  · {t.categoryName}
+                  {isAutoCategorized(t) ? ' · Auto' : ''}
+                </span>
               ) : null}
               {t.note ? (
                 <span className="text-muted-foreground/80">
@@ -198,6 +210,7 @@ export function TxnList({
             <CategoryPicker
               row={t}
               categories={categories}
+              auto={isAutoCategorized(t)}
               onPick={(catId) => {
                 onRecategorize(t.transactionId, catId);
               }}
@@ -207,6 +220,22 @@ export function TxnList({
             {t.status === 'pending' ? (
               <Badge variant="outline" className="hidden text-[10px] uppercase sm:inline-flex">
                 Pending
+              </Badge>
+            ) : null}
+            {/* Reconciled chip (D-047, "Statements moat"): adjacent to the
+                amount it qualifies (Law 8). Absence is the common case and
+                carries no chip — only the positive "matched a statement"
+                fact renders, same hides-at-absence convention as Needs
+                attention. Neutral outline, no color semantics: reconciled
+                is a provenance fact, not a judgment on the money itself. */}
+            {t.reconciled ? (
+              <Badge
+                variant="outline"
+                className="hidden gap-1 text-[10px] uppercase sm:inline-flex"
+                title="Matched to a bank statement during reconciliation"
+              >
+                <CheckCircle2 className="size-3" />
+                Reconciled
               </Badge>
             ) : null}
             <Money
@@ -255,12 +284,30 @@ export function CategoryPicker({
   categories,
   onPick,
   wide,
+  createEntityId,
+  auto,
 }: {
   row: RichTransactionRow;
   categories: CategoryRow[];
   onPick: (categoryLedgerAccountId: string, categoryName?: string) => void;
   /** Full-width dialog variant; default is the compact ledger-row trigger. */
   wide?: boolean;
+  /**
+   * Pin inline-create to THIS entity. Split rows must pass the transaction's
+   * entity (code review r3603509625): a blank row has no current category to
+   * infer from, and the options[0] fallback can land on the WRONG entity in a
+   * multi-entity household — the server would then reject the save against
+   * the category the user just created.
+   */
+  createEntityId?: string | null;
+  /**
+   * P0-B follow-up: a small neutral "Auto" pill inside the SAME trigger a
+   * click already opens — the badge is reversible by construction (picking
+   * any category here, even the one already showing, re-files it with
+   * source='user' via keel_categorize_transaction). Never red/green (Law 8):
+   * this is provenance, not a verdict.
+   */
+  auto?: boolean;
 }) {
   const { householdId } = useHousehold();
   const [open, setOpen] = useState(false);
@@ -331,7 +378,14 @@ export function CategoryPicker({
         ),
       );
     }
-    if (c.ledgerAccountId !== currentId) onPick(c.ledgerAccountId, c.name);
+    // `auto` rows must fire onPick even when the picked category IS the
+    // currently-displayed one (review r3604432435): confirming an
+    // auto-categorized row is exactly "pick the same category" from the
+    // user's perspective, and that has to actually re-file it with
+    // source='user' (clearing the Auto badge) — the no-op suppression below
+    // exists for the ordinary trigger, where re-picking the current value is
+    // truly a no-op with nothing to confirm.
+    if (auto || c.ledgerAccountId !== currentId) onPick(c.ledgerAccountId, c.name);
   }
 
   async function createAndPick() {
@@ -340,9 +394,11 @@ export function CategoryPicker({
     if (name.length === 0) return;
     setCreating(true);
     try {
-      // Same-entity scope: the current category pins the entity; otherwise
-      // the eligible list's entity; null lets the server use its default.
+      // Same-entity scope: an explicit caller pin wins (split rows pass the
+      // transaction's entity); else the current category pins the entity;
+      // else the eligible list's entity; null lets the server use its default.
       const entityId =
+        createEntityId ??
         merged.find((c) => c.ledgerAccountId === currentId)?.entityId ??
         options[0]?.entityId ??
         null;
@@ -391,7 +447,18 @@ export function CategoryPicker({
               }`
         }
       >
-        <span className="truncate">{label}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          {auto ? (
+            <Badge
+              variant="outline"
+              className="h-4 shrink-0 px-1 text-[10px] uppercase"
+              title="Auto-categorized — a rule or the bank's own category, not yet confirmed by you. Click to confirm or change."
+            >
+              Auto
+            </Badge>
+          ) : null}
+          <span className="truncate">{label}</span>
+        </span>
         <ChevronDown className="pointer-events-none size-4 shrink-0 text-muted-foreground" />
       </PopoverTrigger>
       <PopoverContent
@@ -528,6 +595,14 @@ export function TxnEditDialog({
   // category until close, so old→new stays visible (teardown C4: the change
   // you just made is legible, not silent).
   const [picked, setPicked] = useState<{ id: string; name: string } | null>(null);
+  // Split editor rows (teardown C7): null = not splitting (single-category
+  // picker shown); non-null = editable rows whose "Left to split" remainder
+  // must reach exactly 0 before Save splits enables (Law 3 made visible).
+  const [splitRows, setSplitRows] = useState<SplitDraftRow[] | null>(null);
+  const [splitBusy, setSplitBusy] = useState(false);
+  // One idempotency key per dialog session: a retry after a timeout REPLAYS
+  // the same revision instead of double-revising (invariant 3).
+  const [splitAttemptKey, setSplitAttemptKey] = useState(() => crypto.randomUUID());
   // Optimistic tag state for THIS row; parent data refreshes on close.
   const [rowTags, setRowTags] = useState<{ tagId: string; name: string }[]>([]);
   const [createdTags, setCreatedTags] = useState<TagRow[]>([]);
@@ -561,6 +636,12 @@ export function TxnEditDialog({
     setNote(row.note ?? '');
     setVoiding(false);
     setPicked(null);
+    // Multi-split rows open straight into the editor, seeded from the real
+    // postings; single-category rows start in picker mode with a "Split…"
+    // affordance.
+    setSplitRows(row.splits && row.splits.length > 0 ? seedRowsFromSplits(row.splits) : null);
+    setSplitBusy(false);
+    setSplitAttemptKey(crypto.randomUUID());
     setRowTags(row.tags ?? []);
     setCreatedTags([]);
     setNewTag('');
@@ -661,6 +742,78 @@ export function TxnEditDialog({
     [categories, row],
   );
 
+  // Split direction follows the cash sign (expense = money out); every split
+  // row offers categories of that one kind, same as manual entry.
+  const splitKind: 'income' | 'expense' = row
+    ? (row.categoryKind ?? inferKindFromAmount(row.amountMinor))
+    : 'expense';
+
+  // The transaction's entity, derived from its current classification (the
+  // rich read model carries no entityId): the single-offset category or any
+  // existing split's category resolves it through the categories list. Split
+  // rows pass this into the picker so inline-create pins to the RIGHT entity
+  // even from a blank row (code review r3603509625).
+  const txnEntityId = useMemo(() => {
+    if (!row) return null;
+    const candidateIds = [
+      row.categoryLedgerAccountId,
+      ...(row.splits ?? []).map((s) => s.categoryLedgerAccountId),
+    ];
+    for (const id of candidateIds) {
+      if (id === null) continue;
+      const entityId = categories.find((c) => c.ledgerAccountId === id)?.entityId;
+      if (entityId) return entityId;
+    }
+    return null;
+  }, [row, categories]);
+  const splitRemainder = row && splitRows ? splitRemainderMinor(row.amountMinor, splitRows) : '0';
+  const splitSaveReady = row !== null && splitRows !== null && splitsReady(row.amountMinor, splitRows);
+  const isExistingSplit = (row?.splits?.length ?? 0) > 0;
+
+  function splitCategoryName(categoryId: string | null): string | null {
+    if (categoryId === null) return null;
+    return (
+      categories.find((c) => c.ledgerAccountId === categoryId)?.name ??
+      row?.splits?.find((s) => s.categoryLedgerAccountId === categoryId)?.name ??
+      null
+    );
+  }
+
+  function setSplitRowAt(i: number, patch: Partial<SplitDraftRow>) {
+    setSplitRows((prev) =>
+      prev ? prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)) : prev,
+    );
+  }
+
+  async function saveSplits() {
+    if (!row || !householdId || !userId || !splitRows) return;
+    // BigInt on integer strings end to end — the payload only exists when the
+    // remainder is exactly 0 (Law 3/4; the server re-verifies Σ=0 either way).
+    const payload = buildSplitsPayload(row.amountMinor, splitRows);
+    if (!payload) return;
+    setSplitBusy(true);
+    try {
+      await setTransactionSplits({
+        householdId,
+        userId,
+        transactionId: row.transactionId,
+        amountMinor: row.amountMinor,
+        splits: payload,
+        attemptKey: splitAttemptKey,
+      });
+      toast.success(
+        payload.length > 1
+          ? `Split across ${String(payload.length)} categories — the original entry stays on the books.`
+          : 'Back to a single category — the split was reversed, not erased.',
+      );
+      onSaved();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save the splits.');
+    } finally {
+      setSplitBusy(false);
+    }
+  }
+
   async function save() {
     if (!row || !householdId) return;
     setSaving(true);
@@ -726,29 +879,124 @@ export function TxnEditDialog({
                 }}
               />
             </div>
-            {row.splits && row.splits.length > 0 ? (
-              <div className="space-y-1.5">
-                <Label>Splits</Label>
-                <div className="space-y-1 rounded-md border border-border px-3 py-2">
-                  {row.splits.map((s) => (
-                    <div
-                      key={s.categoryLedgerAccountId}
-                      className="flex items-center justify-between gap-3 text-sm"
-                    >
-                      <span className="min-w-0 truncate">{s.name}</span>
-                      <Money
-                        amountMinor={(-BigInt(s.amountMinor)).toString()}
-                        currency={row.currency}
-                        signed
-                        className="shrink-0 text-sm"
+            {splitRows !== null && row.transferStatus !== 'confirmed' ? (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label>Splits</Label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs"
+                    disabled={splitBusy || splitRows.length >= 30}
+                    onClick={() => {
+                      setSplitRows((prev) =>
+                        prev ? [...prev, { categoryId: null, amount: '' }] : prev,
+                      );
+                    }}
+                  >
+                    <Plus className="size-3.5" />
+                    Add split
+                  </Button>
+                </div>
+                {/* 390px: each row stacks category over amount; sm+ is one line. */}
+                {splitRows.map((s, i) => (
+                  <div
+                    key={i}
+                    className="flex flex-col gap-2 sm:flex-row sm:items-center"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <CategoryPicker
+                        row={{
+                          ...row,
+                          categoryLedgerAccountId: s.categoryId,
+                          categoryName: splitCategoryName(s.categoryId) ?? 'Pick category',
+                          categoryKind: splitKind,
+                          splits: null,
+                        }}
+                        categories={categories}
+                        wide
+                        createEntityId={txnEntityId}
+                        onPick={(catId) => {
+                          setSplitRowAt(i, { categoryId: catId });
+                        }}
                       />
                     </div>
-                  ))}
+                    <div className="flex items-center gap-2">
+                      <Input
+                        inputMode="decimal"
+                        placeholder="0.00"
+                        className="h-8 flex-1 text-right tabular-nums sm:w-28 sm:flex-none"
+                        aria-label={`Split ${String(i + 1)} amount`}
+                        value={s.amount}
+                        onChange={(e) => {
+                          setSplitRowAt(i, { amount: e.target.value });
+                        }}
+                      />
+                      {splitRows.length > 1 ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Remove split ${String(i + 1)}`}
+                          disabled={splitBusy}
+                          onClick={() => {
+                            setSplitRows((prev) =>
+                              prev ? prev.filter((_, idx) => idx !== i) : prev,
+                            );
+                          }}
+                        >
+                          <X className="size-4" />
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+                {/* Σ=0 as UI: the remainder must land exactly on zero. Sticky so
+                    it stays visible at 390px while the rows scroll. Red only
+                    when negative (over-allocated) — Law 8. */}
+                <div className="sticky bottom-0 z-10 flex items-center justify-between gap-3 rounded-md border border-border bg-background px-3 py-2">
+                  <span className="text-sm text-muted-foreground">Left to split</span>
+                  <Money
+                    amountMinor={splitRemainder}
+                    currency={row.currency}
+                    signed
+                    className="text-sm"
+                  />
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Split transactions are categorized by their splits. To change them,
-                  void and re-enter.
-                </p>
+                {hasDuplicateCategories(splitRows) ? (
+                  <p className="text-xs text-muted-foreground">
+                    Each category can appear only once — merge the amounts.
+                  </p>
+                ) : null}
+                <div className="flex items-center justify-between gap-2">
+                  {!isExistingSplit ? (
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+                      onClick={() => {
+                        setSplitRows(null);
+                      }}
+                    >
+                      Cancel split
+                    </button>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">
+                      Splits are the categorization — saved as real ledger postings.
+                    </span>
+                  )}
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={splitBusy || !splitSaveReady}
+                    onClick={() => {
+                      void saveSplits();
+                    }}
+                  >
+                    {splitBusy ? <Loader2 className="size-4 animate-spin" /> : null}
+                    Save splits
+                  </Button>
+                </div>
               </div>
             ) : null}
             {row.transferStatus === 'confirmed' ? (
@@ -768,10 +1016,31 @@ export function TxnEditDialog({
               </div>
             ) : null}
             {row.transferStatus !== 'confirmed' &&
-            !(row.splits && row.splits.length > 0) &&
+            splitRows === null &&
             categoryOptions.length > 0 ? (
               <div className="space-y-1.5">
-                <Label>Category</Label>
+                <div className="flex items-center justify-between">
+                  <Label>Category</Label>
+                  {/* Teardown C7: every competitor has this. Expands into two
+                      rows with the full amount seeded on row 1. */}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => {
+                      setSplitRows(
+                        seedRowsForNewSplit(
+                          row.amountMinor,
+                          picked?.id ?? row.categoryLedgerAccountId,
+                        ),
+                      );
+                    }}
+                  >
+                    <Split className="size-3.5" />
+                    Split…
+                  </Button>
+                </div>
                 <CategoryPicker
                   // Overlay the in-dialog pick so the trigger shows the NEW
                   // category while the strike-through below keeps the old one.
@@ -782,6 +1051,9 @@ export function TxnEditDialog({
                   }
                   categories={categories}
                   wide
+                  // Once picked in THIS session the badge would be stale —
+                  // saving always writes source='user' regardless of pick.
+                  auto={!picked && isAutoCategorized(row)}
                   onPick={(catId, catName) => {
                     setPicked({
                       id: catId,

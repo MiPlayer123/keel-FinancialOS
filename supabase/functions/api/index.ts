@@ -73,6 +73,7 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'reconciliations.reopen': 'keel_reconciliation_reopen',
   'transactions.manual_create': 'keel_cmd_manual_transaction',
   'transactions.manual_void': 'keel_cmd_manual_void',
+  'transactions.set_splits': 'keel_cmd_set_splits',
   'accounts.set_opening_balance': 'keel_cmd_set_opening_balance',
   'accounts.reanchor_balance': 'keel_cmd_reanchor_balance',
   'categorization.decide_suggestion': 'keel_cmd_decide_category_suggestion',

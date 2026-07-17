@@ -27,10 +27,12 @@ import {
 } from '@/lib/keel-api';
 import {
   RECURRING_ACTIONS,
+  CADENCE_SUFFIX,
   recurringTransition,
   nextOccurrence,
   changedToday,
   stepScheduleDue,
+  annualizedEstimate,
   type RecurringCommand,
 } from '@/lib/recurring';
 import { Badge } from '@/components/ui/badge';
@@ -318,6 +320,10 @@ function SeriesCard({
   const next = nextOccurrence(series, todayIso());
   const lockedToday = series.status !== 'suggested' && changedToday(series, todayIso());
   const actions = RECURRING_ACTIONS[series.status];
+  // Estimated annual total (teardown C13: "$X/mo · ~$Y/yr"). Derived purely
+  // from this series' own projected occurrences — null (shown as nothing)
+  // rather than a guess when the cadence isn't confidently inferable (Law 9).
+  const estimate = useMemo(() => annualizedEstimate(series.occurrences), [series.occurrences]);
 
   async function act(command: RecurringCommand) {
     if (!userId) return;
@@ -356,6 +362,19 @@ function SeriesCard({
               </>
             ) : null}
           </p>
+          {estimate ? (
+            <p className="text-xs text-muted-foreground">
+              <Money amountMinor={estimate.amountMinor} currency={estimate.currency} />
+              {CADENCE_SUFFIX[estimate.cadence]}
+              {estimate.cadence !== 'annual' ? (
+                <>
+                  {' · ~'}
+                  <Money amountMinor={estimate.annualMinor.toString()} currency={estimate.currency} />
+                  {CADENCE_SUFFIX.annual}
+                </>
+              ) : null}
+            </p>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {lockedToday ? (

@@ -1839,3 +1839,514 @@ keel_autocategorize_household shared the pattern on the worker path.
   writes. Deviation: the migration-time backfill itself is unobservable in
   pgTAP (runs before seed on an empty DB); it shares the ingestion
   extraction shape and was validated by the prod apply.
+## 2026-07-17 — D-043: C8 per-account freshness/reauth + C9 credit limit/utilization (one slice)
+
+Teardown items C8 + C9 (both enrich account rows/detail), per
+design/TEARDOWN-STATUS-2026-07-17.md.
+
+- C8 needed NO new SQL: `connections` already had an authenticated
+  member-read policy (20260710210500) and `fetchConnections` already returned
+  `status` + `last_successful_sync_at`; `accounts.connection_id` existed but
+  wasn't selected — added to `fetchAccounts`. Rows on the Accounts page and
+  detail header show "Updated 2h ago" (new tested `relativeSyncLabel` in
+  `lib/relative-date.ts`: minutes/hours/days, floor division, null for
+  future/garbage) and a neutral-token `ReauthLink` chip →
+  `/dashboard/connections` when the owning connection is `reauth_required`.
+  Rows switched to the stretched-link pattern so the chip is clickable
+  without nested anchors.
+- Deviation (flagged): the sidebar rail shows freshness via the row `title`
+  tooltip only, not visible text — an 11px two-column row can't carry
+  "Updated 2h ago" without breaking the calm alignment (Law 8 / Addendum §D
+  taste call). The reauth icon IS visible in the rail.
+- C9: no limit was captured anywhere (grep of migrations for a limit column
+  came up empty), so migration 20260717170000 adds nullable
+  `balance_snapshots.limit_minor`, threads `p_limit_minor` through
+  `keel_apply_account_balance` (6-arg signature DROPPED, not overloaded, to
+  keep PostgREST named-arg resolution unambiguous; new param defaults null so
+  an old worker build keeps working across the deploy window), and
+  `keel_latest_balances` now returns `limitMinor`. Worker passes Plaid's
+  `balances.limit` via the existing `dollarsToMinor`. Utilization renders
+  ONLY when a provider limit exists (liability rows/detail), via tested
+  scaled-integer BigInt `utilizationPercent` (floor; >100% honest; negative
+  owed clamps to 0; null limit → null → today's UI unchanged). Neutral
+  tokens, no red/amber (utilization is status, not negative money).
+- Verified: vitest 604 + deno 12 suites green, typecheck, lint (3
+  pre-existing warnings in untouched files), web build, build:functions;
+  migration executed end-to-end against a scratch Postgres 16 with stub
+  schema (both call shapes; read model emits limitMinor incl. JSON null).
+## 2026-07-17 — D-044: C7 split editor (transactions.set_splits + editable splits in TxnEditDialog)
+
+Teardown C7 (build-queue item 5). Audit first: NO split-write command existed
+anywhere — splits were real balanced postings created only at manual ENTRY
+(keel_cmd_manual_transaction, 20260713100000); TxnEditDialog rendered them
+read-only with "void and re-enter". Full slice built:
+
+- Contract amendment (versioned here per protocol): new command
+  `transactions.set_splits` — `SetSplitsPayloadSchema`
+  { transactionId, amountMinor, splits[1..30] } with the same BigInt Σ
+  superRefine as manual_create. `amountMinor` is a stale-view guard: the
+  server rejects the command when the live cash posting disagrees with the
+  amount the client was looking at, so a concurrent sync revision can never
+  be silently rebalanced (Law 9 explicit ownership).
+- Migration 20260717190000_set_splits.sql: `keel_cmd_set_splits`, full
+  envelope ritual mirrored from keel_cmd_manual_transaction /
+  keel_cmd_decide_category_suggestion (member-write assert, actor-from-JWT
+  forgery guard, idempotency replay, typed errors, finish_command audit,
+  keel_api ownership). Semantics: cash posting untouched; category offsets of
+  the live batch replaced via the house correction model — reversal batch +
+  replacement batch + journal_revisions row with replacement_batch_id (Law 2
+  reversible correction; Σ=0 re-checked in-proc AND by the deferred trigger).
+  Splits validated with the exact manual-entry lattice (live same-entity
+  expense/income category, cash currency, no dupes, sum = -cash). Overlay
+  coherence per 20260713100000 §1/§5: 1 split → USER overlay pin; >1 split →
+  overlay row deleted (new `grant delete on transaction_categories to
+  keel_api` — first deleter on that table). Period-lock precheck on the
+  batch's effective date; voided rows immutable (P0001).
+- authz: 'transactions.set_splits' partner-tier write; api COMMAND_TO_PROC
+  entry; keel-api.ts setTransactionSplits (economicEventKey
+  `set-splits:<txn>:<attemptKey>`, one attemptKey per dialog session).
+- UI (TxnEditDialog): multi-split rows open straight into an editable split
+  section seeded from the real postings; single-category rows get a "Split…"
+  affordance that expands to two rows with the full amount seeded on row 1.
+  Rows = CategoryPicker (reused, wide) + magnitude input; live "Left to
+  split" remainder rendered with Money (red only when negative — over-
+  allocated; Law 8) and Save splits disabled until the remainder is exactly 0
+  (Σ=0 as UI). 390px: rows stack (flex-col → sm:flex-row); the remainder line
+  is sticky-bottom so it stays visible. All remainder math lives in the pure
+  lib apps/web/src/lib/split-editor.ts (BigInt on strings via the house
+  parseSignedDollars; unit-tested incl. past-2^53 magnitudes).
+- Tests: supabase/tests/018_set_splits.sql (ownership, correction-model
+  shape, Σ=0, overlay delete/pin, replay, stale/unbalanced/dup/zero/scope/
+  voided/period-lock lattice, rich-list splits) mirroring 016;
+  tests/integration/18-set-splits.test.ts mirroring 17 (RPC happy path,
+  revision links, replay+audit-once, typed failures, collapse-to-single,
+  scope safety); contracts test for the new schema; authz action-list test
+  updated.
+- Deliberately NOT built: per-split notes (journal_postings has no memo
+  column — teardown says "if the backend supports it"; it does not) and a
+  confirmed-transfer backend guard (keel_categorize_transaction has none
+  either; the UI hides both category picker and split editor for confirmed
+  transfers — smallest deterministic version, flagged here).
+- CI run 29585819168 hit two unrelated flakes outside this diff: a 404 on
+  02-commands.test.ts (the known cold-boot-race class the ci.yml warmup step
+  targets) and a duplicate `ingestion_skips` row in 08-plaid-sync.test.ts
+  (unrelated to split editing — the unique constraint is
+  (raw_event_id, provider_transaction_id, reason); a second distinct
+  raw_provider_events row for the same webhook page implies the sync worker
+  re-archived under retry/redelivery — a pre-existing webhook-idempotency
+  edge case worth a follow-up slice, not a C7 regression). Re-triggering.
+
+## 2026-07-17 — C16: Home "Needs attention" module (teardown item C16)
+
+One card near the top of Home aggregating actionable counts into deep-linked
+rows (Card + list-row grammar, divide-y like the projected-bills list; hides
+entirely at zero). Pure aggregation in `apps/web/src/lib/needs-attention.ts`
+(unit-tested, todayIso injected); component fetches only the two Review
+sources Home didn't already load (transfers.list + categorization.suggestions
+via useKeelQuerySilent — recurring.list, forecast bills, connections, and
+transactions.rich ride the page's existing fetches). Rows: pending review
+(same three sources as ReviewBadge) → /dashboard/review; outflow forecast
+bills due within 7 days (inclusive both ends) → /dashboard/recurring;
+reauth_required connections → /dashboard/connections; uncategorized
+transactions (rich rows already on the page — no new query) →
+/dashboard/ledger?category=uncategorized. Counts neutral per Law 8.
+Decisions:
+- TransferNudgeBanner REMOVED from Home (its count folds into the review
+  row); component file stays — Reports still renders it with its
+  spending-specific copy.
+- `isUncategorized` moved from txn-edit-dialog.tsx to lib/needs-attention.ts
+  (structural UncategorizedLike input) so the count shares ONE definition;
+  txn-edit-dialog re-exports it, so ledger/page.tsx imports are untouched.
+- SyncStatus now takes connections as a prop; HomeBody fetches connections
+  once and shares them with the reauth row (was a second identical fetch).
+
+## 2026-07-17 — D-042: C14 reports scope bar + chart drill-through (teardown queue item 3)
+
+One scope bar (date presets + custom from/to, account multi-select, entity
+select for multi-entity households) now drives EVERY widget on
+/dashboard/reports; state round-trips through URL search params (shareable
+views, `range`/`from`/`to`/`entity`/`accounts`). Pure helpers live in
+`apps/web/src/lib/report-scope.ts` (29 unit tests): parse/serialize,
+entity∩accounts resolution with stale-id dropout, month enumeration,
+month-clamping for partial coverage, drill-href building, and the Law-9
+footnote label ("3 of 5 accounts · 2026-05-01 – 2026-07-17") every widget
+footnote now leads with. Donut slices, trend bars, and matrix/comparison rows
+deep-link to /dashboard/ledger with category+from+to(+account) params.
+
+Decisions / deviations (with justification):
+1. "Income vs spending by month" is now derived CLIENT-SIDE from
+   transactions.rich (same net convention as the matrix: transfers & debt
+   payments excluded, split-aware) instead of the server
+   `dashboard.cash_flow_monthly` aggregate. The C14 brief forbade new SQL and
+   required account/entity scope on every widget; the server aggregate is
+   household-wide by construction. Formula delta vs the old widget (which
+   included Loan Payments postings and could not be scoped) is stated in the
+   widget footnote. Home keeps using the server aggregate unchanged.
+2. Ledger gained a URL-seeded custom date range (`from`/`to` params) shown
+   as a visible extra entry in the existing date select; selecting any preset
+   clears it. The C14 brief said "no filter-logic changes" — this is a
+   bound-sourcing extension of the existing [from,to] comparison, not new
+   filter logic, and the alternative (mapping ranges onto the nearest preset)
+   would show a register that does NOT reproduce the clicked number (Law 9).
+3. Ledger's account filter is single-select, so drill links carry `account`
+   only when the scope resolves to exactly one account; multi-account scopes
+   drill with category+dates and the register visibly shows "All accounts"
+   (disclosed, not silently narrowed). Documented in ledgerDrillHref.
+4. Month in review is month-granular by design: it honors account/entity
+   scope and offers only in-range month chips, but sums the FULL selected
+   month and reads the full prior month as its comparison baseline (a
+   range-clamped baseline would fabricate deltas). Its footnote says "full
+   month <M>" explicitly.
+5. Donut's "Everything else" fold stays non-clickable: it aggregates the
+   folded remainder and no single register view reproduces it.
+6. TransferNudgeBanner stays UNscoped on purpose — it is a data-quality
+   nudge, not a report number; a narrow scope must not hide pending review
+   work.
+7. `limit_minor` on `balance_snapshots` (C9, a parallel PR) is provider data
+   omitted from the scope-bar's report derivations by construction — it is
+   never read outside the account-detail utilization surface.
+
+## 2026-07-17 — D-048: Recurring annualized $/yr + "Stop tracking" copy fix
+
+Two small teardown gaps from `design/TEARDOWN-STATUS-2026-07-17.md`'s
+Runners-up / "Shipped-vs-teardown tensions" #3 (C13 residual: missing $X/yr;
+copy contradiction: `recurring/page.tsx` still said "Cancel series").
+
+1. **Annualized $/yr** (`apps/web/src/lib/recurring.ts`): `inferCadence`
+   classifies a series' cadence from the whole-day gaps between consecutive
+   `occurrences[].expectedDate` into weekly/biweekly/monthly/annual bands
+   (6-8 / 13-15 / 27-31 / 360-372 days — the annual band spans both 365- and
+   366-day leap years). Unlike the existing fuzzy, display-only `cadenceLabel`
+   in `recurring-evidence.ts` (median gap, tolerates one outlier, has a
+   "~every N days" catch-all — fine for descriptive text), this feeds a real
+   dollar figure, so it requires EVERY individual gap to independently land
+   in the same band and returns `null` — never a guessed multiplier — for
+   anything else (single occurrence, irregular gaps, a cadence outside the
+   four supported ones). Law 9 (reproducible numbers / explicit ownership):
+   a number with no confident basis must not be shown at all, not shown with
+   invented provenance. `annualizedMinor`/`annualizedEstimate` are pure
+   BigInt (Law 4) and use the chronologically LATEST occurrence's amount (a
+   price change shows the new price, not a history average). Wired into
+   `SeriesCard` on `/dashboard/recurring` as "$45.00/mo · ~$540.00/yr" (the
+   annual half is suppressed when the cadence itself is already annual, to
+   avoid showing the same figure twice) via the existing `<Money>` component.
+   19 new unit tests in `apps/web/src/lib/recurring.test.ts`, including a
+   leap-year annual span (2028→2029, 366-day gap), a non-leap span (2026→2027,
+   365 days), band boundaries, irregular-gap degradation to null, malformed
+   amount strings, and a >2^53 magnitude to confirm no float precision loss.
+2. **"Cancel" → "Stop tracking" copy fix** (`apps/web/src/lib/recurring.ts`,
+   `RECURRING_ACTIONS`): `recurring.cancel` only stops KEEL from tracking/
+   forecasting a series — it never touches the real subscription or bill.
+   KEEL has no concierge / act-on-the-merchant's-behalf capability (money
+   movement and provider-directed actions are Class D, disabled — Law 10),
+   so "Cancel series" read as KEEL cancelling the user's Netflix subscription
+   for them, which it cannot do — the exact copy contradiction flagged by
+   `design/COMPETITIVE-TEARDOWN-2026-07-16.md` ("'cancel' verb collides with
+   Rocket's concierge meaning — rename 'Stop tracking'"). Both eligible
+   statuses (`confirmed`, `paused`) now render the button as "Stop tracking";
+   only the `label` field changed — the `recurring.cancel` command/enum
+   value, contract schema, and state-machine transition are byte-for-byte
+   unchanged. Grepped the whole repo for "cancel series" / "recurring.cancel"
+   / "stop tracking": the only other user-facing string was the page header
+   description, already fixed in PR #19 (`59823b4`) — no toast, dialog, or
+   aria-label elsewhere surfaces this action's copy, so nothing else needed
+   changing. Regression test added: every `RECURRING_ACTIONS` label is
+   asserted not to contain the word "cancel".
+3. Deviation: I did not add a confirmation dialog before "Stop tracking" —
+   none existed before this change either (the button calls
+   `recurringTransition` directly), and the brief scoped this slice to copy +
+   a new derived display figure only, zero backend/behavior changes. Flagged
+   here rather than silently expanding scope; a confirm-before-stop-tracking
+   affordance is a reasonable follow-up but is its own (tiny) UX decision.
+
+## 2026-07-17 — D-046: C15 per-report scoped export
+
+Teardown item C15 ("Export the report you're viewing") was NOT COVERED:
+`admin.export_all` (packages/exports, Law 6) is the only export path and is
+household-wide by construction. Reports (C14, PR #28) now has an "Export
+CSV" button next to the scope bar that downloads EXACTLY the current scope
+bar's resolution — accounts ∩ entity, [from, to] day range — as one CSV.
+
+Decisions (with justification):
+1. **Reused packages/exports? No — new dedicated builder.** That package's
+   `toCsvFiles` emits one file per raw canonical TABLE (household-wide
+   relational dump, `INCLUDE` manifest columns) with no concept of the
+   Reports scope bar and no `RichTransactionRow`-shaped row (account name,
+   category name, tags, split detail already joined for display). Forcing
+   the report scope into that shape would mean building a fake
+   `HouseholdExport` snapshot just to satisfy `toCsvFiles`'s type — more
+   complex and less honest than a small pure builder over the same rows the
+   page already renders. New file: `apps/web/src/lib/report-export.ts`
+   (`buildScopedTransactionsCsv`, `scopedExportFilename`), unit-tested in
+   `report-export.test.ts` (9 cases: header block, decimal formatting,
+   sort order, split disclosure, formula-injection neutralization, blank-
+   field defaults, filename shape).
+2. **No new edge function / no migration.** `transactions.rich`
+   (`keel_list_transactions_rich`) is called with no LIMIT/pagination
+   params — the Reports page already holds the FULL household transaction
+   set client-side before any scoping happens (confirmed by reading
+   `supabase/functions/api/index.ts` and `use-keel-query.ts`). The export
+   button reuses the exact same `rangedRows` (built via
+   `scopeRows`/`scopedAccountIdSet` from `report-scope.ts`) every widget on
+   the page already renders from — "download exactly what's on screen" is
+   literal, not an approximation, and there is no completeness gap a
+   server-side query would close. This stays a pure client-side read; the
+   web app still never writes canonical tables (Law 7's no-privileged-
+   side-door boundary is moot here — nothing new is exposed).
+3. **Full scoped set, not any widget's narrower convention.** Every Reports
+   widget excludes transfers/debt-payments and nets refunds for its own
+   spending-analysis purpose (stated in each footnote); the CSV export
+   does NOT apply that exclusion; it exports every transaction in
+   [from, to] ∩ accounts, matching the ledger's own row set, per the task
+   brief's explicit instruction not to silently narrow to one widget's
+   convention.
+4. **Law 9 self-description, twice over.** A leading `#`-prefixed comment
+   block states the scope label (`scopeLabel` — same text every widget
+   footnote already shows, one source of truth), the explicit from/to
+   range, the `transactions.rich` query's `asOf` (data freshness, distinct
+   from export time), the generation timestamp, and the row count. The
+   filename also encodes from/to + a filesystem-safe generated-at stamp
+   (`keel-reports-export_<from>_to_<to>_<generated-at>.csv`), so the file
+   self-describes even if separated from its metadata header (renamed,
+   emailed, re-saved).
+5. **One row per transaction, not per split.** Splits are disclosed in
+   their own `Splits` column (`"Name: amount; Name2: amount2"`) rather
+   than exploded into extra rows — Law 3 (postings balance per
+   transaction): a naive spreadsheet `SUM()` over the Amount column must
+   reproduce net cash flow for the scope, which breaks if a split
+   transaction's shares appear as additional summable rows alongside its
+   own parent cash amount.
+6. **Money stays BIGINT-exact, decimal-formatted for spreadsheets.** Amounts
+   convert from minor-unit strings to plain decimal via BigInt digit-
+   shifting only (no float parsing, Law 4) — mirrors the digit-shifting
+   technique in both `packages/exports/src/currency.ts#formatMinorUnits`
+   and this web layer's own `lib/money.ts#formatMoney`. Deviation from
+   `formatMinorUnits`: this builder hardcodes 2 decimal digits rather than
+   pulling the full ISO-4217 exponent table, matching `lib/money.ts`'s
+   existing web-layer convention (that file already assumes 2 digits for
+   every currency); a 0- or 3-decimal-currency household would see the
+   same rounding limitation the UI already has today, not a new one this
+   export introduces. Flagged here rather than fixed, since fixing it means
+   changing `lib/money.ts` too — out of scope for C15.
+7. **Formula-injection neutralization scoped to actual free text, not
+   numbers (a bug caught by the freshly written unit tests — see below).**
+   `packages/exports/src/csv.ts`'s `neutralizeSpreadsheetCell` (Law 5)
+   matches a leading `=+-@`/tab/CR and is applied to EVERY cell in that
+   package, including bigint columns — meaning a negative `amount_minor`
+   there already gets an apostrophe-prefixed, unsummable text cell (an
+   existing, untested quirk in `packages/exports` I did not touch per the
+   task brief). My first draft copied that blanket behavior verbatim and
+   my own unit tests caught it immediately: a `-1234.56` Amount cell was
+   coming out as `'-1234.56` (text, not a number), which would silently
+   break `SUM()` in Excel/Sheets for every household with any expense in
+   the exported range — directly contradicting this file's own stated
+   purpose ("spreadsheets can SUM the column directly"). Fixed by
+   splitting quoting into `quoteCsv` (plain RFC-4180 quoting, for cells
+   this code generates itself — date, amount, currency, enums,
+   transaction id) vs `quoteUntrustedCsv` (quoting + neutralization, for
+   description/note/account name/category name/tags/counterparty — the
+   actual bank-memo/user-typed content Law 5 is about). Recorded here as
+   the clearest example of "write tests first when practical" catching a
+   real defect before merge.
+8. **Button placement:** next to the scope bar (`flex flex-col …
+   sm:flex-row sm:justify-between`, same responsive pattern as
+   `PageHeader`'s actions slot) rather than inside the scope-bar card
+   itself, so it doesn't compete for space with account/entity pickers at
+   390px (Law 8) — it wraps to its own line below the scope bar on narrow
+   viewports instead of cramming in.
+9. Export stays enabled (and produces a header-only CSV) even when the
+   scope resolves to zero transactions — a reproducible "nothing in this
+   range" file is more honest than hiding the button, and Reports already
+   shows an equivalent "Nothing in this scope" empty state for the same
+   condition.
+
+Verification: `pnpm typecheck` clean; `pnpm lint` — 0 errors, the same 4
+pre-existing warnings as a `git stash` baseline (goals/page.tsx,
+import-csv-dialog.tsx, needs-attention.tsx — none in the touched files);
+`pnpm --filter @keel/web exec vitest run` — 209/209 passing (9 new). No
+edge function touched, so the deno/vitest function gate and
+`pnpm build:functions` don't apply. `admin.export_all` and its tests are
+untouched.
+
+## 2026-07-17 — D-045: P0-B follow-ups (reviewed state, auto badge, bulk approve)
+
+Three residual P0-B follow-ups from `design/TEARDOWN-STATUS-2026-07-17.md`
+(queue items 2/3/4, the leftovers after the categorization review loop shipped
+in `20260717160000_categorization_review.sql` / PR #20). Cross-checked `git
+log` + this file before starting: nothing else in the queue had shipped under
+a different name.
+
+**Finding — the reviewed/unreviewed primitive already existed.**
+`transaction_categories.source` (`'user' | 'rule' | 'plaid_pfc'`, set since
+`20260712200100_transaction_categories_overlay.sql` /
+`20260713040000_category_rules.sql`) already distinguishes a human decision
+from a machine-filed one — exactly the signal follow-up #1 asked for. It was
+just never surfaced past the SQL layer. So instead of a new column/table,
+this migration (`20260717200000_transaction_review_state.sql`) adds ONE
+additive field to `keel_list_transactions_rich`: `categorySource`. Semantics
+(Law 9 explicit ownership — inference never silently equated with a human
+decision):
+- single-offset txn, overlay row present → `tc.source` verbatim (`'user'`
+  reviewed; `'rule'`/`'plaid_pfc'` auto, unreviewed).
+- single-offset txn, NO overlay row → `null`. Nothing was ever assigned
+  (still on the Uncategorized landing pad) — deliberately distinct from
+  "auto"; there's nothing to badge.
+- multi-split txn → `'user'`. A split carries NO overlay row at all
+  (`20260717190000_set_splits.sql` deletes it on re-split to >1 category),
+  but a split can only exist because a user built it through the audited
+  `transactions.set_splits` command — reviewed by construction, not by
+  overlay source.
+
+Full recreate of the tags+counterparty-aware body
+(`20260713220000_transfer_counterparty.sql`, the latest prior definition),
+matching every previous redefinition's house pattern; diffed by hand against
+that file to confirm the ONLY change is the one new field (no scratch
+Postgres available in this session — Docker daemon isn't running here, so I
+triple-checked the SQL by hand instead, per the runbook's fallback).
+
+**Follow-up #1 and #2 share ONE visible signal, deliberately.** Rather than
+building a separate "Reviewed" indicator alongside a separate "Auto" badge
+(redundant scaffolding — Law 8 calm over clutter), the Auto badge's presence
+IS the unreviewed signal and its absence (with a real category, not
+Uncategorized) IS the reviewed signal. `apps/web/src/lib/review-state.ts`
+(unit-tested first, `review-state.test.ts`) exports the two pure predicates —
+`isAutoCategorized` (splits and 'user' are never auto; null is never auto
+either — nothing was assigned) and `isReviewedCategory` — both derived off
+the same `categorySource` field, so there is exactly one source of truth for
+"has a human looked at this."
+
+**Follow-up #2 — the Auto badge, reversible by construction.** A small
+neutral (`variant="outline"`, Law 8: never red/green — this is provenance,
+not a verdict) "Auto" pill renders INSIDE the existing `CategoryPicker`
+trigger (`txn-edit-dialog.tsx`), before the category label, when
+`isAutoCategorized(row)`. Because it's part of the same clickable trigger a
+click already opens, "reversible" comes for free: clicking the badge opens
+the category popover, and picking ANY category there (even re-picking the
+one already showing) calls `keel_categorize_transaction`, which always
+upserts `source='user'` — the badge disappears on next fetch. Wired in three
+places: `TxnList`'s desktop `CategoryPicker`, `TxnEditDialog`'s in-dialog wide
+picker (suppressed once the user has picked in THIS session — `!picked &&
+isAutoCategorized(row)` — so it doesn't show a stale badge before save), and
+`TxnList`'s mobile summary line (`· Auto`, since the picker itself is
+`sm:hidden` — Law 8, 390px must stay legible) where the whole row is already
+the tap target that opens `TxnEditDialog`.
+
+**Follow-up #3 — bulk approve, same audited path per item.** Per Law 2, no
+new server-side batch command: the Review page's Categorizations section
+gained a "Select" toggle (mirroring the Ledger page's existing bulk-recategorize
+UI), a checkbox per `CategorizationCard`, and a bulk bar ("Select all" /
+"Dismiss N" / "Approve N"). Each bulk action fires ONE
+`categorization.decide_suggestion` command per selected suggestion id,
+sequentially, with the exact same `catdecide:<id>:<accept|dismiss>` economic
+event key the single-card action already uses (Law 9 idempotent replay) —
+same audit_log row per decision, same typed-error semantics, zero shortcuts.
+Individual Accept/Dismiss buttons hide while selecting (so one click can't
+fire both an individual and a bulk decision on the same row).
+
+**Tests (written first where practical):**
+- `apps/web/src/lib/review-state.test.ts` (10 cases) precedes
+  `review-state.ts` — the five categorySource/splits combinations for each
+  predicate.
+- `supabase/tests/019_transaction_review_state.sql` — direct fixtures (the
+  established pgTAP-scaffolding ritual) covering all five read-model states:
+  never-touched (null), user, rule, plaid_pfc, and a real two-way split;
+  asserts `categorySource` for each plus a splits-length sanity check.
+- `tests/integration/20-transaction-review-state.test.ts` — three states
+  proven end-to-end through REAL command surfaces (Law 7): `user` via
+  `keel_categorize_transaction`, `rule` via `keel_rule_save` +
+  `keel_apply_rules`, and the split case via `keel_cmd_set_splits`. The
+  fourth state (`null`) is not reachable through any command by definition
+  (it's the absence of ever having run one on a freshly synced transaction),
+  so it's covered at the SQL layer only (019) — documented in the test file's
+  header rather than faked.
+
+**Gate evidence:** `pnpm typecheck` clean; `pnpm lint` — 4 warnings, all
+pre-existing (goals/page.tsx, import-csv-dialog.tsx, needs-attention.tsx —
+none in files this change touches, confirmed via `git status --short`
+against the warning list); `pnpm --filter @keel/web exec vitest run` — 210/210
+passed across 11 files (10 new). No `packages/contracts` or
+`supabase/functions/**` changes, so `pnpm test` / `pnpm build:functions` were
+not required by the runbook's own rule and were not run. `supabase/tests` and
+`tests/integration` could not be executed in this session — the Supabase CLI
+needs a Docker daemon and none is running in this sandbox (`docker info`
+fails: "cannot connect to the Docker daemon"); the migration was instead
+diffed by hand line-for-line against its unchanged predecessor
+(`20260713220000_transfer_counterparty.sql`) to confirm the only delta is the
+one additive `categorySource` field, and both new test files were reviewed by
+hand against the house pgTAP/integration idioms used in 016/018/19. Flagging
+this as a residual gap: the new pgTAP/integration files are unexecuted in
+this session and should be run for real at the next opportunity a scratch
+Postgres is available.
+
+**Deviation:** none from the brief. The one design call worth citing: reusing
+a single field/signal for both "reviewed state" and "auto badge" instead of
+two, justified above under Law 8 (financial calm, not redundant status
+chrome).
+
+## 2026-07-17 — D-047: Ledger reconciled status chip + filter facet
+
+Teardown build-queue item 7, reconciliation half only ("reviewed" state was
+out of scope for this slice — `canonical_transactions.status` already exists
+and is surfaced elsewhere; not touched here). Read first: KEEL already links
+a transaction to a matched bank-statement line via
+`reconciliation_items.transaction_id` (resolution = `matched_transaction`),
+written exactly once, only inside `keel_reconciliation_close`
+(20260712150000). That table carries `keel_forbid_mutation` (no UPDATE/
+DELETE grant), so "this transaction has a matched_transaction item" is a
+permanent fact even if the owning statement's session is later reopened —
+reopening unlocks the PERIOD for corrective entries, it does not retract the
+historical match (Law 2 audit-log-is-append-only; Law 9 reproducible
+numbers). Ruling: reconciled = "has ever been matched," not "session still
+closed."
+
+- Migration `20260717210000_ledger_reconciled_status.sql` (renumbered from
+  20260717200000 at convergence — collided with the P0-B follow-ups
+  migration, which merged first; review r3604380927 also caught this
+  migration's `keel_list_transactions_rich` recreate rebuilding from the
+  stale 20260712200200 shape instead of the current one — rebuilt on top
+  of P0-B's categorySource-bearing body): additive only.
+  (1) `create index if not exists reconciliation_items_household_txn on
+  reconciliation_items(household_id, transaction_id) where transaction_id is
+  not null` — the table's FK to `canonical_transactions` (`fk_item_txn_tenant`)
+  is NOT auto-indexed by Postgres on the referencing side, and without this
+  index the new per-row EXISTS check would seq-scan reconciliation_items on
+  every ledger load (the same class of finding that forced 20260717170000's
+  pfc_primary denormalization). (2) `keel_list_transactions_rich` recreated
+  (create-or-replace, same signature/grants) with one new field, `reconciled`,
+  via a correlated `exists(select 1 from reconciliation_items ri where
+  ri.household_id = ct.household_id and ri.transaction_id = ct.id and
+  ri.resolution = 'matched_transaction')`. No new table, no new command —
+  reconciliation still only happens via the Statements page's existing
+  `keel_reconciliation_close` flow.
+- `RichTransactionRow.reconciled?: boolean` (keel-api.ts) — optional/absent-
+  safe, no breaking change to existing consumers.
+  `apps/web/src/components/keel/txn-edit-dialog.tsx`'s `TxnList` row renders
+  a neutral outline "Reconciled" chip (CheckCircle2 icon) immediately next to
+  the amount ONLY when `t.reconciled` is true (Law 8: status adjacent to the
+  number it qualifies; hides-at-absence — same convention as Needs
+  attention's zero-hide, no "not yet" chip cluttering every ordinary row).
+- Ledger filter facet: new `reconciledFilter` select — "All statuses /
+  Reconciled / Unreconciled" — added to `apps/web/src/app/dashboard/ledger/
+  page.tsx` beside the existing tag/category/account selects (identical
+  `Select`/`SelectItem` pattern, no new filter paradigm), wired into the
+  existing `filtered` predicate and `visibleCount` reset effect.
+- Verification: `pnpm typecheck` and `pnpm lint` clean (0 errors; the 4
+  pre-existing warnings are all in files this slice never touched); `pnpm
+  --filter @keel/web exec vitest run` 200/200 green. No local Supabase/Docker
+  stack available in this environment (matches D-043's constraint) — the
+  migration was instead hand-verified against a real Postgres 16 scratch
+  database seeded with a minimal stub schema mirroring the exact tables/
+  columns/types read in step 1 (households, canonical_transactions,
+  journal_batches/postings, ledger_accounts, accounts, statements,
+  reconciliation_sessions, reconciliation_items): applied clean, a
+  matched-transaction row read `reconciled: true`, an unreconciled sibling
+  plus a decoy same-household `reconciliation_items` row with a
+  non-`matched_transaction` resolution and a null `transaction_id` both read
+  `reconciled: false` (proves the filter is on resolution, not mere row
+  existence), and `EXPLAIN` confirmed the planner uses the new
+  `reconciliation_items_household_txn` index rather than a seq scan. pgTAP
+  015-style coverage for this exact read-model shape is deferred to the next
+  CI-capable pass (GitHub Actions minutes exhausted this session per the
+  task brief) — flagged here per protocol, not silently skipped.
+- Deliberately not built (per task scope): no new reconciliation command,
+  no changes to the Statements page's own close/reopen flow.

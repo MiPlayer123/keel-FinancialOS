@@ -138,13 +138,23 @@ const seedFetchResponse = async (
   body: unknown,
   ordinal = 0,
 ): Promise<void> => {
-  const { error } = await serviceClient().from('plaid_webhook_key_test_responses').insert({
-    kid,
-    ordinal,
-    http_status: httpStatus,
-    body_text: JSON.stringify(body),
-  });
-  if (error) throw new Error(`fetch response seed failed: ${error.message}`);
+  // Scaffolding insert — retry the local gateway's transient "invalid
+  // response ... upstream server" hiccup like serviceRpcWithRetry does
+  // (CI run 29584534409 flaked here).
+  let lastMessage = 'unknown error';
+  for (let i = 0; i < 3; i++) {
+    const { error } = await serviceClient().from('plaid_webhook_key_test_responses').insert({
+      kid,
+      ordinal,
+      http_status: httpStatus,
+      body_text: JSON.stringify(body),
+    });
+    if (!error) return;
+    lastMessage = error.message;
+    if (!/upstream server|fetch failed|ECONNREFUSED|502|503/i.test(lastMessage)) break;
+    await new Promise((resolve) => setTimeout(resolve, 500 * (i + 1)));
+  }
+  throw new Error(`fetch response seed failed: ${lastMessage}`);
 };
 
 beforeAll(async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { relativeDueLabel } from './relative-date';
+import { relativeDueLabel, relativeSyncLabel } from './relative-date';
 
 const TODAY = '2026-07-17';
 
@@ -28,5 +28,43 @@ describe('relativeDueLabel', () => {
   it('returns null for garbage rather than guessing', () => {
     expect(relativeDueLabel('not-a-date', TODAY)).toBeNull();
     expect(relativeDueLabel('2026-07-19', 'nope')).toBeNull();
+  });
+});
+
+describe('relativeSyncLabel', () => {
+  const NOW = '2026-07-17T12:00:00Z';
+
+  it('phrases sub-minute ages as just now', () => {
+    expect(relativeSyncLabel('2026-07-17T12:00:00Z', NOW)).toBe('just now');
+    expect(relativeSyncLabel('2026-07-17T11:59:01Z', NOW)).toBe('just now');
+  });
+
+  it('uses minute granularity under an hour', () => {
+    expect(relativeSyncLabel('2026-07-17T11:59:00Z', NOW)).toBe('1m ago');
+    expect(relativeSyncLabel('2026-07-17T11:15:30Z', NOW)).toBe('44m ago');
+    expect(relativeSyncLabel('2026-07-17T11:00:01Z', NOW)).toBe('59m ago');
+  });
+
+  it('uses hour granularity under a day (floor, never rounding up)', () => {
+    expect(relativeSyncLabel('2026-07-17T11:00:00Z', NOW)).toBe('1h ago');
+    expect(relativeSyncLabel('2026-07-17T09:30:00Z', NOW)).toBe('2h ago');
+    expect(relativeSyncLabel('2026-07-16T12:00:01Z', NOW)).toBe('23h ago');
+  });
+
+  it('uses day granularity from 24h onward', () => {
+    expect(relativeSyncLabel('2026-07-16T12:00:00Z', NOW)).toBe('1d ago');
+    expect(relativeSyncLabel('2026-07-03T12:00:00Z', NOW)).toBe('14d ago');
+    expect(relativeSyncLabel('2025-07-17T12:00:00Z', NOW)).toBe('365d ago');
+  });
+
+  it('handles timezone offsets by real instants, not lexical dates', () => {
+    // 08:00-04:00 == 12:00Z — the same instant, so: just now.
+    expect(relativeSyncLabel('2026-07-17T08:00:00-04:00', NOW)).toBe('just now');
+  });
+
+  it('returns null for the future and for garbage', () => {
+    expect(relativeSyncLabel('2026-07-17T12:05:00Z', NOW)).toBeNull();
+    expect(relativeSyncLabel('not-a-timestamp', NOW)).toBeNull();
+    expect(relativeSyncLabel(NOW, 'nope')).toBeNull();
   });
 });

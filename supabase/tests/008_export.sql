@@ -32,7 +32,7 @@ insert into expected_export_tables(table_name, allowed_columns, omitted_columns)
   ('import_rows', array['id','import_batch_id','row_number','raw','created_at'], '{}'),
   ('ingestion_skips', array['id','household_id','connection_id','raw_event_id','provider_transaction_id','currency','reason','created_at'], '{}'),
   ('account_lineage', array['id','household_id','account_id','event_type','previous_state','new_state','occurred_at'], '{}'),
-  ('balance_snapshots', array['id','household_id','account_id','as_of','available_minor','current_minor','currency','source','snapshot_metadata','created_at'], '{}'),
+  ('balance_snapshots', array['id','household_id','account_id','as_of','available_minor','current_minor','limit_minor','currency','source','snapshot_metadata','created_at'], '{}'),
   ('connection_health_events', array['id','household_id','connection_id','event_type','severity','details','occurred_at'], '{}'),
   ('audit_log', array['id','household_id','actor','action','object_type','object_id','command_id','before','after','at'], '{}'),
   ('domain_events', array['id','event_type','household_id','command_id','economic_event_key','actor','occurred_at','payload'], '{}'),

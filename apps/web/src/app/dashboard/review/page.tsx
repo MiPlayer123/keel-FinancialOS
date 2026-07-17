@@ -9,6 +9,7 @@ import {
   ArrowRight,
   ArrowLeftRight,
   ChevronDown,
+  ListChecks,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -62,6 +63,55 @@ function ReviewBody() {
   );
   const transfers = useTransferSuggestions(householdId);
   const categorizations = useCategorySuggestions(householdId);
+  // Bulk approve/dismiss (P0-B follow-up #3): client-side convenience over
+  // the SAME audited command as a single decision — one
+  // categorization.decide_suggestion call per selected id, never a shortcut
+  // around Law 2's per-mutation audit_log requirement.
+  const [catSelecting, setCatSelecting] = useState(false);
+  const [catSelected, setCatSelected] = useState<Set<string>>(new Set());
+  const [catBulkBusy, setCatBulkBusy] = useState(false);
+
+  function toggleCatSelected(id: string) {
+    setCatSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function bulkDecide(accept: boolean) {
+    if (!householdId || !userId || catSelected.size === 0) return;
+    setCatBulkBusy(true);
+    let ok = 0;
+    let failed = 0;
+    for (const suggestionId of catSelected) {
+      try {
+        await keelCommand({
+          commandId: newId(),
+          command: 'categorization.decide_suggestion',
+          // Deterministic per decision, exactly like the single-card action:
+          // a retry replays, never re-executes (Law 9).
+          economicEventKey: `catdecide:${suggestionId}:${accept ? 'accept' : 'dismiss'}`,
+          actor: { kind: 'user', userId },
+          householdId,
+          payload: { suggestionId, accept },
+        });
+        ok++;
+      } catch {
+        failed++;
+      }
+    }
+    setCatBulkBusy(false);
+    setCatSelected(new Set());
+    setCatSelecting(false);
+    toast[failed > 0 ? 'error' : 'success'](
+      failed > 0
+        ? `${accept ? 'Approved' : 'Dismissed'} ${String(ok)}, ${String(failed)} failed.`
+        : `${accept ? 'Approved' : 'Dismissed'} ${String(ok)} suggestion${ok === 1 ? '' : 's'}.`,
+    );
+    await categorizations.refetch();
+  }
 
   const suggested = rows.filter((r) => r.status === 'suggested');
 
@@ -144,19 +194,78 @@ function ReviewBody() {
 
       {categorizations.suggested.length > 0 ? (
         <section className="space-y-3">
-          <h2 className="text-sm font-medium text-muted-foreground">
-            Categorizations · {categorizations.suggested.length}
-          </h2>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-medium text-muted-foreground">
+              Categorizations · {categorizations.suggested.length}
+            </h2>
+            {categorizations.suggested.length > 1 ? (
+              <Button
+                variant={catSelecting ? 'secondary' : 'outline'}
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => {
+                  setCatSelecting((s) => !s);
+                  setCatSelected(new Set());
+                }}
+              >
+                <ListChecks className="size-3.5" />
+                {catSelecting ? 'Done' : 'Select'}
+              </Button>
+            ) : null}
+          </div>
           <p className="text-xs text-muted-foreground">
             Deterministic matches from your rules and the bank&apos;s own categories.
             Nothing is filed until you accept it.
           </p>
+          {catSelecting ? (
+            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-secondary/40 px-4 py-2.5">
+              <span className="text-sm font-medium">{catSelected.size} selected</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                disabled={catBulkBusy}
+                onClick={() => {
+                  setCatSelected(new Set(categorizations.suggested.map((r) => r.suggestionId)));
+                }}
+              >
+                Select all
+              </Button>
+              <span className="flex-1" />
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={catBulkBusy || catSelected.size === 0}
+                onClick={() => {
+                  void bulkDecide(false);
+                }}
+              >
+                {catBulkBusy ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
+                Dismiss {catSelected.size > 0 ? catSelected.size : ''}
+              </Button>
+              <Button
+                size="sm"
+                disabled={catBulkBusy || catSelected.size === 0}
+                onClick={() => {
+                  void bulkDecide(true);
+                }}
+              >
+                {catBulkBusy ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+                Approve {catSelected.size > 0 ? catSelected.size : ''}
+              </Button>
+            </div>
+          ) : null}
           {categorizations.suggested.map((row) => (
             <CategorizationCard
               key={row.suggestionId}
               row={row}
               householdId={householdId}
               userId={userId}
+              selecting={catSelecting}
+              selected={catSelected.has(row.suggestionId)}
+              onToggle={() => {
+                toggleCatSelected(row.suggestionId);
+              }}
               onDone={() => {
                 void categorizations.refetch();
               }}
@@ -422,11 +531,20 @@ function CategorizationCard({
   row,
   householdId,
   userId,
+  selecting,
+  selected,
+  onToggle,
   onDone,
 }: {
   row: CategorySuggestionRow;
   householdId: string;
   userId: string | null;
+  /** Bulk-select mode (P0-B follow-up #3): shows a checkbox, hides the
+   *  per-card actions so one click can't fire both an individual and a bulk
+   *  decision on the same suggestion. */
+  selecting?: boolean;
+  selected?: boolean;
+  onToggle?: () => void;
   onDone: () => void;
 }) {
   const [busy, setBusy] = useState<null | 'accept' | 'dismiss'>(null);
@@ -466,7 +584,23 @@ function CategorizationCard({
   return (
     <Card>
       <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0 space-y-1">
+        {selecting ? (
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={selected ?? false}
+            aria-label={`Select ${displayName}`}
+            className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded border ${
+              selected
+                ? 'border-primary bg-primary text-primary-foreground'
+                : 'border-border'
+            }`}
+            onClick={onToggle}
+          >
+            {selected ? <Check className="size-3.5" /> : null}
+          </button>
+        ) : null}
+        <div className="min-w-0 flex-1 space-y-1">
           <div className="flex min-w-0 items-center gap-2">
             <p className="truncate font-medium" title={row.originalDescription}>
               {displayName}
@@ -526,33 +660,35 @@ function CategorizationCard({
             </div>
           </WhyDisclosure>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy !== null}
-            onClick={() => {
-              void act(false);
-            }}
-          >
-            {busy === 'dismiss' ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
-            Dismiss
-          </Button>
-          <Button
-            size="sm"
-            disabled={busy !== null}
-            onClick={() => {
-              void act(true);
-            }}
-          >
-            {busy === 'accept' ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Check className="size-4" />
-            )}
-            Accept
-          </Button>
-        </div>
+        {selecting ? null : (
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy !== null}
+              onClick={() => {
+                void act(false);
+              }}
+            >
+              {busy === 'dismiss' ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
+              Dismiss
+            </Button>
+            <Button
+              size="sm"
+              disabled={busy !== null}
+              onClick={() => {
+                void act(true);
+              }}
+            >
+              {busy === 'accept' ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Check className="size-4" />
+              )}
+              Accept
+            </Button>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

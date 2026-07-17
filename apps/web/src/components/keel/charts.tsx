@@ -192,20 +192,44 @@ export type MonthlyFlow = {
   netMinor: string;
 };
 
-/** Grouped monthly inflow/outflow bars (emerald/indigo, legend + tooltip). */
-export function CashFlowMonthlyChart({ rows, height = 220 }: { rows: MonthlyFlow[]; height?: number }) {
+/** Grouped monthly inflow/outflow bars (emerald/indigo, legend + tooltip).
+ *  `onMonthClick` (optional) makes each month column a drill-through into the
+ *  register — the caller supplies the navigation. */
+export function CashFlowMonthlyChart({
+  rows,
+  height = 220,
+  onMonthClick,
+}: {
+  rows: MonthlyFlow[];
+  height?: number;
+  onMonthClick?: (month: string) => void;
+}) {
   const data = rows.map((r) => ({
     month: r.month,
     inflow: toGeometry(r.inflowMinor),
     outflow: toGeometry(r.outflowMinor),
     row: r,
   }));
+  // recharts hands the categorical chart state back on click; the active
+  // label is the month key of the column under the cursor.
+  const handleClick =
+    onMonthClick === undefined
+      ? undefined
+      : (state: unknown) => {
+          const label = (state as { activeLabel?: unknown } | null)?.activeLabel;
+          if (typeof label === 'string' && label !== '') onMonthClick(label);
+        };
 
   return (
     <div className="space-y-2">
-      <div style={{ height }} className="w-full">
+      <div style={{ height }} className={`w-full${handleClick ? ' cursor-pointer' : ''}`}>
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 8 }} barGap={2}>
+          <BarChart
+            data={data}
+            margin={{ top: 8, right: 8, bottom: 0, left: 8 }}
+            barGap={2}
+            {...(handleClick ? { onClick: handleClick } : {})}
+          >
             <CartesianGrid stroke={GRID} vertical={false} />
             <XAxis
               dataKey="month"
@@ -322,7 +346,13 @@ export function CategoryBarList({ items }: { items: CategorySpend[] }) {
 // Red is never used here (Law 8: red = negative money only).
 // ---------------------------------------------------------------------------
 
-export type CategoryDonutSlice = { name: string; amountMinor: string };
+export type CategoryDonutSlice = {
+  name: string;
+  amountMinor: string;
+  /** Category ledger-account id for drill-through (null = uncategorized).
+   *  Omit when the caller doesn't wire clicks. */
+  id?: string | null;
+};
 
 const DONUT_HUES = [
   'var(--chart-1)',
@@ -355,11 +385,16 @@ export function CategoryDonut({
   currency = 'USD',
   height = 220,
   topN = 6,
+  onSliceClick,
 }: {
   items: CategoryDonutSlice[];
   currency?: string;
   height?: number;
   topN?: number;
+  /** Drill-through for a REAL category slice. "Everything else" is an
+   *  aggregate of the folded remainder — no single register view reproduces
+   *  it, so it stays non-clickable rather than drilling somewhere wrong. */
+  onSliceClick?: (slice: { id: string | null; name: string }) => void;
 }) {
   const { slices, totalMinor } = useMemo(() => {
     const sorted = [...items]
@@ -397,10 +432,29 @@ export function CategoryDonut({
       value: toGeometry(s.amountMinor),
       pct,
       isOther: s.isOther,
+      categoryId: s.id ?? null,
       fill: style.fill,
       fillOpacity: style.fillOpacity,
     };
   });
+
+  // recharts spreads each datum onto the sector props AND nests it as
+  // `payload`; read defensively from either shape.
+  const handleSectorClick =
+    onSliceClick === undefined
+      ? undefined
+      : (item: unknown) => {
+          const raw = item as {
+            payload?: { name?: unknown; categoryId?: unknown; isOther?: unknown };
+            name?: unknown;
+            categoryId?: unknown;
+            isOther?: unknown;
+          } | null;
+          const p = raw?.payload ?? raw;
+          if (!p || p.isOther === true) return;
+          if (typeof p.name !== 'string') return;
+          onSliceClick({ id: typeof p.categoryId === 'string' ? p.categoryId : null, name: p.name });
+        };
 
   return (
     <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -431,6 +485,9 @@ export function CategoryDonut({
               stroke="var(--card)"
               strokeWidth={2}
               isAnimationActive={false}
+              {...(handleSectorClick
+                ? { onClick: handleSectorClick, className: 'cursor-pointer' }
+                : {})}
             />
           </PieChart>
         </ResponsiveContainer>
@@ -442,21 +499,42 @@ export function CategoryDonut({
         </div>
       </div>
       <div className="min-w-0 flex-1 space-y-1.5">
-        {data.map((d) => (
-          <div key={d.name} className="flex items-center gap-2 text-sm">
-            <span
-              className="size-2.5 shrink-0 rounded-[3px]"
-              style={{ background: d.fill, opacity: d.fillOpacity }}
-            />
-            <span className="min-w-0 flex-1 truncate">{d.name}</span>
-            <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
-              {String(d.pct)}%
-            </span>
-            <span className="w-20 shrink-0 text-right font-mono text-xs tabular-nums">
-              {formatMoney(d.amountMinor, { currency })}
-            </span>
-          </div>
-        ))}
+        {data.map((d) => {
+          const clickable = onSliceClick !== undefined && !d.isOther;
+          const row = (
+            <>
+              <span
+                className="size-2.5 shrink-0 rounded-[3px]"
+                style={{ background: d.fill, opacity: d.fillOpacity }}
+              />
+              <span className={`min-w-0 flex-1 truncate text-left${clickable ? ' hover:underline' : ''}`}>
+                {d.name}
+              </span>
+              <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
+                {String(d.pct)}%
+              </span>
+              <span className="w-20 shrink-0 text-right font-mono text-xs tabular-nums">
+                {formatMoney(d.amountMinor, { currency })}
+              </span>
+            </>
+          );
+          return clickable ? (
+            <button
+              key={d.name}
+              type="button"
+              className="flex w-full cursor-pointer items-center gap-2 text-sm"
+              onClick={() => {
+                onSliceClick({ id: d.categoryId, name: d.name });
+              }}
+            >
+              {row}
+            </button>
+          ) : (
+            <div key={d.name} className="flex items-center gap-2 text-sm">
+              {row}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

@@ -135,15 +135,26 @@ export type AccountRow = {
   ledgerAccountId: string;
   currency: string;
   entityId: string;
+  /** Owning provider connection; null for manual accounts. Joined client-side
+   *  against fetchConnections for per-row freshness/reauth (teardown C8). */
+  connectionId: string | null;
+  /** Set when the account is closed/archived (present so historical scope
+   *  resolution can include closed accounts and pickers can label them). */
+  archivedAt?: string | null;
 };
 
-export async function fetchAccounts(householdId: string): Promise<AccountRow[]> {
-  const { data, error } = await getSupabaseBrowserClient()
+export async function fetchAccounts(
+  householdId: string,
+  opts?: { includeArchived?: boolean },
+): Promise<AccountRow[]> {
+  let query = getSupabaseBrowserClient()
     .from('accounts')
-    .select('id, name, subtype, ledger_account_id, currency, entity_id')
-    .eq('household_id', householdId)
-    .is('archived_at', null)
-    .order('name');
+    .select('id, name, subtype, ledger_account_id, currency, entity_id, connection_id, archived_at')
+    .eq('household_id', householdId);
+  // Scope resolution over HISTORY must see closed accounts too (review
+  // r3603410820) — pickers default to active only.
+  if (!opts?.includeArchived) query = query.is('archived_at', null);
+  const { data, error } = await query.order('name');
   if (error) throw error;
 
   type Row = {
@@ -153,6 +164,8 @@ export async function fetchAccounts(householdId: string): Promise<AccountRow[]> 
     ledger_account_id: string;
     currency: string;
     entity_id: string;
+    connection_id: string | null;
+    archived_at: string | null;
   };
 
   return ((data as Row[] | null) ?? []).map((r) => ({
@@ -162,6 +175,8 @@ export async function fetchAccounts(householdId: string): Promise<AccountRow[]> 
     ledgerAccountId: r.ledger_account_id,
     currency: r.currency,
     entityId: r.entity_id,
+    connectionId: r.connection_id,
+    archivedAt: r.archived_at,
   }));
 }
 
@@ -395,6 +410,15 @@ export type RichTransactionRow = {
   categoryKind: 'income' | 'expense' | null;
   /** Stable key for system categories (rename-proof "Uncategorized" checks). */
   categoryPfcKey?: string | null;
+  /**
+   * Provenance of the CURRENT single-offset category (absent pre-migration;
+   * null when the transaction has never had an overlay written — still on
+   * the Uncategorized landing pad). 'user' = a human confirmed it (directly,
+   * or a suggestion the user approved — the approval path writes source
+   * 'user' too); 'rule' / 'plaid_pfc' = machine-filed, never individually
+   * reviewed. See lib/review-state.ts for the derived "Auto" badge check.
+   */
+  categorySource?: 'user' | 'rule' | 'plaid_pfc' | null;
   /** Present (non-null) only for multi-split transactions. */
   splits?: TransactionSplit[] | null;
   /** User labels, orthogonal to categories (absent pre-tags-migration). */
@@ -406,6 +430,13 @@ export type RichTransactionRow = {
   counterpartyAccountName?: string | null;
   /** Other leg's transaction id, for a future "jump to" affordance. */
   counterpartyTransactionId?: string | null;
+  /**
+   * True once a closed reconciliation session matched this transaction to a
+   * bank statement line (reconciliation_items.resolution = 'matched_transaction',
+   * D-047). Absent/false = not (yet) reconciled — the common case; the chip
+   * only renders on true (Law 8 hides-at-absence, same as Needs-attention).
+   */
+  reconciled?: boolean;
 };
 
 export type CategoryRow = {
@@ -449,6 +480,9 @@ export type LatestBalanceRow = {
   accountId: string;
   currentMinor: string;
   availableMinor: string | null;
+  /** Provider-reported credit limit (absent/null until the limit migration
+   *  lands or when the institution reports none) — teardown C9. */
+  limitMinor?: string | null;
   currency: string;
   asOf: string;
 };
@@ -984,6 +1018,10 @@ export type RecurringOccurrence = {
   expectedAmountMinor: string;
   currency: string;
   status: string;
+  /** Set once this occurrence is matched to a real transaction — used to
+   *  detect internal-transfer series (a confirmed transfer_links row on the
+   *  matched txn) the same way keel_cash_flow_forecast excludes them. */
+  matchedTxnId: string | null;
 };
 
 export type RecurringStatusEvent = {
@@ -1156,6 +1194,42 @@ export async function voidManualTransaction(input: {
     payload: {
       transactionId: input.transactionId,
       reason: input.reason,
+    },
+  });
+}
+
+/**
+ * Re-split an existing transaction across categories (teardown C7). The cash
+ * side is untouched; the server replaces the category offsets through the
+ * reversible correction model (reversal + replacement batch). amountMinor is
+ * the signed cash amount THIS CLIENT is looking at — the server rejects the
+ * command if the live batch disagrees, so a concurrent sync revision can
+ * never be silently rebalanced.
+ */
+export async function setTransactionSplits(input: {
+  householdId: string;
+  userId: string;
+  transactionId: string;
+  /** Signed minor units of the cash posting as displayed to the user. */
+  amountMinor: string;
+  /** Debit-positive offsets; must sum to exactly -amountMinor (Law 3). */
+  splits: { categoryLedgerAccountId: string; amountMinor: string }[];
+  /**
+   * Idempotency handle: mint ONE per edit session so a retry after a timeout
+   * replays instead of double-revising (invariant 3).
+   */
+  attemptKey: string;
+}): Promise<CommandResult> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'transactions.set_splits',
+    economicEventKey: `set-splits:${input.transactionId}:${input.attemptKey}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: {
+      transactionId: input.transactionId,
+      amountMinor: input.amountMinor,
+      splits: input.splits,
     },
   });
 }
