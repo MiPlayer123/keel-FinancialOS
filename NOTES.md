@@ -2814,3 +2814,28 @@ assumption — a null bound is a no-op AND branch, mechanically.
   currently only be set at creation or via delete-and-recreate; amount range
   inherits that same limitation rather than being a special case). Residual
   gap noted for the next teardown pass on C18.
+- **Migration rename (convergence):** `20260717220000_rules_amount_range.sql`
+  collided with C6 residual's `20260717220000_account_mask.sql` (#39, merged
+  first) for the same timestamp slot — renamed to
+  `20260717230000_rules_amount_range.sql`, no body change from the rename
+  alone.
+- **Review fix (r3604707156):** the amount-range AND condition above only
+  gated `keel_apply_rules` — `keel_detect_category_suggestions`
+  (`20260717170000_pfc_primary_denormalized.sql`) still matched active rules
+  in its `rule_winners` CTE by household/category/pattern with no amount
+  check, so a transaction outside a rule's amount bound could still surface
+  a `rule_match` *suggestion* (suppressing the correct PFC suggestion below
+  it in the same detection pass), and a user accepting that suggestion would
+  apply a category the rule engine itself would refuse to apply via
+  `keel_apply_rules`. Fixed in the same (renamed) migration: `targets` now
+  also selects `offp.amount_minor` (same single-category-posting magnitude
+  reasoning `keel_apply_rules` already relies on — Law 3), and
+  `rule_winners`'s join gained the identical two null-safe bound checks.
+  Both bounds null remains a no-op AND (Law 9) — every pre-existing rule's
+  suggestions are byte-for-byte unchanged. New test:
+  `tests/integration/21-rules-amount-range.test.ts` — "keel_detect_category_
+  suggestions respects the same amount bound as keel_apply_rules (review
+  r3604707156)" — proves a below-floor synced transaction gets no rule_match
+  suggestion for that rule's category while an at/above-floor one still
+  does. Unexecuted-but-hand-verified in this sandbox, same constraint as the
+  rest of this entry.

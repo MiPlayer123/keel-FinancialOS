@@ -173,6 +173,68 @@ describe('rules amount-range condition (C18 residual)', () => {
     expect(error?.message ?? '').toMatch(/amount_min_minor must be <= amount_max_minor/);
   });
 
+  it('keel_detect_category_suggestions respects the same amount bound as keel_apply_rules (review r3604707156)', async () => {
+    // Before this fix, the suggestion detector's rule_winners CTE matched
+    // active rules by household/category/pattern with no amount check at
+    // all, so a transaction below a rule's floor still surfaced a
+    // rule_match suggestion (suppressing the correct PFC suggestion) even
+    // though keel_apply_rules itself would refuse to apply that rule.
+    const alex = await signIn(SEED.users.alex.email);
+    const svc = serviceClient();
+    const pattern = `AMOUNT DETECT FLOOR ${Date.now().toString(36)}`;
+
+    const below = await syncedTxn(svc, `${pattern} BELOW`, '3000'); // $30
+    const above = await syncedTxn(svc, `${pattern} ABOVE`, '6000'); // $60
+
+    const { error: ruleError } = await alex.rpc('keel_rule_save', {
+      p_household_id: HOUSEHOLD,
+      p_rule_id: null,
+      p_pattern: pattern,
+      p_category_ledger_account_id: GROCERIES,
+      p_rename_to: null,
+      p_priority: 100,
+      p_active: true,
+      p_amount_min_minor: '5000', // $50 floor
+      p_amount_max_minor: null,
+    });
+    if (ruleError) throw new Error(`rule save failed: ${ruleError.message}`);
+
+    const { error: detectError } = await alex.rpc('keel_detect_category_suggestions', {
+      p_household_id: HOUSEHOLD,
+    });
+    if (detectError) throw new Error(`detect failed: ${detectError.message}`);
+
+    const { data, error: listError } = await alex.rpc('keel_list_category_suggestions', {
+      p_household_id: HOUSEHOLD,
+    });
+    if (listError) throw new Error(`list failed: ${listError.message}`);
+    const rows = (
+      data as {
+        rows: {
+          canonicalTransactionId: string;
+          source: string;
+          reasonCode: string;
+          suggestedCategoryLedgerAccountId: string;
+        }[];
+      }
+    ).rows;
+
+    const belowSuggestion = rows.find((r) => r.canonicalTransactionId === below);
+    const aboveSuggestion = rows.find((r) => r.canonicalTransactionId === above);
+
+    // The below-floor transaction must NOT get a rule_match suggestion for
+    // this rule's category — the rule engine would never apply it either.
+    expect(
+      belowSuggestion &&
+        belowSuggestion.source === 'rule' &&
+        belowSuggestion.suggestedCategoryLedgerAccountId === GROCERIES,
+    ).toBeFalsy();
+    // The at/above-floor transaction still gets its rule_match suggestion.
+    expect(aboveSuggestion?.source).toBe('rule');
+    expect(aboveSuggestion?.reasonCode).toBe('rule_match');
+    expect(aboveSuggestion?.suggestedCategoryLedgerAccountId).toBe(GROCERIES);
+  });
+
   it('a legacy null-range rule (both bounds unset) matches regardless of amount — backward compatible', async () => {
     const alex = await signIn(SEED.users.alex.email);
     const svc = serviceClient();

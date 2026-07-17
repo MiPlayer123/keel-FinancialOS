@@ -379,3 +379,168 @@ $$;
 
 revoke all on function public.keel_list_rules(uuid) from public, anon;
 grant execute on function public.keel_list_rules(uuid) to authenticated, service_role;
+
+-- ---------------------------------------------------------------------------
+-- keel_detect_category_suggestions: signature UNCHANGED (uuid) — plain
+-- create-or-replace, rebuilt from the CURRENT live body in 20260717170000.
+-- Review finding (r3604707156): the amount-range AND condition above only
+-- gated keel_apply_rules. The suggestion path's rule_winners CTE matched
+-- active rules by household/category/pattern with no amount check, so a
+-- transaction outside a rule's amount bound could still surface a rule_match
+-- suggestion (suppressing the correct PFC suggestion below it), and accepting
+-- it would apply a category the rule engine itself would refuse to apply.
+-- Only two deltas from the live body: `targets` now also selects
+-- offp.amount_minor (the single category posting's amount — by the balanced-
+-- postings invariant, Law 3, its magnitude equals the cash leg's for a
+-- single-offset transaction, same reasoning keel_apply_rules already uses),
+-- and rule_winners ANDs the same two null-safe bound checks. Both bounds null
+-- is a no-op AND (Law 9): every pre-existing rule's suggestions are unchanged.
+-- ---------------------------------------------------------------------------
+create or replace function public.keel_detect_category_suggestions(p_household_id uuid)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_count int;
+  v_uid uuid := coalesce(
+    nullif(pg_catalog.current_setting('request.jwt.claim.sub', true), ''),
+    nullif(pg_catalog.current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'
+  )::uuid;
+begin
+  if v_uid is not null and not exists (
+    select 1 from public.household_memberships
+    where household_id = p_household_id and user_id = v_uid
+  ) then
+    raise exception 'KEEL_NOT_FOUND' using errcode = 'P0006';
+  end if;
+
+  with targets as (
+    select ct.id as txn_id, ct.description, offp.entity_id, offp.amount_minor,
+           offcat.kind as txn_kind,
+           coalesce(tc.category_ledger_account_id, offcat.id) as current_cat
+      from public.canonical_transactions ct
+      join public.journal_batches jb
+        on jb.canonical_transaction_id = ct.id and jb.reverses_batch_id is null
+       and not exists (
+         select 1 from public.journal_revisions rev where rev.original_batch_id = jb.id
+       )
+      join public.journal_postings offp on offp.batch_id = jb.id
+      join public.ledger_accounts offcat
+        on offcat.id = offp.ledger_account_id and offcat.is_category = true
+      left join public.transaction_categories tc on tc.canonical_transaction_id = ct.id
+      left join public.ledger_accounts cur on cur.id = tc.category_ledger_account_id
+      where ct.household_id = p_household_id
+        and ct.voided_at is null
+        -- Single-offset only: split transactions are categorized by their
+        -- splits (20260713100000 §5).
+        and (
+          select count(*) from public.journal_postings p2
+          join public.ledger_accounts l2 on l2.id = p2.ledger_account_id and l2.is_category
+          where p2.batch_id = jb.id
+        ) = 1
+        and (
+          (case when tc.canonical_transaction_id is not null
+                then cur.pfc_key else offcat.pfc_key end)
+            in ('uncategorized_expense', 'uncategorized_income')
+          or tc.source = 'plaid_pfc'
+        )
+  ),
+  rule_winners as (
+    -- Deterministic winner per transaction: lowest (priority, created_at, id)
+    -- among matching rules — same lattice as keel_apply_rules. Kind- and
+    -- entity-safe; matched against the IMMUTABLE provider description.
+    select distinct on (t.txn_id)
+           t.txn_id, r.id as rule_id, r.pattern,
+           r.category_ledger_account_id as cat_id
+      from targets t
+      join public.category_rules r
+        on r.household_id = p_household_id
+       and r.active
+       and r.category_ledger_account_id is not null
+       and position(lower(r.pattern) in lower(t.description)) > 0
+       -- C18 residual fix (review r3604707156): same amount-range AND
+       -- condition keel_apply_rules enforces. Null bound => no-op AND.
+       and (r.amount_min_minor is null or abs(t.amount_minor) >= r.amount_min_minor)
+       and (r.amount_max_minor is null or abs(t.amount_minor) <= r.amount_max_minor)
+      join public.ledger_accounts rc
+        on rc.id = r.category_ledger_account_id
+       and rc.is_category = true and rc.archived_at is null
+       and rc.entity_id = t.entity_id
+       and rc.kind = t.txn_kind
+      order by t.txn_id, r.priority, r.created_at, r.id
+  ),
+  pfc_proposals as (
+    -- ONE proposal per transaction (adversarial review P2-1). PFC primary now
+    -- read from the record's denormalized pfc_primary — extracted once at
+    -- ingestion (20260717170000) instead of re-exploding the whole raw event
+    -- history per call (prod finding: 37s scans → statement timeout).
+    -- Deterministic winner unchanged: posted record first, then the newest
+    -- normalized record, then id.
+    select distinct on (t.txn_id)
+           t.txn_id, nsr.pfc_primary,
+           cat.pfc_key as cat_key, cat.id as cat_id
+      from targets t
+      join public.transaction_source_links tsl on tsl.canonical_transaction_id = t.txn_id
+      join public.normalized_source_records nsr
+        on nsr.id = tsl.normalized_source_record_id
+       and nsr.pfc_primary is not null
+      join public.ledger_accounts cat
+        on cat.entity_id = t.entity_id
+       and cat.pfc_key = public.keel_pfc_to_category_key(nsr.pfc_primary, t.txn_kind)
+       and cat.is_category = true and cat.kind = t.txn_kind and cat.archived_at is null
+      -- Precedence: user rules beat PFC — a transaction with a rule proposal
+      -- never also gets a PFC proposal.
+      where not exists (select 1 from rule_winners w where w.txn_id = t.txn_id)
+      order by t.txn_id, nsr.pending asc, nsr.created_at desc, nsr.id
+  ),
+  proposals as (
+    select w.txn_id, w.cat_id, 'rule'::text as source, 'rule_match'::text as reason_code,
+           jsonb_build_object('ruleId', w.rule_id, 'pattern', w.pattern,
+                              'matchedField', 'description') as evidence
+      from rule_winners w
+    union all
+    select p.txn_id, p.cat_id, 'pfc', 'pfc_mapping',
+           jsonb_build_object('pfcPrimary', p.pfc_primary, 'pfcKey', p.cat_key)
+      from pfc_proposals p
+  )
+  insert into public.category_suggestions
+    (household_id, canonical_transaction_id, suggested_category_ledger_account_id,
+     source, reason_code, evidence)
+  select p_household_id, pr.txn_id, pr.cat_id, pr.source, pr.reason_code, pr.evidence
+    from proposals pr
+    join targets t on t.txn_id = pr.txn_id
+    -- Never suggest what the transaction already effectively carries.
+    where pr.cat_id <> t.current_cat
+    -- Only genuinely-NEW proposals may consume LIMIT slots (adversarial
+    -- review P1-1): the LIMIT applies before ON CONFLICT, so without this
+    -- anti-join on the full unique key, existing pending/dismissed rows
+    -- permanently occupy the deterministic ordered prefix and rows 201+
+    -- would never be suggested. ON CONFLICT stays as the concurrency
+    -- backstop for two detection passes racing.
+    and not exists (
+      select 1 from public.category_suggestions cs
+      where cs.household_id = p_household_id
+        and cs.canonical_transaction_id = pr.txn_id
+        and cs.suggested_category_ledger_account_id = pr.cat_id
+        and cs.source = pr.source
+    )
+    order by pr.txn_id, pr.source
+    limit 200  -- bound one detection pass; the next call picks up the rest
+  on conflict (household_id, canonical_transaction_id,
+               suggested_category_ledger_account_id, source) do nothing;
+  get diagnostics v_count = row_count;
+
+  if v_count > 0 then
+    insert into public.audit_log (household_id, actor, action, object_type, object_id, after)
+    values (p_household_id,
+            case when v_uid is null
+                 then jsonb_build_object('kind', 'system', 'source', 'categorization_detector')
+                 else jsonb_build_object('kind', 'user', 'userId', v_uid) end,
+            'categorization.detect', 'household', p_household_id,
+            jsonb_build_object('suggested', v_count));
+  end if;
+  return v_count;
+end;
+$$;
