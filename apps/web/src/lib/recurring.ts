@@ -1,6 +1,26 @@
-import { keelCommand, newId, type RecurringSeriesRow, type ScheduleRow } from '@/lib/keel-api';
+import {
+  keelCommand,
+  newId,
+  type RecurringOccurrence,
+  type RecurringSeriesRow,
+  type ScheduleRow,
+} from '@/lib/keel-api';
+import { dayGapsBetween } from '@/lib/recurring-evidence';
 
-/** Valid lifecycle commands per series status (mirrors the SQL state machine). */
+/**
+ * Valid lifecycle commands per series status (mirrors the SQL state
+ * machine). Labels read "Stop tracking" rather than "Cancel": `recurring.
+ * cancel` only stops KEEL from tracking/forecasting a series — it never
+ * touches the real-world subscription or bill (KEEL has no concierge /
+ * act-on-your-behalf capability here; money movement and provider-directed
+ * actions stay Class D, disabled — Law 10). "Cancel series" reads as KEEL
+ * cancelling the subscription for you, which it cannot do — a copy
+ * contradiction flagged by the teardown (design/COMPETITIVE-TEARDOWN-
+ * 2026-07-16.md: "'cancel' verb collides with Rocket's concierge meaning —
+ * rename 'Stop tracking'"; design/TEARDOWN-STATUS-2026-07-17.md tension #3).
+ * Only the display label changes here — the `recurring.cancel` command/enum
+ * value and state-machine transition are untouched.
+ */
 export const RECURRING_ACTIONS: Record<
   RecurringSeriesRow['status'],
   { command: RecurringCommand; label: string }[]
@@ -11,11 +31,11 @@ export const RECURRING_ACTIONS: Record<
   ],
   confirmed: [
     { command: 'recurring.pause', label: 'Pause' },
-    { command: 'recurring.cancel', label: 'Cancel series' },
+    { command: 'recurring.cancel', label: 'Stop tracking' },
   ],
   paused: [
     { command: 'recurring.resume', label: 'Resume' },
-    { command: 'recurring.cancel', label: 'Cancel series' },
+    { command: 'recurring.cancel', label: 'Stop tracking' },
   ],
   cancelled: [],
   rejected: [],
@@ -112,4 +132,133 @@ export function stepScheduleDue(
     case 'once':
       return dateIso;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Annualized $/yr estimate (teardown C13: "$X/mo · ~$Y/yr" per series).
+//
+// This is a DISPLAY figure, not a ledger number — it never touches posted
+// amounts, only the series' own PROJECTED occurrences (mirrors the honesty
+// rule already applied to recurringReasonLine in recurring-evidence.ts: the
+// contract exposes projected occurrences, never observed history, so the
+// wording and the confidence bar both have to match that). Cadence is
+// inferred independently from the fuzzy, display-only `cadenceLabel` in
+// recurring-evidence.ts (which intentionally has wide bands and a
+// "~every N days" catch-all for descriptive text): annualizing multiplies a
+// REAL dollar figure out to a year, so this uses narrower bands and refuses
+// (returns null) rather than guess a multiplier for anything that doesn't
+// land confidently on weekly/biweekly/monthly/annual — Law 9 (reproducible
+// numbers) says a number with no confident basis must not be shown at all,
+// not shown with invented provenance.
+// ---------------------------------------------------------------------------
+
+export type RecurringCadence = 'weekly' | 'biweekly' | 'monthly' | 'annual';
+
+/** Occurrences-per-year multiplier for each supported cadence. */
+const CADENCE_MULTIPLIER: Record<RecurringCadence, bigint> = {
+  weekly: 52n,
+  biweekly: 26n,
+  monthly: 12n,
+  annual: 1n,
+};
+
+/** Short unit suffix for the per-occurrence figure, e.g. "$45.00" + "/mo". */
+export const CADENCE_SUFFIX: Record<RecurringCadence, string> = {
+  weekly: '/wk',
+  biweekly: '/2wk',
+  monthly: '/mo',
+  annual: '/yr',
+};
+
+/** Inclusive [min, max] whole-day-gap window each supported cadence accepts. */
+const CADENCE_BANDS: [RecurringCadence, number, number][] = [
+  ['weekly', 6, 8],
+  ['biweekly', 13, 15],
+  // Covers every calendar month length (28–31) plus a one-day weekend/holiday
+  // posting shift either side.
+  ['monthly', 27, 31],
+  // Covers 365 (common year) and 366 (leap year), plus a few days of
+  // anchor-day drift.
+  ['annual', 360, 372],
+];
+
+function bandFor(gapDays: number): RecurringCadence | null {
+  for (const [cadence, min, max] of CADENCE_BANDS) {
+    if (gapDays >= min && gapDays <= max) return cadence;
+  }
+  return null;
+}
+
+/**
+ * Infers a strict billing cadence from the whole-day gaps between
+ * consecutive expected dates. Unlike the fuzzy, display-only `cadenceLabel`
+ * in recurring-evidence.ts (which takes the MEDIAN gap so one skipped or
+ * doubled occurrence can't flip a purely descriptive label), this feeds an
+ * annualization MULTIPLIER applied to a real dollar figure — a higher bar
+ * than descriptive text, so EVERY individual gap must independently land in
+ * the same band, not just the median. One outlier gap (an irregular series,
+ * a detector artifact, a skipped/doubled occurrence) degrades the whole
+ * series to null rather than silently picking the majority cadence — Law 9
+ * (reproducible numbers / explicit ownership): a number with no confident
+ * basis must not be shown at all, never shown with invented provenance.
+ * Fewer than two dated occurrences (no gap to measure) also returns null.
+ */
+export function inferCadence(expectedDates: readonly string[]): RecurringCadence | null {
+  const gaps = dayGapsBetween(expectedDates).filter((g) => g > 0);
+  if (gaps.length === 0) return null;
+  const bands = gaps.map(bandFor);
+  const first = bands[0] ?? null;
+  if (first === null) return null;
+  return bands.every((b) => b === first) ? first : null;
+}
+
+/**
+ * Multiplies a single occurrence's minor-unit amount out to an annual total.
+ * Pure BigInt — no floats touch the figure (Law 4). `amountMinor` must be an
+ * unsigned decimal integer string (the shape `RecurringOccurrence.
+ * expectedAmountMinor` is always in); malformed input throws rather than
+ * silently coercing to 0 (mirrors the validate-before-BigInt rule in
+ * `amountsConsistent`).
+ */
+export function annualizedMinor(amountMinor: string, cadence: RecurringCadence): bigint {
+  if (!/^\d+$/.test(amountMinor)) {
+    throw new Error(`annualizedMinor: not an unsigned integer string: ${amountMinor}`);
+  }
+  return BigInt(amountMinor) * CADENCE_MULTIPLIER[cadence];
+}
+
+export type RecurringAnnualEstimate = {
+  cadence: RecurringCadence;
+  /** The representative (most recent) occurrence's own unsigned amount. */
+  amountMinor: string;
+  currency: string;
+  /** amountMinor × the cadence's occurrences-per-year, as an unsigned BigInt. */
+  annualMinor: bigint;
+};
+
+/**
+ * Full annualized estimate for a recurring series, or null when the cadence
+ * can't be confidently inferred (single occurrence, irregular gaps, or a
+ * cadence outside weekly/biweekly/monthly/annual) — never a fabricated
+ * number (Law 9: explicit ownership + reproducible numbers). Uses the
+ * chronologically LATEST occurrence's amount as the representative figure
+ * (a price change should show the new price, not an average across history)
+ * and its currency; malformed amount strings degrade to null rather than
+ * throwing, since this is a passive display helper, not a validating write
+ * path.
+ */
+export function annualizedEstimate(
+  occurrences: readonly Pick<RecurringOccurrence, 'expectedDate' | 'expectedAmountMinor' | 'currency'>[],
+): RecurringAnnualEstimate | null {
+  if (occurrences.length === 0) return null;
+  const cadence = inferCadence(occurrences.map((o) => o.expectedDate));
+  if (cadence === null) return null;
+  const latest = [...occurrences].sort((a, b) => a.expectedDate.localeCompare(b.expectedDate)).at(-1);
+  if (!latest || !/^\d+$/.test(latest.expectedAmountMinor)) return null;
+  return {
+    cadence,
+    amountMinor: latest.expectedAmountMinor,
+    currency: latest.currency,
+    annualMinor: annualizedMinor(latest.expectedAmountMinor, cadence),
+  };
 }

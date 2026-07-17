@@ -2005,3 +2005,56 @@ Decisions / deviations (with justification):
 7. `limit_minor` on `balance_snapshots` (C9, a parallel PR) is provider data
    omitted from the scope-bar's report derivations by construction — it is
    never read outside the account-detail utilization surface.
+
+## 2026-07-17 — D-048: Recurring annualized $/yr + "Stop tracking" copy fix
+
+Two small teardown gaps from `design/TEARDOWN-STATUS-2026-07-17.md`'s
+Runners-up / "Shipped-vs-teardown tensions" #3 (C13 residual: missing $X/yr;
+copy contradiction: `recurring/page.tsx` still said "Cancel series").
+
+1. **Annualized $/yr** (`apps/web/src/lib/recurring.ts`): `inferCadence`
+   classifies a series' cadence from the whole-day gaps between consecutive
+   `occurrences[].expectedDate` into weekly/biweekly/monthly/annual bands
+   (6-8 / 13-15 / 27-31 / 360-372 days — the annual band spans both 365- and
+   366-day leap years). Unlike the existing fuzzy, display-only `cadenceLabel`
+   in `recurring-evidence.ts` (median gap, tolerates one outlier, has a
+   "~every N days" catch-all — fine for descriptive text), this feeds a real
+   dollar figure, so it requires EVERY individual gap to independently land
+   in the same band and returns `null` — never a guessed multiplier — for
+   anything else (single occurrence, irregular gaps, a cadence outside the
+   four supported ones). Law 9 (reproducible numbers / explicit ownership):
+   a number with no confident basis must not be shown at all, not shown with
+   invented provenance. `annualizedMinor`/`annualizedEstimate` are pure
+   BigInt (Law 4) and use the chronologically LATEST occurrence's amount (a
+   price change shows the new price, not a history average). Wired into
+   `SeriesCard` on `/dashboard/recurring` as "$45.00/mo · ~$540.00/yr" (the
+   annual half is suppressed when the cadence itself is already annual, to
+   avoid showing the same figure twice) via the existing `<Money>` component.
+   19 new unit tests in `apps/web/src/lib/recurring.test.ts`, including a
+   leap-year annual span (2028→2029, 366-day gap), a non-leap span (2026→2027,
+   365 days), band boundaries, irregular-gap degradation to null, malformed
+   amount strings, and a >2^53 magnitude to confirm no float precision loss.
+2. **"Cancel" → "Stop tracking" copy fix** (`apps/web/src/lib/recurring.ts`,
+   `RECURRING_ACTIONS`): `recurring.cancel` only stops KEEL from tracking/
+   forecasting a series — it never touches the real subscription or bill.
+   KEEL has no concierge / act-on-the-merchant's-behalf capability (money
+   movement and provider-directed actions are Class D, disabled — Law 10),
+   so "Cancel series" read as KEEL cancelling the user's Netflix subscription
+   for them, which it cannot do — the exact copy contradiction flagged by
+   `design/COMPETITIVE-TEARDOWN-2026-07-16.md` ("'cancel' verb collides with
+   Rocket's concierge meaning — rename 'Stop tracking'"). Both eligible
+   statuses (`confirmed`, `paused`) now render the button as "Stop tracking";
+   only the `label` field changed — the `recurring.cancel` command/enum
+   value, contract schema, and state-machine transition are byte-for-byte
+   unchanged. Grepped the whole repo for "cancel series" / "recurring.cancel"
+   / "stop tracking": the only other user-facing string was the page header
+   description, already fixed in PR #19 (`59823b4`) — no toast, dialog, or
+   aria-label elsewhere surfaces this action's copy, so nothing else needed
+   changing. Regression test added: every `RECURRING_ACTIONS` label is
+   asserted not to contain the word "cancel".
+3. Deviation: I did not add a confirmation dialog before "Stop tracking" —
+   none existed before this change either (the button calls
+   `recurringTransition` directly), and the brief scoped this slice to copy +
+   a new derived display figure only, zero backend/behavior changes. Flagged
+   here rather than silently expanding scope; a confirm-before-stop-tracking
+   affordance is a reasonable follow-up but is its own (tiny) UX decision.
