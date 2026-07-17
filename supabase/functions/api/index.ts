@@ -22,6 +22,9 @@ import {
   OpenAiCompatibleChatProvider,
   CommandEnvelopeSchema,
   ConnectionIdSchema,
+  DocumentIdSchema,
+  DocumentKindSchema,
+  DocumentTargetTypeSchema,
   EntityIdSchema,
   EntityKindSchema,
   HouseholdIdSchema,
@@ -50,6 +53,20 @@ import {
   ProviderBudgetExhaustedError,
 } from '../_shared/plaid-client.ts';
 
+const DOCUMENT_MIME_ALLOWLIST = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'application/pdf',
+]);
+const DOCUMENT_MAX_BYTES = 10 * 1024 * 1024;
+const DOCUMENT_SIGNED_URL_TTL_S = 300;
+
+const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+};
+
 const COMMAND_TO_PROC: Record<string, string> = {
   'accounts.create': 'keel_cmd_create_account',
   'ingest.record_raw_event': 'keel_cmd_record_raw_event',
@@ -77,6 +94,8 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'accounts.set_opening_balance': 'keel_cmd_set_opening_balance',
   'accounts.reanchor_balance': 'keel_cmd_reanchor_balance',
   'categorization.decide_suggestion': 'keel_cmd_decide_category_suggestion',
+  'documents.detach': 'keel_cmd_documents_detach',
+  'documents.delete': 'keel_cmd_documents_delete',
 };
 
 const QUERY_TO_PROC: Record<string, string> = {
@@ -1876,6 +1895,202 @@ export default {
       });
       if (completeError) return mapDbError(completeError);
       return json(200, { status: removed ? 'disconnected' : 'disconnecting' });
+    }
+
+    if (path === '/documents/upload-url') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const entityId = EntityIdSchema.safeParse(input['entityId']);
+      const kind = DocumentKindSchema.safeParse(input['kind']);
+      const originalFilename =
+        typeof input['originalFilename'] === 'string' &&
+        input['originalFilename'].length > 0 &&
+        input['originalFilename'].length <= 255
+          ? input['originalFilename']
+          : null;
+      const mimeType = typeof input['mimeType'] === 'string' ? input['mimeType'] : null;
+      if (
+        !householdId.success ||
+        !entityId.success ||
+        !kind.success ||
+        !originalFilename ||
+        !mimeType ||
+        !DOCUMENT_MIME_ALLOWLIST.has(mimeType)
+      ) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Upload request failed validation.',
+          details: {},
+        });
+      }
+
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'documents.confirm_upload', {
+        householdId: householdId.data,
+        entityId: entityId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+
+      const documentId = crypto.randomUUID();
+      const storageBucket = kind.data === 'receipt' ? 'receipts' : 'statements';
+      const storagePath = `${householdId.data}/${documentId}/${crypto.randomUUID()}`;
+      const { data: signed, error: signError } = await ctx.supabaseAdmin.storage
+        .from(storageBucket)
+        .createSignedUploadUrl(storagePath);
+      if (signError || !signed) return internalFailure();
+
+      return json(200, {
+        documentId,
+        storageBucket,
+        storagePath,
+        uploadUrl: signed.signedUrl,
+        token: signed.token,
+      });
+    }
+
+    if (path === '/documents/confirm-upload') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const entityId = EntityIdSchema.safeParse(input['entityId']);
+      const documentId = DocumentIdSchema.safeParse(input['documentId']);
+      const kind = DocumentKindSchema.safeParse(input['kind']);
+      const storageBucket = input['storageBucket'];
+      const storagePath = input['storagePath'];
+      const originalFilename = input['originalFilename'];
+      const targetType = input['targetType'];
+      const targetId = input['targetId'];
+      const targetTypeParsed =
+        targetType === undefined ? undefined : DocumentTargetTypeSchema.safeParse(targetType);
+      if (
+        !householdId.success ||
+        !entityId.success ||
+        !documentId.success ||
+        !kind.success ||
+        (storageBucket !== 'receipts' && storageBucket !== 'statements') ||
+        typeof storagePath !== 'string' ||
+        storagePath.length === 0 ||
+        typeof originalFilename !== 'string' ||
+        originalFilename.length === 0 ||
+        originalFilename.length > 255 ||
+        (targetType !== undefined && (!targetTypeParsed?.success || typeof targetId !== 'string')) ||
+        (targetType === undefined && targetId !== undefined)
+      ) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Confirm-upload request failed validation.',
+          details: {},
+        });
+      }
+      if ((kind.data === 'receipt' ? 'receipts' : 'statements') !== storageBucket) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Document kind does not match its storage bucket.',
+          details: {},
+        });
+      }
+
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'documents.confirm_upload', {
+        householdId: householdId.data,
+        entityId: entityId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+
+      // Postgres cannot reach Storage — download the object the browser just
+      // uploaded and compute its real size/hash here, server-side, before any
+      // of it is trusted. The client-declared mimeType is checked but the
+      // byte size is the one Storage itself reports.
+      const { data: fileData, error: downloadError } = await ctx.supabaseAdmin.storage
+        .from(storageBucket)
+        .download(storagePath);
+      if (downloadError || !fileData) {
+        return json(404, { code: 'not_found', message: 'Uploaded object not found.', details: {} });
+      }
+      if (fileData.size <= 0 || fileData.size > DOCUMENT_MAX_BYTES) {
+        return json(422, {
+          code: 'invalid_command',
+          message: 'File is empty or exceeds the 10MB limit.',
+          details: {},
+        });
+      }
+      const mimeType = fileData.type || 'application/octet-stream';
+      if (!DOCUMENT_MIME_ALLOWLIST.has(mimeType)) {
+        return json(422, {
+          code: 'invalid_command',
+          message: `Unsupported file type: ${mimeType}`,
+          details: {},
+        });
+      }
+      const bytes = new Uint8Array(await fileData.arrayBuffer());
+      const contentSha256 = await sha256Hex(bytes);
+
+      const { data, error } = await ctx.supabaseAdmin.rpc('keel_documents_confirm_upload', {
+        p_household_id: householdId.data,
+        p_entity_id: entityId.data,
+        p_document_id: documentId.data,
+        p_kind: kind.data,
+        p_storage_bucket: storageBucket,
+        p_storage_path: storagePath,
+        p_content_sha256: contentSha256,
+        p_mime_type: mimeType,
+        p_byte_size: bytes.byteLength,
+        p_original_filename: originalFilename,
+        p_created_by: userId,
+        p_target_type: targetTypeParsed?.data ?? null,
+        p_target_id: targetType !== undefined ? targetId : null,
+      });
+      if (error) return mapDbError(error);
+      return json(200, data);
+    }
+
+    if (path === '/documents/list') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const targetType = DocumentTargetTypeSchema.safeParse(input['targetType']);
+      const targetId = input['targetId'];
+      if (!householdId.success || !targetType.success || typeof targetId !== 'string') {
+        return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });
+      }
+
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'documents.list_for_target', {
+        householdId: householdId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+
+      const { data, error } = await ctx.supabase.rpc('keel_documents_list_for_target', {
+        p_household_id: householdId.data,
+        p_target_type: targetType.data,
+        p_target_id: targetId,
+      });
+      if (error) return mapDbError(error);
+      const rows = (data as { rows: Record<string, unknown>[] })?.rows ?? [];
+      const withUrls = await Promise.all(
+        rows.map(async (row) => {
+          const bucket = row['storageBucket'];
+          const objectPath = row['storagePath'];
+          if (typeof bucket !== 'string' || typeof objectPath !== 'string') {
+            return { ...row, url: null };
+          }
+          const { data: signed } = await ctx.supabaseAdmin.storage
+            .from(bucket)
+            .createSignedUrl(objectPath, DOCUMENT_SIGNED_URL_TTL_S);
+          return { ...row, url: signed?.signedUrl ?? null };
+        }),
+      );
+      return json(200, { rows: withUrls });
     }
 
     if (path === '/commands') {

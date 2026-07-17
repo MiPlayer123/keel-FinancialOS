@@ -1522,3 +1522,107 @@ export async function askKeel(input: {
 export function newId(): string {
   return crypto.randomUUID();
 }
+
+// ---------------------------------------------------------------------------
+// Documents (attach-only receipts/statements — no auto-extract/match; see
+// docs/research/RECEIPTS-2026-07-16.md for the deferred fuller pipeline).
+// ---------------------------------------------------------------------------
+
+export type DocumentTargetType = 'transaction' | 'paycheck' | 'reimbursement_claim' | 'statement';
+export type DocumentKind = 'receipt' | 'statement';
+
+export type DocumentRow = {
+  attachmentId: string;
+  documentId: string;
+  kind: DocumentKind;
+  originalFilename: string;
+  storageBucket: string;
+  storagePath: string;
+  mimeType: string;
+  byteSize: number;
+  attachedAt: string;
+  /** Short-lived signed read URL (5 min TTL) — re-fetch the list to refresh. */
+  url: string | null;
+};
+
+export async function fetchDocumentsForTarget(
+  householdId: string,
+  targetType: DocumentTargetType,
+  targetId: string,
+): Promise<DocumentRow[]> {
+  const res = await invoke<{ rows: DocumentRow[] }>('api/documents/list', {
+    householdId,
+    targetType,
+    targetId,
+  });
+  return res.rows;
+}
+
+/**
+ * Upload one file and (optionally) attach it to a target in the same flow:
+ * mint a signed upload URL, PUT the bytes straight to Storage (never through
+ * this edge function's request body), then confirm — the confirm step is
+ * what actually verifies/hashes/records the object server-side. A file
+ * picked with no target yet (e.g. before a transaction exists) can pass
+ * `target: undefined` and be attached later via a separate confirm call is
+ * NOT supported — target must be known at upload time in this slice.
+ */
+export async function uploadDocument(input: {
+  householdId: string;
+  entityId: string;
+  kind: DocumentKind;
+  file: File;
+  target: { type: DocumentTargetType; id: string };
+}): Promise<{ documentId: string; attachmentId: string }> {
+  const { householdId, entityId, kind, file, target } = input;
+  const upload = await invoke<{
+    documentId: string;
+    storageBucket: string;
+    storagePath: string;
+    uploadUrl: string;
+    token: string;
+  }>('api/documents/upload-url', {
+    householdId,
+    entityId,
+    kind,
+    originalFilename: file.name,
+    mimeType: file.type,
+  });
+
+  const { error: uploadError } = await getSupabaseBrowserClient()
+    .storage.from(upload.storageBucket)
+    .uploadToSignedUrl(upload.storagePath, upload.token, file);
+  if (uploadError) throw uploadError;
+
+  const confirmed = await invoke<{ effects: { documentId: string; attachmentId: string } }>(
+    'api/documents/confirm-upload',
+    {
+      householdId,
+      entityId,
+      documentId: upload.documentId,
+      kind,
+      storageBucket: upload.storageBucket,
+      storagePath: upload.storagePath,
+      originalFilename: file.name,
+      targetType: target.type,
+      targetId: target.id,
+    },
+  );
+  return confirmed.effects;
+}
+
+export async function detachDocument(input: {
+  householdId: string;
+  userId: string;
+  attachmentId: string;
+  reason: string;
+}): Promise<CommandResult> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'documents.detach',
+    economicEventKey: `documents.detach:${input.attachmentId}:${newId()}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: { attachmentId: input.attachmentId, reason: input.reason },
+  });
+}
