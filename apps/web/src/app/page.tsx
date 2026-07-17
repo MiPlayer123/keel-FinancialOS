@@ -5,7 +5,6 @@ import {
   Building2,
   CalendarClock,
   DownloadCloud,
-  Equal,
   Scale,
   ShieldCheck,
   Sparkles,
@@ -18,30 +17,6 @@ import { HeroMockupLazy } from '@/components/keel/landing/hero-mockup-lazy';
 import { LandingNav } from '@/components/keel/landing/landing-nav';
 import { Reveal } from '@/components/keel/landing/reveal';
 import { cn } from '@/lib/utils';
-
-/* Honest guarantees, benefit-first — no invented social proof. */
-const GUARANTEES = [
-  {
-    icon: Equal,
-    claim: 'Never off by a cent',
-    detail: 'Every transaction must balance to zero — the database itself enforces it.',
-  },
-  {
-    icon: Undo2,
-    claim: 'Nothing is ever lost',
-    detail: 'History is append-only. Every change is audited, and every one is undoable.',
-  },
-  {
-    icon: ShieldCheck,
-    claim: 'AI never acts alone',
-    detail: 'Material changes wait for your approval, with confidence and evidence attached.',
-  },
-  {
-    icon: DownloadCloud,
-    claim: 'Leave with everything',
-    detail: 'One click exports it all — CSV, JSON, QIF & Beancount. Always.',
-  },
-];
 
 const FEATURES = [
   {
@@ -143,25 +118,8 @@ export default function LandingPage() {
           </div>
         </section>
 
-        {/* ————— Guarantee strip: honest promises, benefit-first ————— */}
-        <section className="border-y border-border bg-muted/30">
-          <div className="mx-auto grid w-full max-w-6xl gap-x-10 gap-y-8 px-6 py-10 sm:grid-cols-2 sm:py-12 lg:grid-cols-4">
-            {GUARANTEES.map((g, i) => (
-              <Reveal key={g.claim} delayMs={i * 90}>
-                <p className="flex items-center gap-2 text-sm font-semibold tracking-tight">
-                  <g.icon aria-hidden className="size-4 text-primary" />
-                  {g.claim}
-                </p>
-                <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-                  {g.detail}
-                </p>
-              </Reveal>
-            ))}
-          </div>
-        </section>
-
         {/* ————— Problem / principles ————— */}
-        <section id="principles" className="scroll-mt-24">
+        <section id="principles" className="scroll-mt-24 border-t border-border">
           <div className="mx-auto grid w-full max-w-6xl gap-10 px-6 py-20 sm:py-28 lg:grid-cols-2 lg:gap-16">
             <Reveal>
               <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
