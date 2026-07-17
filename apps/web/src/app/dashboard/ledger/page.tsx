@@ -150,6 +150,11 @@ function LedgerTable() {
   const [accountFilter, setAccountFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [tagFilter, setTagFilter] = useState('all');
+  // D-047 status facet: All / Reconciled / Unreconciled, same select-pattern
+  // as account/category/tag above — no new filter paradigm.
+  const [reconciledFilter, setReconciledFilter] = useState<'all' | 'reconciled' | 'unreconciled'>(
+    'all',
+  );
   const [sort, setSort] = useState<SortKey>('date_desc');
 
   // Deep links (Reports drill-down, ⌘K actions):
@@ -196,7 +201,17 @@ function LedgerTable() {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-  }, [query, datePreset, customRange, accountFilter, categoryFilter, tagFilter, sort, grouping]);
+  }, [
+    query,
+    datePreset,
+    customRange,
+    accountFilter,
+    categoryFilter,
+    tagFilter,
+    reconciledFilter,
+    sort,
+    grouping,
+  ]);
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -253,6 +268,8 @@ function LedgerTable() {
       if (tagFilter !== 'all' && !(t.tags ?? []).some((x) => x.tagId === tagFilter)) {
         return false;
       }
+      if (reconciledFilter === 'reconciled' && !t.reconciled) return false;
+      if (reconciledFilter === 'unreconciled' && t.reconciled) return false;
       if (
         q &&
         !t.description.toLowerCase().includes(q) &&
@@ -285,7 +302,18 @@ function LedgerTable() {
       }
     });
     return out;
-  }, [rows, cleanedById, query, datePreset, customRange, accountFilter, categoryFilter, tagFilter, sort]);
+  }, [
+    rows,
+    cleanedById,
+    query,
+    datePreset,
+    customRange,
+    accountFilter,
+    categoryFilter,
+    tagFilter,
+    reconciledFilter,
+    sort,
+  ]);
 
   const totals = useMemo(() => {
     let inflow = 0n;
@@ -541,6 +569,26 @@ function LedgerTable() {
             <TagsIcon className="size-4" />
           </Button>
         ) : null}
+        <Select
+          value={reconciledFilter}
+          items={{
+            all: 'All statuses',
+            reconciled: 'Reconciled',
+            unreconciled: 'Unreconciled',
+          }}
+          onValueChange={(v) => {
+            if (v === 'all' || v === 'reconciled' || v === 'unreconciled') setReconciledFilter(v);
+          }}
+        >
+          <SelectTrigger className="h-9 w-36">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All statuses</SelectItem>
+            <SelectItem value="reconciled">Reconciled</SelectItem>
+            <SelectItem value="unreconciled">Unreconciled</SelectItem>
+          </SelectContent>
+        </Select>
         <Select
           value={sort}
           items={{

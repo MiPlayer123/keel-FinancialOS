@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeftRight,
   Check,
+  CheckCircle2,
   ChevronDown,
   Loader2,
   Pencil,
@@ -219,6 +220,22 @@ export function TxnList({
             {t.status === 'pending' ? (
               <Badge variant="outline" className="hidden text-[10px] uppercase sm:inline-flex">
                 Pending
+              </Badge>
+            ) : null}
+            {/* Reconciled chip (D-047, "Statements moat"): adjacent to the
+                amount it qualifies (Law 8). Absence is the common case and
+                carries no chip — only the positive "matched a statement"
+                fact renders, same hides-at-absence convention as Needs
+                attention. Neutral outline, no color semantics: reconciled
+                is a provenance fact, not a judgment on the money itself. */}
+            {t.reconciled ? (
+              <Badge
+                variant="outline"
+                className="hidden gap-1 text-[10px] uppercase sm:inline-flex"
+                title="Matched to a bank statement during reconciliation"
+              >
+                <CheckCircle2 className="size-3" />
+                Reconciled
               </Badge>
             ) : null}
             <Money

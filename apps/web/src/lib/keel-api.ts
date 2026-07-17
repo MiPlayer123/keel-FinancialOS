@@ -407,6 +407,13 @@ export type RichTransactionRow = {
   counterpartyAccountName?: string | null;
   /** Other leg's transaction id, for a future "jump to" affordance. */
   counterpartyTransactionId?: string | null;
+  /**
+   * True once a closed reconciliation session matched this transaction to a
+   * bank statement line (reconciliation_items.resolution = 'matched_transaction',
+   * D-047). Absent/false = not (yet) reconciled — the common case; the chip
+   * only renders on true (Law 8 hides-at-absence, same as Needs-attention).
+   */
+  reconciled?: boolean;
 };
 
 export type CategoryRow = {
