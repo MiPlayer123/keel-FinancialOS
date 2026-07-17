@@ -41,51 +41,60 @@ create temporary table _pfc_page on commit drop as
          ) as raw_id;
 
 -- 1) An 'added' event WITH a PFC: the primary is stamped onto the record.
-select is(
-  (select pfc_primary from public.normalized_source_records
-    where id = public.keel_worker_create_normalized(
+-- Each call's returned id is captured FIRST (review finding: a volatile
+-- inserting function inside the WHERE of a scan over the same table has
+-- planner-dependent evaluation), then the row is asserted by id.
+create temporary table _pfc_ids on commit drop as
+  select public.keel_worker_create_normalized(
       (select attempt_id from _pfc_ctx),
       'd7000000-0000-4000-8000-000000000001',
       (select raw_id from _pfc_page),
       '00000000-0000-4000-8000-00000000a401',
-      'pgtap-pfc-1', 'added', '-1200', 'USD', '2026-07-11', 'PFC CAFE', false)),
+      'pgtap-pfc-1', 'added', '-1200', 'USD', '2026-07-11', 'PFC CAFE', false) as id1,
+    null::uuid as id2, null::uuid as id3, null::uuid as id4;
+select is(
+  (select pfc_primary from public.normalized_source_records
+    where id = (select id1 from _pfc_ids)),
   'FOOD_AND_DRINK',
   'ingestion stamps the added PFC primary onto the normalized record');
 
 -- 2) An 'added' event WITHOUT a PFC object: empty string — preserving the
 -- original extraction's coalesce-to-'' (maps to Other / Other Income).
-select is(
-  (select pfc_primary from public.normalized_source_records
-    where id = public.keel_worker_create_normalized(
+update _pfc_ids set id2 = public.keel_worker_create_normalized(
       (select attempt_id from _pfc_ctx),
       'd7000000-0000-4000-8000-000000000001',
       (select raw_id from _pfc_page),
       '00000000-0000-4000-8000-00000000a401',
-      'pgtap-pfc-2', 'added', '-500', 'USD', '2026-07-11', 'NO PFC SHOP', false)),
+      'pgtap-pfc-2', 'added', '-500', 'USD', '2026-07-11', 'NO PFC SHOP', false);
+select is(
+  (select pfc_primary from public.normalized_source_records
+    where id = (select id2 from _pfc_ids)),
   '',
   'an added entry without a PFC stamps the empty string (Other mapping preserved)');
 
 -- 3) A record whose ptid is NOT in this page's added array: NULL (no PFC
 -- evidence for this record — e.g. modified-only pages, simulator pages).
-select ok(
-  (select pfc_primary from public.normalized_source_records
-    where id = public.keel_worker_create_normalized(
+update _pfc_ids set id3 = public.keel_worker_create_normalized(
       (select attempt_id from _pfc_ctx),
       'd7000000-0000-4000-8000-000000000001',
       (select raw_id from _pfc_page),
       '00000000-0000-4000-8000-00000000a401',
-      'pgtap-pfc-3', 'added', '-900', 'USD', '2026-07-11', 'UNLISTED', false)) is null,
+      'pgtap-pfc-3', 'added', '-900', 'USD', '2026-07-11', 'UNLISTED', false);
+select ok(
+  (select pfc_primary from public.normalized_source_records
+    where id = (select id3 from _pfc_ids)) is null,
   'a ptid absent from the page''s added array stamps NULL');
 
 -- 4) Removed events never attempt extraction.
-select ok(
-  (select pfc_primary from public.normalized_source_records
-    where id = public.keel_worker_create_normalized(
+update _pfc_ids set id4 = public.keel_worker_create_normalized(
       (select attempt_id from _pfc_ctx),
       'd7000000-0000-4000-8000-000000000001',
       (select raw_id from _pfc_page),
       null,
-      'pgtap-pfc-1', 'removed', null, null, null, null, false)) is null,
+      'pgtap-pfc-1', 'removed', null, null, null, null, false);
+select ok(
+  (select pfc_primary from public.normalized_source_records
+    where id = (select id4 from _pfc_ids)) is null,
   'a removed record carries no PFC');
 
 -- ---------------------------------------------------------------------------
