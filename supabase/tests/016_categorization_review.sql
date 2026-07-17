@@ -93,6 +93,10 @@ values
 -- (posted pt2 = FOOD_AND_DRINK, pending pt2b = GENERAL_MERCHANDISE → the
 -- multi-link fan-out of adversarial review P2-1); the posted record must win
 -- and T2 must get exactly ONE suggestion.
+-- Since 20260717170000 detection reads normalized_source_records.pfc_primary
+-- (denormalized at ingestion by keel_worker_create_normalized — write path
+-- covered by pgTAP 017); the fixtures stamp the same value ingestion would.
+-- The raw page stays seeded as the immutable source-of-truth evidence.
 insert into public.raw_provider_events
   (id, household_id, connection_id, provider, provider_event_id, account_external_ref,
    body, body_text, received_at)
@@ -104,17 +108,20 @@ values
    now());
 insert into public.normalized_source_records
   (id, raw_event_id, household_id, account_id, provider_transaction_id,
-   amount_minor, currency, effective_date, description, pending)
+   amount_minor, currency, effective_date, description, pending, pfc_primary)
 values
   ('c5000000-0000-4000-8000-000000000031', 'c5000000-0000-4000-8000-000000000030',
    '00000000-0000-4000-8000-00000000a001', '00000000-0000-4000-8000-00000000a401',
-   'pgtap-cat-pt1', -4300, 'USD', '2026-07-10', 'BLUE BOTTLE COFFEE ROASTERS', false),
+   'pgtap-cat-pt1', -4300, 'USD', '2026-07-10', 'BLUE BOTTLE COFFEE ROASTERS', false,
+   'FOOD_AND_DRINK'),
   ('c5000000-0000-4000-8000-000000000032', 'c5000000-0000-4000-8000-000000000030',
    '00000000-0000-4000-8000-00000000a001', '00000000-0000-4000-8000-00000000a401',
-   'pgtap-cat-pt2', -1200, 'USD', '2026-07-11', 'CORNER DELI 42', false),
+   'pgtap-cat-pt2', -1200, 'USD', '2026-07-11', 'CORNER DELI 42', false,
+   'FOOD_AND_DRINK'),
   ('c5000000-0000-4000-8000-000000000033', 'c5000000-0000-4000-8000-000000000030',
    '00000000-0000-4000-8000-00000000a001', '00000000-0000-4000-8000-00000000a401',
-   'pgtap-cat-pt2b', -1200, 'USD', '2026-07-11', 'CORNER DELI 42', true);
+   'pgtap-cat-pt2b', -1200, 'USD', '2026-07-11', 'CORNER DELI 42', true,
+   'GENERAL_MERCHANDISE');
 insert into public.transaction_source_links
   (canonical_transaction_id, normalized_source_record_id, household_id)
 values

@@ -1801,3 +1801,41 @@ hypotheses (verified against the run's logs):
   category_suggestions) and an explicit accept-INSERTS-on-absent count
   assert (pgTAP T1 has no pre-existing overlay, so that path was already
   proven green — kept explicit now).
+
+## 2026-07-17 — D-042: PFC denormalization (prod perf finding — 37s detection scans)
+
+Prod postgres logs: keel_detect_category_suggestions hit 37,453ms on the
+founder's real dataset and was killed by the API statement timeout (3×
+"canceling statement due to statement timeout" → transaction_failed 500s in
+Review). Root cause: the pfc CTE re-scanned and jsonb-exploded EVERY
+raw_provider_events row with an 'added' array on every call;
+keel_autocategorize_household shared the pattern on the worker path.
+20260717160000 is applied to prod, so the fix is a NEW migration
+(20260717170000_pfc_primary_denormalized.sql), branch claude/p0b-perf:
+- normalized_source_records.pfc_primary (nullable text): the PFC primary is
+  extracted ONCE — at ingestion, inside keel_worker_create_normalized, from
+  ONLY the single page that supplied the event ('' = listed in 'added'
+  without a PFC → Other/Other Income mapping preserved; NULL = no evidence).
+  Raw events remain the immutable source of truth (source preservation);
+  the column is a reproducible convenience copy and is OMITTED from export
+  (same Law-6 ruling as raw_provider_events.body) — 008 inventory +
+  packages/exports manifest updated accordingly, no export DTO change.
+- One-time backfill at migration time using the exact original extraction,
+  household-scoped (a global pass must not let tenants' provider txn ids
+  collide). The nsr immutability trigger is disabled for exactly that
+  statement: stamping a derived annotation is not a correction of captured
+  source fields.
+- keel_detect_category_suggestions + keel_autocategorize_household recreated
+  to join targets → transaction_source_links → nsr.pfc_primary (PK lookups
+  scoped to the household's target transactions only; identical distinct-on
+  tie-breaks). Autocategorize additionally gains distinct-on per transaction
+  (deterministic multi-link resolution — same class as review P2-1).
+- Index ruling: none added — consumers reach nsr by PK; the only
+  provider_transaction_id path is already covered by
+  normalized_source_records_provider_txn (20260712210000).
+- Tests: pgTAP 017 drives the REAL ingestion path (lease → open attempt →
+  archive page → create_normalized) and pins the no-raw-scan property via
+  pg_get_functiondef; 016 fixtures stamp pfc_primary as ingestion now
+  writes. Deviation: the migration-time backfill itself is unobservable in
+  pgTAP (runs before seed on an empty DB); it shares the ingestion
+  extraction shape and was validated by the prod apply.
