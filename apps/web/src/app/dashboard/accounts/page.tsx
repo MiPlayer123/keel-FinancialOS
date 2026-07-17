@@ -16,6 +16,7 @@ import {
 } from '@/lib/keel-api';
 import { Skeleton } from '@/components/ui/skeleton';
 import { AddAccountDialog } from '@/components/keel/add-account-dialog';
+import { NetWorthHero } from '@/components/keel/net-worth-hero';
 import { RecordTransferDialog } from '@/components/keel/record-transfer-dialog';
 
 type Enriched = AccountRow & { kind: string; balanceMinor: string };
@@ -109,27 +110,29 @@ function AccountsBody() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-start justify-between gap-4 rounded-lg border border-border bg-card px-5 py-4">
-        <div>
-          <p className="text-sm text-muted-foreground">Net worth</p>
-          <Money amountMinor={netMinor} className="text-3xl font-semibold" muteZero={false} />
-        </div>
-        <div className="flex flex-wrap justify-end gap-2">
-          <RecordTransferDialog
-            accounts={accounts}
-            onDone={() => {
-              setReload((n) => n + 1);
-              void balances.refetch();
-            }}
-          />
-          <AddAccountDialog
-            onCreated={() => {
-              setReload((n) => n + 1);
-              void balances.refetch();
-            }}
-          />
-        </div>
-      </div>
+      {/* Fused hero (C11): number + Δ + % + window + chart as one unit. */}
+      <NetWorthHero
+        householdId={householdId}
+        fallbackNetMinor={netMinor}
+        fallbackAsOf={balances.asOf}
+        actions={
+          <>
+            <RecordTransferDialog
+              accounts={accounts}
+              onDone={() => {
+                setReload((n) => n + 1);
+                void balances.refetch();
+              }}
+            />
+            <AddAccountDialog
+              onCreated={() => {
+                setReload((n) => n + 1);
+                void balances.refetch();
+              }}
+            />
+          </>
+        }
+      />
 
       <AccountGroup title="Assets" rows={assets} />
       <AccountGroup title="Liabilities" rows={liabilities} />

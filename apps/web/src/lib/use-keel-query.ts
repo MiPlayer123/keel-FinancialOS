@@ -64,6 +64,35 @@ export function useKeelQuery<Row>(query: string, householdId: string | null) {
  * loading, `[]` on error or empty — the section simply doesn't render until
  * the backend supports the query. Extra params are serialized for identity.
  */
+/**
+ * Silent variant that KEEPS the query envelope (asOf + formulaVersion), for
+ * surfaces that must stamp reproducibility metadata next to the number
+ * (Law 9). `null` while loading; `{ rows: [], asOf: null }` on error/disabled
+ * so the section can fall back without crashing.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- Row is caller-specified and types the returned rows
+export function useKeelQueryEnvelope<Row>(
+  query: string,
+  householdId: string | null,
+  extra?: Record<string, unknown>,
+): { rows: Row[]; asOf: string | null } | null {
+  const extraKey = JSON.stringify(extra ?? {});
+
+  const result = useQuery({
+    queryKey: [KEEL_QUERY_KEY, query, householdId, extraKey],
+    queryFn: async (): Promise<QueryResult<Row>> => {
+      if (!householdId) throw new Error('useKeelQueryEnvelope: disabled (no household)');
+      return keelQuery<Row>(query, householdId, JSON.parse(extraKey) as Record<string, unknown>);
+    },
+    enabled: householdId !== null,
+  });
+
+  if (householdId === null) return { rows: [], asOf: null };
+  if (result.isSuccess) return { rows: result.data.rows, asOf: result.data.asOf };
+  if (result.isError) return { rows: [], asOf: null };
+  return null;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- Row is caller-specified and types the returned rows
 export function useKeelQuerySilent<Row>(
   query: string,
