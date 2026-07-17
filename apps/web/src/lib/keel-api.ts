@@ -1139,6 +1139,42 @@ export async function voidManualTransaction(input: {
   });
 }
 
+/**
+ * Re-split an existing transaction across categories (teardown C7). The cash
+ * side is untouched; the server replaces the category offsets through the
+ * reversible correction model (reversal + replacement batch). amountMinor is
+ * the signed cash amount THIS CLIENT is looking at — the server rejects the
+ * command if the live batch disagrees, so a concurrent sync revision can
+ * never be silently rebalanced.
+ */
+export async function setTransactionSplits(input: {
+  householdId: string;
+  userId: string;
+  transactionId: string;
+  /** Signed minor units of the cash posting as displayed to the user. */
+  amountMinor: string;
+  /** Debit-positive offsets; must sum to exactly -amountMinor (Law 3). */
+  splits: { categoryLedgerAccountId: string; amountMinor: string }[];
+  /**
+   * Idempotency handle: mint ONE per edit session so a retry after a timeout
+   * replays instead of double-revising (invariant 3).
+   */
+  attemptKey: string;
+}): Promise<CommandResult> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'transactions.set_splits',
+    economicEventKey: `set-splits:${input.transactionId}:${input.attemptKey}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: {
+      transactionId: input.transactionId,
+      amountMinor: input.amountMinor,
+      splits: input.splits,
+    },
+  });
+}
+
 /** The entity's Opening Balances equity ledger account (for starting balances). */
 export async function fetchOpeningBalancesLedgerId(
   householdId: string,

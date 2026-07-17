@@ -38,6 +38,7 @@ describe('action vocabulary', () => {
       'reconciliations.reopen',
       'transactions.manual_create',
       'transactions.manual_void',
+      'transactions.set_splits',
       'accounts.set_opening_balance',
       'accounts.reanchor_balance',
       'categorization.decide_suggestion',
