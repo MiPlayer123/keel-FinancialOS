@@ -14,6 +14,7 @@ import {
   categorizeTransaction,
   fetchAccounts,
   fetchConnections,
+  fetchEntities,
   fetchGoals,
   reanchorAccountBalance,
   fetchCategories,
@@ -24,6 +25,7 @@ import {
   type CategoryRow,
   type ConnectionRow,
   type DailyBalanceRow,
+  type EntityRow,
   type LatestBalanceRow,
   type GoalRow,
   type RichTransactionRow,
@@ -35,6 +37,7 @@ import { utilizationPercent } from '@/lib/credit-utilization';
 import { ReauthLink } from '@/components/keel/reauth-link';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
 import { RenameAccountDialog } from '@/components/keel/rename-account-dialog';
+import { ReassignEntityDialog } from '@/components/keel/reassign-entity-dialog';
 import { SetOpeningBalanceDialog } from '@/components/keel/set-opening-balance-dialog';
 import { TxnEditDialog, TxnList } from '@/components/keel/txn-edit-dialog';
 import { BalanceTrendChart, CategoryBarList } from '@/components/keel/charts';
@@ -64,9 +67,11 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [tags, setTags] = useState<TagRow[]>([]);
   const [goals, setGoals] = useState<GoalRow[]>([]);
+  const [entities, setEntities] = useState<EntityRow[]>([]);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<RichTransactionRow | null>(null);
   const [renaming, setRenaming] = useState(false);
+  const [reassigning, setReassigning] = useState(false);
   const [accountReload, setAccountReload] = useState(0);
   const [settingBalance, setSettingBalance] = useState(false);
   const [fixingBalance, setFixingBalance] = useState(false);
@@ -126,6 +131,13 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
       })
       .catch(() => {
         if (active) setGoals([]);
+      });
+    void fetchEntities(householdId)
+      .then((e) => {
+        if (active) setEntities(e);
+      })
+      .catch(() => {
+        if (active) setEntities([]);
       });
     return () => {
       active = false;
@@ -198,6 +210,7 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
     kind === 'liability' && provider
       ? utilizationPercent(provider.currentMinor, provider.limitMinor ?? null)
       : null;
+  const entityName = entities.find((e) => e.entityId === account.entityId)?.name ?? null;
 
   return (
     <div className="space-y-6 p-6">
@@ -220,11 +233,29 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
               <Pencil className="size-3.5" />
             </Button>
           </div>
-          <p className="text-sm text-muted-foreground">
+          <p className="flex flex-wrap items-center gap-1 text-sm text-muted-foreground">
             <span className="capitalize">
               {kind} · {account.subtype.replaceAll('_', ' ')}
             </span>
             {syncLabel ? <> · Updated {syncLabel}</> : null}
+            {entityName ? (
+              <>
+                {' '}
+                · {entityName}
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Change entity"
+                  title="Change entity"
+                  className="size-5 text-muted-foreground/60 hover:text-foreground"
+                  onClick={() => {
+                    setReassigning(true);
+                  }}
+                >
+                  <Pencil className="size-3" />
+                </Button>
+              </>
+            ) : null}
           </p>
           {connection?.status === 'reauth_required' ? <ReauthLink className="mt-1.5" /> : null}
         </div>
@@ -349,6 +380,22 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
         onRenamed={() => {
           setRenaming(false);
           setAccountReload((n) => n + 1);
+          void txns.refetch();
+        }}
+      />
+
+      <ReassignEntityDialog
+        open={reassigning}
+        householdId={householdId}
+        accountId={accountId}
+        currentEntityId={account.entityId}
+        onClose={() => {
+          setReassigning(false);
+        }}
+        onReassigned={() => {
+          setReassigning(false);
+          setAccountReload((n) => n + 1);
+          void balances.refetch();
           void txns.refetch();
         }}
       />

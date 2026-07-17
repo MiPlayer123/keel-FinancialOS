@@ -5,13 +5,12 @@ import { Plus, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { useHousehold } from '@/components/keel/household-context';
+import { EntityPicker } from '@/components/keel/entity-picker';
 import {
-  createEntity,
   createManualAccount,
   fetchEntities,
   fetchOpeningBalancesLedgerId,
   postOpeningBalance,
-  type EntityKind,
   type EntityRow,
 } from '@/lib/keel-api';
 import { Button } from '@/components/ui/button';
@@ -29,7 +28,6 @@ import {
   Select,
   SelectContent,
   SelectItem,
-  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
@@ -45,18 +43,6 @@ const SUBTYPES: { value: string; label: string; kind: 'asset' | 'liability' }[] 
   { value: 'loan', label: 'Loan / mortgage', kind: 'liability' },
   { value: 'other_liability', label: 'Other debt', kind: 'liability' },
 ];
-
-const ENTITY_KINDS: { value: EntityKind; label: string }[] = [
-  { value: 'personal', label: 'Personal' },
-  { value: 'sole_prop', label: 'Sole proprietorship' },
-  { value: 'llc_single', label: 'LLC (single-member)' },
-  { value: 'llc_multi', label: 'LLC (multi-member)' },
-  { value: 's_corp', label: 'S-corp' },
-  { value: 'trust', label: 'Trust' },
-  { value: 'other', label: 'Other' },
-];
-
-const NEW_ENTITY_VALUE = '__new_entity__';
 
 /** Parse a user-entered dollar amount into non-negative minor units (Law 4). */
 function dollarsToMinorString(input: string): string | null {
@@ -84,9 +70,6 @@ export function AddAccountDialog({ onCreated }: { onCreated: () => void }) {
   // dropdown only appears once a second entity exists.
   const [entities, setEntities] = useState<EntityRow[] | null>(null);
   const [entityId, setEntityId] = useState<string>('');
-  const [showNewEntity, setShowNewEntity] = useState(false);
-  const [newEntityName, setNewEntityName] = useState('');
-  const [newEntityKind, setNewEntityKind] = useState<EntityKind>('personal');
   const [creatingEntity, setCreatingEntity] = useState(false);
 
   const spec =
@@ -113,34 +96,6 @@ export function AddAccountDialog({ onCreated }: { onCreated: () => void }) {
       cancelled = true;
     };
   }, [open, householdId]);
-
-  async function createNewEntity() {
-    if (!householdId || newEntityName.trim().length === 0) return;
-    setCreatingEntity(true);
-    try {
-      const result = await createEntity({
-        householdId,
-        name: newEntityName.trim(),
-        kind: newEntityKind,
-      });
-      if (!result.entityId) throw new Error('Could not create entity.');
-      const created: EntityRow = {
-        entityId: result.entityId,
-        name: newEntityName.trim(),
-        kind: newEntityKind,
-      };
-      setEntities((prev) => [...(prev ?? []), created]);
-      setEntityId(created.entityId);
-      setShowNewEntity(false);
-      setNewEntityName('');
-      setNewEntityKind('personal');
-      toast.success(`Added entity "${created.name}".`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not create entity.');
-    } finally {
-      setCreatingEntity(false);
-    }
-  }
 
   async function create() {
     if (!householdId || !userId || name.trim().length === 0) return;
@@ -276,116 +231,20 @@ export function AddAccountDialog({ onCreated }: { onCreated: () => void }) {
                 required before the account can be created. */}
             <div className="space-y-1.5">
               <Label>Entity</Label>
-              {entities && entities.length > 1 ? (
-                <Select
-                  value={showNewEntity ? NEW_ENTITY_VALUE : entityId}
-                  items={{
-                    ...Object.fromEntries(entities.map((e) => [e.entityId, e.name])),
-                    [NEW_ENTITY_VALUE]: '+ Add a new entity…',
+              {householdId && entities ? (
+                <EntityPicker
+                  householdId={householdId}
+                  entities={entities}
+                  value={entityId}
+                  onChange={setEntityId}
+                  onEntityCreated={(created) => {
+                    setEntities((prev) => [...(prev ?? []), created]);
                   }}
-                  onValueChange={(v) => {
-                    if (v === NEW_ENTITY_VALUE) {
-                      setShowNewEntity(true);
-                    } else if (v) {
-                      setEntityId(v);
-                      setShowNewEntity(false);
-                    }
-                  }}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {entities.map((e) => (
-                      <SelectItem key={e.entityId} value={e.entityId}>
-                        {e.name}
-                      </SelectItem>
-                    ))}
-                    <SelectSeparator />
-                    <SelectItem value={NEW_ENTITY_VALUE}>+ Add a new entity…</SelectItem>
-                  </SelectContent>
-                </Select>
+                  onCreatingNewChange={setCreatingEntity}
+                />
               ) : (
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-sm text-muted-foreground">
-                    {entities && entities.length === 1 ? (entities[0]?.name ?? '') : 'Loading…'}
-                  </p>
-                  {entities ? (
-                    <Button
-                      type="button"
-                      variant="link"
-                      size="sm"
-                      className="h-auto p-0 text-xs"
-                      onClick={() => {
-                        setShowNewEntity((s) => !s);
-                      }}
-                    >
-                      + Add a new entity
-                    </Button>
-                  ) : null}
-                </div>
+                <p className="text-sm text-muted-foreground">Loading…</p>
               )}
-              {showNewEntity ? (
-                <div className="mt-2 space-y-2 rounded-lg border p-3">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="new-entity-name">New entity name</Label>
-                    <Input
-                      id="new-entity-name"
-                      value={newEntityName}
-                      maxLength={200}
-                      placeholder="e.g. Acme Consulting LLC"
-                      onChange={(e) => {
-                        setNewEntityName(e.target.value);
-                      }}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label>Entity type</Label>
-                    <Select
-                      value={newEntityKind}
-                      items={Object.fromEntries(ENTITY_KINDS.map((k) => [k.value, k.label]))}
-                      onValueChange={(v) => {
-                        if (v) setNewEntityKind(v);
-                      }}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {ENTITY_KINDS.map((k) => (
-                          <SelectItem key={k.value} value={k.value}>
-                            {k.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="flex justify-end gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={creatingEntity}
-                      onClick={() => {
-                        setShowNewEntity(false);
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      disabled={creatingEntity || newEntityName.trim().length === 0}
-                      onClick={() => {
-                        void createNewEntity();
-                      }}
-                    >
-                      {creatingEntity ? <Loader2 className="size-4 animate-spin" /> : null}
-                      Create entity
-                    </Button>
-                  </div>
-                </div>
-              ) : null}
             </div>
           </div>
           <DialogFooter>
@@ -399,7 +258,7 @@ export function AddAccountDialog({ onCreated }: { onCreated: () => void }) {
               Cancel
             </Button>
             <Button
-              disabled={busy || name.trim().length === 0}
+              disabled={busy || name.trim().length === 0 || creatingEntity}
               onClick={() => {
                 void create();
               }}
