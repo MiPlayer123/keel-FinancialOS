@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ReceiptText,
@@ -29,10 +29,18 @@ import {
   type TagRow,
 } from '@/lib/keel-api';
 import { merchantDisplayName } from '@/lib/merchant-name';
+import { resolveEditingAfterSave } from '@/lib/txn-edit-guard';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
 import { ImportCsvDialog } from '@/components/keel/import-csv-dialog';
 import { ManageTagsDialog } from '@/components/keel/manage-tags-dialog';
-import { TxnEditDialog, TxnList, isUncategorized, type ListCallbacks } from '@/components/keel/txn-edit-dialog';
+import {
+  TxnDetailPanel,
+  TxnEditDialog,
+  TxnList,
+  isUncategorized,
+  type ListCallbacks,
+  type TxnEditFormHandle,
+} from '@/components/keel/txn-edit-dialog';
 import { Money } from '@/components/keel/money';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -126,6 +134,32 @@ function amountMatches(amountMinor: string, q: string): boolean {
   return dollars === q || abs === q;
 }
 
+/**
+ * Master-detail (teardown C6 residual): true only at Tailwind's `lg`
+ * breakpoint (1024px), the same width already used for the sidebar's
+ * collapse-to-icons split (app-shell.tsx) and the query-timing panel — a
+ * side panel needs real desktop width to sit next to the list without
+ * squeezing it unreadably; below that, TxnEditDialog's existing modal is the
+ * only surface (Law 8: must degrade to a usable single column at 390px).
+ * Starts `false` (SSR-safe default matching the mobile modal, same one-time-
+ * matchMedia pattern as landing/transaction-story.tsx) and stays reactive to
+ * live resize so a real browser resize can flip modes without a reload.
+ */
+function useIsDesktopDetail(): boolean {
+  const [isDesktop, setIsDesktop] = useState(false);
+  useEffect(() => {
+    const mql = window.matchMedia('(min-width: 1024px)');
+    setIsDesktop(mql.matches);
+    const onChange = (e: MediaQueryListEvent) => {
+      setIsDesktop(e.matches);
+    };
+    mql.addEventListener('change', onChange);
+    return () => {
+      mql.removeEventListener('change', onChange);
+    };
+  }, []);
+  return isDesktop;
+}
 
 function LedgerTable() {
   const { householdId, userId, ready } = useHousehold();
@@ -193,6 +227,14 @@ function LedgerTable() {
     }
   }, [searchParams, router]);
   const [editing, setEditing] = useState<RichTransactionRow | null>(null);
+  // Master-detail (teardown C6 residual): at desktop widths, selecting a row
+  // shows TxnDetailPanel beside the list instead of TxnEditDialog's modal —
+  // both are driven by the same `editing` state, just routed to whichever
+  // shell `isDesktop` says is active. editorRef lets this page trigger the
+  // same flush-then-close path either shell uses internally, from OUTSIDE
+  // either one (see selectForEdit below).
+  const isDesktop = useIsDesktopDetail();
+  const editorRef = useRef<TxnEditFormHandle>(null);
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
   const [managingTags, setManagingTags] = useState(false);
@@ -369,6 +411,25 @@ function LedgerTable() {
     });
   }
 
+  /**
+   * Selects a transaction for editing. On the desktop panel the list stays
+   * clickable while a row is already open (that's the whole point of
+   * master-detail) — so switching straight from one transaction to another,
+   * with no intermediate close, is a real path here that never existed for
+   * the modal-only surface. Any pending tag write against the row being LEFT
+   * still needs to flush to the parent (list refetch) before we move on, so
+   * this pre-flushes through the same requestClose the panel's own × button
+   * and the modal's Escape/overlay use — then selects the new row in the
+   * same synchronous handler, so React's batching lands on `next`, never on
+   * the transient null requestClose's onClose sets first.
+   */
+  function selectForEdit(next: RichTransactionRow) {
+    if (isDesktop && editing && editing.transactionId !== next.transactionId) {
+      editorRef.current?.requestClose();
+    }
+    setEditing(next);
+  }
+
   if (!ready || loading) {
     return (
       <div className="space-y-2">
@@ -429,6 +490,49 @@ function LedgerTable() {
 
   const expenseCategories = categories.filter((c) => c.kind === 'expense');
   const incomeCategories = categories.filter((c) => c.kind === 'income');
+
+  // Shared by both edit shells (TxnEditDialog's modal, TxnDetailPanel's
+  // desktop panel) so the two never drift on what "closed"/"saved"/"tags
+  // changed"/"search this merchant" mean — same closures, same behavior,
+  // just routed to whichever shell `isDesktop` says is active below.
+  const closeEditing = () => {
+    setEditing(null);
+  };
+  // Review finding (teardown C6 master-detail): the desktop panel lets a
+  // user switch straight from row A to row B while A's save/void/split-save
+  // is still in flight. If that stale completion unconditionally cleared
+  // `editing`, it would close row B's panel and discard whatever draft the
+  // user had started there — a real data-loss path master-detail introduced
+  // that never existed for the modal-only surface. The list always refetches
+  // (A's change is real and should show up), but `editing` only clears when
+  // the completed save's transactionId is STILL the one currently open.
+  const savedEditing = (txnId: string) => {
+    setEditing((cur) => resolveEditingAfterSave(cur, txnId));
+    void refetch();
+  };
+  const tagsMutatedEditing = () => {
+    void refetch();
+    if (householdId) {
+      void fetchTags(householdId)
+        .then(setTags)
+        .catch(() => undefined);
+    }
+  };
+  const merchantSearchEditing = (description: string) => {
+    setQuery(description);
+    setDatePreset('all');
+    setCustomRange(null);
+    setAccountFilter('all');
+    setCategoryFilter('all');
+    setTagFilter('all');
+  };
+  const recategorizeEditing = (id: string, cat: string) => {
+    void recategorize(id, cat);
+  };
+  // Desktop + a selection: the panel takes over and the modal is suppressed
+  // (row=null keeps it closed); anywhere else the modal is the only surface,
+  // unchanged from before this slice.
+  const showPanel = isDesktop && editing !== null;
 
   return (
     <div className="space-y-4">
@@ -679,52 +783,76 @@ function LedgerTable() {
         />
       ) : null}
 
-      {grouping === 'none' ? (
-        <>
-          <TxnList
-            rows={filtered.slice(0, visibleCount)}
-            categories={categories}
-            onRecategorize={(id, cat) => {
-              void recategorize(id, cat);
-            }}
-            onEdit={setEditing}
-            selecting={selecting}
-            selected={selected}
-            onToggle={toggleSelected}
-          />
-          {filtered.length > visibleCount ? (
-            <div className="flex justify-center">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setVisibleCount((c) => c + PAGE_SIZE);
-                }}
-              >
-                Show {String(Math.min(PAGE_SIZE, filtered.length - visibleCount))} more of{' '}
-                {String(filtered.length - visibleCount)}
-              </Button>
-            </div>
-          ) : null}
-        </>
-      ) : (
-        <GroupedList
-          rows={filtered}
-          categories={categories}
-          groupBy={grouping}
-          onRecategorize={(id, cat) => {
-            void recategorize(id, cat);
-          }}
-          onEdit={(row) => {
-            // Category grouping fans split rows with per-share amounts; the
-            // edit dialog must always show the REAL transaction.
-            setEditing(rows.find((r) => r.transactionId === row.transactionId) ?? row);
-          }}
-          selecting={selecting}
-          selected={selected}
-          onToggle={toggleSelected}
-        />
-      )}
+      {/* Master-detail (teardown C6 residual): at desktop widths with a row
+          selected, the list and TxnDetailPanel share a two-column row — the
+          list never loses its scroll position or gets covered by a modal.
+          Below `lg`, or with nothing selected, this is just the list at full
+          width (unchanged from before this slice). */}
+      <div
+        className={showPanel ? 'items-start gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_22rem]' : ''}
+      >
+        <div className={showPanel ? 'min-w-0 space-y-4' : 'space-y-4'}>
+          {grouping === 'none' ? (
+            <>
+              <TxnList
+                rows={filtered.slice(0, visibleCount)}
+                categories={categories}
+                onRecategorize={recategorizeEditing}
+                onEdit={selectForEdit}
+                selecting={selecting}
+                selected={selected}
+                onToggle={toggleSelected}
+              />
+              {filtered.length > visibleCount ? (
+                <div className="flex justify-center">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setVisibleCount((c) => c + PAGE_SIZE);
+                    }}
+                  >
+                    Show {String(Math.min(PAGE_SIZE, filtered.length - visibleCount))} more of{' '}
+                    {String(filtered.length - visibleCount)}
+                  </Button>
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <GroupedList
+              rows={filtered}
+              categories={categories}
+              groupBy={grouping}
+              onRecategorize={recategorizeEditing}
+              onEdit={(row) => {
+                // Category grouping fans split rows with per-share amounts;
+                // the edit surface must always show the REAL transaction.
+                selectForEdit(rows.find((r) => r.transactionId === row.transactionId) ?? row);
+              }}
+              selecting={selecting}
+              selected={selected}
+              onToggle={toggleSelected}
+            />
+          )}
+        </div>
+        {showPanel ? (
+          <div className="lg:sticky lg:top-4">
+            <TxnDetailPanel
+              row={editing}
+              householdId={householdId}
+              userId={userId}
+              categories={categories}
+              allTags={tags}
+              formRef={editorRef}
+              onTagsMutated={tagsMutatedEditing}
+              onClose={closeEditing}
+              onSaved={savedEditing}
+              onRecategorize={recategorizeEditing}
+              onMerchantSearch={merchantSearchEditing}
+            />
+          </div>
+        ) : null}
+      </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm">
         <span className="text-muted-foreground">
@@ -763,38 +891,21 @@ function LedgerTable() {
         }}
       />
 
+      {/* Below the desktop breakpoint (or when isDesktop hasn't resolved
+          yet), this is the ONLY edit surface — showPanel keeps it closed
+          (row=null) whenever the desktop panel above is showing instead. */}
       <TxnEditDialog
-        row={editing}
+        row={showPanel ? null : editing}
         householdId={householdId}
         userId={userId}
         categories={categories}
         allTags={tags}
-        onTagsMutated={() => {
-          void refetch();
-          if (householdId) {
-            void fetchTags(householdId)
-              .then(setTags)
-              .catch(() => undefined);
-          }
-        }}
-        onClose={() => {
-          setEditing(null);
-        }}
-        onSaved={() => {
-          setEditing(null);
-          void refetch();
-        }}
-        onRecategorize={(id, cat) => {
-          void recategorize(id, cat);
-        }}
-        onMerchantSearch={(description) => {
-          setQuery(description);
-          setDatePreset('all');
-          setCustomRange(null);
-          setAccountFilter('all');
-          setCategoryFilter('all');
-          setTagFilter('all');
-        }}
+        formRef={editorRef}
+        onTagsMutated={tagsMutatedEditing}
+        onClose={closeEditing}
+        onSaved={savedEditing}
+        onRecategorize={recategorizeEditing}
+        onMerchantSearch={merchantSearchEditing}
       />
 
       <AddTransactionDialog

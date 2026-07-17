@@ -2966,3 +2966,129 @@ that one route's chunk, not the shared bundle.
   inset in the main padding: `pb-[calc(4rem+env(safe-area-inset-bottom))]
   lg:pb-0` (4rem = the prior `pb-16`'s pixel value), so the two paddings
   track each other exactly instead of drifting on notched devices.
+## 2026-07-17 — D-054: C6 residual — master-detail panel
+
+Teardown item C6 ("Master-detail txn surface") was still `◐` after D-050
+closed the account-mask/status-chip half: the ONE remaining gap was the
+actual master-detail split view — today (before this slice) clicking a row
+always opened `TxnEditDialog` as a centered modal, covering the list, with
+no side-by-side detail pane. This slice closes that gap for the Ledger page
+only (`apps/web/src/app/dashboard/ledger/page.tsx`) — pure frontend, no new
+RPC/command/migration, exactly per the task's scope guardrail.
+
+**What shipped.** `apps/web/src/components/keel/txn-edit-dialog.tsx`:
+extracted a new internal `TxnEditForm` component holding ALL of the
+previous `TxnEditDialog`'s state/handlers/JSX (name, splits, transfer info,
+category picker, tags, note, void) verbatim — no behavior change, just
+relocated out of the Dialog wrapper. Two shells now host it:
+- `TxnEditDialog` (exported, same prop signature every existing caller
+  already used) — the modal, unchanged behavior. The Accounts register page
+  (`apps/web/src/app/dashboard/accounts/[id]/page.tsx`) still calls it with
+  zero prop changes and is completely unaffected by this slice.
+- `TxnDetailPanel` (new export) — a static bordered card hosting the same
+  `TxnEditForm`, meant to sit beside the list instead of over it. Only the
+  Ledger page mounts this one.
+
+**Desktop/mobile split.** `TxnEditFormHandle` (`{ requestClose: () => void
+}`) is exposed via `useImperativeHandle` off `TxnEditForm` — the one piece
+of new machinery, because switching between "which shell is active" needs a
+way to trigger the SAME flush-then-close path (Cancel/Escape/overlay/×)
+from OUTSIDE either shell. `TxnEditDialog` gained an optional `formRef` prop
+(falls back to a local ref, so untouched for every caller that doesn't pass
+one); `TxnDetailPanel` requires one. The Ledger page's `useIsDesktopDetail()`
+hook (`(min-width: 1024px)`, matching the `lg` breakpoint already used for
+the sidebar collapse in `app-shell.tsx` and `query-timing-panel.tsx`) is a
+plain `matchMedia` + `useState`, SSR-safe default `false` (same one-time
+pattern as `landing/transaction-story.tsx`, but kept reactive to live
+resize via `addEventListener('change', …)` since a real desktop→mobile
+resize must degrade the panel to the modal live, not just at reload — Law 8
+requires usability at 390px, so this is checked, not assumed). `showPanel =
+isDesktop && editing !== null` decides everything: `TxnEditDialog` gets
+`row={showPanel ? null : editing}` (closed whenever the panel is active),
+`TxnDetailPanel` only renders (inside a `lg:grid lg:grid-cols-
+[minmax(0,1fr)_22rem]` wrapper next to the list) when `showPanel` is true.
+Below `lg`, or with nothing selected, the page is byte-for-byte the same
+single-column list it was before this slice.
+
+**Row-to-row switching without closing.** The actual point of master-detail
+is that the list stays clickable while the panel is open — clicking a
+different transaction should update the panel in place, not force a
+close/reopen. That path never existed for the modal (which blocks the list
+underneath), so it needed one new function: `selectForEdit(next)` in the
+Ledger page pre-flushes the OUTGOING row through `editorRef.current
+?.requestClose()` (only on desktop, only when the id actually changes),
+then calls `setEditing(next)` in the same synchronous handler — React's
+batching lands on `next`, the transient `null` `requestClose`'s own
+`onClose` sets is never the value that commits. This guarantees a pending
+tag write on the row being left still reaches the parent's refetch before
+the panel repaints for the new row, so the list's cached tag chips can
+never go stale from a mid-browse switch. Five callbacks
+(`closeEditing`/`savedEditing`/`tagsMutatedEditing`/`merchantSearchEditing`
+/`recategorizeEditing`) are defined once in the Ledger page and passed
+identically to both `TxnEditDialog` and `TxnDetailPanel`, per the task
+brief's "extract shared pieces, don't fork duplicate logic" — the two
+shells cannot drift on what "closed" or "saved" means.
+
+**Deferred / accepted trade-off, flagged not fixed:** resizing the browser
+across the `lg` boundary WHILE a row is mid-edit (e.g. a typed-but-unsaved
+name change in the panel) unmounts that `TxnEditForm` instance and mounts a
+fresh one in the other shell, which re-seeds from `row` and loses the
+unsaved draft — same as closing and reopening. Nothing is persisted either
+way (no server write happened yet), so this is a UI-only edge case, not a
+data-loss bug; not worth solving in this slice (an in-flight resize
+mid-edit is rare, and doing so would mean serializing/rehydrating draft
+state across a full remount, real scope creep for "smallest deterministic
+slice"). Also not pursued: keyboard up/down navigation between rows while
+the panel is open — a nice master-detail touch some competitors have, but
+not called for by the teardown note and outside this slice's scope.
+
+**Verification (CI cannot run — GitHub Actions minutes exhausted this
+session; this is the full local gate battery substituting for it, per
+this session's established fallback):**
+- `pnpm typecheck` — clean, 0 errors, all workspace packages (ran after
+  `pnpm install`, needed fresh in this worktree per the task's flagged
+  `motion`/`gsap` dependency addition from the concurrent landing-v2-motion
+  PR).
+- `pnpm lint` — 0 errors; the same 4 pre-existing warnings this session's
+  other entries already note (`goals/page.tsx`, `import-csv-dialog.tsx`,
+  `needs-attention.tsx`) — confirmed none touch either file this slice
+  changed.
+- `pnpm --filter @keel/web exec vitest run` — 273/273 passed, 16 test
+  files (no regressions; no new pure helper was introduced — the
+  desktop/mobile decision is DOM-dependent `matchMedia`, and this repo's
+  `apps/web/vitest.config.ts` deliberately scopes unit tests to
+  `src/lib/**/*.test.ts` pure-logic only, components covered by build +
+  integration layers per its own header comment — so no new test file was
+  added for this slice, consistent with that convention).
+- No Supabase/Docker stack touched or needed: no migration, no RPC change,
+  confirmed by `git diff --stat` showing exactly two files, both under
+  `apps/web/src/`.
+- **Migration rename note (unrelated to this slice, convergence-only):**
+  this entry originally numbered itself D-053, colliding with the C17
+  residual entry above (also D-053, opened independently and merged first
+  as #44) — renumbered to D-054, no content change from the renumbering
+  alone.
+- **Review fix (chatgpt-codex-connector, P2):** the master-detail panel
+  lets a user switch straight from transaction A to B with no intermediate
+  close — but `save`/`saveSplits`/`voidTxn`'s completion handlers all called
+  a bare `onSaved()` that unconditionally cleared `editing`. If A's save was
+  still in flight when the user switched to B, A's completion later fired
+  `onSaved()` anyway and closed B's panel, discarding whatever draft the
+  user had started there — a real data-loss path master-detail introduced
+  that never existed for the modal-only surface (a modal blocks the list
+  underneath, so this race was never reachable before this slice).
+  Fixed by keying the completion to the transaction it was actually for:
+  `onSaved` now takes `(txnId: string)` (all three call sites in
+  `TxnEditForm` pass `row.transactionId`), and the Ledger page's
+  `savedEditing` only clears `editing` when the completed save's txnId
+  still matches the currently-open row — a stale completion from a
+  transaction the user has switched away from is ignored, though the list
+  still refetches either way since the underlying save was real. Extracted
+  the one-line decision into a tested pure helper,
+  `apps/web/src/lib/txn-edit-guard.ts`'s `resolveEditingAfterSave` (3 new
+  cases in `txn-edit-guard.test.ts`: matching txnId clears, stale/mismatched
+  txnId is ignored, already-null is a no-op) — this is also the first pure
+  helper this slice needed, so the earlier "no new test file" note above no
+  longer fully holds; `pnpm --filter @keel/web exec vitest run` is
+  288/288 across 18 files (was 273/273 across 16) after this fix, `pnpm
+  typecheck`/`pnpm lint`/`cd apps/web && pnpm build` all re-verified clean.
