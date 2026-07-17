@@ -90,9 +90,10 @@ export function TransactionStory() {
     if (!pinned) return;
     const root = rootRef.current;
     if (!root) return;
-    // Object flag: the cleanup below flips it concurrently, which plain
-    // `let` narrowing would (wrongly) flag as an impossible condition.
-    const flags = { killed: false };
+    // Read through a function: the cleanup below flips the flag concurrently,
+    // which direct narrowing would (wrongly) flag as an impossible condition.
+    let killed = false;
+    const isKilled = () => killed;
     let cleanup: (() => void) | null = null;
 
     void (async () => {
@@ -100,8 +101,11 @@ export function TransactionStory() {
         import('gsap'),
         import('gsap/ScrollTrigger'),
       ]);
-      if (flags.killed) return;
+      if (isKilled()) return;
       gsap.registerPlugin(ScrollTrigger);
+      // Fonts shift metrics; measure the FLIP geometry only after they settle.
+      await document.fonts.ready;
+      if (isKilled()) return;
 
       const q = gsap.utils.selector(root);
       const stage = root.querySelector<HTMLElement>('[data-stage]');
@@ -112,11 +116,13 @@ export function TransactionStory() {
 
       // Manual FLIP for the approve morph: both live in the same static stage,
       // so one measurement at init gives a stable delta to bake into the tween.
+      // Card and slot share the same inset width, so only height morphs
+      // (uniform scale would squeeze the card's width mid-flight).
       const cardBox = card.getBoundingClientRect();
       const slotBox = slot.getBoundingClientRect();
       const dx = slotBox.left - cardBox.left;
       const dy = slotBox.top - cardBox.top;
-      const scale = slotBox.height / cardBox.height;
+      const scaleY = slotBox.height / cardBox.height;
 
       // Non-uniform preserveAspectRatio scaling leaves a sliver at full
       // offset, so the path also stays invisible until its beat.
@@ -144,7 +150,7 @@ export function TransactionStory() {
       // Beat 1 — raw memo arrives
       tl.addLabel('memo');
       setActive(0, tl, 'memo');
-      tl.fromTo(q('[data-memo]'), { opacity: 0, y: 24, filter: 'blur(6px)' }, { opacity: 1, y: 0, filter: 'blur(0px)' }, 'memo');
+      tl.fromTo(q('[data-memo]'), { opacity: 0, y: 24 }, { opacity: 1, y: 0 }, 'memo');
 
       // Beat 2 — normalize
       tl.addLabel('clean', '+=0.4');
@@ -164,7 +170,7 @@ export function TransactionStory() {
       setActive(3, tl, 'suggest');
       tl.fromTo(card, { opacity: 0, y: 20 }, { opacity: 1, y: 0 }, 'suggest');
       tl.addLabel('approve', '+=0.5');
-      tl.to(card, { x: dx, y: dy, scale, transformOrigin: 'top left', opacity: 0, ease: 'power2.inOut', duration: 0.6 }, 'approve');
+      tl.to(card, { x: dx, y: dy, scaleY, transformOrigin: 'top left', opacity: 0, ease: 'power2.inOut', duration: 0.6 }, 'approve');
       tl.fromTo(slot, { opacity: 0 }, { opacity: 1, duration: 0.4 }, 'approve+=0.35');
 
       // Beat 5 — chart draws
@@ -182,7 +188,7 @@ export function TransactionStory() {
     })();
 
     return () => {
-      flags.killed = true;
+      killed = true;
       cleanup?.();
     };
   }, [pinned]);
@@ -214,8 +220,10 @@ export function TransactionStory() {
               </ol>
 
               {/* stage */}
+              {/* Visual stage is decorative; the rail carries the semantics. */}
               <div
                 data-stage
+                aria-hidden
                 className="relative h-[430px] overflow-hidden rounded-xl border border-border bg-card p-6 md:col-span-3"
               >
                 <p data-memo className="break-all pr-24 font-mono text-xs leading-relaxed text-muted-foreground opacity-0">

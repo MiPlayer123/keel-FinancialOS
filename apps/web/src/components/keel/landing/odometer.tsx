@@ -62,14 +62,17 @@ export function Odometer({ value, className }: { value: string; className?: stri
 
   return (
     <LazyMotion features={domAnimation} strict>
-      <span ref={ref} aria-label={value} className={cn('font-mono tabular-nums', className)}>
-        {value.split('').map((ch, i) =>
-          /\d/.test(ch) ? (
-            <DigitColumn key={`${String(i)}-${ch}`} digit={Number(ch)} animate={on} delay={i * 0.05} />
-          ) : (
-            <span key={`${String(i)}-${ch}`}>{ch}</span>
-          ),
-        )}
+      <span ref={ref} className={cn('font-mono tabular-nums', className)}>
+        <span className="sr-only">{value}</span>
+        <span aria-hidden>
+          {value.split('').map((ch, i) =>
+            /\d/.test(ch) ? (
+              <DigitColumn key={`${String(i)}-${ch}`} digit={Number(ch)} animate={on} delay={i * 0.05} />
+            ) : (
+              <span key={`${String(i)}-${ch}`}>{ch}</span>
+            ),
+          )}
+        </span>
       </span>
     </LazyMotion>
   );
