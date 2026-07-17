@@ -37,7 +37,7 @@ of `supabase/migrations/*.sql`, `supabase/functions/worker`,
 - **KEEL today:** The entity model itself is real and load-bearing —
   `entities` table (`supabase/migrations/20260710210100_identity_authz.sql:19-26`),
   `accounts.entity_id` is `not null` (line 65), reports already filter by
-  entity once a second one exists (`apps/web/src/app/dashboard/reports/page.tsx:96,283-305`).
+  entity once a second one exists (`apps/web/src/app/dashboard/reports/page.tsx:653`).
   Manual account creation already has a working inline entity picker
   (`add-account-dialog.tsx:85-143`). Only the Plaid path skips it.
 - **Fix:** Add the same entity picker `add-account-dialog.tsx` already has
@@ -64,7 +64,7 @@ of `supabase/migrations/*.sql`, `supabase/functions/worker`,
 - **Maps to:** BC-v2.1 §9.1 explicit ownership + reversible correction.
 
 ### INVEST-1 — Investment/retirement accounts sync balance + cash transactions only; no holdings [P2]
-- **Evidence:** `supabase/migrations/20260711140100_c3_link_disconnect_saga.sql:200-230`
+- **Evidence:** `supabase/migrations/20260711140100_c3_link_disconnect_saga.sql:417-438`
   stores every Plaid account (any subtype, including `ira`/`brokerage`/`401k`)
   identically to a checking account — `kind` collapses to `'asset'`, no
   subtype branching. Zero `create table holdings|securities|lots` across all
