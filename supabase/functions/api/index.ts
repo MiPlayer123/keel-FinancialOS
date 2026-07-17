@@ -124,6 +124,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'goals.list': 'keel_list_goals',
   'entities.list': 'keel_list_entities',
   'dashboard.cash_flow_forecast': 'keel_cash_flow_forecast',
+  'holdings.list': 'keel_list_holdings',
 };
 
 // deno-lint-ignore no-explicit-any
@@ -941,6 +942,78 @@ export default {
         p_entity_id: entityId.data,
       });
       if (reassignError) return mapDbError(reassignError);
+      return json(200, { ok: true });
+    }
+
+    if (path === '/holdings/upsert') {
+      // Manual holding entry (S-inv-1a, docs/harness/plans/investments-v1.md).
+      // Descriptive-only: never touches the ledger. Server computes
+      // value_minor itself (Law 4) -- the client's preview number is
+      // display-only, never trusted for storage.
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const accountId = AccountIdSchema.safeParse(input['accountId']);
+      const holdingId = input['holdingId'];
+      const symbol = input['symbol'];
+      const name = input['name'];
+      const qty = input['qty'];
+      const priceMinor = input['priceMinor'];
+      const costBasisMinor = input['costBasisMinor'];
+      const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const decimalRe = /^\d+(\.\d{1,8})?$/;
+      const intRe = /^\d+$/;
+      if (
+        !householdId.success ||
+        !accountId.success ||
+        (holdingId !== undefined && holdingId !== null && (typeof holdingId !== 'string' || !uuidRe.test(holdingId))) ||
+        typeof symbol !== 'string' ||
+        symbol.trim().length === 0 ||
+        symbol.length > 20 ||
+        (name !== undefined && name !== null && typeof name !== 'string') ||
+        typeof qty !== 'string' ||
+        !decimalRe.test(qty) ||
+        typeof priceMinor !== 'string' ||
+        !intRe.test(priceMinor) ||
+        (costBasisMinor !== undefined && costBasisMinor !== null &&
+          (typeof costBasisMinor !== 'string' || !intRe.test(costBasisMinor)))
+      ) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Holding request failed validation.',
+          details: {},
+        });
+      }
+      const { data: newHoldingId, error: upsertError } = await ctx.supabase.rpc('keel_holding_upsert', {
+        p_household_id: householdId.data,
+        p_account_id: accountId.data,
+        p_holding_id: holdingId ?? null,
+        p_symbol: symbol,
+        p_name: name ?? null,
+        p_qty: qty,
+        p_price_minor: priceMinor,
+        p_cost_basis_minor: costBasisMinor ?? null,
+      });
+      if (upsertError) return mapDbError(upsertError);
+      return json(200, { holdingId: newHoldingId });
+    }
+
+    if (path === '/holdings/delete') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const holdingId = input['holdingId'];
+      if (!householdId.success || typeof holdingId !== 'string' || !uuidRe.test(holdingId)) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Holding delete request failed validation.',
+          details: {},
+        });
+      }
+      const { error: deleteError } = await ctx.supabase.rpc('keel_holding_delete', {
+        p_household_id: householdId.data,
+        p_holding_id: holdingId,
+      });
+      if (deleteError) return mapDbError(deleteError);
       return json(200, { ok: true });
     }
 
@@ -2275,6 +2348,15 @@ export default {
       } else if (query.query === 'dashboard.net_worth') {
         const db = body as { asOf?: unknown };
         rpcArgs.p_as_of = isoDate(db.asOf) ?? todayIso;
+      } else if (query.query === 'holdings.list') {
+        const db = body as { accountId?: unknown };
+        const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (db.accountId !== undefined) {
+          if (typeof db.accountId !== 'string' || !uuidRe.test(db.accountId)) {
+            return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });
+          }
+          rpcArgs.p_account_id = db.accountId;
+        }
       }
       const rpcStartedAt = performance.now();
       const { data, error } = await ctx.supabase.rpc(proc, rpcArgs);

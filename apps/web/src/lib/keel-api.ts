@@ -206,6 +206,68 @@ export async function reassignAccountEntity(input: {
   });
 }
 
+/**
+ * One position in an account's latest holdings snapshot (S-inv-1a,
+ * docs/harness/plans/investments-v1.md). Descriptive only — never derived
+ * from or fed into the ledger. `qty` is a decimal string (fractional
+ * shares are real; Law 4 keeps money BIGINT but quantities are not money).
+ */
+export type HoldingRow = {
+  holdingId: string;
+  accountId: string;
+  asOf: string;
+  symbol: string;
+  name: string | null;
+  qty: string;
+  priceMinor: string;
+  valueMinor: string;
+  costBasisMinor: string | null;
+  currency: string;
+  source: 'manual' | 'plaid';
+  updatedAt: string;
+};
+
+/** Latest holdings snapshot, optionally scoped to one account. */
+export async function fetchHoldings(householdId: string, accountId?: string): Promise<HoldingRow[]> {
+  const data = await invoke<{ rows?: HoldingRow[] }>('api/queries', {
+    query: 'holdings.list',
+    householdId,
+    ...(accountId ? { accountId } : {}),
+  });
+  return Array.isArray(data.rows) ? data.rows : [];
+}
+
+/** Create or edit a manual holding. Omit `holdingId` to create. */
+export async function upsertHolding(input: {
+  householdId: string;
+  accountId: string;
+  holdingId?: string;
+  symbol: string;
+  name?: string;
+  qty: string;
+  priceMinor: string;
+  costBasisMinor?: string;
+}): Promise<{ holdingId?: string }> {
+  return invoke('api/holdings/upsert', {
+    householdId: input.householdId,
+    accountId: input.accountId,
+    holdingId: input.holdingId ?? null,
+    symbol: input.symbol,
+    name: input.name ?? null,
+    qty: input.qty,
+    priceMinor: input.priceMinor,
+    costBasisMinor: input.costBasisMinor ?? null,
+  });
+}
+
+/** Delete a manual holding (Plaid-synced rows are never user-deletable here). */
+export async function deleteHolding(input: { householdId: string; holdingId: string }): Promise<unknown> {
+  return invoke('api/holdings/delete', {
+    householdId: input.householdId,
+    holdingId: input.holdingId,
+  });
+}
+
 /** Connections for a household (RLS-scoped direct read; credentials never exposed). */
 export type ConnectionRow = {
   id: string;

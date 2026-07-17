@@ -36,6 +36,7 @@ const SUBTYPES: { value: string; label: string; kind: 'asset' | 'liability' }[] 
   { value: 'cash', label: 'Cash', kind: 'asset' },
   { value: 'checking', label: 'Checking', kind: 'asset' },
   { value: 'savings', label: 'Savings', kind: 'asset' },
+  { value: 'investment', label: 'Investment / brokerage', kind: 'asset' },
   { value: 'property', label: 'Property / real estate', kind: 'asset' },
   { value: 'vehicle', label: 'Vehicle', kind: 'asset' },
   { value: 'other_asset', label: 'Other asset', kind: 'asset' },
