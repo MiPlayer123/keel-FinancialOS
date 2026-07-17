@@ -51,6 +51,7 @@ import { ReauthLink } from '@/components/keel/reauth-link';
 import { QuickNav } from '@/components/keel/quick-nav';
 import { ReviewBadge } from '@/components/keel/review-badge';
 import { QueryTimingPanel } from '@/components/keel/query-timing-panel';
+import { BottomTabBar } from '@/components/keel/bottom-tab-bar';
 
 type NavItem = { label: string; href: string; icon: LucideIcon };
 
@@ -504,11 +505,15 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="w-9" />
         </header>
 
-        <main className="min-w-0 flex-1">
+        {/* C17: bottom padding reserves room for the fixed phone-width tab
+            bar so the last row of any page is never hidden beneath it;
+            0 at lg+ where the tab bar itself is hidden. */}
+        <main className="min-w-0 flex-1 pb-16 lg:pb-0">
           <QuickNav />
           {children}
         </main>
         <QueryTimingPanel />
+        <BottomTabBar />
       </div>
     </div>
   );

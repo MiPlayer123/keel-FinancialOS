@@ -11,6 +11,7 @@ import {
   ChevronDown,
   ListChecks,
 } from 'lucide-react';
+import { LazyMotion, domMax, m, useMotionValue, useTransform } from 'motion/react';
 import { toast } from 'sonner';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
@@ -18,6 +19,7 @@ import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery } from '@/lib/use-keel-query';
 import { relativeDueLabel } from '@/lib/relative-date';
+import { resolveSwipeDecision } from '@/lib/swipe';
 import {
   keelCommand,
   newId,
@@ -158,8 +160,8 @@ function ReviewBody() {
             Possible transfers · {transfers.suggested.length}
           </h2>
           <p className="text-xs text-muted-foreground">
-            These pairs look like money moving between your own accounts. Confirming keeps
-            both sides in the ledger but stops them counting as income and spending.
+            These pairs look like money moving between your own accounts. Confirming keeps both
+            sides in the ledger but stops them counting as income and spending.
           </p>
           {transfers.suggested.map((link) => (
             <TransferCard
@@ -215,8 +217,8 @@ function ReviewBody() {
             ) : null}
           </div>
           <p className="text-xs text-muted-foreground">
-            Deterministic matches from your rules and the bank&apos;s own categories.
-            Nothing is filed until you accept it.
+            Deterministic matches from your rules and the bank&apos;s own categories. Nothing is
+            filed until you accept it.
           </p>
           {catSelecting ? (
             <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-secondary/40 px-4 py-2.5">
@@ -241,7 +243,11 @@ function ReviewBody() {
                   void bulkDecide(false);
                 }}
               >
-                {catBulkBusy ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
+                {catBulkBusy ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <X className="size-4" />
+                )}
                 Dismiss {catSelected.size > 0 ? catSelected.size : ''}
               </Button>
               <Button
@@ -251,27 +257,36 @@ function ReviewBody() {
                   void bulkDecide(true);
                 }}
               >
-                {catBulkBusy ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+                {catBulkBusy ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Check className="size-4" />
+                )}
                 Approve {catSelected.size > 0 ? catSelected.size : ''}
               </Button>
             </div>
           ) : null}
-          {categorizations.suggested.map((row) => (
-            <CategorizationCard
-              key={row.suggestionId}
-              row={row}
-              householdId={householdId}
-              userId={userId}
-              selecting={catSelecting}
-              selected={catSelected.has(row.suggestionId)}
-              onToggle={() => {
-                toggleCatSelected(row.suggestionId);
-              }}
-              onDone={() => {
-                void categorizations.refetch();
-              }}
-            />
-          ))}
+          {/* domMax (not the smaller domAnimation bundle Tilt uses elsewhere)
+              is required for drag gestures — loaded lazily once for this
+              section only, not the whole Review page. */}
+          <LazyMotion features={domMax} strict>
+            {categorizations.suggested.map((row) => (
+              <CategorizationCard
+                key={row.suggestionId}
+                row={row}
+                householdId={householdId}
+                userId={userId}
+                selecting={catSelecting}
+                selected={catSelected.has(row.suggestionId)}
+                onToggle={() => {
+                  toggleCatSelected(row.suggestionId);
+                }}
+                onDone={() => {
+                  void categorizations.refetch();
+                }}
+              />
+            ))}
+          </LazyMotion>
         </section>
       ) : null}
     </div>
@@ -445,9 +460,7 @@ function TransferCard({
           </p>
           {/* Law 11: deterministic reason codes from real row fields — no invented confidence. */}
           <p className="text-xs text-muted-foreground">{transferReasonLine(link.dayGap)}</p>
-          <WhyDisclosure
-            subject={`the ${link.outAccountName} to ${link.inAccountName} transfer`}
-          >
+          <WhyDisclosure subject={`the ${link.outAccountName} to ${link.inAccountName} transfer`}>
             {/*
              * Evidence table (proof on demand). Limitation: TransferLinkRow
              * carries a single shared effectiveDate + dayGap, not per-side
@@ -478,7 +491,10 @@ function TransferCard({
                       : `${link.effectiveDate} ±${String(link.dayGap)}d`,
                 },
               ].map((side) => (
-                <div key={side.label} className="flex min-w-0 flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-2">
+                <div
+                  key={side.label}
+                  className="flex min-w-0 flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-2"
+                >
                   <span className="w-8 shrink-0 font-medium text-muted-foreground">
                     {side.label}
                   </span>
@@ -505,7 +521,11 @@ function TransferCard({
               void act(false);
             }}
           >
-            {busy === 'reject' ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
+            {busy === 'reject' ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <X className="size-4" />
+            )}
             Not a transfer
           </Button>
           <Button
@@ -558,6 +578,19 @@ function CategorizationCard({
     pfcPrimary: row.evidence.pfcPrimary ?? null,
   });
 
+  // C17 swipe review queue: an ADDITION over the buttons below, never a
+  // replacement — `act` is the SAME function a swipe or a button click
+  // calls, so a swipe goes through the identical audited
+  // categorization.decide_suggestion command (Law 7). Disabled during bulk
+  // select (a drag would fight the checkbox gesture) and while a decision
+  // is already in flight.
+  const x = useMotionValue(0);
+  // Law 8: red is reserved for negative money, so the dismiss hint uses a
+  // neutral muted tone rather than red, even though it maps to "reject".
+  const acceptHintOpacity = useTransform(x, [0, 96], [0, 1]);
+  const dismissHintOpacity = useTransform(x, [-96, 0], [1, 0]);
+  const swipeDisabled = Boolean(selecting) || busy !== null;
+
   async function act(accept: boolean) {
     if (!userId) return;
     setBusy(accept ? 'accept' : 'dismiss');
@@ -571,9 +604,7 @@ function CategorizationCard({
         householdId,
         payload: { suggestionId: row.suggestionId, accept },
       });
-      toast.success(
-        accept ? `Filed under ${row.suggestedCategoryName}.` : 'Suggestion dismissed.',
-      );
+      toast.success(accept ? `Filed under ${row.suggestedCategoryName}.` : 'Suggestion dismissed.');
       onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Action failed.');
@@ -583,115 +614,155 @@ function CategorizationCard({
   }
 
   return (
-    <Card>
-      <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:justify-between">
-        {selecting ? (
-          <button
-            type="button"
-            role="checkbox"
-            aria-checked={selected ?? false}
-            aria-label={`Select ${displayName}`}
-            className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded border ${
-              selected
-                ? 'border-primary bg-primary text-primary-foreground'
-                : 'border-border'
-            }`}
-            onClick={onToggle}
-          >
-            {selected ? <Check className="size-3.5" /> : null}
-          </button>
-        ) : null}
-        <div className="min-w-0 flex-1 space-y-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <p className="truncate font-medium" title={row.originalDescription}>
-              {displayName}
-            </p>
-            <Badge variant="secondary" className="max-w-40 shrink-0">
-              <span className="truncate">{row.suggestedCategoryName}</span>
-            </Badge>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            <Money amountMinor={row.amountMinor} currency={row.currency} /> on{' '}
-            <span className="font-mono text-xs">{row.effectiveDate}</span>
-            {' · '}
-            {row.accountName}
-          </p>
-          {/* Law 11: deterministic reason code — a rule or the bank's PFC, never invented confidence. */}
-          <p className="text-xs text-muted-foreground">{reasonLine}</p>
-          <WhyDisclosure subject={`the ${row.suggestedCategoryName} categorization for ${displayName}`}>
-            <div className="space-y-1.5 rounded-md border border-border bg-muted/30 p-3 text-xs">
-              {/* Raw description reachable without hover (touch parity). */}
-              <p className="break-all text-muted-foreground/80">
-                Bank memo: <span className="font-mono">{row.originalDescription}</span>
-              </p>
-              <p className="break-all text-muted-foreground/80">
-                {row.source === 'rule' ? (
-                  <>
-                    {/* FROZEN as-detected pattern (Law 9) — matches the reason line. */}
-                    Matched rule (as detected):{' '}
-                    <span className="font-mono">{row.rulePattern ?? row.evidence.pattern ?? '—'}</span>
-                  </>
-                ) : (
-                  <>
-                    Bank category key:{' '}
-                    <span className="font-mono">{row.evidence.pfcPrimary ?? row.evidence.pfcKey ?? '—'}</span>
-                  </>
-                )}
-              </p>
-              {/* The rule's PRESENT text may only appear here, explicitly
-                  labeled — never in the reason line (adversarial review P2-2). */}
-              {row.source === 'rule' &&
-              row.ruleLivePattern !== null &&
-              row.ruleLivePattern !== (row.rulePattern ?? row.evidence.pattern) ? (
-                <p className="break-all text-muted-foreground/80">
-                  Rule as of now:{' '}
-                  <span className="font-mono">{row.ruleLivePattern}</span>
+    <div className="relative">
+      {/* Swipe direction hints — decorative only (the buttons below carry
+          the real accessible affordance), so hidden from assistive tech and
+          never intercepting pointer events. */}
+      <m.div
+        aria-hidden="true"
+        style={{ opacity: acceptHintOpacity }}
+        className="pointer-events-none absolute inset-0 flex items-center rounded-xl bg-primary/10 pl-5 text-primary"
+      >
+        <Check className="size-5" />
+      </m.div>
+      <m.div
+        aria-hidden="true"
+        style={{ opacity: dismissHintOpacity }}
+        className="pointer-events-none absolute inset-0 flex items-center justify-end rounded-xl bg-muted pr-5 text-muted-foreground"
+      >
+        <X className="size-5" />
+      </m.div>
+      <m.div
+        style={{ x }}
+        drag={swipeDisabled ? false : 'x'}
+        dragConstraints={{ left: 0, right: 0 }}
+        dragElastic={0.6}
+        dragSnapToOrigin
+        onDragEnd={(_event, info) => {
+          const decision = resolveSwipeDecision(info.offset.x, info.velocity.x);
+          if (decision === 'accept') void act(true);
+          else if (decision === 'dismiss') void act(false);
+        }}
+        className="touch-pan-y"
+      >
+        <Card>
+          <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:justify-between">
+            {selecting ? (
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={selected ?? false}
+                aria-label={`Select ${displayName}`}
+                className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded border ${
+                  selected ? 'border-primary bg-primary text-primary-foreground' : 'border-border'
+                }`}
+                onClick={onToggle}
+              >
+                {selected ? <Check className="size-3.5" /> : null}
+              </button>
+            ) : null}
+            <div className="min-w-0 flex-1 space-y-1">
+              <div className="flex min-w-0 items-center gap-2">
+                <p className="truncate font-medium" title={row.originalDescription}>
+                  {displayName}
                 </p>
-              ) : null}
-              <p className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
-                {/* Current vs suggested: the change being approved, spelled out. */}
-                <span className="truncate line-through decoration-muted-foreground/60">
-                  {row.currentCategoryName}
-                </span>
-                <ArrowRight className="size-3 shrink-0" aria-hidden />
-                <span className="truncate font-medium text-foreground">
-                  {row.suggestedCategoryName}
-                </span>
+                <Badge variant="secondary" className="max-w-40 shrink-0">
+                  <span className="truncate">{row.suggestedCategoryName}</span>
+                </Badge>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                <Money amountMinor={row.amountMinor} currency={row.currency} /> on{' '}
+                <span className="font-mono text-xs">{row.effectiveDate}</span>
+                {' · '}
+                {row.accountName}
               </p>
+              {/* Law 11: deterministic reason code — a rule or the bank's PFC, never invented confidence. */}
+              <p className="text-xs text-muted-foreground">{reasonLine}</p>
+              <WhyDisclosure
+                subject={`the ${row.suggestedCategoryName} categorization for ${displayName}`}
+              >
+                <div className="space-y-1.5 rounded-md border border-border bg-muted/30 p-3 text-xs">
+                  {/* Raw description reachable without hover (touch parity). */}
+                  <p className="break-all text-muted-foreground/80">
+                    Bank memo: <span className="font-mono">{row.originalDescription}</span>
+                  </p>
+                  <p className="break-all text-muted-foreground/80">
+                    {row.source === 'rule' ? (
+                      <>
+                        {/* FROZEN as-detected pattern (Law 9) — matches the reason line. */}
+                        Matched rule (as detected):{' '}
+                        <span className="font-mono">
+                          {row.rulePattern ?? row.evidence.pattern ?? '—'}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        Bank category key:{' '}
+                        <span className="font-mono">
+                          {row.evidence.pfcPrimary ?? row.evidence.pfcKey ?? '—'}
+                        </span>
+                      </>
+                    )}
+                  </p>
+                  {/* The rule's PRESENT text may only appear here, explicitly
+                  labeled — never in the reason line (adversarial review P2-2). */}
+                  {row.source === 'rule' &&
+                  row.ruleLivePattern !== null &&
+                  row.ruleLivePattern !== (row.rulePattern ?? row.evidence.pattern) ? (
+                    <p className="break-all text-muted-foreground/80">
+                      Rule as of now: <span className="font-mono">{row.ruleLivePattern}</span>
+                    </p>
+                  ) : null}
+                  <p className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+                    {/* Current vs suggested: the change being approved, spelled out. */}
+                    <span className="truncate line-through decoration-muted-foreground/60">
+                      {row.currentCategoryName}
+                    </span>
+                    <ArrowRight className="size-3 shrink-0" aria-hidden />
+                    <span className="truncate font-medium text-foreground">
+                      {row.suggestedCategoryName}
+                    </span>
+                  </p>
+                </div>
+              </WhyDisclosure>
             </div>
-          </WhyDisclosure>
-        </div>
-        {selecting ? null : (
-          <div className="flex shrink-0 items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy !== null}
-              onClick={() => {
-                void act(false);
-              }}
-            >
-              {busy === 'dismiss' ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
-              Dismiss
-            </Button>
-            <Button
-              size="sm"
-              disabled={busy !== null}
-              onClick={() => {
-                void act(true);
-              }}
-            >
-              {busy === 'accept' ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <Check className="size-4" />
-              )}
-              Accept
-            </Button>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+            {selecting ? null : (
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy !== null}
+                  onClick={() => {
+                    void act(false);
+                  }}
+                >
+                  {busy === 'dismiss' ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <X className="size-4" />
+                  )}
+                  Dismiss
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={busy !== null}
+                  onClick={() => {
+                    void act(true);
+                  }}
+                >
+                  {busy === 'accept' ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Check className="size-4" />
+                  )}
+                  Accept
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </m.div>
+    </div>
   );
 }
 
@@ -778,7 +849,9 @@ function SuggestionCard({
           )}
           <p className="text-xs text-muted-foreground">{reasonLine}</p>
           {series.occurrences.length > 0 ? (
-            <WhyDisclosure subject={`the ${merchantDisplayName(series.counterpartyKey.toUpperCase())} recurring series`}>
+            <WhyDisclosure
+              subject={`the ${merchantDisplayName(series.counterpartyKey.toUpperCase())} recurring series`}
+            >
               <div className="space-y-1.5 rounded-md border border-border bg-muted/30 p-3 text-xs">
                 <p className="text-muted-foreground">
                   {series.occurrences.length} upcoming projected
@@ -819,7 +892,11 @@ function SuggestionCard({
               void act('recurring.reject');
             }}
           >
-            {busy === 'reject' ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
+            {busy === 'reject' ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <X className="size-4" />
+            )}
             Dismiss
           </Button>
           <Button
