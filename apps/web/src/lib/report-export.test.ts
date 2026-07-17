@@ -150,6 +150,37 @@ describe('buildScopedTransactionsCsv', () => {
     expect(dataLine).toContain(`"'@evil"`);
   });
 
+  it('strips embedded CR/LF from scopeText in the metadata block so injected content cannot start a new CSV line (review r3604408469)', () => {
+    // A user-created entity name can carry an embedded CR/LF; scopeText is
+    // written into an UNQUOTED "#" comment line (no quotes to escape a
+    // newline), so a raw CR/LF would start a new physical line that a
+    // spreadsheet app still parses as a row of its own — and if THAT line
+    // begins with a formula trigger, it becomes executable.
+    const csv = buildScopedTransactionsCsv({
+      rows: [row({})],
+      scope: { from: '2026-06-01', to: '2026-06-30' },
+      scopeText: 'Evil Corp\r\n=cmd|"/c calc"!A1 · All accounts',
+      asOf: null,
+      generatedAt: GENERATED_AT,
+    });
+    const lines = csv.split('\r\n');
+    // The embedded CR/LF is collapsed to a space — the injected text stays
+    // INSIDE the single "#" comment line instead of starting a new one.
+    expect(lines[0]).toBe('# KEEL Reports export — scope: Evil Corp =cmd|"/c calc"!A1 · All accounts');
+    expect(lines[1]).toContain('# Range:');
+  });
+
+  it('neutralizes scopeText that itself starts with a formula trigger', () => {
+    const csv = buildScopedTransactionsCsv({
+      rows: [row({})],
+      scope: { from: '2026-06-01', to: '2026-06-30' },
+      scopeText: '=cmd|"/c calc"!A1',
+      asOf: null,
+      generatedAt: GENERATED_AT,
+    });
+    expect(csv.split('\r\n')[0]).toBe(`# KEEL Reports export — scope: '=cmd|"/c calc"!A1`);
+  });
+
   it('defaults missing category/tags/transfer/note/counterparty fields to blank cells, not "null"/"undefined"', () => {
     const csv = buildScopedTransactionsCsv({
       rows: [row({ categoryName: null, categoryKind: null })],

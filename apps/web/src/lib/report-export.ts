@@ -38,6 +38,20 @@ import type { RichTransactionRow } from './keel-api';
 const neutralizeSpreadsheetCell = (cell: string): string =>
   /^[=+\-@\t\r]/u.test(cell) ? `'${cell}` : cell;
 
+/**
+ * Sanitizes free text destined for an UNQUOTED `#`-comment metadata line
+ * (review r3604408469): `scopeText` can carry a user-created entity name,
+ * and unlike the quoted data cells below, these header lines are written
+ * raw with no surrounding quotes to escape a comma/newline. A CR/LF inside
+ * the name would otherwise start a new physical line that a spreadsheet
+ * app still parses as CSV — if THAT line begins with `=`/`+`/`-`/`@` it
+ * becomes an interpretable formula cell. Strip embedded CR/LF (a metadata
+ * line is single-line by construction) before applying the same
+ * leading-character neutralization used everywhere else in this file.
+ */
+const sanitizeMetadataText = (text: string): string =>
+  neutralizeSpreadsheetCell(text.replaceAll(/[\r\n]+/gu, ' '));
+
 /** Plain RFC-4180 quoting for values this code generates itself (dates,
  *  amounts, currency codes, enums, ids) — never user/bank-originated text. */
 const quoteCsv = (cell: string): string => `"${cell.replaceAll('"', '""')}"`;
@@ -145,7 +159,7 @@ function sortedRows(rows: RichTransactionRow[]): RichTransactionRow[] {
  */
 export function buildScopedTransactionsCsv(input: ScopedExportInput): string {
   const lines: string[] = [
-    `# KEEL Reports export — scope: ${input.scopeText}`,
+    `# KEEL Reports export — scope: ${sanitizeMetadataText(input.scopeText)}`,
     `# Range: ${input.scope.from} to ${input.scope.to}`,
     `# Data as of: ${input.asOf ?? 'unknown'}`,
     `# Generated: ${input.generatedAt.toISOString()}`,
