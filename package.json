@@ -16,7 +16,8 @@
     "format:check": "prettier --check .",
     "build:functions": "node scripts/build-functions.mjs",
     "provision:local": "node scripts/dev/provision-local-env.mjs",
-    "test:integration": "vitest run --config tests/integration/vitest.config.ts"
+    "test:integration": "vitest run --config tests/integration/vitest.config.ts",
+    "audit:queries": "node scripts/audit/query-surface.mjs"
   },
   "devDependencies": {
     "@keel/contracts": "workspace:*",

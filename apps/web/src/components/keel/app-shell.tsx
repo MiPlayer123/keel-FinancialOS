@@ -46,6 +46,7 @@ import {
 import { Money } from '@/components/keel/money';
 import { QuickNav } from '@/components/keel/quick-nav';
 import { ReviewBadge } from '@/components/keel/review-badge';
+import { QueryTimingPanel } from '@/components/keel/query-timing-panel';
 
 type NavItem = { label: string; href: string; icon: LucideIcon };
 
@@ -68,13 +69,7 @@ const NAV: NavItem[] = [
 
 const COLLAPSE_KEY = 'keel-sidebar-collapsed';
 
-function NavLinks({
-  collapsed,
-  onNavigate,
-}: {
-  collapsed: boolean;
-  onNavigate?: () => void;
-}) {
+function NavLinks({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: () => void }) {
   const pathname = usePathname();
   return (
     <nav className="flex flex-col gap-0.5">
@@ -413,9 +408,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   control); Sign out stacked below so nothing overlaps it. */}
               <div className="flex items-center gap-2 px-1">
                 <Avatar size="sm">
-                  <AvatarFallback>
-                    {(email ?? '?').charAt(0).toUpperCase()}
-                  </AvatarFallback>
+                  <AvatarFallback>{(email ?? '?').charAt(0).toUpperCase()}</AvatarFallback>
                 </Avatar>
                 <span
                   className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
@@ -490,6 +483,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <QuickNav />
           {children}
         </main>
+        <QueryTimingPanel />
       </div>
     </div>
   );

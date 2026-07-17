@@ -1,11 +1,19 @@
 import { getSupabaseBrowserClient } from '@/lib/supabase';
 
 /** Shared envelope for read queries; every query is scoped to one household. */
+export type QueryDiagnostics = {
+  query: string;
+  rpcMs?: number;
+  edgeMs?: number;
+  clientMs?: number;
+};
+
 export type QueryResult<Row> = {
   scope: { householdId: string };
   asOf: string;
   formulaVersion?: string;
   rows: Row[];
+  diagnostics?: QueryDiagnostics;
 };
 
 async function invoke<T>(fn: string, body: Record<string, unknown>): Promise<T> {
@@ -23,7 +31,11 @@ async function invoke<T>(fn: string, body: Record<string, unknown>): Promise<T> 
           throw new Error(detail.code ? `${detail.message} (${detail.code})` : detail.message);
         }
       } catch (parseErr) {
-        if (parseErr instanceof Error && parseErr.message !== error.message && !(parseErr instanceof SyntaxError)) {
+        if (
+          parseErr instanceof Error &&
+          parseErr.message !== error.message &&
+          !(parseErr instanceof SyntaxError)
+        ) {
           throw parseErr;
         }
       }
@@ -34,13 +46,30 @@ async function invoke<T>(fn: string, body: Record<string, unknown>): Promise<T> 
   return data;
 }
 
+function recordKeelQueryTiming(diagnostics: QueryDiagnostics): void {
+  if (typeof window === 'undefined') return;
+
+  window.dispatchEvent(new CustomEvent('keel:query-timing', { detail: diagnostics }));
+  if (window.localStorage.getItem('keel:perf') === '1') {
+    console.debug('[keel:query]', diagnostics);
+  }
+}
+
 /** POST /api/queries — read-only, household-scoped. `extra` carries query-specific params. */
-export function keelQuery<Row>(
+export async function keelQuery<Row>(
   query: string,
   householdId: string,
   extra: Record<string, unknown> = {},
 ): Promise<QueryResult<Row>> {
-  return invoke<QueryResult<Row>>('api/queries', { query, householdId, ...extra });
+  const startedAt = performance.now();
+  const result = await invoke<QueryResult<Row>>('api/queries', { query, householdId, ...extra });
+  const diagnostics = {
+    ...result.diagnostics,
+    query,
+    clientMs: Math.trunc(performance.now() - startedAt),
+  };
+  recordKeelQueryTiming(diagnostics);
+  return { ...result, diagnostics };
 }
 
 export type CashFlowRow = {
@@ -250,13 +279,7 @@ export async function fetchFirstEntityId(householdId: string): Promise<string | 
 
 /** A financial entity (personal books, an LLC, a trust, …) within a household. */
 export type EntityKind =
-  | 'personal'
-  | 'sole_prop'
-  | 'llc_single'
-  | 'llc_multi'
-  | 's_corp'
-  | 'trust'
-  | 'other';
+  'personal' | 'sole_prop' | 'llc_single' | 'llc_multi' | 's_corp' | 'trust' | 'other';
 
 export type EntityRow = {
   entityId: string;
@@ -538,10 +561,11 @@ export async function fetchCashFlowForecast(
   days = 30,
 ): Promise<{ rows: DailyBalanceRow[]; bills: ForecastBill[] } | null> {
   try {
-    const res = await invoke<{ rows?: DailyBalanceRow[]; bills?: ForecastBill[] }>(
-      'api/queries',
-      { query: 'dashboard.cash_flow_forecast', householdId, days },
-    );
+    const res = await invoke<{ rows?: DailyBalanceRow[]; bills?: ForecastBill[] }>('api/queries', {
+      query: 'dashboard.cash_flow_forecast',
+      householdId,
+      days,
+    });
     return { rows: res.rows ?? [], bills: res.bills ?? [] };
   } catch {
     return null;
@@ -1015,7 +1039,12 @@ export type ReconciliationSession = {
   status: string;
   closedAt: string | null;
   reopenedAt: string | null;
-  items: { lineId: string; resolution: string; transactionId: string | null; explanation: string }[];
+  items: {
+    lineId: string;
+    resolution: string;
+    transactionId: string | null;
+    explanation: string;
+  }[];
   adjustments: { kind: string; amountMinor: string; explanation: string }[];
 };
 
@@ -1292,6 +1321,81 @@ export async function fetchAuditLog(householdId: string, limit = 25): Promise<Au
     actor: r.actor,
     at: r.at,
   }));
+}
+
+export type NoteTaskRow =
+  | {
+      type: 'note';
+      id: string;
+      body: string;
+      pinned: boolean;
+      createdAt: string;
+      updatedAt: string;
+    }
+  | {
+      type: 'task';
+      id: string;
+      title: string;
+      description: string | null;
+      status: 'open' | 'done' | 'dismissed';
+      dueOn: string | null;
+      priority: 'low' | 'normal' | 'high';
+      createdAt: string;
+      updatedAt: string;
+    };
+
+export async function saveNote(input: {
+  householdId: string;
+  noteId?: string | null;
+  body: string;
+  pinned?: boolean;
+}): Promise<{ noteId: string }> {
+  return invoke<{ noteId: string }>('api/notes/save', {
+    householdId: input.householdId,
+    noteId: input.noteId ?? null,
+    body: input.body,
+    pinned: input.pinned ?? false,
+  });
+}
+
+export async function archiveNote(input: {
+  householdId: string;
+  noteId: string;
+}): Promise<unknown> {
+  return invoke('api/notes/archive', {
+    householdId: input.householdId,
+    noteId: input.noteId,
+  });
+}
+
+export async function saveTask(input: {
+  householdId: string;
+  taskId?: string | null;
+  title: string;
+  description?: string | null;
+  dueOn?: string | null;
+  priority?: 'low' | 'normal' | 'high';
+}): Promise<{ taskId: string }> {
+  return invoke<{ taskId: string }>('api/tasks/save', {
+    householdId: input.householdId,
+    taskId: input.taskId ?? null,
+    title: input.title,
+    description: input.description ?? null,
+    dueOn: input.dueOn ?? null,
+    priority: input.priority ?? 'normal',
+  });
+}
+
+export async function setTaskStatus(input: {
+  householdId: string;
+  taskId: string;
+  status: 'open' | 'done' | 'dismissed';
+}): Promise<unknown> {
+  return invoke('api/tasks/set-status', {
+    householdId: input.householdId,
+    taskId: input.taskId,
+    status: input.status,
+  });
 }
 
 /**

@@ -27,14 +27,11 @@ import { merchantDisplayName } from '@/lib/merchant-name';
 import { stepScheduleDue } from '@/lib/recurring';
 import { Badge } from '@/components/ui/badge';
 import { CashFlowCard } from '@/components/keel/cash-flow-card';
-import {
-  BalanceTrendChart,
-  CashFlowMonthlyChart,
-  CategoryBarList,
-} from '@/components/keel/charts';
+import { BalanceTrendChart, CashFlowMonthlyChart, CategoryBarList } from '@/components/keel/charts';
 import { spendingMix, isDebtOrTransferLike, suggestedTransferCount } from '@/lib/spending';
 import { NetWorthHero } from '@/components/keel/net-worth-hero';
 import { TransferNudgeBanner } from '@/components/keel/transfer-nudge-banner';
+import { NotesTasksCard } from '@/components/keel/notes-tasks-card';
 import { formatMoney } from '@/lib/money';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -70,7 +67,9 @@ function SyncStatus({ householdId }: { householdId: string }) {
         if (!active) return;
         const synced = conns
           .filter((c) => c.lastSuccessfulSyncAt !== null)
-          .sort((a, b) => (b.lastSuccessfulSyncAt ?? '').localeCompare(a.lastSuccessfulSyncAt ?? ''));
+          .sort((a, b) =>
+            (b.lastSuccessfulSyncAt ?? '').localeCompare(a.lastSuccessfulSyncAt ?? ''),
+          );
         setLastSync(synced[0]?.lastSuccessfulSyncAt ?? null);
         setConnectionId(conns[0]?.id ?? null);
       })
@@ -128,7 +127,6 @@ function agoLabel(iso: string): string {
   return `${String(Math.trunc(hours / 24))}d ago`;
 }
 
-
 // rawDetail: unabbreviated source string (e.g. the raw bank memo behind a
 // cleaned merchant name) — surfaces in the tooltip so the inference never
 // hides the source (Law 9; review finding).
@@ -156,8 +154,7 @@ function buildInsights(rows: RichTransactionRow[]): Insight[] {
   for (const t of rows) {
     currencyCounts.set(t.currency, (currencyCounts.get(t.currency) ?? 0) + 1);
   }
-  const domCurrency =
-    [...currencyCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'USD';
+  const domCurrency = [...currencyCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'USD';
 
   let biggest: RichTransactionRow | null = null;
   let mtd = 0n;
@@ -323,8 +320,7 @@ function computeFreeToSpend(
   }
 
   const freeMinor = receivedMinor + expectedMinor - spentMinor - billsDueMinor;
-  const perDayMinor =
-    freeMinor > 0n && daysLeft > 0 ? freeMinor / BigInt(daysLeft) : null;
+  const perDayMinor = freeMinor > 0n && daysLeft > 0 ? freeMinor / BigInt(daysLeft) : null;
 
   return {
     currency,
@@ -373,12 +369,14 @@ function FreeToSpendCard({
             </p>
           ) : null}
         </div>
-        <div
-          className={`grid grid-cols-2 gap-3 ${fts.hasRecurringData ? 'sm:grid-cols-4' : ''}`}
-        >
+        <div className={`grid grid-cols-2 gap-3 ${fts.hasRecurringData ? 'sm:grid-cols-4' : ''}`}>
           <div>
             <p className="text-xs text-muted-foreground">In so far</p>
-            <Money amountMinor={fts.receivedMinor.toString()} currency={fts.currency} className="text-sm" />
+            <Money
+              amountMinor={fts.receivedMinor.toString()}
+              currency={fts.currency}
+              className="text-sm"
+            />
           </div>
           {fts.hasRecurringData ? (
             <div>
@@ -413,9 +411,9 @@ function FreeToSpendCard({
         </div>
         {fts.hasRecurringData ? (
           <p className="text-xs text-muted-foreground">
-            Income received and spending so far, plus confirmed recurring bills/income and
-            schedules still due this month (if a schedule duplicates a detected series, it
-            counts twice — pause one on the Recurring page).
+            Income received and spending so far, plus confirmed recurring bills/income and schedules
+            still due this month (if a schedule duplicates a detected series, it counts twice —
+            pause one on the Recurring page).
           </p>
         ) : null}
       </CardContent>
@@ -540,6 +538,8 @@ function HomeBody() {
         series={recurringSeries ?? []}
         schedules={schedules}
       />
+
+      <NotesTasksCard householdId={householdId} />
 
       {/* Fused net-worth hero (C11): number + Δ + % + window + chart as one
           unit, with range pills (C10). Replaces the old bare Net position
