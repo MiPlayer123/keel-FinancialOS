@@ -12,6 +12,11 @@ export interface KeelPlaidHolding {
   readonly priceMinor: string;
   readonly costBasisMinor: string | null;
   readonly currency: 'USD';
+  /** Plaid's raw security type (equity, etf, fixed income, mutual fund,
+   *  cryptocurrency, derivative, other -- 'cash' never reaches here, see
+   *  below). Stored as-is; coarse-bucketing into an allocation view
+   *  (S-inv-1c) happens at read time, not here. */
+  readonly securityType: string | null;
 }
 
 export interface SkippedPlaidHolding {
@@ -137,6 +142,7 @@ export const mapHoldingsGetToKeel = (body: unknown): MappedPlaidHoldings => {
 
     const costBasis = value['cost_basis'];
     const nameValue = security['name'];
+    const typeValue = security['type'];
 
     result.holdings.push({
       accountExternalRef,
@@ -152,6 +158,7 @@ export const mapHoldingsGetToKeel = (body: unknown): MappedPlaidHoldings => {
           ? dollarsToMinorString(costBasis)
           : null,
       currency: 'USD',
+      securityType: typeof typeValue === 'string' && typeValue.trim().length > 0 ? typeValue : null,
     });
   }
   return result;

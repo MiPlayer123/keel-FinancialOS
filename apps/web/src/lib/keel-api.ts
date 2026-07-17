@@ -227,6 +227,10 @@ export type HoldingRow = {
   costBasisMinor: string | null;
   currency: string;
   source: 'manual' | 'plaid';
+  /** Plaid's raw security type (equity, etf, fixed income, …) when synced;
+   *  always null for manual entries. Coarse-bucketed at read time for the
+   *  allocation view (S-inv-1c, lib/holdings-allocation.ts). */
+  securityType: string | null;
   updatedAt: string;
 };
 
