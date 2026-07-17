@@ -2058,3 +2058,112 @@ copy contradiction: `recurring/page.tsx` still said "Cancel series").
    a new derived display figure only, zero backend/behavior changes. Flagged
    here rather than silently expanding scope; a confirm-before-stop-tracking
    affordance is a reasonable follow-up but is its own (tiny) UX decision.
+
+## 2026-07-17 — D-046: C15 per-report scoped export
+
+Teardown item C15 ("Export the report you're viewing") was NOT COVERED:
+`admin.export_all` (packages/exports, Law 6) is the only export path and is
+household-wide by construction. Reports (C14, PR #28) now has an "Export
+CSV" button next to the scope bar that downloads EXACTLY the current scope
+bar's resolution — accounts ∩ entity, [from, to] day range — as one CSV.
+
+Decisions (with justification):
+1. **Reused packages/exports? No — new dedicated builder.** That package's
+   `toCsvFiles` emits one file per raw canonical TABLE (household-wide
+   relational dump, `INCLUDE` manifest columns) with no concept of the
+   Reports scope bar and no `RichTransactionRow`-shaped row (account name,
+   category name, tags, split detail already joined for display). Forcing
+   the report scope into that shape would mean building a fake
+   `HouseholdExport` snapshot just to satisfy `toCsvFiles`'s type — more
+   complex and less honest than a small pure builder over the same rows the
+   page already renders. New file: `apps/web/src/lib/report-export.ts`
+   (`buildScopedTransactionsCsv`, `scopedExportFilename`), unit-tested in
+   `report-export.test.ts` (9 cases: header block, decimal formatting,
+   sort order, split disclosure, formula-injection neutralization, blank-
+   field defaults, filename shape).
+2. **No new edge function / no migration.** `transactions.rich`
+   (`keel_list_transactions_rich`) is called with no LIMIT/pagination
+   params — the Reports page already holds the FULL household transaction
+   set client-side before any scoping happens (confirmed by reading
+   `supabase/functions/api/index.ts` and `use-keel-query.ts`). The export
+   button reuses the exact same `rangedRows` (built via
+   `scopeRows`/`scopedAccountIdSet` from `report-scope.ts`) every widget on
+   the page already renders from — "download exactly what's on screen" is
+   literal, not an approximation, and there is no completeness gap a
+   server-side query would close. This stays a pure client-side read; the
+   web app still never writes canonical tables (Law 7's no-privileged-
+   side-door boundary is moot here — nothing new is exposed).
+3. **Full scoped set, not any widget's narrower convention.** Every Reports
+   widget excludes transfers/debt-payments and nets refunds for its own
+   spending-analysis purpose (stated in each footnote); the CSV export
+   does NOT apply that exclusion; it exports every transaction in
+   [from, to] ∩ accounts, matching the ledger's own row set, per the task
+   brief's explicit instruction not to silently narrow to one widget's
+   convention.
+4. **Law 9 self-description, twice over.** A leading `#`-prefixed comment
+   block states the scope label (`scopeLabel` — same text every widget
+   footnote already shows, one source of truth), the explicit from/to
+   range, the `transactions.rich` query's `asOf` (data freshness, distinct
+   from export time), the generation timestamp, and the row count. The
+   filename also encodes from/to + a filesystem-safe generated-at stamp
+   (`keel-reports-export_<from>_to_<to>_<generated-at>.csv`), so the file
+   self-describes even if separated from its metadata header (renamed,
+   emailed, re-saved).
+5. **One row per transaction, not per split.** Splits are disclosed in
+   their own `Splits` column (`"Name: amount; Name2: amount2"`) rather
+   than exploded into extra rows — Law 3 (postings balance per
+   transaction): a naive spreadsheet `SUM()` over the Amount column must
+   reproduce net cash flow for the scope, which breaks if a split
+   transaction's shares appear as additional summable rows alongside its
+   own parent cash amount.
+6. **Money stays BIGINT-exact, decimal-formatted for spreadsheets.** Amounts
+   convert from minor-unit strings to plain decimal via BigInt digit-
+   shifting only (no float parsing, Law 4) — mirrors the digit-shifting
+   technique in both `packages/exports/src/currency.ts#formatMinorUnits`
+   and this web layer's own `lib/money.ts#formatMoney`. Deviation from
+   `formatMinorUnits`: this builder hardcodes 2 decimal digits rather than
+   pulling the full ISO-4217 exponent table, matching `lib/money.ts`'s
+   existing web-layer convention (that file already assumes 2 digits for
+   every currency); a 0- or 3-decimal-currency household would see the
+   same rounding limitation the UI already has today, not a new one this
+   export introduces. Flagged here rather than fixed, since fixing it means
+   changing `lib/money.ts` too — out of scope for C15.
+7. **Formula-injection neutralization scoped to actual free text, not
+   numbers (a bug caught by the freshly written unit tests — see below).**
+   `packages/exports/src/csv.ts`'s `neutralizeSpreadsheetCell` (Law 5)
+   matches a leading `=+-@`/tab/CR and is applied to EVERY cell in that
+   package, including bigint columns — meaning a negative `amount_minor`
+   there already gets an apostrophe-prefixed, unsummable text cell (an
+   existing, untested quirk in `packages/exports` I did not touch per the
+   task brief). My first draft copied that blanket behavior verbatim and
+   my own unit tests caught it immediately: a `-1234.56` Amount cell was
+   coming out as `'-1234.56` (text, not a number), which would silently
+   break `SUM()` in Excel/Sheets for every household with any expense in
+   the exported range — directly contradicting this file's own stated
+   purpose ("spreadsheets can SUM the column directly"). Fixed by
+   splitting quoting into `quoteCsv` (plain RFC-4180 quoting, for cells
+   this code generates itself — date, amount, currency, enums,
+   transaction id) vs `quoteUntrustedCsv` (quoting + neutralization, for
+   description/note/account name/category name/tags/counterparty — the
+   actual bank-memo/user-typed content Law 5 is about). Recorded here as
+   the clearest example of "write tests first when practical" catching a
+   real defect before merge.
+8. **Button placement:** next to the scope bar (`flex flex-col …
+   sm:flex-row sm:justify-between`, same responsive pattern as
+   `PageHeader`'s actions slot) rather than inside the scope-bar card
+   itself, so it doesn't compete for space with account/entity pickers at
+   390px (Law 8) — it wraps to its own line below the scope bar on narrow
+   viewports instead of cramming in.
+9. Export stays enabled (and produces a header-only CSV) even when the
+   scope resolves to zero transactions — a reproducible "nothing in this
+   range" file is more honest than hiding the button, and Reports already
+   shows an equivalent "Nothing in this scope" empty state for the same
+   condition.
+
+Verification: `pnpm typecheck` clean; `pnpm lint` — 0 errors, the same 4
+pre-existing warnings as a `git stash` baseline (goals/page.tsx,
+import-csv-dialog.tsx, needs-attention.tsx — none in the touched files);
+`pnpm --filter @keel/web exec vitest run` — 209/209 passing (9 new). No
+edge function touched, so the deno/vitest function gate and
+`pnpm build:functions` don't apply. `admin.export_all` and its tests are
+untouched.

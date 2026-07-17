@@ -3,7 +3,8 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { BarChart3, ArrowDownRight, ArrowUpRight, ChevronDown } from 'lucide-react';
+import { BarChart3, ArrowDownRight, ArrowUpRight, ChevronDown, Download } from 'lucide-react';
+import { toast } from 'sonner';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
@@ -44,6 +45,7 @@ import {
   scopedAccountIdSet,
   type ReportScope,
 } from '@/lib/report-scope';
+import { buildScopedTransactionsCsv, scopedExportFilename } from '@/lib/report-export';
 import { TransferNudgeBanner } from '@/components/keel/transfer-nudge-banner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -166,6 +168,16 @@ function buildMatrix(
 
 function rangeLabel(from: string, to: string): string {
   return `${from} – ${to}`;
+}
+
+/** Same Blob/anchor download pattern as Settings' full-household export. */
+function downloadCsvFile(filename: string, csv: string) {
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 /**
@@ -931,6 +943,27 @@ function ReportsBody() {
       .slice(0, 8);
   }, [matrix, months]);
 
+  // C15: export EXACTLY the current scope bar's resolution — the full
+  // scoped transaction set (accounts ∩ entity, [from, to]), not any single
+  // widget's narrower convention (no transfer/debt-payment exclusion here;
+  // that stays widget-specific, disclosed in each card's own footnote). Must
+  // sit above the early returns below (rules-of-hooks: hooks can't be
+  // conditional).
+  const handleExportCsv = useCallback(() => {
+    const generatedAt = new Date();
+    const csv = buildScopedTransactionsCsv({
+      rows: rangedRows,
+      scope: { from: scope.from, to: scope.to },
+      scopeText,
+      asOf: txns.asOf,
+      generatedAt,
+    });
+    downloadCsvFile(scopedExportFilename({ from: scope.from, to: scope.to }, generatedAt), csv);
+    toast.success(
+      `Exported ${String(rangedRows.length)} transaction${rangedRows.length === 1 ? '' : 's'}.`,
+    );
+  }, [rangedRows, scope.from, scope.to, scopeText, txns.asOf]);
+
   const scopeRestricted = scope.entityId !== null || scope.accountIds.length > 0;
   if (
     !ready ||
@@ -973,7 +1006,18 @@ function ReportsBody() {
     <>
       <TransferNudgeBanner count={suggestedCount} />
 
-      <ScopeBar scope={scope} accounts={accounts} entities={entities} onScopeChange={setScope} />
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <ScopeBar scope={scope} accounts={accounts} entities={entities} onScopeChange={setScope} />
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 shrink-0"
+          onClick={handleExportCsv}
+        >
+          <Download className="size-4" />
+          Export CSV
+        </Button>
+      </div>
 
       {rangedRows.length === 0 ? (
         <EmptyState
