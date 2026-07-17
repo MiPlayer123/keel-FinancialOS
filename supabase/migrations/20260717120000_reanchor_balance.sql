@@ -422,7 +422,17 @@ $$;
 -- needs SELECT on it. All other tables it reads/writes (accounts,
 -- ledger_accounts, journal_batches/postings/revisions, period_locks) are
 -- already granted to keel_api via the set_opening_balance lineage.
+-- keel_api is non-BYPASSRLS and balance_snapshots has RLS enabled with only a
+-- `to authenticated` member-read policy, so a bare GRANT still yields zero
+-- rows (RLS filters silently — CI caught this as "no provider balance
+-- snapshot yet"). The established ritual (paychecks, transfer_links, …) pairs
+-- the grant with a keel_api policy; scope safety lives in the proc's explicit
+-- household_id filter, exactly like every other _api_all policy.
 grant select on public.balance_snapshots to keel_api;
+create policy balance_snapshots_api_read
+  on public.balance_snapshots
+  for select to keel_api
+  using (true);
 
 -- Ownership ritual (procs owned by keel_api; execute for authenticated only),
 -- matching keel_cmd_set_opening_balance.
