@@ -511,7 +511,10 @@ export type CategorySuggestionRow = {
   suggestedCategoryName: string;
   suggestedCategoryKind: 'expense' | 'income';
   currentCategoryName: string;
+  /** FROZEN as-detected rule pattern (from evidence) — drives the reason line. */
   rulePattern: string | null;
+  /** The rule's pattern as it reads NOW (null if deleted) — Why panel only. */
+  ruleLivePattern: string | null;
 };
 
 /** Run deterministic categorization detection; returns new suggestion count. */

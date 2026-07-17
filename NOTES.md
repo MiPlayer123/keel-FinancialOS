@@ -1744,3 +1744,34 @@ Slice makes the loop real without turning off the existing machinery:
   threshold confidence away from auto-apply is the follow-up
   (reviewed/unreviewed txn state + visible "auto" badge, still open on the
   teardown ledger).
+
+## 2026-07-17 — D-041 cont.: adversarial review fixes (P1-1/P1-2/P2-1/P2-2)
+
+Four findings against ed36b51, fixed in place in the same migration file
+(never deployed, so no follow-up migration):
+- P1-1 detection starvation: `limit 200` applied BEFORE `on conflict do
+  nothing`, so pending/dismissed rows permanently occupied the deterministic
+  ordered prefix — with ≥200 undecided proposals, rows 201+ were never
+  suggested. Fix: anti-join category_suggestions on the FULL unique key
+  before the LIMIT (only genuinely-new proposals consume slots); ON CONFLICT
+  retained as the concurrency backstop.
+- P1-2 stale accept clobbered user decisions (Law 9): decide-accept never
+  re-checked that the overlay was still machine-defaulted, and the read
+  model filtered on status only. Fix: shared predicate ("effective category
+  is an Uncategorized landing pad, or a plaid_pfc overlay") re-checked under
+  the FOR UPDATE in decide-accept (typed P0009 'suggestion is stale' when a
+  user/rule classification settled it) AND mirrored in
+  keel_list_category_suggestions so settled cards drop off Review. pgTAP +
+  integration both cover: user recategorizes after detection → card gone,
+  accept fails P0009, overlay untouched.
+- P2-1 contradictory PFC cards: pfc_proposals joined ALL source links of a
+  canonical transaction (pending + posted with different primaries → two
+  pending cards). Fix: `distinct on (t.txn_id)` ordered (posted first,
+  newest normalized record, id). pgTAP now seeds the contradictory two-link
+  case and asserts exactly one suggestion with the posted record winning.
+- P2-2 reason line asserted a present-tense match from the LIVE rule
+  pattern while proposing the frozen category. Fix: `rulePattern` in the
+  read model is now the FROZEN evidence pattern and the line reads past
+  tense ("Matched your rule '<as-detected>'"); the live pattern rides as
+  `ruleLivePattern` and renders only inside the Why panel, labeled "Rule as
+  of now", and only when it differs.

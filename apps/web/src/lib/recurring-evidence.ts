@@ -138,8 +138,14 @@ export function pfcPrimaryLabel(pfcPrimary: string): string {
 /**
  * Reason-code line for a categorization suggestion (deterministic — the
  * detector matched a user rule or the bank's own category; no invented
- * confidence). E.g. "Matches your rule 'blue bottle'" or
+ * confidence). E.g. "Matched your rule 'blue bottle'" or
  * "Bank category: Food and drink".
+ *
+ * `rulePattern` must be the FROZEN as-detected pattern from the suggestion's
+ * evidence, and the wording is past tense: the line describes the match that
+ * actually produced the suggestion, not the rule's present-day text (Law 9 —
+ * the rule may have been edited since; the live pattern belongs in the Why
+ * panel, explicitly labeled).
  */
 export function categorizationReasonLine(input: {
   reasonCode: string;
@@ -148,8 +154,8 @@ export function categorizationReasonLine(input: {
 }): string {
   if (input.reasonCode === 'rule_match') {
     return input.rulePattern
-      ? `Matches your rule '${input.rulePattern}'`
-      : 'Matches one of your rules';
+      ? `Matched your rule '${input.rulePattern}'`
+      : 'Matched one of your rules';
   }
   if (input.reasonCode === 'pfc_mapping') {
     return input.pfcPrimary

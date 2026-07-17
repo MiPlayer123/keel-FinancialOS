@@ -492,7 +492,8 @@ function CategorizationCard({
               <p className="break-all text-muted-foreground/80">
                 {row.source === 'rule' ? (
                   <>
-                    Matched rule:{' '}
+                    {/* FROZEN as-detected pattern (Law 9) — matches the reason line. */}
+                    Matched rule (as detected):{' '}
                     <span className="font-mono">{row.rulePattern ?? row.evidence.pattern ?? '—'}</span>
                   </>
                 ) : (
@@ -502,6 +503,16 @@ function CategorizationCard({
                   </>
                 )}
               </p>
+              {/* The rule's PRESENT text may only appear here, explicitly
+                  labeled — never in the reason line (adversarial review P2-2). */}
+              {row.source === 'rule' &&
+              row.ruleLivePattern !== null &&
+              row.ruleLivePattern !== (row.rulePattern ?? row.evidence.pattern) ? (
+                <p className="break-all text-muted-foreground/80">
+                  Rule as of now:{' '}
+                  <span className="font-mono">{row.ruleLivePattern}</span>
+                </p>
+              ) : null}
               <p className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
                 {/* Current vs suggested: the change being approved, spelled out. */}
                 <span className="truncate line-through decoration-muted-foreground/60">

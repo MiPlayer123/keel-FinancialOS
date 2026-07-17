@@ -36,7 +36,10 @@ insert into public.ledger_accounts
 values
   ('c5000000-0000-4000-8000-000000000010', '00000000-0000-4000-8000-00000000a001',
    '00000000-0000-4000-8000-00000000a101', 'Food & Drink', 'expense', 'USD', true,
-   'food_drink', true);
+   'food_drink', true),
+  ('c5000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-00000000a001',
+   '00000000-0000-4000-8000-00000000a101', 'Shopping', 'expense', 'USD', true,
+   'shopping', true);
 
 -- T1: uncategorized (offset on the landing pad, no overlay). Both a matching
 -- user rule AND a PFC mapping propose a category — the rule must win.
@@ -78,6 +81,10 @@ values
    '00000000-0000-4000-8000-00000000a311', 'plaid_pfc');
 
 -- Raw PFC evidence for BOTH transactions (T1's must lose to the rule).
+-- T2 deliberately carries TWO source links with CONTRADICTORY primaries
+-- (posted pt2 = FOOD_AND_DRINK, pending pt2b = GENERAL_MERCHANDISE → the
+-- multi-link fan-out of adversarial review P2-1); the posted record must win
+-- and T2 must get exactly ONE suggestion.
 insert into public.raw_provider_events
   (id, household_id, connection_id, provider, provider_event_id, account_external_ref,
    body, body_text, received_at)
@@ -85,7 +92,7 @@ values
   ('c5000000-0000-4000-8000-000000000030', '00000000-0000-4000-8000-00000000a001',
    '00000000-0000-4000-8000-00000000a202', 'plaid', 'pgtap-cat-sync-1', 'sim-acct-checking',
    '{}'::jsonb,
-   '{"added":[{"transaction_id":"pgtap-cat-pt1","personal_finance_category":{"primary":"FOOD_AND_DRINK"}},{"transaction_id":"pgtap-cat-pt2","personal_finance_category":{"primary":"FOOD_AND_DRINK"}}]}',
+   '{"added":[{"transaction_id":"pgtap-cat-pt1","personal_finance_category":{"primary":"FOOD_AND_DRINK"}},{"transaction_id":"pgtap-cat-pt2","personal_finance_category":{"primary":"FOOD_AND_DRINK"}},{"transaction_id":"pgtap-cat-pt2b","personal_finance_category":{"primary":"GENERAL_MERCHANDISE"}}]}',
    now());
 insert into public.normalized_source_records
   (id, raw_event_id, household_id, account_id, provider_transaction_id,
@@ -96,13 +103,18 @@ values
    'pgtap-cat-pt1', -4300, 'USD', '2026-07-10', 'BLUE BOTTLE COFFEE ROASTERS', false),
   ('c5000000-0000-4000-8000-000000000032', 'c5000000-0000-4000-8000-000000000030',
    '00000000-0000-4000-8000-00000000a001', '00000000-0000-4000-8000-00000000a401',
-   'pgtap-cat-pt2', -1200, 'USD', '2026-07-11', 'CORNER DELI 42', false);
+   'pgtap-cat-pt2', -1200, 'USD', '2026-07-11', 'CORNER DELI 42', false),
+  ('c5000000-0000-4000-8000-000000000033', 'c5000000-0000-4000-8000-000000000030',
+   '00000000-0000-4000-8000-00000000a001', '00000000-0000-4000-8000-00000000a401',
+   'pgtap-cat-pt2b', -1200, 'USD', '2026-07-11', 'CORNER DELI 42', true);
 insert into public.transaction_source_links
   (canonical_transaction_id, normalized_source_record_id, household_id)
 values
   ('c5000000-0000-4000-8000-000000000001', 'c5000000-0000-4000-8000-000000000031',
    '00000000-0000-4000-8000-00000000a001'),
   ('c5000000-0000-4000-8000-000000000002', 'c5000000-0000-4000-8000-000000000032',
+   '00000000-0000-4000-8000-00000000a001'),
+  ('c5000000-0000-4000-8000-000000000002', 'c5000000-0000-4000-8000-000000000033',
    '00000000-0000-4000-8000-00000000a001');
 
 -- User rule matching T1 only, filing to Coffee Shops.
@@ -130,6 +142,10 @@ select is(
   (select suggested_category_ledger_account_id from public.category_suggestions
     where canonical_transaction_id = 'c5000000-0000-4000-8000-000000000001'),
   '00000000-0000-4000-8000-00000000a314'::uuid, 'T1 suggests Coffee Shops');
+select is(
+  (select count(*)::int from public.category_suggestions
+    where canonical_transaction_id = 'c5000000-0000-4000-8000-000000000002'),
+  1, 'contradictory multi-link PFC evidence collapses to ONE suggestion (P2-1)');
 select is(
   (select source from public.category_suggestions
     where canonical_transaction_id = 'c5000000-0000-4000-8000-000000000002'),
@@ -318,5 +334,46 @@ select throws_ok($$
   select public.keel_list_category_suggestions('00000000-0000-4000-8000-00000000a001')
 $$, 'P0006', null, 'read model is scope-safe');
 reset role;
+
+-- ---------------------------------------------------------------------------
+-- Stale-suggestion guard (adversarial review P1-2): the user settles the
+-- classification AFTER detection; the pending suggestion must (a) drop off
+-- the read model and (b) fail typed on accept — never silently overwrite the
+-- user's own decision (Law 9).
+-- ---------------------------------------------------------------------------
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
+-- Alex recategorizes the probe transaction himself (Groceries, source user).
+select lives_ok($$
+  select public.keel_categorize_transaction(
+    '00000000-0000-4000-8000-00000000a001',
+    'c5000000-0000-4000-8000-000000000003',
+    '00000000-0000-4000-8000-00000000a311')
+$$, 'user recategorizes the probe transaction after detection');
+-- (b) The settled row leaves the Review read model.
+select is(
+  jsonb_array_length(public.keel_list_category_suggestions('00000000-0000-4000-8000-00000000a001')->'rows'),
+  0, 'a user-settled classification drops its pending card from the read model');
+-- (a) Accepting the stale suggestion fails typed; nothing is overwritten.
+select throws_ok($$
+  select public.keel_cmd_decide_category_suggestion(
+    'c5000000-0000-4000-8000-0000000000d7', 'pgtap:cat:decide:stale', '{}'::jsonb,
+    '00000000-0000-4000-8000-00000000a001',
+    jsonb_build_object('suggestion_id', (select sid from _probe), 'accept', true))
+$$, 'P0009', null, 'accepting a stale suggestion fails typed instead of clobbering the user');
+reset role;
+
+select is(
+  (select category_ledger_account_id from public.transaction_categories
+    where canonical_transaction_id = 'c5000000-0000-4000-8000-000000000003'),
+  '00000000-0000-4000-8000-00000000a311'::uuid,
+  'the user''s own categorization survives the stale accept attempt');
+select is(
+  (select source from public.transaction_categories
+    where canonical_transaction_id = 'c5000000-0000-4000-8000-000000000003'),
+  'user', 'overlay provenance stays user after the blocked accept');
+select is(
+  (select status from public.category_suggestions where id = (select sid from _probe)),
+  'suggested', 'the blocked decision leaves the suggestion undecided');
 
 select * from finish();rollback;

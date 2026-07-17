@@ -171,7 +171,13 @@ begin
       order by elem->>'transaction_id', r.received_at desc
   ),
   pfc_proposals as (
-    select t.txn_id, pfc.primary as pfc_primary,
+    -- ONE proposal per transaction (adversarial review P2-1): a canonical
+    -- transaction can carry several source links (pending + posted records
+    -- with different PFC primaries), which would fan out into contradictory
+    -- pending cards. Deterministic winner: posted record first, then the
+    -- newest normalized record, then id.
+    select distinct on (t.txn_id)
+           t.txn_id, pfc.primary as pfc_primary,
            cat.pfc_key as cat_key, cat.id as cat_id
       from targets t
       join public.transaction_source_links tsl on tsl.canonical_transaction_id = t.txn_id
@@ -184,6 +190,7 @@ begin
       -- Precedence: user rules beat PFC — a transaction with a rule proposal
       -- never also gets a PFC proposal.
       where not exists (select 1 from rule_winners w where w.txn_id = t.txn_id)
+      order by t.txn_id, nsr.pending asc, nsr.created_at desc, nsr.id
   ),
   proposals as (
     select w.txn_id, w.cat_id, 'rule'::text as source, 'rule_match'::text as reason_code,
@@ -203,6 +210,19 @@ begin
     join targets t on t.txn_id = pr.txn_id
     -- Never suggest what the transaction already effectively carries.
     where pr.cat_id <> t.current_cat
+    -- Only genuinely-NEW proposals may consume LIMIT slots (adversarial
+    -- review P1-1): the LIMIT applies before ON CONFLICT, so without this
+    -- anti-join on the full unique key, existing pending/dismissed rows
+    -- permanently occupy the deterministic ordered prefix and rows 201+
+    -- would never be suggested. ON CONFLICT stays as the concurrency
+    -- backstop for two detection passes racing.
+    and not exists (
+      select 1 from public.category_suggestions cs
+      where cs.household_id = p_household_id
+        and cs.canonical_transaction_id = pr.txn_id
+        and cs.suggested_category_ledger_account_id = pr.cat_id
+        and cs.source = pr.source
+    )
     order by pr.txn_id, pr.source
     limit 200  -- bound one detection pass; the next call picks up the rest
   on conflict (household_id, canonical_transaction_id,
@@ -271,9 +291,12 @@ begin
         'suggestedCategoryName', sc.name,
         'suggestedCategoryKind', sc.kind,
         'currentCategoryName', coalesce(cur.name, offcat.name),
-        -- Live rule pattern when the rule still exists; evidence keeps the
-        -- as-detected copy either way (Law 9: reproducible).
-        'rulePattern', coalesce(r.pattern, s.evidence->>'pattern')
+        -- FROZEN as-detected pattern (Law 9: the reason line must describe
+        -- the match that actually produced this suggestion, not the rule's
+        -- present-day text — adversarial review P2-2). The live pattern rides
+        -- separately for the Why panel's "rule as of now" line only.
+        'rulePattern', s.evidence->>'pattern',
+        'ruleLivePattern', r.pattern
       ) as row
       from public.category_suggestions s
       join public.canonical_transactions ct on ct.id = s.canonical_transaction_id
@@ -298,6 +321,17 @@ begin
       where s.household_id = p_household_id
         and s.status = 'suggested'
         and ct.voided_at is null
+        -- Settled classifications drop off the Review page (adversarial
+        -- review P1-2b): once the transaction's effective category is no
+        -- longer machine-defaulted (user or rule filed it on a real
+        -- category), the pending suggestion is stale — same predicate as
+        -- detection targeting and the decide-accept guard.
+        and (
+          (case when tc.canonical_transaction_id is not null
+                then cur.pfc_key else offcat.pfc_key end)
+            in ('uncategorized_expense', 'uncategorized_income')
+          or tc.source = 'plaid_pfc'
+        )
     ) t;
 
   return jsonb_build_object(
@@ -336,6 +370,9 @@ declare
   v_accept boolean;
   v_entity uuid;
   v_offsets int;
+  v_offset_pfc text;
+  v_overlay_source text;
+  v_overlay_pfc text;
   v_cat public.ledger_accounts%rowtype;
   v_old uuid;
   v_new_status text;
@@ -374,8 +411,8 @@ begin
   if v_accept then
     -- Same validation lattice as keel_categorize_transaction: live batch,
     -- single offset, category is a live same-entity classification target.
-    select jp.entity_id, count(*) over ()
-      into v_entity, v_offsets
+    select jp.entity_id, count(*) over (), la.pfc_key
+      into v_entity, v_offsets, v_offset_pfc
       from public.canonical_transactions ct
       join public.journal_batches jb
         on jb.canonical_transaction_id = ct.id and jb.reverses_batch_id is null
@@ -405,9 +442,29 @@ begin
         using errcode = 'P0009';
     end if;
 
-    select category_ledger_account_id into v_old
-      from public.transaction_categories
-      where canonical_transaction_id = v_suggestion.canonical_transaction_id;
+    select tc.category_ledger_account_id, tc.source, curla.pfc_key
+      into v_old, v_overlay_source, v_overlay_pfc
+      from public.transaction_categories tc
+      left join public.ledger_accounts curla on curla.id = tc.category_ledger_account_id
+      where tc.canonical_transaction_id = v_suggestion.canonical_transaction_id;
+
+    -- Stale-suggestion guard (adversarial review P1-2a; Law 9 explicit
+    -- ownership): between detection and this approval the user (or the
+    -- preview→confirm rule apply) may have settled the classification. If
+    -- the transaction's effective category is no longer machine-defaulted
+    -- (an Uncategorized landing pad, or a plaid_pfc overlay), accepting
+    -- would silently overwrite a human decision — fail typed instead. The
+    -- read model hides such rows with the same predicate; this is the
+    -- authoritative re-check under the row lock.
+    if not (
+      coalesce(case when v_old is not null then v_overlay_pfc else v_offset_pfc end, '')
+        in ('uncategorized_expense', 'uncategorized_income')
+      or coalesce(v_overlay_source, '') = 'plaid_pfc'
+    ) then
+      raise exception
+        'KEEL_INVALID_COMMAND: suggestion is stale; this transaction was already categorized'
+        using errcode = 'P0009';
+    end if;
 
     -- Overlay upsert, source='user': the approval is a human decision, so the
     -- rules engine's "never a user row" guard now protects it (Law 2).

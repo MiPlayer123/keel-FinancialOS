@@ -117,12 +117,15 @@ describe('reason lines', () => {
     expect(pfcPrimaryLabel('')).toBe('Unknown');
   });
   it('builds the categorization reason line for rule and PFC sources', () => {
+    // Past tense over the FROZEN as-detected pattern (Law 9): the line
+    // describes the match that produced the suggestion, never the rule's
+    // present-day text.
     expect(
       categorizationReasonLine({ reasonCode: 'rule_match', rulePattern: 'blue bottle' }),
-    ).toBe("Matches your rule 'blue bottle'");
-    // A deleted rule loses its live pattern but the claim stays honest.
+    ).toBe("Matched your rule 'blue bottle'");
+    // Evidence missing a pattern still keeps the claim honest.
     expect(categorizationReasonLine({ reasonCode: 'rule_match', rulePattern: null })).toBe(
-      'Matches one of your rules',
+      'Matched one of your rules',
     );
     expect(
       categorizationReasonLine({ reasonCode: 'pfc_mapping', pfcPrimary: 'FOOD_AND_DRINK' }),

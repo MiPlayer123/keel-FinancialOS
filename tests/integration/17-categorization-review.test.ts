@@ -212,5 +212,52 @@ describe('categorization.decide_suggestion (P0-B suggest→approve loop)', () =>
     const finalPending = await listSuggestions(alex);
     expect(finalPending.find((r) => r.canonicalTransactionId === txn1)).toBeUndefined();
     expect(finalPending.find((r) => r.canonicalTransactionId === txn2)).toBeUndefined();
+
+    // (5) Stale-suggestion guard (adversarial review P1-2, Law 9): the user
+    // settles the classification between detection and approval — the card
+    // must drop off the read model and accept must fail typed rather than
+    // silently overwrite the user's own decision.
+    const txn3 = await createUncategorizedTxn(alex, `BLUE BOTTLE ${token} #3`);
+    const { error: detect3Error } = await alex.rpc('keel_detect_category_suggestions', {
+      p_household_id: HOUSEHOLD,
+    });
+    if (detect3Error) throw new Error(detect3Error.message);
+    const s3 = (await listSuggestions(alex)).find((r) => r.canonicalTransactionId === txn3);
+    expect(s3).toBeDefined();
+
+    // Reason line provenance (adversarial review P2-2): the FROZEN
+    // as-detected pattern drives the card; the live pattern rides separately.
+    expect(s3!.rulePattern).toBe(token);
+
+    // User recategorizes the transaction himself (Groceries, source 'user').
+    const { error: recatError } = await alex.rpc('keel_categorize_transaction', {
+      p_household_id: HOUSEHOLD,
+      p_txn_id: txn3,
+      p_category_ledger_account_id: SEED.ledgerAccounts.alphaGroceries,
+    });
+    if (recatError) throw new Error(`recategorize failed: ${recatError.message}`);
+
+    // Settled row drops off the Review read model.
+    expect(
+      (await listSuggestions(alex)).find((r) => r.canonicalTransactionId === txn3),
+    ).toBeUndefined();
+
+    // Accepting the stale suggestion fails typed (P0009) and changes nothing.
+    const { error: staleError } = await alex.rpc('keel_cmd_decide_category_suggestion', {
+      p_command_id: crypto.randomUUID(),
+      p_economic_event_key: `itest:cat:decide:${s3!.suggestionId}:stale`,
+      p_actor: ACTOR,
+      p_household_id: HOUSEHOLD,
+      p_payload: { suggestion_id: s3!.suggestionId, accept: true },
+    });
+    expect(staleError?.code).toBe('P0009');
+
+    const overlay3 = await svc
+      .from('transaction_categories')
+      .select('category_ledger_account_id, source')
+      .eq('canonical_transaction_id', txn3)
+      .single();
+    expect(overlay3.data?.category_ledger_account_id).toBe(SEED.ledgerAccounts.alphaGroceries);
+    expect(overlay3.data?.source).toBe('user');
   });
 });
