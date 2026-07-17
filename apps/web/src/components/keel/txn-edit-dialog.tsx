@@ -54,6 +54,7 @@ import {
 } from '@/lib/category-picker';
 import { maskAccountLabel } from '@/lib/account-label';
 import { merchantDisplayName } from '@/lib/merchant-name';
+import { shortDateWithYear } from '@/lib/relative-date';
 import { isUncategorized } from '@/lib/needs-attention';
 import { isAutoCategorized } from '@/lib/review-state';
 import { useHousehold } from '@/components/keel/household-context';
@@ -143,8 +144,8 @@ export function TxnList({
               {selected.has(t.transactionId) ? <Check className="size-3.5" /> : null}
             </button>
           ) : null}
-          <span className="w-14 shrink-0 font-mono text-xs text-muted-foreground">
-            {t.effectiveDate.slice(5)}
+          <span className="w-16 shrink-0 font-mono text-xs text-muted-foreground">
+            {shortDateWithYear(t.effectiveDate)}
           </span>
           {/* min-w-0 + truncate: the description can never push into the
               category picker or the amount, no matter how long the memo is. */}

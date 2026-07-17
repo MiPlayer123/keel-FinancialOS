@@ -18,6 +18,7 @@ import {
   type StatementRow,
 } from '@/lib/keel-api';
 import { sha256Hex, parseSignedDollars, minorToDollars } from '@/lib/hash';
+import { shortDateWithYear } from '@/lib/relative-date';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -855,7 +856,7 @@ function CloseStatementDialog({
   const candidateItems = Object.fromEntries(
     candidates.map((t) => [
       t.transactionId,
-      `${t.effectiveDate.slice(5)} · ${t.description.slice(0, 36)}`,
+      `${shortDateWithYear(t.effectiveDate)} · ${t.description.slice(0, 36)}`,
     ]),
   );
 
@@ -947,7 +948,7 @@ function CloseStatementDialog({
                               )
                               .map((t) => (
                                 <SelectItem key={t.transactionId} value={t.transactionId}>
-                                  {t.effectiveDate.slice(5)} · {t.description.slice(0, 36)}
+                                  {shortDateWithYear(t.effectiveDate)} · {t.description.slice(0, 36)}
                                 </SelectItem>
                               ))}
                           </SelectContent>
