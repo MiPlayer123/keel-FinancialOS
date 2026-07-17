@@ -20,14 +20,14 @@ slices merge.
 | C1 | Sidebar accounts = balances + subtotals + net worth | **SHIPPED** | `SidebarAccounts` (PR #12); 3-way split, click-through |
 | C2 | Review count as nav badge | **SHIPPED** | `review-badge.tsx` — counts transfers+recurring only (extend with P0-B) |
 | C3 | Normalized merchant label, raw in detail | **SHIPPED** | `lib/merchant-name.ts` + tooltips (PR #15); NACHA/ACH extraction |
-| C4 | Category picker: typeahead + recents + inline-create + old value struck | **PLANNED → next** | Still bare `<Select>` (`txn-edit-dialog.tsx` CategoryPicker); `command.tsx` (cmdk) already in repo |
+| C4 | Category picker: typeahead + recents + inline-create + old value struck | **SHIPPED** | PR #17 (534eab6): cmdk-in-popover, recents, inline create, old→new strike; live-verified on real data |
 | C5 | Transfers outside categorization, excluded from spend math | **SHIPPED** | D-034 predicate; residual: no paired-glyph on ledger rows |
 | C6 | Master-detail txn surface | **◐** | `TxnEditDialog` covers edit incl. mobile; no detail panel, account last-4, status chip |
 | C7 | Split editor: live remainder + per-leg exclude | **PLANNED** | Splits render read-only; editor = W2.4 |
 | C8 | Per-account freshness + reauth at the row | **◐** | Connection-level only; account rows show no "Updated Nh ago" |
 | C9 | Credit limit + utilization badge | **NOT COVERED** | Detail shows balance + available only |
-| C10 | Time-range pills on every trend chart | **◐** | Reports donut only; account trend + dashboard net-worth fixed 90d |
-| C11 | Net-worth hero fused (num+Δ+%+window+chart) | **NOT COVERED → next** | Pieces exist scattered; never fused |
+| C10 | Time-range pills on every trend chart | **◐** | Reports donut + net-worth hero (PR #18); account-detail trend still fixed 90d |
+| C11 | Net-worth hero fused (num+Δ+%+window+chart) | **SHIPPED** | PR #18 (d418378): NetWorthHero on Home + Accounts, BigInt Δ/%, honest disabled pills, as-of stamp; live-verified |
 | C12 | Budget rows + hero | **SHIPPED (exceeds)** | Full bars/remaining/rollover; missing income line only |
 | C13 | Recurring calendar + occurrence states + $/yr | **◐** | Calendar + paid/due shipped; missing overdue/missed, $X/yr, price-change |
 | C14 | ONE report scope bar + chart drill | **NOT COVERED** | No account/entity filter (undercuts multi-entity thesis); charts non-drill |
@@ -40,7 +40,7 @@ slices merge.
 
 ## Counts
 
-- Patterns: 7 SHIPPED full · 6 partial · 2 planned · 5 not covered.
+- Patterns: 9 SHIPPED full · 6 partial · 1 planned (C7) · 3 not covered (C9, C14→in-build-queue, C15, C19). Updated post PR #17/#18.
 - P0s: P0-A shipped · P0-B core outstanding.
 - Dimensions: budgets + goals strong; categorization-rules and review-approval
   are the two not-covered-dominant dimensions — both are P0-B adjacent.
