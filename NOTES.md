@@ -2002,3 +2002,6 @@ Decisions / deviations (with justification):
 6. TransferNudgeBanner stays UNscoped on purpose — it is a data-quality
    nudge, not a report number; a narrow scope must not hide pending review
    work.
+7. `limit_minor` on `balance_snapshots` (C9, a parallel PR) is provider data
+   omitted from the scope-bar's report derivations by construction — it is
+   never read outside the account-detail utilization surface.
