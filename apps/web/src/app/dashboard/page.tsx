@@ -559,7 +559,7 @@ function HomeBody() {
         schedules={schedules}
       />
 
-      <NotesTasksCard householdId={householdId} />
+      <NotesTasksCard householdId={householdId} compact />
 
       {/* Fused net-worth hero (C11): number + Δ + % + window + chart as one
           unit, with range pills (C10). Replaces the old bare Net position
