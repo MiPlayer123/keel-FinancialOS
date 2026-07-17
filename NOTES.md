@@ -2839,3 +2839,130 @@ assumption — a null bound is a no-op AND branch, mechanically.
   suggestion for that rule's category while an at/above-floor one still
   does. Unexecuted-but-hand-verified in this sandbox, same constraint as the
   rest of this entry.
+
+## 2026-07-17 — D-053: C17 residual — mobile bottom tabs + swipe review queue
+
+Teardown item C17 ("Mobile bottom tabs + edit-anything + swipe review") was
+the last `◐` residual: "Edit gap closed; no bottom tabs / swipe queue." Two
+independent, purely-additive frontend slices close it — no schema, no new
+command (Law 7: reused the existing `categorization.decide_suggestion`
+command end to end, same as the button path).
+
+**1. Phone-only bottom tab bar.** New `apps/web/src/components/keel/
+bottom-tab-bar.tsx`: a `nav` fixed to the viewport bottom, `lg:hidden` — the
+SAME breakpoint `AppShell`'s existing mobile top bar/sheet menu already uses
+(Law 8: this is an ADDITION at phone widths, not a new desktop nav; the
+desktop sidebar is untouched). Five destinations, not the full 13-item
+desktop `NAV` list — the small set a phone user reaches for one-handed:
+Home, Ledger, Review, Accounts, Budgets, reusing the exact same lucide icons
+`app-shell.tsx`'s sidebar already maps to each so the icon vocabulary is
+identical across desktop and phone chrome. `aria-current="page"` on the
+active tab (mirrors the sidebar's active-state convention). Wired into
+`AppShell` alongside a `pb-16 lg:pb-0` on `<main>` so the bar never occludes
+the last row of any page's content; `0` at `lg+` where the bar itself is
+hidden. `pb-[env(safe-area-inset-bottom)]` on the bar handles the home-
+indicator inset on notched phones (falls back to `0` where unsupported).
+`ReviewBadge` (previously sidebar-only, hardcoded to one inline-pill shape)
+gained a `variant="dot"` prop — same count/same source query, a small
+absolutely-positioned corner badge instead of the inline pill, so the
+Review tab carries the identical pending-count signal the sidebar row does
+without duplicating the count-fetch logic. Default `variant="inline"`
+keeps the existing sidebar call site byte-for-byte unaffected.
+
+**2. Swipe gesture on the categorization Review queue.** Checked
+`apps/web/package.json` first per the task brief's own steer: no dedicated
+gesture/swipe library exists, but `motion` (`motion/react`) is already a
+dependency (landing-v2-motion, PR #42) and its `drag` gesture covers this
+exactly — adding a new library would have been unjustified duplication.
+One catch: `Tilt`'s existing usage (`landing/tilt.tsx`) lazily loads the
+smaller `domAnimation` feature bundle, which does NOT include `drag` (only
+`domMax` does — confirmed by reading `node_modules/framer-motion/dist/
+framer-motion.dev.js`'s `domAnimation`/`domMax` definitions directly, since
+this wasn't obvious from either component's usage in this codebase). Wrapped
+only the categorization suggestion list in `review/page.tsx` with
+`<LazyMotion features={domMax} strict>` — one instance, scoped to that
+section, not the whole Review page or app; confirmed via `pnpm build` that
+the extra bundle weight (`/dashboard/review` grew to 51.5 kB) is isolated to
+that one route's chunk, not the shared bundle.
+- New pure helper `apps/web/src/lib/swipe.ts` — `resolveSwipeDecision(offsetX,
+  velocityX)` — written and unit-tested FIRST (`swipe.test.ts`, 10 cases)
+  before being wired into the component, per this session's established
+  test-first convention. Decides accept ("right", mirrors the existing
+  right-hand Accept button)/dismiss ("left")/no-decision from a completed
+  drag's offset and velocity: a drag resolves only if it clears EITHER a
+  96px distance bar (however slow) OR a fast-flick bar (≥24px AND
+  ≥500px/s) — a floor of 24px applies unconditionally first, so a stray
+  high-velocity reading on an effectively stationary touch never fires an
+  action (jitter guard). Direction always follows the offset's sign, never
+  the velocity's, since a completed drag's velocity can occasionally read
+  near zero even for a clearly-signed offset.
+- `CategorizationCard` (the categorization Review queue's suggestion card —
+  confirmed via grep that this, not the recurring-series `SuggestionCard` in
+  the same file, is the one the task's "categorization Review queue" refers
+  to) now wraps its existing `<Card>` in an `m.div` with `drag="x"`,
+  `dragConstraints={{left:0,right:0}}` (always snaps back visually — the
+  card leaving the list happens through the SAME `onDone`/refetch path the
+  buttons already use, not a fly-off animation, per "smallest deterministic
+  slice"), and an `onDragEnd` that calls `resolveSwipeDecision` and then the
+  EXACT SAME `act(accept: boolean)` function the Accept/Dismiss buttons call
+  — same `commandId`/`economicEventKey`/audited RPC, so a swipe is
+  indistinguishable from a click at the command layer (Law 2/7/9). Two
+  decorative background hint layers (opacity driven by an `useTransform` of
+  the drag's `x` motion value) preview the pending direction while dragging.
+  **Law 8 color note:** the dismiss-direction hint deliberately uses a
+  neutral muted tone, not red — red is reserved for negative money only, and
+  "dismiss a suggestion" is not a negative-money event. Swipe is disabled
+  (`drag={false}`) during bulk-select mode (a drag would fight the
+  checkbox's own tap target) and while a decision is already in flight
+  (`busy !== null`) — the exact same guard the buttons already had via
+  `disabled={busy !== null}`.
+- **Accessibility (explicit requirement, not an afterthought):** the swipe
+  is purely an ADDITION — the Accept/Dismiss buttons are unchanged, remain
+  keyboard-reachable, and are the ONLY affordance a screen-reader or
+  keyboard-only user sees; the drag hint layers are `aria-hidden`.
+- **Gate evidence (CI cannot run this session — GitHub Actions minutes
+  exhausted; this battery is the substitute, per the task brief):**
+  `pnpm typecheck` — clean, 0 errors, all workspace packages. `pnpm lint` —
+  0 errors; the same 4 pre-existing warnings as D-045/D-047/D-051
+  (goals/page.tsx, import-csv-dialog.tsx ×2, needs-attention.tsx — none in
+  any file this slice touched, confirmed against `git status --short`).
+  `pnpm --filter @keel/web exec vitest run` — 283/283 across 17 files (+1
+  new file, `swipe.test.ts`, 10 cases). `cd apps/web && pnpm build` — clean
+  production build, 22/22 static pages generated, only the same 4
+  pre-existing lint warnings surfaced during the build's own lint pass (run
+  per this repo's ops fact: a clean typecheck alone is not sufficient,
+  Vercel enforces the build's ESLint pass). No backend/SQL touched (pure
+  frontend slice, confirmed via `git status --short` before starting) —
+  `pnpm test`/`pnpm build:functions` were out of scope and not run.
+- **Deferred (explicitly out of scope for this residual slice):** the
+  original C17 teardown finding's "edit-anything" sub-item was already
+  closed by `TxnEditDialog` per the ledger's own note ("Edit gap closed");
+  not revisited here. Swipe gestures were scoped to the categorization
+  suggestion cards only, per the task brief — the recurring-series
+  `SuggestionCard` and `TransferCard` in the same Review page keep
+  button-only accept/reject (a future pass could extend the same
+  `resolveSwipeDecision` helper to them, but the task brief named the
+  categorization queue specifically and this is the smallest deterministic
+  slice for that finding). No fly-off/exit animation on decision — the card
+  snaps back and disappears via the existing refetch-driven list update,
+  matching every other suggestion card's mutation pattern in this session
+  rather than introducing new choreography.
+- **Review fixes (two P2 findings, chatgpt-codex-connector):**
+  (1) `resolveSwipeDecision`'s flick path qualified on `|velocityX|` alone
+  with no check that the velocity's DIRECTION agreed with the net offset —
+  a user dragging right ~30px then flicking back left at release
+  (`offsetX=30, velocityX=-800`, a pull-back-to-cancel gesture) still
+  cleared the flick bar and resolved by the (unrelated) offset's sign,
+  filing `accept` for a gesture that meant the opposite. Fixed by requiring
+  `Math.sign(velocityX) === Math.sign(offsetX)` as part of the flick
+  qualification (`swipe.ts`); two new tests in `swipe.test.ts` prove a
+  disagreeing-direction flick now resolves to no-decision (`null`) while an
+  agreeing-direction short flick still resolves as before (no regression).
+  (2) The bottom tab bar's own height grows by
+  `env(safe-area-inset-bottom)` on phones with a home indicator, but
+  `AppShell`'s `<main>` only reserved a flat `pb-16` — on those devices the
+  bar is taller than the reserved padding, so the last row of content could
+  still sit partly hidden under the inset area. Fixed by reserving the same
+  inset in the main padding: `pb-[calc(4rem+env(safe-area-inset-bottom))]
+  lg:pb-0` (4rem = the prior `pb-16`'s pixel value), so the two paddings
+  track each other exactly instead of drifting on notched devices.
