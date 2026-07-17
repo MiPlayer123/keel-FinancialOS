@@ -2299,7 +2299,12 @@ historical match (Law 2 audit-log-is-append-only; Law 9 reproducible
 numbers). Ruling: reconciled = "has ever been matched," not "session still
 closed."
 
-- Migration `20260717200000_ledger_reconciled_status.sql`: additive only.
+- Migration `20260717210000_ledger_reconciled_status.sql` (renumbered from
+  20260717200000 at convergence — collided with the P0-B follow-ups
+  migration, which merged first; review r3604380927 also caught this
+  migration's `keel_list_transactions_rich` recreate rebuilding from the
+  stale 20260712200200 shape instead of the current one — rebuilt on top
+  of P0-B's categorySource-bearing body): additive only.
   (1) `create index if not exists reconciliation_items_household_txn on
   reconciliation_items(household_id, transaction_id) where transaction_id is
   not null` — the table's FK to `canonical_transactions` (`fk_item_txn_tenant`)
