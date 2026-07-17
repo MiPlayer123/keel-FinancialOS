@@ -141,19 +141,40 @@ function LedgerTable() {
   const [query, setQuery] = useState('');
   const [grouping, setGrouping] = useState<Grouping>('none');
   const [datePreset, setDatePreset] = useState<DatePreset>('all');
+  // Exact [from, to] day bounds seeded ONLY from the URL (Reports drill-through
+  // — a chart's register link must reproduce the days it summed, Law 9). Shown
+  // as a visible "from – to" entry in the date select; picking any preset
+  // clears it. No new filter logic: it just sources the same bounds the
+  // presets feed into `filtered`.
+  const [customRange, setCustomRange] = useState<{ from: string; to: string } | null>(null);
   const [accountFilter, setAccountFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [tagFilter, setTagFilter] = useState('all');
   const [sort, setSort] = useState<SortKey>('date_desc');
 
   // Deep links (Reports drill-down, ⌘K actions):
-  // /dashboard/ledger?category=<id|uncategorized> and ?add=1. Keyed on the
-  // live search params so ledger→ledger navigations (same segment, no
-  // remount) still apply; ?add=1 is stripped after opening so refresh/back
-  // doesn't reopen the dialog and a repeat ⌘K action re-fires.
+  // /dashboard/ledger?category=<id|uncategorized>&account=<id>&date=<preset>
+  // &from=YYYY-MM-DD&to=YYYY-MM-DD and ?add=1 — each seeds the existing filter
+  // state. Keyed on the live search params so ledger→ledger navigations (same
+  // segment, no remount) still apply; ?add=1 is stripped after opening so
+  // refresh/back doesn't reopen the dialog and a repeat ⌘K action re-fires.
   useEffect(() => {
     const category = searchParams.get('category');
     if (category) setCategoryFilter(category);
+    const account = searchParams.get('account');
+    if (account) setAccountFilter(account);
+    const date = searchParams.get('date');
+    const presetHit = date ? DATE_PRESETS.find((p) => p.key === date) : undefined;
+    if (presetHit) {
+      setDatePreset(presetHit.key);
+      setCustomRange(null);
+    }
+    const from = searchParams.get('from');
+    const to = searchParams.get('to');
+    const isoRe = /^\d{4}-\d{2}-\d{2}$/;
+    if (!presetHit && from && to && isoRe.test(from) && isoRe.test(to) && from <= to) {
+      setCustomRange({ from, to });
+    }
     const q = searchParams.get('q');
     if (q) setQuery(q);
     if (searchParams.get('add') === '1') {
@@ -170,7 +191,7 @@ function LedgerTable() {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-  }, [query, datePreset, accountFilter, categoryFilter, tagFilter, sort, grouping]);
+  }, [query, datePreset, customRange, accountFilter, categoryFilter, tagFilter, sort, grouping]);
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -206,7 +227,9 @@ function LedgerTable() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const [from, to] = presetRange(datePreset);
+    const [from, to] = customRange
+      ? ([customRange.from, customRange.to] as const)
+      : presetRange(datePreset);
     const out = rows.filter((t) => {
       if (from && t.effectiveDate < from) return false;
       if (to && t.effectiveDate > to) return false;
@@ -257,7 +280,7 @@ function LedgerTable() {
       }
     });
     return out;
-  }, [rows, cleanedById, query, datePreset, accountFilter, categoryFilter, tagFilter, sort]);
+  }, [rows, cleanedById, query, datePreset, customRange, accountFilter, categoryFilter, tagFilter, sort]);
 
   const totals = useMemo(() => {
     let inflow = 0n;
@@ -389,16 +412,27 @@ function LedgerTable() {
           />
         </div>
         <Select
-          value={datePreset}
-          items={Object.fromEntries(DATE_PRESETS.map((p) => [p.key, p.label]))}
+          value={customRange ? 'custom' : datePreset}
+          items={{
+            ...(customRange ? { custom: `${customRange.from} – ${customRange.to}` } : {}),
+            ...Object.fromEntries(DATE_PRESETS.map((p) => [p.key, p.label])),
+          }}
           onValueChange={(v) => {
-            if (v) setDatePreset(v);
+            const hit = DATE_PRESETS.find((p) => p.key === v);
+            if (!hit) return; // 'custom' is URL-seeded only, never re-selectable
+            setCustomRange(null);
+            setDatePreset(hit.key);
           }}
         >
           <SelectTrigger className="h-9 w-36">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
+            {customRange ? (
+              <SelectItem value="custom">
+                {customRange.from} – {customRange.to}
+              </SelectItem>
+            ) : null}
             {DATE_PRESETS.map((p) => (
               <SelectItem key={p.key} value={p.key}>
                 {p.label}
@@ -703,6 +737,7 @@ function LedgerTable() {
         onMerchantSearch={(description) => {
           setQuery(description);
           setDatePreset('all');
+          setCustomRange(null);
           setAccountFilter('all');
           setCategoryFilter('all');
           setTagFilter('all');
