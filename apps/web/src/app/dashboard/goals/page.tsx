@@ -1,7 +1,17 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Target, Plus, Loader2, Archive, ArchiveRestore, PiggyBank } from 'lucide-react';
+import {
+  Target,
+  Plus,
+  Loader2,
+  Archive,
+  ArchiveRestore,
+  PiggyBank,
+  Calculator,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
@@ -21,6 +31,7 @@ import {
 import { minorToDollars, parseSignedDollars } from '@/lib/hash';
 import { formatMoney } from '@/lib/money';
 import { relativeDueLabel } from '@/lib/relative-date';
+import { parseAprBps, simulatePayoff } from '@/lib/debt-payoff';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -346,6 +357,13 @@ function GoalCard({
           </p>
         ) : null}
 
+        {isDebt && BigInt(goal.currentBalanceMinor ?? '0') > 0n ? (
+          <DebtPayoffSimulator
+            balanceMinor={goal.currentBalanceMinor ?? '0'}
+            currency={goal.currency}
+          />
+        ) : null}
+
         {goal.status !== 'archived' && !isDebt ? (
           <div className="flex items-center gap-2">
             <Input
@@ -386,6 +404,186 @@ function GoalCard({
         ) : null}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Debt payoff simulator (teardown runner-up, Class C preview-only — Law 10).
+ * Pure client-side math against the debt's CURRENT ledger balance; rate and
+ * payment inputs are ephemeral scenario values, never persisted, never sent
+ * to the server, never a command. See `apps/web/src/lib/debt-payoff.ts` for
+ * the amortization math and its floor-division rounding convention.
+ */
+function DebtPayoffSimulator({
+  balanceMinor,
+  currency,
+}: {
+  balanceMinor: string;
+  currency: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [aprInput, setAprInput] = useState('');
+  const [minPaymentInput, setMinPaymentInput] = useState('');
+  const [extraInput, setExtraInput] = useState('');
+
+  const balance = BigInt(balanceMinor || '0');
+
+  const scenario = useMemo(() => {
+    const aprBps = parseAprBps(aprInput);
+    const minPaymentMinorStr = parseSignedDollars(minPaymentInput);
+    const extraMinorStr = extraInput.trim() ? parseSignedDollars(extraInput) : '0';
+
+    if (aprBps === null || minPaymentMinorStr === null || extraMinorStr === null) return null;
+    if (minPaymentMinorStr.startsWith('-') || extraMinorStr.startsWith('-')) return null;
+
+    const minPaymentMinor = BigInt(minPaymentMinorStr || '0');
+    const extraMinor = BigInt(extraMinorStr || '0');
+    if (minPaymentMinor <= 0n) return null;
+
+    const minOnly = simulatePayoff({ balanceMinor: balance, aprBps, minPaymentMinor });
+    const withExtra =
+      extraMinor > 0n
+        ? simulatePayoff({ balanceMinor: balance, aprBps, minPaymentMinor, extraMinor })
+        : null;
+
+    return { minOnly, withExtra, extraMinor };
+  }, [aprInput, minPaymentInput, extraInput, balance]);
+
+  return (
+    <div className="border-t border-border pt-2">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-7 w-full justify-between px-1 text-xs text-muted-foreground"
+        onClick={() => {
+          setOpen((v) => !v);
+        }}
+      >
+        <span className="inline-flex items-center gap-1.5">
+          <Calculator className="size-3.5" />
+          Payoff simulator
+        </span>
+        {open ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+      </Button>
+
+      {open ? (
+        <div className="space-y-3 pt-2">
+          <div className="grid grid-cols-3 gap-2">
+            <div className="space-y-1">
+              <Label htmlFor={`apr-${balanceMinor}`} className="text-[11px]">
+                APR %
+              </Label>
+              <Input
+                id={`apr-${balanceMinor}`}
+                inputMode="decimal"
+                placeholder="19.99"
+                className="h-8 text-sm"
+                value={aprInput}
+                onChange={(e) => {
+                  setAprInput(e.target.value);
+                }}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`min-${balanceMinor}`} className="text-[11px]">
+                Min payment/mo
+              </Label>
+              <Input
+                id={`min-${balanceMinor}`}
+                inputMode="decimal"
+                placeholder="0.00"
+                className="h-8 text-sm"
+                value={minPaymentInput}
+                onChange={(e) => {
+                  setMinPaymentInput(e.target.value);
+                }}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`extra-${balanceMinor}`} className="text-[11px]">
+                Extra/mo
+              </Label>
+              <Input
+                id={`extra-${balanceMinor}`}
+                inputMode="decimal"
+                placeholder="0.00"
+                className="h-8 text-sm"
+                value={extraInput}
+                onChange={(e) => {
+                  setExtraInput(e.target.value);
+                }}
+              />
+            </div>
+          </div>
+
+          {scenario === null ? (
+            <p className="text-xs text-muted-foreground">
+              Enter an APR and a minimum monthly payment to see a projection.
+            </p>
+          ) : (
+            <div className="space-y-1.5 text-xs">
+              {scenario.minOnly === null ? (
+                <p className="text-muted-foreground">
+                  At this rate, the minimum payment never gets ahead of interest — try a higher
+                  payment.
+                </p>
+              ) : (
+                <p>
+                  <span className="text-muted-foreground">Minimum payments only:</span> payoff in{' '}
+                  <span className="font-medium">
+                    {scenario.minOnly.months} {scenario.minOnly.months === 1 ? 'month' : 'months'}
+                  </span>
+                  , {formatMoney(scenario.minOnly.totalInterestMinor.toString(), { currency })}{' '}
+                  total interest
+                </p>
+              )}
+              {scenario.extraMinor > 0n ? (
+                scenario.withExtra === null ? (
+                  <p className="text-muted-foreground">
+                    Even with the extra payment, this rate never gets ahead of interest.
+                  </p>
+                ) : (
+                  <p>
+                    <span className="text-muted-foreground">
+                      With {formatMoney(scenario.extraMinor.toString(), { currency })}/mo extra:
+                    </span>{' '}
+                    payoff in{' '}
+                    <span className="font-medium">
+                      {scenario.withExtra.months}{' '}
+                      {scenario.withExtra.months === 1 ? 'month' : 'months'}
+                    </span>
+                    , {formatMoney(scenario.withExtra.totalInterestMinor.toString(), { currency })}{' '}
+                    total interest
+                    {scenario.minOnly !== null ? (
+                      <>
+                        {' — save '}
+                        <span className="font-medium">
+                          {formatMoney(
+                            (
+                              scenario.minOnly.totalInterestMinor -
+                              scenario.withExtra.totalInterestMinor
+                            ).toString(),
+                            { currency },
+                          )}
+                        </span>
+                      </>
+                    ) : null}
+                  </p>
+                )
+              ) : null}
+              <p className="flex items-center gap-1.5 pt-1 text-[11px] text-muted-foreground">
+                <Badge variant="outline" className="h-4 px-1.5 text-[10px] uppercase">
+                  Estimate
+                </Badge>
+                Assumes a fixed rate and on-time payments. Nothing here is saved or applied to
+                your account.
+              </p>
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
