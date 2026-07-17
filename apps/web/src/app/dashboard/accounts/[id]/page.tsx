@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, Loader2, Pencil, Plus, ReceiptText, Scale, Wand2 } from 'lucide-react';
@@ -32,11 +32,18 @@ import {
 } from '@/lib/keel-api';
 import { relativeSyncLabel } from '@/lib/relative-date';
 import { utilizationPercent } from '@/lib/credit-utilization';
+import { resolveEditingAfterSave } from '@/lib/txn-edit-guard';
+import { useIsDesktopDetail } from '@/lib/use-desktop-detail';
 import { ReauthLink } from '@/components/keel/reauth-link';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
 import { RenameAccountDialog } from '@/components/keel/rename-account-dialog';
 import { SetOpeningBalanceDialog } from '@/components/keel/set-opening-balance-dialog';
-import { TxnEditDialog, TxnList } from '@/components/keel/txn-edit-dialog';
+import {
+  TxnDetailPanel,
+  TxnEditDialog,
+  TxnList,
+  type TxnEditFormHandle,
+} from '@/components/keel/txn-edit-dialog';
 import { BalanceTrendChart, CategoryBarList } from '@/components/keel/charts';
 import { spendingMix } from '@/lib/spending';
 import { Button } from '@/components/ui/button';
@@ -66,6 +73,11 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
   const [goals, setGoals] = useState<GoalRow[]>([]);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<RichTransactionRow | null>(null);
+  // Master-detail (same pattern as the ledger register, teardown C6
+  // residual): at desktop widths the panel sits beside the list instead of
+  // opening a modal — the two surfaces must stay consistent, not diverge.
+  const isDesktop = useIsDesktopDetail();
+  const editorRef = useRef<TxnEditFormHandle>(null);
   const [renaming, setRenaming] = useState(false);
   const [accountReload, setAccountReload] = useState(0);
   const [settingBalance, setSettingBalance] = useState(false);
@@ -198,6 +210,49 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
     kind === 'liability' && provider
       ? utilizationPercent(provider.currentMinor, provider.limitMinor ?? null)
       : null;
+
+  // Shared by both edit shells (TxnEditDialog's modal, TxnDetailPanel's
+  // desktop panel) — same closures as the ledger register so the two never
+  // drift on what "closed"/"saved"/"tags changed"/"search this merchant"
+  // mean, just routed to whichever shell `isDesktop` says is active below.
+  function selectForEdit(next: RichTransactionRow) {
+    if (isDesktop && editing && editing.transactionId !== next.transactionId) {
+      editorRef.current?.requestClose();
+    }
+    setEditing(next);
+  }
+  const closeEditing = () => {
+    setEditing(null);
+  };
+  const savedEditing = (txnId: string) => {
+    setEditing((cur) => resolveEditingAfterSave(cur, txnId));
+    void txns.refetch();
+    void balances.refetch();
+  };
+  const tagsMutatedEditing = () => {
+    void txns.refetch();
+    if (householdId) {
+      void fetchTags(householdId)
+        .then(setTags)
+        .catch(() => undefined);
+    }
+  };
+  const recategorizeEditing = (txnId: string, categoryId: string) => {
+    if (!householdId) return;
+    void categorizeTransaction({
+      householdId,
+      transactionId: txnId,
+      categoryLedgerAccountId: categoryId,
+    })
+      .then(() => txns.refetch())
+      .catch((err: unknown) => {
+        toast.error(err instanceof Error ? err.message : 'Could not change the category.');
+      });
+  };
+  const merchantSearchEditing = (description: string) => {
+    router.push(`/dashboard/ledger?q=${encodeURIComponent(description)}`);
+  };
+  const showPanel = isDesktop && editing !== null;
 
   return (
     <div className="space-y-6 p-6">
@@ -383,110 +438,98 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
       ) : null}
 
       <div>
-        <section className="space-y-2">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium text-muted-foreground">
-              Transactions{accountTxns.length > 0 ? ` (${String(accountTxns.length)})` : ''}
-            </h2>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs"
-              onClick={() => {
-                setAdding(true);
-              }}
-            >
-              <Plus className="size-3.5" />
-              Add
-            </Button>
-          </div>
-          <AddTransactionDialog
-            open={adding}
-            householdId={householdId}
-            userId={userId}
-            accounts={accounts}
-            categories={categories}
-            defaultAccountId={accountId}
-            history={txns.rows}
-            onClose={() => {
-              setAdding(false);
-            }}
-            onSaved={() => {
-              setAdding(false);
-              void txns.refetch();
-              void balances.refetch();
-            }}
-          />
-          {accountTxns.length === 0 ? (
-            <EmptyState
-              icon={<ReceiptText className="size-6" />}
-              title="No transactions yet"
-              description="Transactions land here when the account syncs — or add one by hand."
-            />
-          ) : (
-            <TxnList
-              rows={accountTxns}
+        <div
+          className={
+            showPanel ? 'items-start gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_22rem]' : ''
+          }
+        >
+          <section className={showPanel ? 'min-w-0 space-y-2' : 'space-y-2'}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-medium text-muted-foreground">
+                Transactions{accountTxns.length > 0 ? ` (${String(accountTxns.length)})` : ''}
+              </h2>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => {
+                  setAdding(true);
+                }}
+              >
+                <Plus className="size-3.5" />
+                Add
+              </Button>
+            </div>
+            <AddTransactionDialog
+              open={adding}
+              householdId={householdId}
+              userId={userId}
+              accounts={accounts}
               categories={categories}
-              running={runningByTxn}
-              selecting={false}
-              selected={EMPTY_SELECTION}
-              onToggle={() => undefined}
-              onEdit={setEditing}
-              onRecategorize={(txnId, categoryId) => {
-                if (!householdId) return;
-                void categorizeTransaction({
-                  householdId,
-                  transactionId: txnId,
-                  categoryLedgerAccountId: categoryId,
-                })
-                  .then(() => txns.refetch())
-                  .catch((err: unknown) => {
-                    toast.error(
-                      err instanceof Error ? err.message : 'Could not change the category.',
-                    );
-                  });
+              defaultAccountId={accountId}
+              history={txns.rows}
+              onClose={() => {
+                setAdding(false);
+              }}
+              onSaved={() => {
+                setAdding(false);
+                void txns.refetch();
+                void balances.refetch();
               }}
             />
-          )}
-        </section>
+            {accountTxns.length === 0 ? (
+              <EmptyState
+                icon={<ReceiptText className="size-6" />}
+                title="No transactions yet"
+                description="Transactions land here when the account syncs — or add one by hand."
+              />
+            ) : (
+              <TxnList
+                rows={accountTxns}
+                categories={categories}
+                running={runningByTxn}
+                selecting={false}
+                selected={EMPTY_SELECTION}
+                onToggle={() => undefined}
+                onEdit={selectForEdit}
+                onRecategorize={recategorizeEditing}
+              />
+            )}
+          </section>
+          {showPanel ? (
+            <div className="lg:sticky lg:top-4">
+              <TxnDetailPanel
+                row={editing}
+                householdId={householdId}
+                userId={userId}
+                categories={categories}
+                allTags={tags}
+                formRef={editorRef}
+                onTagsMutated={tagsMutatedEditing}
+                onClose={closeEditing}
+                onSaved={savedEditing}
+                onRecategorize={recategorizeEditing}
+                onMerchantSearch={merchantSearchEditing}
+              />
+            </div>
+          ) : null}
+        </div>
 
+        {/* Below the desktop breakpoint (or before isDesktop resolves), this
+            is the ONLY edit surface — showPanel keeps it closed (row=null)
+            whenever the desktop panel above is showing instead. */}
         <TxnEditDialog
-          row={editing}
+          row={showPanel ? null : editing}
           householdId={householdId}
           userId={userId}
           categories={categories}
           allTags={tags}
-          onTagsMutated={() => {
-            void txns.refetch();
-            if (householdId) {
-              void fetchTags(householdId)
-                .then(setTags)
-                .catch(() => undefined);
-            }
-          }}
-          onClose={() => {
-            setEditing(null);
-          }}
-          onSaved={() => {
-            setEditing(null);
-            void txns.refetch();
-            void balances.refetch();
-          }}
-          onRecategorize={(txnId, categoryId) => {
-            if (!householdId) return;
-            void categorizeTransaction({
-              householdId,
-              transactionId: txnId,
-              categoryLedgerAccountId: categoryId,
-            })
-              .then(() => txns.refetch())
-              .catch((err: unknown) => {
-                toast.error(err instanceof Error ? err.message : 'Could not change the category.');
-              });
-          }}
-          onMerchantSearch={(description) => {
-            router.push(`/dashboard/ledger?q=${encodeURIComponent(description)}`);
-          }}
+          formRef={editorRef}
+          onTagsMutated={tagsMutatedEditing}
+          onClose={closeEditing}
+          onSaved={savedEditing}
+          onRecategorize={recategorizeEditing}
+          onMerchantSearch={merchantSearchEditing}
         />
       </div>
     </div>

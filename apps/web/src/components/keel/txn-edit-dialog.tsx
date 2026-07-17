@@ -173,20 +173,38 @@ export function TxnList({
                   {isAutoCategorized(t) ? ' · Auto' : ''}
                 </span>
               ) : null}
-              {t.note ? (
-                <span className="text-muted-foreground/80">
-                  {' '}
-                  <StickyNote className="inline size-3 align-[-1px]" aria-label="Note" />{' '}
-                  {t.note.length > 40 ? `${t.note.slice(0, 40)}…` : t.note}
-                </span>
-              ) : null}
-              {(t.tags ?? []).slice(0, 2).map((x) => (
-                <span key={x.tagId} className="text-muted-foreground/80"> #{x.name}</span>
-              ))}
-              {(t.tags?.length ?? 0) > 2 ? (
-                <span className="text-muted-foreground/60"> +{String((t.tags?.length ?? 0) - 2)}</span>
-              ) : null}
             </p>
+            {/* Note/tags get their OWN line rather than trailing the account
+                line above: that line already truncates as a single unit, so a
+                long account/category combo silently swallowed the note+tag
+                content behind the ellipsis with nothing ever visible
+                (review feedback: "even a little overflow" should still show
+                something). A dedicated line means these only compete with
+                each other, never with the account name. */}
+            {t.note || (t.tags?.length ?? 0) > 0 ? (
+              <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/80">
+                {t.note ? (
+                  <span className="flex min-w-0 items-center gap-1">
+                    <StickyNote className="size-3 shrink-0 align-[-1px]" aria-label="Note" />
+                    <span className="truncate">
+                      {t.note.length > 40 ? `${t.note.slice(0, 40)}…` : t.note}
+                    </span>
+                  </span>
+                ) : null}
+                {(t.tags ?? []).length > 0 ? (
+                  <span className="flex shrink-0 items-center gap-1">
+                    {(t.tags ?? []).slice(0, 2).map((x) => (
+                      <span key={x.tagId}>#{x.name}</span>
+                    ))}
+                    {(t.tags?.length ?? 0) > 2 ? (
+                      <span className="text-muted-foreground/60">
+                        +{String((t.tags?.length ?? 0) - 2)}
+                      </span>
+                    ) : null}
+                  </span>
+                ) : null}
+              </p>
+            ) : null}
           </button>
           {t.transferStatus === 'confirmed' ? (
             <Badge
