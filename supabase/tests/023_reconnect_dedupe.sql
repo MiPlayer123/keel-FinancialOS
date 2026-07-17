@@ -97,6 +97,34 @@ insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amo
   ('c9000000-0000-4000-8000-000000000046', 'c9000000-0000-4000-8000-000000000012', '00000000-0000-4000-8000-00000000a101', -1500, 'USD'),
   ('c9000000-0000-4000-8000-000000000046', '00000000-0000-4000-8000-00000000a317', '00000000-0000-4000-8000-00000000a101', 1500, 'USD');
 
+-- Unrelated account at a DIFFERENT institution, active, whose transaction
+-- coincidentally matches the old account's by date/amount/description --
+-- review finding r3606990724 (P1): the write path must reject this pair
+-- even though currency/kind/status all superficially line up, since it is
+-- not a real reconnect match (keel_list_reconnect_matches would never
+-- surface it).
+insert into public.connections (id, household_id, provider, external_ref, status, institution_id)
+values ('c9000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-00000000a001',
+        'plaid', 'pgtap:reconnect:unrelated-item', 'active', 'ins_wells_fargo');
+insert into public.ledger_accounts (id, household_id, entity_id, name, kind, currency, is_category)
+values ('c9000000-0000-4000-8000-000000000013', '00000000-0000-4000-8000-00000000a001',
+        '00000000-0000-4000-8000-00000000a101', 'Reconnect Test Unrelated', 'asset', 'USD', false);
+insert into public.accounts (id, household_id, entity_id, connection_id, ledger_account_id, name, subtype, currency, mask)
+values ('c9000000-0000-4000-8000-000000000023', '00000000-0000-4000-8000-00000000a001',
+        '00000000-0000-4000-8000-00000000a101', 'c9000000-0000-4000-8000-000000000003',
+        'c9000000-0000-4000-8000-000000000013', 'Wells Savings', 'savings', 'USD', '9999');
+insert into public.canonical_transactions
+  (id, household_id, entity_id, account_id, status, source, description, effective_date, economic_event_key)
+values ('c9000000-0000-4000-8000-000000000037', '00000000-0000-4000-8000-00000000a001',
+        '00000000-0000-4000-8000-00000000a101', 'c9000000-0000-4000-8000-000000000023',
+        'posted', 'sync', 'RECONNECT COSTCO', '2026-06-01', 'pgtap:reconnect:unrelated:u1');
+insert into public.journal_batches (id, household_id, canonical_transaction_id, description, effective_date, command_id)
+values ('c9000000-0000-4000-8000-000000000047', '00000000-0000-4000-8000-00000000a001',
+        'c9000000-0000-4000-8000-000000000037', 'RECONNECT COSTCO', '2026-06-01', 'c9000000-0000-4000-8000-0000000000d7');
+insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency) values
+  ('c9000000-0000-4000-8000-000000000047', 'c9000000-0000-4000-8000-000000000013', '00000000-0000-4000-8000-00000000a101', -4300, 'USD'),
+  ('c9000000-0000-4000-8000-000000000047', '00000000-0000-4000-8000-00000000a317', '00000000-0000-4000-8000-00000000a101', 4300, 'USD');
+
 -- ---------------------------------------------------------------------------
 -- Match detection: as alex (household member).
 -- ---------------------------------------------------------------------------
@@ -110,6 +138,24 @@ select is(
     where elem->>'newAccountId' = 'c9000000-0000-4000-8000-000000000022'
       and elem->>'oldAccountId' = 'c9000000-0000-4000-8000-000000000021'),
   1, 'the new/old test accounts are detected as a reconnect match');
+select is(
+  (select count(*)::int from _matches
+    where elem->>'newAccountId' = 'c9000000-0000-4000-8000-000000000023'),
+  0, 'the unrelated (different institution) account is never surfaced as a match');
+
+-- P1 fix: dedupe rejects an unrelated account pair even though
+-- currency/kind/status all superficially line up.
+select throws_ok($$
+  select public.keel_cmd_dedupe_reconnect_account(
+    'c9000000-0000-4000-8000-0000000000e4', 'pgtap:reconnect:unrelated:reject', '{}'::jsonb,
+    '00000000-0000-4000-8000-00000000a001',
+    jsonb_build_object('new_account_id', 'c9000000-0000-4000-8000-000000000023',
+      'old_account_id', 'c9000000-0000-4000-8000-000000000021'))
+$$, 'P0009', null, 'dedupe rejects an unrelated (different institution) account pair');
+select is(
+  (select voided_at is null from public.canonical_transactions
+    where id = 'c9000000-0000-4000-8000-000000000037'),
+  true, 'the unrelated account''s transaction is untouched');
 
 -- Guard: old account's connection must be disconnected.
 update public.connections set status = 'active' where id = 'c9000000-0000-4000-8000-000000000001';

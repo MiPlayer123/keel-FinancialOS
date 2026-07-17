@@ -118,6 +118,7 @@ declare
   v_new_acc record;
   v_old_acc record;
   v_pair record;
+  v_locked_voided_at timestamptz;
   v_batch public.journal_batches%rowtype;
   v_reversal_id uuid;
   v_voided_count int := 0;
@@ -134,7 +135,8 @@ begin
   v_new_account_id := (p_payload->>'new_account_id')::uuid;
   v_old_account_id := (p_payload->>'old_account_id')::uuid;
 
-  select a.id, a.currency, la.kind, c.status as connection_status
+  select a.id, a.currency, a.name, a.subtype, a.mask, la.kind,
+         c.status as connection_status, c.institution_id
     into v_new_acc
     from public.accounts a
     join public.ledger_accounts la on la.id = a.ledger_account_id
@@ -144,7 +146,8 @@ begin
     raise exception 'KEEL_SCOPE_VIOLATION: new account not in household' using errcode = 'P0006';
   end if;
 
-  select a.id, a.currency, la.kind, c.status as connection_status
+  select a.id, a.currency, a.name, a.subtype, a.mask, la.kind,
+         c.status as connection_status, c.institution_id
     into v_old_acc
     from public.accounts a
     join public.ledger_accounts la on la.id = a.ledger_account_id
@@ -157,12 +160,40 @@ begin
   if v_new_acc.id = v_old_acc.id then
     raise exception 'KEEL_INVALID_COMMAND: cannot dedupe an account against itself' using errcode = 'P0009';
   end if;
+  if v_new_acc.connection_status is distinct from 'active' then
+    raise exception 'KEEL_INVALID_COMMAND: the new account''s connection must be active'
+      using errcode = 'P0009';
+  end if;
   if v_old_acc.connection_status is distinct from 'disconnected' then
     raise exception 'KEEL_INVALID_COMMAND: the old account''s connection must be disconnected'
       using errcode = 'P0009';
   end if;
   if v_new_acc.currency <> v_old_acc.currency or v_new_acc.kind <> v_old_acc.kind then
     raise exception 'KEEL_INVALID_COMMAND: accounts must match currency and kind' using errcode = 'P0009';
+  end if;
+
+  -- Review finding r3606990724 (P1): the write path must enforce the SAME
+  -- match predicate as keel_list_reconnect_matches, not just
+  -- currency/kind/status -- otherwise any two same-household accounts (old
+  -- disconnected + new active) would qualify, and coincidental same-day/
+  -- same-amount/same-description transactions between genuinely UNRELATED
+  -- accounts would get voided.
+  if v_old_acc.institution_id is distinct from v_new_acc.institution_id then
+    raise exception
+      'KEEL_INVALID_COMMAND: accounts are not at the same institution -- not a reconnect match'
+      using errcode = 'P0009';
+  end if;
+  if not (
+    (v_old_acc.mask is not null and v_new_acc.mask is not null and v_old_acc.mask = v_new_acc.mask)
+    or (
+      (v_old_acc.mask is null or v_new_acc.mask is null)
+      and v_old_acc.name = v_new_acc.name
+      and v_old_acc.subtype = v_new_acc.subtype
+    )
+  ) then
+    raise exception
+      'KEEL_INVALID_COMMAND: accounts do not match by mask (or name+subtype) -- not a reconnect match'
+      using errcode = 'P0009';
   end if;
 
   -- Pair up same-day/same-amount/same-description transactions between the
@@ -201,6 +232,21 @@ begin
        and ol.description = nw.description
        and ol.rn = nw.rn
   loop
+    -- Review finding r3606990731 (P2): lock the candidate row and re-check
+    -- voided_at before reversing -- the CTE above ran with no lock, so a
+    -- concurrent dedupe run (e.g. a double-clicked button) could otherwise
+    -- select the SAME candidate before either commits, and reverse it twice.
+    -- A second concurrent caller blocks here until the first commits, then
+    -- sees voided_at already set and skips -- same serialization pattern as
+    -- keel_cmd_set_splits' FOR UPDATE lock on the transaction row.
+    select voided_at into v_locked_voided_at
+      from public.canonical_transactions
+     where id = v_pair.new_txn_id
+     for update;
+    if v_locked_voided_at is not null then
+      continue;
+    end if;
+
     select jb.* into v_batch
       from public.journal_batches jb
      where jb.canonical_transaction_id = v_pair.new_txn_id
