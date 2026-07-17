@@ -30,7 +30,9 @@ describe('secret boundary (Law 12) — no secret value in tracked files', () => 
     expect(trackedFiles().length).toBeGreaterThan(20);
   });
 
-  it('scans every tracked text file and finds no secret value', () => {
+  // 30s: this walks every tracked file; the default 5s flaked repeatedly
+  // under parallel CI/build load (it always passes alone — pure I/O breadth).
+  it('scans every tracked text file and finds no secret value', { timeout: 30_000 }, () => {
     const offenders: string[] = [];
     for (const rel of trackedFiles()) {
       // This test file itself contains the patterns; skip it.
