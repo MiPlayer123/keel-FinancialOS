@@ -1584,3 +1584,27 @@ Six-angle-style review of `keel_cmd_reanchor_balance` confirmed the ledger math 
 CI (integration job) surfaced that `16-reanchor-balance.test.ts` set up ledger state by direct DML on `journal_batches`/`connections` — denied even to service_role (financial tables are proc-only, Law 7; pgTAP passed because it runs privileged). Fixes:
 - Test 1 (reanchor happy path): the inflating "backfill activity" now posts through `keel_cmd_manual_transaction` (real balanced batch, non-opening) instead of raw journal inserts. Signed-in client hoisted.
 - Test 2 (auto-anchor deferral gate): moved out of the integration file — it needs an UNSYNCED connection, un-creatable via the allowed surface — into pgTAP `supabase/tests/015_reanchor_balance.sql`, which runs privileged and can insert an unsynced connection + account directly. Covers: deferral while unsynced (snapshot only, no anchor), anchor after first full sync, both-legs equity marker, and no-double-anchor idempotency. Coverage preserved at the correct layer.
+
+## 2026-07-17 — D-037: prod migration apply + founder account correction
+- The Supabase GitHub integration did not auto-apply `20260717120000_reanchor_balance`
+  within ~15 min of the #13 merge (functions deployed fine via deploy-functions.yml).
+  Applied the migration manually via the management API and normalized the recorded
+  version to `20260717120000` so the integration skips it if/when it wakes up.
+  Deviation from "integration applies migrations" (INFRA §deploy): justified —
+  the founder was looking at a live wrong balance and the file applied is
+  byte-identical to the CI-green migration on main.
+- Founder account correction executed through the REAL UI path (login → account
+  detail → Fix balance) on prod, not via SQL: Venmo re-anchored −171,104 →
+  +41,333 minor (matches provider $413.33); CHASE COLLEGE 1,688,994 → 1,674,200
+  ($16,742.00). CREDIT CARD untouched (−41,505 vs provider-owed 41,505 —
+  liability convention already correct). Two `accounts.reanchor_balance`
+  audit rows; prior stale anchors reversed, originals preserved (Law 2).
+- Known cosmetic consequence, logged for a future slice: the re-anchor delta is
+  dated `current_date`, so the balance CHART's pre-correction window still shows
+  the old (wrong) running balance. Alternatives (backdating the opening before
+  the earliest synced txn) would fabricate an as-of balance we never observed —
+  reproducible-numbers (Law 9) says don't. Candidate fix: chart annotation
+  ("balance corrected on YYYY-MM-DD") rather than data rewrite.
+- days_requested=730 confirmed live in link-token creation; existing Plaid items
+  keep their shallow window until relinked (Plaid re-initializes history only at
+  link time; 730d is Plaid's hard cap regardless).
