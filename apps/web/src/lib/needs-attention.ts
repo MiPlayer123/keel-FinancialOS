@@ -46,8 +46,10 @@ export type AttentionRow = {
  * flashing a wrong total.
  */
 export type NeedsAttentionInput = {
-  /** recurring.list — same source ReviewBadge counts. */
-  recurring: Pick<RecurringSeriesRow, 'status'>[] | null;
+  /** recurring.list — same source ReviewBadge counts; occurrences supply the
+   *  due-TODAY bills the forecast proc excludes (its window is strictly
+   *  after today — review finding r3603384614). */
+  recurring: Pick<RecurringSeriesRow, 'status' | 'sign' | 'occurrences'>[] | null;
   /** transfers.list — same source ReviewBadge counts. */
   transfers: Pick<TransferLinkRow, 'status'>[] | null;
   /** categorization.suggestions — same source ReviewBadge counts. */
@@ -86,9 +88,19 @@ export function buildNeedsAttention(input: NeedsAttentionInput): AttentionRow[] 
     countSuggested(input.categorizations);
 
   const horizonIso = addDaysIso(input.todayIso, BILLS_DUE_HORIZON_DAYS);
-  const billsCount = (input.bills ?? []).filter(
-    (b) => b.sign === 'outflow' && b.date >= input.todayIso && b.date <= horizonIso,
-  ).length;
+  // Forecast bills are strictly future (the proc filters > current_date), so
+  // "due within 7 days" would silently exclude the most actionable case —
+  // due TODAY. Today's expected recurring outflows fill that gap; the two
+  // sources are disjoint by construction (== today vs > today), so no dedupe.
+  const dueTodayCount = (input.recurring ?? [])
+    .filter((r) => r.status === 'confirmed' && r.sign === 'outflow')
+    .flatMap((r) => r.occurrences)
+    .filter((o) => o.status === 'expected' && o.expectedDate === input.todayIso).length;
+  const billsCount =
+    dueTodayCount +
+    (input.bills ?? []).filter(
+      (b) => b.sign === 'outflow' && b.date >= input.todayIso && b.date <= horizonIso,
+    ).length;
 
   const reauthCount = (input.connections ?? []).filter(
     (c) => c.status === 'reauth_required',

@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   CalendarClock,
@@ -18,12 +18,14 @@ import {
   type AttentionRow,
   type UncategorizedLike,
 } from '@/lib/needs-attention';
-import type {
-  CategorySuggestionRow,
-  ConnectionRow,
-  ForecastBill,
-  RecurringSeriesRow,
-  TransferLinkRow,
+import {
+  detectCategorySuggestions,
+  detectTransfers,
+  type CategorySuggestionRow,
+  type ConnectionRow,
+  type ForecastBill,
+  type RecurringSeriesRow,
+  type TransferLinkRow,
 } from '@/lib/keel-api';
 
 const ROW_ICONS: Record<AttentionRow['key'], LucideIcon> = {
@@ -60,10 +62,30 @@ export function NeedsAttention({
   connections: ConnectionRow[] | null;
   transactions: UncategorizedLike[] | null;
 }) {
-  const transfers = useKeelQuerySilent<TransferLinkRow>('transfers.list', householdId);
+  // Run the idempotent detectors BEFORE listing (review finding: without
+  // this, Home's counts are stale until the user visits Review, defeating
+  // the inbox's purpose). Failures degrade to listing whatever is saved.
+  const [detected, setDetected] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void Promise.allSettled([
+      detectTransfers(householdId),
+      detectCategorySuggestions(householdId),
+    ]).then(() => {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- flag flips in cleanup
+      if (active) setDetected(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, [householdId]);
+  const transfers = useKeelQuerySilent<TransferLinkRow>(
+    'transfers.list',
+    detected ? householdId : null,
+  );
   const categorizations = useKeelQuerySilent<CategorySuggestionRow>(
     'categorization.suggestions',
-    householdId,
+    detected ? householdId : null,
   );
 
   const rows = useMemo(

@@ -16,6 +16,9 @@ const EMPTY: NeedsAttentionInput = {
   todayIso: '2026-07-17',
 };
 
+const occ = (expectedDate: string, status = 'expected') =>
+  ({ expectedDate, status, expectedAmountMinor: '-1000', currency: 'USD', occurrenceId: expectedDate }) as never;
+
 describe('buildNeedsAttention', () => {
   it('returns no rows when everything is zero (module hides)', () => {
     expect(buildNeedsAttention(EMPTY)).toEqual([]);
@@ -38,7 +41,11 @@ describe('buildNeedsAttention', () => {
   it('sums suggested transfers + recurring + categorizations into one review row', () => {
     const rows = buildNeedsAttention({
       ...EMPTY,
-      recurring: [{ status: 'suggested' }, { status: 'confirmed' }, { status: 'rejected' }],
+      recurring: [
+        { status: 'suggested', sign: 'outflow', occurrences: [] },
+        { status: 'confirmed', sign: 'outflow', occurrences: [] },
+        { status: 'rejected', sign: 'outflow', occurrences: [] },
+      ],
       transfers: [{ status: 'suggested' }, { status: 'confirmed' }],
       categorizations: [
         { status: 'suggested' },
@@ -184,5 +191,24 @@ describe('isUncategorized', () => {
     expect(isUncategorized({ categoryName: 'Uncategorized Expense' })).toBe(true);
     expect(isUncategorized({ categoryName: 'Groceries' })).toBe(false);
     expect(isUncategorized({ categoryName: null })).toBe(true);
+  });
+
+  it('counts due-TODAY bills from recurring occurrences (forecast starts tomorrow)', () => {
+    const rows = buildNeedsAttention({
+      recurring: [
+        { status: 'confirmed', sign: 'outflow', occurrences: [occ('2026-07-17')] } as never,
+        // inflows and suggested series contribute nothing to bills
+        { status: 'confirmed', sign: 'inflow', occurrences: [occ('2026-07-17')] } as never,
+        { status: 'suggested', sign: 'outflow', occurrences: [occ('2026-07-17')] } as never,
+      ],
+      transfers: [],
+      categorizations: [],
+      bills: [{ date: '2026-07-19', sign: 'outflow' }],
+      connections: [],
+      transactions: [],
+      todayIso: '2026-07-17',
+    });
+    const bills = rows.find((r) => r.key === 'bills');
+    expect(bills?.count).toBe(2); // one due today + one in-window forecast bill
   });
 });
