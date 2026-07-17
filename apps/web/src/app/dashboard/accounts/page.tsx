@@ -10,16 +10,31 @@ import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery } from '@/lib/use-keel-query';
 import {
   fetchAccounts,
+  fetchConnections,
+  fetchLatestBalances,
   fetchLedgerKinds,
   type AccountRow,
+  type ConnectionRow,
+  type LatestBalanceRow,
   type TrialBalanceRow,
 } from '@/lib/keel-api';
+import { relativeSyncLabel } from '@/lib/relative-date';
+import { utilizationPercent } from '@/lib/credit-utilization';
 import { Skeleton } from '@/components/ui/skeleton';
 import { AddAccountDialog } from '@/components/keel/add-account-dialog';
 import { NetWorthHero } from '@/components/keel/net-worth-hero';
 import { RecordTransferDialog } from '@/components/keel/record-transfer-dialog';
+import { ReauthLink } from '@/components/keel/reauth-link';
 
-type Enriched = AccountRow & { kind: string; balanceMinor: string };
+type Enriched = AccountRow & {
+  kind: string;
+  balanceMinor: string;
+  /** "Updated 2h ago" from the owning connection; null for manual accounts. */
+  syncLabel: string | null;
+  needsReauth: boolean;
+  /** Integer % of the provider credit limit in use; null when no limit exists. */
+  utilization: number | null;
+};
 
 export default function AccountsPage() {
   return (
@@ -41,6 +56,8 @@ function AccountsBody() {
   const balances = useKeelQuery<TrialBalanceRow>('ledger.trial_balance', householdId);
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
   const [kinds, setKinds] = useState<Map<string, string> | null>(null);
+  const [connections, setConnections] = useState<ConnectionRow[]>([]);
+  const [provider, setProvider] = useState<LatestBalanceRow[]>([]);
   const [reload, setReload] = useState(0);
 
   useEffect(() => {
@@ -61,6 +78,24 @@ function AccountsBody() {
         setAccounts([]);
         setKinds(new Map());
       });
+    // Row enrichment (C8/C9) is best-effort: freshness/reauth ride the same
+    // member-read the Connections page uses, utilization the same
+    // balances.latest the detail page uses. A failure here degrades to
+    // exactly the pre-slice rows — never blocks balances.
+    void fetchConnections(householdId)
+      .then((c) => {
+        if (active) setConnections(c);
+      })
+      .catch(() => {
+        if (active) setConnections([]);
+      });
+    void fetchLatestBalances(householdId)
+      .then((rows) => {
+        if (active) setProvider(rows);
+      })
+      .catch(() => {
+        if (active) setProvider([]);
+      });
     return () => {
       active = false;
     };
@@ -77,11 +112,29 @@ function AccountsBody() {
   }
 
   const balanceByLedger = new Map(balances.rows.map((r) => [r.ledgerAccountId, r.balanceMinor]));
-  const enriched: Enriched[] = accounts.map((a) => ({
-    ...a,
-    kind: kinds.get(a.ledgerAccountId) ?? 'asset',
-    balanceMinor: balanceByLedger.get(a.ledgerAccountId) ?? '0',
-  }));
+  const connectionById = new Map(connections.map((c) => [c.id, c]));
+  const providerByAccount = new Map(provider.map((r) => [r.accountId, r]));
+  const nowIso = new Date().toISOString();
+  const enriched: Enriched[] = accounts.map((a) => {
+    const kind = kinds.get(a.ledgerAccountId) ?? 'asset';
+    const conn = a.connectionId ? connectionById.get(a.connectionId) : undefined;
+    const snapshot = providerByAccount.get(a.id);
+    return {
+      ...a,
+      kind,
+      balanceMinor: balanceByLedger.get(a.ledgerAccountId) ?? '0',
+      syncLabel: conn?.lastSuccessfulSyncAt
+        ? relativeSyncLabel(conn.lastSuccessfulSyncAt, nowIso)
+        : null,
+      needsReauth: conn?.status === 'reauth_required',
+      // Utilization only ever renders on liabilities WITH a provider limit —
+      // provider currentMinor is the positive owed magnitude the bank reports.
+      utilization:
+        kind === 'liability' && snapshot
+          ? utilizationPercent(snapshot.currentMinor, snapshot.limitMinor ?? null)
+          : null,
+    };
+  });
 
   if (enriched.length === 0) {
     return (
@@ -151,24 +204,40 @@ function AccountGroup({ title, rows }: { title: string; rows: Enriched[] }) {
       </div>
       <div className="overflow-hidden rounded-lg border border-border">
         {rows.map((a, i) => (
-          <Link
+          // Stretched-link row: the account link covers the whole row via the
+          // absolute overlay span, while the reauth link stays independently
+          // clickable above it (z-10) — no nested anchors.
+          <div
             key={a.id}
-            href={`/dashboard/accounts/${a.id}`}
-            className={`flex items-center justify-between gap-4 px-4 py-3 transition-colors hover:bg-secondary/50 ${
+            className={`relative flex items-center justify-between gap-4 px-4 py-3 transition-colors hover:bg-secondary/50 ${
               i > 0 ? 'border-t border-border' : ''
             }`}
           >
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium">{a.name}</p>
-              <p className="text-xs capitalize text-muted-foreground">
-                {a.subtype.replaceAll('_', ' ')}
+              <Link href={`/dashboard/accounts/${a.id}`} className="focus-visible:outline-none">
+                <span className="absolute inset-0" aria-hidden="true" />
+                <p className="truncate text-sm font-medium">{a.name}</p>
+              </Link>
+              <p className="truncate text-xs text-muted-foreground">
+                <span className="capitalize">{a.subtype.replaceAll('_', ' ')}</span>
+                {/* Freshness at the row (C8): from the OWNING connection's
+                    last successful sync — status adjacent to its number. */}
+                {a.syncLabel ? <> · Updated {a.syncLabel}</> : null}
               </p>
+              {a.needsReauth ? <ReauthLink className="relative z-10 mt-1" /> : null}
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <Money amountMinor={a.balanceMinor} currency={a.currency} className="text-sm" />
+              <div className="text-right">
+                <Money amountMinor={a.balanceMinor} currency={a.currency} className="text-sm" />
+                {/* Utilization (C9): only when a provider limit exists; neutral
+                    tokens — the % is status, not negative money (Law 8). */}
+                {a.utilization !== null ? (
+                  <p className="text-[11px] text-muted-foreground">{a.utilization}% of limit</p>
+                ) : null}
+              </div>
               <ChevronRight className="size-4 text-muted-foreground" />
             </div>
-          </Link>
+          </div>
         ))}
       </div>
     </section>

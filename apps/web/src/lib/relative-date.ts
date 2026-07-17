@@ -9,6 +9,33 @@
  * relative near, absolute far).
  */
 const DAY_MS = 86_400_000;
+const MINUTE_MS = 60_000;
+
+/**
+ * Compact freshness phrasing for sync timestamps (teardown C8: "Updated 2h
+ * ago" at the account row). Unlike relativeDueLabel this takes full ISO
+ * TIMESTAMPS and never goes absolute — a sync time is always meaningful as an
+ * age. Pure integer math on epoch milliseconds (this is time, not money;
+ * floor division is exact enough by design): minutes under an hour, hours
+ * under a day, days beyond.
+ *
+ * Returns null for garbage input and for timestamps in the future (clock skew
+ * must never produce a claim like "updated in 5m").
+ */
+export function relativeSyncLabel(isoTimestamp: string, nowIso: string): string | null {
+  const then = Date.parse(isoTimestamp);
+  const now = Date.parse(nowIso);
+  if (!Number.isFinite(then) || !Number.isFinite(now)) return null;
+  const elapsedMs = now - then;
+  if (elapsedMs < 0) return null;
+  const minutes = Math.floor(elapsedMs / MINUTE_MS);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${String(minutes)}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${String(hours)}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${String(days)}d ago`;
+}
 
 export function relativeDueLabel(dateIso: string, todayIso: string): string | null {
   const date = Date.parse(`${dateIso}T00:00:00Z`);

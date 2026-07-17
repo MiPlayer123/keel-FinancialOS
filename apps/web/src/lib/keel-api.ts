@@ -106,12 +106,15 @@ export type AccountRow = {
   ledgerAccountId: string;
   currency: string;
   entityId: string;
+  /** Owning provider connection; null for manual accounts. Joined client-side
+   *  against fetchConnections for per-row freshness/reauth (teardown C8). */
+  connectionId: string | null;
 };
 
 export async function fetchAccounts(householdId: string): Promise<AccountRow[]> {
   const { data, error } = await getSupabaseBrowserClient()
     .from('accounts')
-    .select('id, name, subtype, ledger_account_id, currency, entity_id')
+    .select('id, name, subtype, ledger_account_id, currency, entity_id, connection_id')
     .eq('household_id', householdId)
     .is('archived_at', null)
     .order('name');
@@ -124,6 +127,7 @@ export async function fetchAccounts(householdId: string): Promise<AccountRow[]> 
     ledger_account_id: string;
     currency: string;
     entity_id: string;
+    connection_id: string | null;
   };
 
   return ((data as Row[] | null) ?? []).map((r) => ({
@@ -133,6 +137,7 @@ export async function fetchAccounts(householdId: string): Promise<AccountRow[]> 
     ledgerAccountId: r.ledger_account_id,
     currency: r.currency,
     entityId: r.entity_id,
+    connectionId: r.connection_id,
   }));
 }
 
@@ -426,6 +431,9 @@ export type LatestBalanceRow = {
   accountId: string;
   currentMinor: string;
   availableMinor: string | null;
+  /** Provider-reported credit limit (absent/null until the limit migration
+   *  lands or when the institution reports none) — teardown C9. */
+  limitMinor?: string | null;
   currency: string;
   asOf: string;
 };

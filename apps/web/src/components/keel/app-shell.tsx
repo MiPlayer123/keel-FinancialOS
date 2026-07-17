@@ -38,12 +38,16 @@ import { ThemeToggle } from '@/components/theme-toggle';
 import { useHousehold } from '@/components/keel/household-context';
 import {
   fetchAccounts,
+  fetchConnections,
   fetchLedgerKinds,
   keelQuery,
   type AccountRow,
+  type ConnectionRow,
   type TrialBalanceRow,
 } from '@/lib/keel-api';
+import { relativeSyncLabel } from '@/lib/relative-date';
 import { Money } from '@/components/keel/money';
+import { ReauthLink } from '@/components/keel/reauth-link';
 import { QuickNav } from '@/components/keel/quick-nav';
 import { ReviewBadge } from '@/components/keel/review-badge';
 
@@ -191,18 +195,22 @@ function SidebarAccounts({
     queryKey: ['keel-query', 'sidebar-accounts', householdId],
     queryFn: async () => {
       if (!householdId) throw new Error('sidebar-accounts: disabled (no household)');
-      const [a, k, b] = await Promise.all([
+      const [a, k, b, c] = await Promise.all([
         fetchAccounts(householdId),
         fetchLedgerKinds(householdId),
         keelQuery<TrialBalanceRow>('ledger.trial_balance', householdId),
+        // Per-account freshness + reauth at the row (C8); same member-read
+        // the Connections page uses. Best-effort — the rail renders without.
+        fetchConnections(householdId).catch((): ConnectionRow[] => []),
       ]);
-      return { accounts: a, kinds: k, balances: b.rows };
+      return { accounts: a, kinds: k, balances: b.rows, connections: c };
     },
     enabled: householdId !== null,
   });
   const accounts = data?.accounts ?? [];
   const kinds = data?.kinds ?? new Map<string, string>();
   const byLedger = new Map((data?.balances ?? []).map((r) => [r.ledgerAccountId, r]));
+  const connById = new Map((data?.connections ?? []).map((c) => [c.id, c]));
 
   if (accounts.length === 0) return null;
   // Mirror the Accounts page's three-way split (asset / liability / other) so
@@ -243,20 +251,37 @@ function SidebarAccounts({
           const href = `/dashboard/accounts/${a.id}`;
           const active = pathname === href;
           const bal = byLedger.get(a.ledgerAccountId);
+          const conn = a.connectionId ? connById.get(a.connectionId) : undefined;
+          // C8 freshness in the rail: hover/tooltip only — the 11px row has no
+          // room for visible text without breaking the calm alignment; the
+          // Accounts page and detail carry the visible "Updated Nh ago".
+          const updated = conn?.lastSuccessfulSyncAt
+            ? relativeSyncLabel(conn.lastSuccessfulSyncAt, new Date().toISOString())
+            : null;
           return (
-            <Link
+            // Stretched-link row so the compact reauth link can sit above the
+            // account link (z-10) without nesting anchors.
+            <div
               key={a.id}
-              href={href}
-              onClick={() => onNavigate?.()}
               className={cn(
-                'flex items-center justify-between gap-2 rounded-md py-1 pl-6 pr-3 text-xs transition-colors',
+                'relative flex items-center justify-between gap-2 rounded-md py-1 pl-6 pr-3 text-xs transition-colors',
                 active
                   ? 'bg-secondary text-foreground'
                   : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
               )}
-              title={a.name}
+              title={updated ? `${a.name} — updated ${updated}` : a.name}
             >
-              <span className="truncate">{a.name}</span>
+              <Link
+                href={href}
+                onClick={() => onNavigate?.()}
+                className="min-w-0 truncate focus-visible:outline-none"
+              >
+                <span className="absolute inset-0" aria-hidden="true" />
+                {a.name}
+              </Link>
+              {conn?.status === 'reauth_required' ? (
+                <ReauthLink compact className="relative z-10" onNavigate={onNavigate} />
+              ) : null}
               {bal ? (
                 <Money
                   amountMinor={bal.balanceMinor}
@@ -268,7 +293,7 @@ function SidebarAccounts({
                 // balance, so only an absent one shows the em dash.
                 <span className="shrink-0 font-mono text-muted-foreground/70">—</span>
               )}
-            </Link>
+            </div>
           );
         })}
         {rows.length > CAP ? (
