@@ -1592,6 +1592,12 @@ export default {
       const renameTo = input['renameTo'];
       const priority = input['priority'];
       const active = input['active'];
+      // C18 residual: optional amount-range condition, string-encoded BIGINT
+      // minor units (Law 4 — money never travels as a JSON number). Either,
+      // both, or neither may be present; unsigned only (magnitude, not sign).
+      const amountMinMinor = input['amountMinMinor'];
+      const amountMaxMinor = input['amountMaxMinor'];
+      const bigIntUnsignedRe = /^\d{1,18}$/;
       if (
         (ruleId !== undefined && (typeof ruleId !== 'string' || !uuidRe.test(ruleId))) ||
         typeof pattern !== 'string' ||
@@ -1603,7 +1609,11 @@ export default {
           renameTo !== null &&
           (typeof renameTo !== 'string' || renameTo.length > 140)) ||
         (priority !== undefined && typeof priority !== 'number') ||
-        (active !== undefined && typeof active !== 'boolean')
+        (active !== undefined && typeof active !== 'boolean') ||
+        (amountMinMinor !== undefined && amountMinMinor !== null &&
+          (typeof amountMinMinor !== 'string' || !bigIntUnsignedRe.test(amountMinMinor))) ||
+        (amountMaxMinor !== undefined && amountMaxMinor !== null &&
+          (typeof amountMaxMinor !== 'string' || !bigIntUnsignedRe.test(amountMaxMinor)))
       ) {
         return json(400, {
           code: 'invalid_command',
@@ -1619,6 +1629,8 @@ export default {
         p_rename_to: typeof renameTo === 'string' ? renameTo : null,
         p_priority: typeof priority === 'number' ? Math.trunc(priority) : null,
         p_active: typeof active === 'boolean' ? active : null,
+        p_amount_min_minor: typeof amountMinMinor === 'string' ? amountMinMinor : null,
+        p_amount_max_minor: typeof amountMaxMinor === 'string' ? amountMaxMinor : null,
       });
       if (error) return mapDbError(error);
       return json(200, { ruleId: data });

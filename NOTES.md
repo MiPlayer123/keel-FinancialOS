@@ -2689,3 +2689,128 @@ already-known mask just because one particular refresh response omitted
 the field. This closes the residual gap flagged above: a pre-existing
 linked account now picks up its mask on its very next scheduled refresh,
 no manual re-link required.
+## 2026-07-17 — D-051: C18 residual — multi-condition rules (amount range)
+
+Teardown queue item C18 ("Rules multi-condition→action + dry-run count"):
+the two-phase dry-run preview counted count already shipped
+(20260713040000/20260713100000); the rule builder itself still only
+supported ONE condition (`description_contains`). Step 1 per the runbook:
+confirmed via `grep -n "create or replace function public.keel_apply_rules"
+supabase/migrations/*.sql` that TWO historical bodies exist
+(20260713040000, 20260713100000) and the LATER one
+(20260713100000 — adds the single-offset-only guard) is the live shape;
+rebuilt from that body, not the stale original, matching the exact mistake
+the task brief warned two earlier PRs into this session hit.
+
+**Design (smallest deterministic extension, per the brief's own steer):** a
+second, optional condition dimension — an amount RANGE
+(`amount_min_minor`/`amount_max_minor`, both nullable BIGINT, both
+independent) AND'd with the existing pattern match. Semantics: bounds the
+MAGNITUDE (`abs(...)`) of the transaction's cash-leg amount, not its signed
+value — a rule author thinks "subscriptions over $50" regardless of whether
+the ledger's sign convention (negative = expense, positive = income;
+`lib/money.ts`/`category-picker.ts`) happens to be negative for that leg.
+Both null reproduces the ORIGINAL single-condition rule exactly — proven in
+`supabase/tests/020_rules_amount_range.sql`'s "legacy" fixture and
+`tests/integration/21-rules-amount-range.test.ts`'s last case. **Law 1**:
+matching stays pure SQL (`position()` + numeric comparison) — no LLM
+anywhere near rule evaluation, before or after this change. **Law 9**:
+backward compatibility for existing rules is a first-class test, not an
+assumption — a null bound is a no-op AND branch, mechanically.
+
+- Migration `20260717220000_rules_amount_range.sql`: (1) two nullable
+  columns + three CHECK constraints (`amount_min_minor >= 0`,
+  `amount_max_minor >= 0`, `amount_min_minor <= amount_max_minor` when both
+  set — equal bounds allowed, a single-point "exactly $50" rule). (2)
+  `keel_rule_save`: SIGNATURE CHANGE (two new trailing optional bigint
+  params) → `drop function` on the old 7-arg signature first, same
+  convention as `20260713180000`'s `keel_goal_save` p_kind extension (grants
+  die with the dropped signature, restated for the new one). Added the same
+  non-negative/ordered-bounds validation as a typed `KEEL_INVALID_COMMAND`
+  (P0009) ahead of the CHECK constraints, so a bad payload fails with the
+  house error shape instead of a bare `23514`. (3) `keel_apply_rules`:
+  signature UNCHANGED (`uuid, boolean`) — plain create-or-replace, rebuilt
+  from the confirmed-live 20260713100000 body; the ONLY change is one more
+  AND branch in the `matches` CTE's rule join, against
+  `abs(offp.amount_minor)` — no new join needed, because the balanced-
+  postings invariant (Law 3) means the category-offset posting's magnitude
+  always equals the cash leg's for a single-offset transaction (and
+  keel_apply_rules already restricts to single-offset transactions only).
+  (4) `keel_list_rules`: signature unchanged, rows gain
+  `amountMinMinor`/`amountMaxMinor` (text-serialized BIGINT, Law 4 — money
+  never travels as a JSON number).
+- Export manifests updated (Law 6 — full export always works, and doesn't
+  silently leak or silently drop new columns): `supabase/tests/008_export.sql`'s
+  `category_rules` expected-columns array and
+  `packages/exports/src/manifest.ts`'s `INCLUDE` entry both gained the two
+  new columns (the latter also lists them under `bigintColumns` — Law 4). No
+  change needed to `keel_export_household` itself; its `category_rules`
+  export already does `to_jsonb(x)` (whole-row), so new columns ride along
+  automatically.
+- Edge function (`supabase/functions/api/index.ts`, `/rules/save`): validates
+  `amountMinMinor`/`amountMaxMinor` as optional string-encoded unsigned
+  BIGINT (`/^\d{1,18}$/`, same house pattern as the credit-limit and
+  manual-transaction amount fields) and forwards them to `p_amount_min_minor`/
+  `p_amount_max_minor`.
+- Web: `RuleRow`/`saveRule` (`keel-api.ts`) gain the two fields. New shared
+  helpers `parseDollarsToMinorString`/`minorToDollarsInput` (`lib/money.ts`
+  — unit-tested FIRST in `money.test.ts`, 12 cases, before being wired into
+  the UI) parse a user-typed dollar string into minor units without ever
+  touching a float (Law 4) and round-trip back for display. `RulesCard`: the
+  amount condition is collapsed behind an "Add amount condition" affordance
+  (Law 8 — most rules are pattern-only; don't force two extra fields on
+  every rule author) with "At least"/"At most" dollar inputs, client-side
+  parse/range validation before the save round-trip, and a rule-list line
+  that renders "$50.00+" / "$20.00 – $80.00" / "up to $80.00" next to the
+  pattern when a range is set. No edit-existing-rule flow exists yet (rules
+  are create/delete only, pre-dating this slice) — the amount fields are
+  therefore create-only for now, same limitation the pattern/category/
+  rename fields already had.
+- **Tests (written first where practical):** `apps/web/src/lib/money.test.ts`
+  preceded the UI wiring. `supabase/tests/020_rules_amount_range.sql` (13
+  pgTAP assertions): three CHECK-constraint rejections (negative min,
+  negative max, inverted range) + one CHECK-constraint acceptance (equal
+  bounds), then a legacy/min-only/closed-range fixture set proving
+  below-floor, at-floor, inside-range, and above-ceiling behavior via
+  direct `keel_apply_rules` dry-run and apply calls, plus a re-run-is-stable
+  idempotency check. `tests/integration/21-rules-amount-range.test.ts` (4
+  cases) proves the same semantics end-to-end through the REAL
+  `keel_rule_save`/`keel_apply_rules` RPCs and a synced (not manually
+  entered) transaction — mirroring 20-transaction-review-state.test.ts's
+  established reason for using the sync/worker path instead of
+  `keel_cmd_manual_transaction` (a manual entry always pins a `source='user'`
+  overlay that a rule's own conflict guard refuses to touch).
+- **Gate evidence:** `pnpm typecheck` clean. `pnpm lint` — 0 errors, the
+  same 4 pre-existing warnings as D-047/D-045 (goals/page.tsx,
+  import-csv-dialog.tsx ×2, needs-attention.tsx — none in any file this
+  slice touched, confirmed against `git status --short`). `pnpm --filter
+  @keel/web exec vitest run` — 254/254 (14 files, +1 new: money.test.ts).
+  `pnpm build:functions` — clean (regenerates the gitignored
+  `_shared/vendor/keel-domain.mjs` bundle; required because this slice
+  touched `supabase/functions/api/index.ts`). `pnpm test` — the vitest half
+  is 726/726 across 61 files; the `deno test` half could not run at all in
+  this sandbox (`deno: not found` — no Deno binary installed here, a
+  distinct gap from the already-documented Docker/Supabase-CLI absence) —
+  flagging this as a residual environment gap, not a passing/skipped
+  result. **No Docker/Supabase CLI in this sandbox** (same constraint as
+  D-043/D-045/D-047) — `020_rules_amount_range.sql` and
+  `21-rules-amount-range.test.ts` are unexecuted in this session. Both were
+  hand-verified instead: the migration's `keel_apply_rules` body was
+  diffed statement-by-statement against the confirmed-current
+  20260713100000 body (the only delta is the two new AND branches in the
+  `matches` CTE and a comment block — everything else, including the
+  single-offset guard, the dry-run/apply predicate parity, and the audit
+  logging, is byte-identical); the `keel_rule_save` rebuild was diffed
+  against its one prior definition the same way (only delta: two new
+  params, their validation block, and their presence in the four
+  insert/update/audit payloads). Flagging the unexecuted-but-hand-verified
+  pgTAP/integration coverage here per protocol, matching how D-047 handled
+  the identical constraint.
+- **Deferred (explicitly out of scope per the task brief):** the "NL chips"
+  (natural-language rule summary) sub-feature mentioned in the original C18
+  teardown finding is a separate, meaningfully-sized surface (parsing a
+  rule's conditions into a human sentence chip row) — not attempted here.
+  Also deferred: an edit-existing-rule flow (pattern/category/rename can
+  currently only be set at creation or via delete-and-recreate; amount range
+  inherits that same limitation rather than being a special case). Residual
+  gap noted for the next teardown pass on C18.
