@@ -77,6 +77,7 @@ export const TRANSACTION_MUTATION_KEYS = [
   'transactions.rich_page',
   'ledger.trial_balance',
   'categorization.suggestions',
+  'accounts.balance_daily',
 ] as const;
 
 /**
