@@ -116,6 +116,20 @@ function ReviewBody() {
     });
   }, []);
 
+  // F-4: the optimistic hide only needs to survive until the authoritative
+  // transactions.rich refetch lands. Prune those ids afterwards so the Set
+  // stays bounded AND a transaction that later becomes uncategorized again is
+  // not permanently suppressed by a stale id.
+  const pruneResolved = useCallback((txnIds: string[]) => {
+    if (txnIds.length === 0) return;
+    setResolvedTxnIds((prev) => {
+      if (!txnIds.some((id) => prev.has(id))) return prev;
+      const next = new Set(prev);
+      for (const id of txnIds) next.delete(id);
+      return next;
+    });
+  }, []);
+
   const stillUncategorized = useMemo(() => {
     const pending = new Set(categorizations.suggested.map((r) => r.canonicalTransactionId));
     return txns.rows
@@ -206,6 +220,8 @@ function ReviewBody() {
         });
         toast.success(categoryName ? `Filed under ${categoryName}.` : 'Category updated.');
         await txns.refetch();
+        // Authoritative data has landed — drop the optimistic hide (F-4).
+        pruneResolved([txn.transactionId]);
       } catch (err) {
         setResolvedTxnIds((prev) => {
           const next = new Set(prev);
