@@ -74,10 +74,10 @@ function SyncStatus({
   const syncTimestamps = syncableConnections.flatMap((connection) =>
     connection.lastSuccessfulSyncAt ? [connection.lastSuccessfulSyncAt] : [],
   );
-  const lastSync =
-    syncTimestamps.length === syncableConnections.length
-      ? (syncTimestamps.sort((a, b) => a.localeCompare(b))[0] ?? null)
-      : null;
+  // Oldest successful sync among connections that HAVE synced — a connection
+  // still awaiting its first sync shouldn't hide real freshness info.
+  const lastSync = syncTimestamps.sort((a, b) => a.localeCompare(b))[0] ?? null;
+  const firstSyncPending = syncTimestamps.length < syncableConnections.length;
 
   if (syncableConnections.length === 0) return null;
 
@@ -86,14 +86,28 @@ function SyncStatus({
   async function syncNow() {
     setBusy(true);
     try {
-      await Promise.all(
+      // allSettled: one connection failing to kick off must not abort or
+      // misreport the ones that did start (review P2-1).
+      const results = await Promise.allSettled(
         syncableConnections.map((connection) =>
           syncConnection({ householdId, connectionId: connection.id }),
         ),
       );
-      toast.success('Sync started — new transactions land within a minute or two.');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Sync failed to start.');
+      const fulfilled = results.filter((r) => r.status === 'fulfilled').length;
+      if (fulfilled === results.length) {
+        toast.success('Sync started — new transactions land within a minute or two.');
+      } else if (fulfilled > 0) {
+        toast.warning(
+          `Synced ${String(fulfilled)} of ${String(results.length)} connections — retry for the rest.`,
+        );
+      } else {
+        const firstRejection: unknown = results.find(
+          (r): r is PromiseRejectedResult => r.status === 'rejected',
+        )?.reason;
+        toast.error(
+          firstRejection instanceof Error ? firstRejection.message : 'Sync failed to start.',
+        );
+      }
     } finally {
       setBusy(false);
     }
@@ -101,7 +115,9 @@ function SyncStatus({
 
   return (
     <span className="flex items-center gap-2 text-xs text-muted-foreground">
-      {ago ? `Updated ${ago}` : 'Syncs automatically'}
+      {ago
+        ? `Updated ${ago}${firstSyncPending ? ' · first sync pending' : ''}`
+        : 'Syncs automatically'}
       <Button
         variant="ghost"
         size="sm"
