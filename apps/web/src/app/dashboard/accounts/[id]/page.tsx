@@ -158,6 +158,26 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
     };
   }, [householdId, accountId, accountReload]);
 
+  // While a connection is mid-sync, isSyncing is a snapshot from the fetch
+  // above — nothing else refreshes it, so a page left open past the
+  // backend's completion (or the 15-minute staleness cutoff) would keep
+  // "Fix balance" disabled indefinitely. Poll only while genuinely syncing;
+  // stops itself once fetchConnections reports isSyncing=false.
+  const anyConnectionSyncing = useMemo(() => connections.some((c) => c.isSyncing), [connections]);
+  useEffect(() => {
+    if (!householdId || !anyConnectionSyncing) return;
+    const interval = setInterval(() => {
+      void fetchConnections(householdId)
+        .then((c) => {
+          setConnections(c);
+        })
+        .catch(() => {});
+    }, 60_000);
+    return () => {
+      clearInterval(interval);
+    };
+  }, [householdId, anyConnectionSyncing]);
+
   const accountTxns = useMemo(
     () => txns.rows.filter((t) => t.accountId === accountId),
     [txns.rows, accountId],
