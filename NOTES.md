@@ -4196,3 +4196,116 @@ pfc_key-stamped, 0 existing subcategories — the backfill attaches cleanly.
 - Migrations authored as FILES ONLY (20260718140000) — not applied anywhere.
   pgTAP 024 covers seed placement, idempotent double-apply, archived-sub
   non-resurrection, user-name collision, one-level constraint, scope gate.
+
+## WS-H — Performance (F-005) + Cmd+K transaction search (F-021) [2026-07-18]
+
+Branch `ws-h-perf`. Surgical pass over the #1 perf cost: the unbounded rich
+transaction read. NOTHING in the existing rich DTO shape changed — only bounded
++ extended (the read model is load-bearing for 7 pages + WS-I/WS-J building in
+parallel; compatibility is a contract).
+
+**Migration 20260718150000_transactions_rich_page.sql (FILES ONLY — never
+applied; validated read-only via throwaway probes on live data, then dropped):**
+- `keel_list_transactions_rich_page(household, limit, cursor_date, cursor_id,
+  account_id, category_id, search)` → `{ scope, asOf, rows, nextCursor }`.
+  KEYSET pagination (effective_date desc, id desc), NOT offset — stable under
+  concurrent inserts, cheap at any depth. Per-row DTO is byte-for-byte the same
+  jsonb_build_object the unbounded `keel_list_transactions_rich` emits. Limit
+  clamped [1,200]. Fetches limit+1 to derive nextCursor (null on last page).
+  Fails CLOSED on null JWT sub + re-checks household membership (mirrors the
+  unbounded read's auth exactly). Server-side account + single-offset-category +
+  ILIKE-escaped text filters (search is DATA — Law 5; % / _ / \ escaped, bound
+  param never concatenated).
+- `keel_search_transactions(household, search, limit)` → slim hits for Cmd+K
+  (F-021); server-side, never a client scan over a full download. Blank term →
+  empty page (never a full dump). Same fail-closed auth.
+- Two partial hot-path indexes on canonical_transactions (voided_at is null):
+  (household, effective_date desc, id desc) for the page order, and
+  (household, account_id, effective_date desc, id desc) for the account filter.
+- The unbounded `keel_list_transactions_rich` is UNTOUCHED (signature + output).
+  Exports (keel_export_household chain + packages/exports manifest) and pgTAP
+  008 allowlist are UNAFFECTED — no table columns were added, only read fns +
+  indexes.
+
+**Verified (live data, 1351 live txns, probes dropped afterward):** full 7-page
+walk at limit 200 returned all 1351 rows, 1351 distinct ids (no dupes), correct
+null nextCursor termination, and DTO parity vs the unbounded read = **0 missing,
+0 extra** (byte-identical jsonb). Account filter on the 644-row main-checking
+account: 200-row first page, 0 leaks. Search: 200 hits, 0 false positives.
+
+**pgTAP 028_transactions_rich_page.sql** (NOT run here — orchestrator runs
+`supabase test db` serially at merge): structure/grants, keyset completeness +
+gaplessness + tie-break ordering, account/category/search filters, split-row is
+excluded from a single-category filter, DTO byte-parity vs the unbounded read
+(incl. the split row), fail-closed on null sub, scope violation for a non-member.
+
+**Edge:** `transactions.rich_page` / `transactions.search` added to
+QUERY_TO_PROC with shape-validated, FAIL-SAFE param parsing — a half-cursor
+(date without id, or vice-versa) or a garbage uuid is IGNORED (first page
+served) rather than erroring, so a stale cursor can never wedge the ledger.
+
+**Frontend — virtualization (dep added: @tanstack/react-virtual ^3.14.6, root
+pnpm-lock.yaml committed):**
+- New `VirtualTxnList` (window-scroll `useWindowVirtualizer`, variable-height
+  rows re-measured on mount) renders ONLY the visible slice. Row markup is the
+  SAME `TxnRow` extracted from `TxnList` (byte-identical rows; `topBorder` prop
+  replaces the old index-based border since virtual rows mount in isolation).
+- Ledger: the ungrouped register now virtualizes the FULL `filtered` set — the
+  render cap + "show more" + `visibleCount` state/effect + PAGE_SIZE are GONE.
+  All client-side facets/sort/totals unchanged (still over the full set). The
+  grouped view keeps `TxnList` (groups are small).
+- Account detail: the transaction list (was rendering ALL 644 rows unsliced) now
+  uses `VirtualTxnList`.
+
+**Frontend — scoped cache invalidation (use-keel-query.ts):** the blanket
+`['keel-query']` prefix nuke on every save re-downloaded EVERYTHING mounted.
+Added `invalidateKeelQueries` / `useKeelInvalidate` + a curated
+`TRANSACTION_MUTATION_KEYS` = {transactions.rich, transactions.rich_page,
+ledger.trial_balance, categorization.suggestions}. Ledger + account-detail now
+invalidate exactly those on a mutation instead of the whole cache, so a
+categorize/split/transfer/void/tag/date/balance edit still refreshes the txn
+lists + trial balance + suggestion queue, but no longer re-pulls budgets, goals,
+recurring, holdings, investments, connections, etc.
+  - SCOPED: cash-flow / net-worth aggregates (Home/Reports) are intentionally
+    NOT in the key set — they are date-bounded and refetch on their own mount;
+    a ledger edit doesn't need them live while you're on the ledger, and they
+    revalidate on next navigation via staleTime. If a future mutation is found
+    to need one live, add it to the list.
+  - SAFE-BY-DEFAULT: the broad `refetch()` (whole-prefix invalidation) is
+    UNCHANGED and still the default returned by `useKeelQuery`. Only the two
+    heavy pages opt into narrowing, where the dirtied set is well understood.
+    Every other page/component keeps the old broad behaviour — a missed key is
+    worse (stale number) than an over-fetch.
+
+**F-021 Cmd+K:** quick-nav gains a debounced (200ms) server-backed transaction
+search source (`searchTransactions` → keel_search_transactions), term ≥2 chars,
+stale-response guarded, reset on close. Hits render as a "Transactions" group
+and deep-link to the ledger scoped to that account with the search pre-filled.
+
+**Deferred / assessed (honest):**
+- Account-detail still fetches the whole-household `transactions.rich` for the
+  txn-detail sheet's transfer-counterparty MATCH picker (`allRows` → findMatch
+  needs the OTHER account's rows) and the add-dialog payee memory (`history`).
+  Removing that household fetch would break the transfer matcher — it's a
+  pre-existing WS-E flow dependency, out of WS-H's surgical scope. The
+  server-side account filter IS available (`fetchAllAccountTransactions` in
+  keel-api) and the ledger's account facet + the paginated read use it; wiring
+  the account page's LIST + running-balance to it (while keeping a narrower
+  cross-account feed for the matcher) is a clean follow-up. Virtualization
+  already removes the 644-row DOM cost, the concrete perf hit.
+- Dashboard/reports still read the unbounded `transactions.rich` (aggregate
+  widgets + client-side flow/payee math over the full set — doc'd elsewhere as
+  intentionally client-side per those workstreams). Assessed: converting them to
+  the paginated path would require server-side aggregation procs (bigger change,
+  different workstream); left as-is. They are not the reported hot path (the
+  ledger + account pages were).
+
+Build: `cd apps/web && pnpm build` PASSES (ESLint + typecheck clean). Root
+`pnpm vitest run`: 830 tests / 71 suites pass (the one transient failure was a
+missing generated vendor bundle — `node scripts/build-functions.mjs` regenerates
+it; gitignored, not a WS-H regression).
+
+**Orchestrator at merge:** apply 20260718150000 to cloud (psql
+--single-transaction); run `supabase test db` (incl. new 028); deploy the `api`
+edge function (QUERY_TO_PROC additions); Vercel auto-deploys web on merge to
+main (dep + lockfile already committed).
