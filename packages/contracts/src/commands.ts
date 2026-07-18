@@ -387,6 +387,22 @@ export const DeleteDocumentPayloadSchema = z.object({
   reason: z.string().min(1).max(500),
 }).strict();
 
+/**
+ * WS-J / F-030: confirm or reject a suggested receipt→transaction match
+ * (AI class B, suggest→approve). `confirm=true` attaches the receipt to the
+ * matched transaction; `confirm=false` rejects the pair (never re-suggested).
+ * Approval binds the exact matchId (Law 11).
+ */
+export const DecideReceiptMatchPayloadSchema = z.object({
+  matchId: z.string().uuid(),
+  confirm: z.boolean(),
+}).strict();
+
+/** Undo a confirmed receipt match — detach (Law 2), never delete. */
+export const DetachReceiptMatchPayloadSchema = z.object({
+  matchId: z.string().uuid(),
+}).strict();
+
 export const COMMAND_PAYLOAD_SCHEMAS = {
   'accounts.create': CreateAccountPayloadSchema,
   'ingest.record_raw_event': RecordRawEventPayloadSchema,
@@ -422,6 +438,8 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'categorization.decide_suggestion': DecideCategorySuggestionPayloadSchema,
   'documents.detach': DetachDocumentPayloadSchema,
   'documents.delete': DeleteDocumentPayloadSchema,
+  'receipts.decide_match': DecideReceiptMatchPayloadSchema,
+  'receipts.detach_match': DetachReceiptMatchPayloadSchema,
 } as const;
 export type CommandProcedureName = keyof typeof COMMAND_PAYLOAD_SCHEMAS;
 /**

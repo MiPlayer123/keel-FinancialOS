@@ -103,6 +103,8 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'categorization.decide_suggestion': 'keel_cmd_decide_category_suggestion',
   'documents.detach': 'keel_cmd_documents_detach',
   'documents.delete': 'keel_cmd_documents_delete',
+  'receipts.decide_match': 'keel_cmd_receipts_decide_match',
+  'receipts.detach_match': 'keel_cmd_receipts_detach_match',
 };
 
 const QUERY_TO_PROC: Record<string, string> = {
@@ -142,6 +144,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'investments.overview': 'keel_investments_overview',
   'investments.value_daily': 'keel_investments_value_daily',
   'connections.list_reconnect_matches': 'keel_list_reconnect_matches',
+  'receipts.inbox': 'keel_receipts_inbox',
 };
 
 // deno-lint-ignore no-explicit-any
@@ -2273,6 +2276,27 @@ export default {
         p_target_id: targetType !== undefined ? targetId : null,
       });
       if (error) return mapDbError(error);
+
+      // WS-J / F-030: for a receipt, enqueue background extraction + matching
+      // (AI class B). Best-effort: a queue/drain failure must not undo the
+      // already-durable upload+attach. The worker is idempotent per version.
+      const confirmEffects = (data as { effects?: { documentVersionId?: string } })?.effects;
+      const documentVersionId = confirmEffects?.documentVersionId;
+      if (kind.data === 'receipt' && typeof documentVersionId === 'string') {
+        const { error: enqueueError } = await ctx.supabaseAdmin.rpc('keel_enqueue', {
+          queue_name: 'sync_events',
+          message: {
+            jobType: 'receipt_extract',
+            economicEventKey: `receipt:extract:${documentVersionId}`,
+            refs: { documentVersionId, householdId: householdId.data },
+          },
+        });
+        if (!enqueueError) {
+          // Kick the drain so extraction runs promptly (the 3-min cron is the
+          // fallback). Best-effort.
+          await ctx.supabaseAdmin.rpc('keel_cron_drain_sync', {});
+        }
+      }
       return json(200, data);
     }
 
@@ -2299,6 +2323,45 @@ export default {
         p_household_id: householdId.data,
         p_target_type: targetType.data,
         p_target_id: targetId,
+      });
+      if (error) return mapDbError(error);
+      const rows = (data as { rows: Record<string, unknown>[] })?.rows ?? [];
+      const withUrls = await Promise.all(
+        rows.map(async (row) => {
+          const bucket = row['storageBucket'];
+          const objectPath = row['storagePath'];
+          if (typeof bucket !== 'string' || typeof objectPath !== 'string') {
+            return { ...row, url: null };
+          }
+          const { data: signed } = await ctx.supabaseAdmin.storage
+            .from(bucket)
+            .createSignedUrl(objectPath, DOCUMENT_SIGNED_URL_TTL_S);
+          return { ...row, url: signed?.signedUrl ?? null };
+        }),
+      );
+      return json(200, { rows: withUrls });
+    }
+
+    // WS-J / F-030: receipts inbox — the receipts hub. Same shape as
+    // /documents/list (proc returns storage pointers; this route mints the
+    // per-row short-lived signed read URL Postgres cannot sign).
+    if (path === '/receipts/inbox') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      if (!householdId.success) {
+        return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });
+      }
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'receipts.inbox', {
+        householdId: householdId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+      const { data, error } = await ctx.supabase.rpc('keel_receipts_inbox', {
+        p_household_id: householdId.data,
       });
       if (error) return mapDbError(error);
       const rows = (data as { rows: Record<string, unknown>[] })?.rows ?? [];

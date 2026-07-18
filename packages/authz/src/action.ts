@@ -38,6 +38,8 @@ export const WRITE_ACTIONS = [
   'documents.confirm_upload',
   'documents.detach',
   'documents.delete',
+  'receipts.decide_match',
+  'receipts.detach_match',
 ] as const satisfies readonly CommandName[];
 
 export const EXPORT_ACTIONS = ['admin.export_all'] as const satisfies readonly CommandName[];
@@ -53,6 +55,7 @@ export const READ_ACTIONS = [
   'statements.list',
   'statements.cadence',
   'documents.list_for_target',
+  'receipts.inbox',
   'audit.read',
   ...EXPORT_ACTIONS,
 ] as const;
@@ -100,6 +103,8 @@ export const ACTION_MINIMUM_ROLES = {
   'documents.confirm_upload': 'partner',
   'documents.detach': 'partner',
   'documents.delete': 'partner',
+  'receipts.decide_match': 'partner',
+  'receipts.detach_match': 'partner',
   'ledger.trial_balance': 'viewer',
   'transactions.list': 'viewer',
   'recurring.list': 'viewer',
@@ -110,6 +115,7 @@ export const ACTION_MINIMUM_ROLES = {
   'statements.list':'viewer',
   'statements.cadence':'viewer',
   'documents.list_for_target': 'viewer',
+  'receipts.inbox': 'viewer',
   'audit.read': 'viewer',
   'admin.export_all': 'owner',
 } as const satisfies Readonly<Record<Action, MinimumRole>>;

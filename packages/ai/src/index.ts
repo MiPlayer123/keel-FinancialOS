@@ -37,3 +37,17 @@ export {
   type BuildRecordInput,
   type ChatResponseRecord,
 } from './record.js';
+export {
+  buildReceiptExtractionPrompt,
+  coerceReceiptFields,
+  RECEIPT_PROMPT_VERSION,
+  type RawReceiptFields,
+  type ReceiptExtractionResult,
+  type ReceiptExtractor,
+  type ReceiptImage,
+} from './receipt.js';
+export {
+  CloudVisionReceiptExtractor,
+  RecordedReceiptExtractor,
+  type CloudVisionConfig,
+} from './receipt-provider.js';
