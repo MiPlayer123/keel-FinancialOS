@@ -1566,6 +1566,40 @@ export type StatementLine = {
   description: string;
 };
 
+// ---- F-029 statement cadence + due reminder --------------------------------
+export type StatementCadenceRow = {
+  accountId: string;
+  closeDay: number | null;
+  closeDaySource: 'manual' | 'derived' | 'unknown';
+  lastPeriodEnd: string | null;
+  nextExpectedClose: string | null;
+  overdue: boolean;
+  statementCount: number;
+};
+
+export async function fetchStatementCadence(
+  householdId: string,
+): Promise<StatementCadenceRow[]> {
+  const res = await keelQuery<StatementCadenceRow>('statements.cadence', householdId);
+  return res.rows;
+}
+
+export async function setStatementCadence(input: {
+  householdId: string;
+  userId: string;
+  accountId: string;
+  closeDay: number | null;
+}): Promise<unknown> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'statements.set_cadence',
+    economicEventKey: `statements.set_cadence:${input.accountId}:${newId()}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: { accountId: input.accountId, closeDay: input.closeDay },
+  });
+}
+
 export type ReconciliationSession = {
   sessionId: string;
   ledgerEndingMinor: string;

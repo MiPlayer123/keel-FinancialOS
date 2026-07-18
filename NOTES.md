@@ -4392,3 +4392,36 @@ applies at merge.
   block, export privilege.
 - Test count deltas fixed: authz action vocabulary (+4), exports manifest &
   formats.property (71→72). Full vitest 834 pass.
+
+### F-029 statement cadence + due reminder (migration + web; CSV import DEFERRED)
+- Migration 20260718162000. account_statement_cadence table (manual override:
+  close_day 1-31 per account; mutable/DELETE-able since it's a live setting,
+  not an economic event — audited via the command). keel_statement_set_cadence
+  (set/clear) + keel_statement_cadence read model. Read model: effective close
+  day = manual override else modal day-of-month of prior statements' period_end;
+  computes next expected close (first monthly close-day strictly after the last
+  period_end, month-length-clamped) + overdue flag. Only accounts that actually
+  reconcile (have a manual cadence or a statement) appear.
+- Web: Statements page shows a "Statement due" reminder (overdue accounts) +
+  a collapsible per-account cadence editor (set day / clear). No feed into the
+  shared needs-attention card (kept on the feature page per scope; hook exists
+  if wanted later).
+- CSV line import DEFERRED per brief (F-029 slice 1). Uploads stay attach-only.
+- Registered command/query, authz actions + min-roles, contracts schema, export
+  chain + manifest + pgTAP 008 (count 72→73). pgTAP 030.
+
+### Cross-cutting
+- Three migrations authored (FILES ONLY, never applied):
+  20260718160000 cash_flow_exclude_settlements,
+  20260718161000 recurring_classification_and_schedule_links,
+  20260718162000 statement_cadence. Orchestrator applies at merge.
+- pgTAP added: 028 (X-003), 029 (F-028), 030 (F-029). 008/manifest counts and
+  authz action vocabulary updated for the new tables/actions.
+- Migrations were NOT run against any DB (constraint). SQL validated by
+  inspection against sibling procs + the existing patterns; pgTAP runs serially
+  at merge under the orchestrator.
+- Web `pnpm build` green; root `pnpm vitest run` 836 pass. Worker deno tests
+  not run (worker untouched). Deno check of api/index.ts blocked locally by
+  @supabase/server module resolution (deploy-time only) — changes are
+  string-map + guard additions matching existing patterns; the web build's
+  contracts/authz typecheck covers the shared surface.

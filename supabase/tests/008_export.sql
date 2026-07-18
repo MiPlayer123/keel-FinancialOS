@@ -43,7 +43,8 @@ insert into expected_export_tables(table_name, allowed_columns, omitted_columns)
   ('recurring_candidate_versions', array['id','household_id','series_id','detector_run_id','candidate_hash','input_fingerprint','detector_version','confidence_version','normalizer_version','as_of','score_bps','evidence','candidate','created_at'], '{}'),
   ('recurring_occurrences', array['household_id','id','series_id','candidate_version_id','occurrence_key','expected_date','expected_amount_minor','currency','amount_kind','status','matched_txn_id','score_bps','evidence','input_fingerprint','detector_version','confidence_version','as_of','created_at'], '{}'),
   ('recurring_status_events', array['household_id','id','series_id','candidate_version_id','transition','effective_date','actor','command_id','created_at'], '{}'),
-  ('recurring_series_schedule_links', array['household_id','id','series_id','schedule_id','linked_by','command_id','created_at','detached_at','detached_reason'], '{}');
+  ('recurring_series_schedule_links', array['household_id','id','series_id','schedule_id','linked_by','command_id','created_at','detached_at','detached_reason'], '{}'),
+  ('account_statement_cadence', array['household_id','account_id','close_day','updated_by','created_at','updated_at'], '{}');
 insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
   ('tags', array['id','household_id','name','created_at'], '{}'),
   ('transaction_tags', array['canonical_transaction_id','tag_id','household_id','created_at'], '{}'),
@@ -120,8 +121,8 @@ select ok(
 select is(
   (select count(*)::int from expected_export_tables
     where has_table_privilege('keel_export', format('public.%I', table_name), 'SELECT')),
-  72,
-  'keel_export can SELECT all 72 included tables'
+  73,
+  'keel_export can SELECT all 73 included tables'
 );
 select is(
   (select count(*)::int

@@ -90,6 +90,7 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'reimbursements.reverse_settlement': 'keel_reimbursement_reverse_settlement',
   'reimbursements.reverse_claim': 'keel_reimbursement_reverse_claim',
   'statements.create': 'keel_statement_create',
+  'statements.set_cadence': 'keel_statement_set_cadence',
   'reconciliations.close': 'keel_reconciliation_close',
   'reconciliations.reopen': 'keel_reconciliation_reopen',
   'transactions.manual_create': 'keel_cmd_manual_transaction',
@@ -121,6 +122,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'paychecks.list': 'keel_list_paychecks',
   'reimbursements.list': 'keel_list_reimbursements',
   'statements.list': 'keel_list_statements',
+  'statements.cadence': 'keel_statement_cadence',
   'dashboard.cash_flow': 'keel_cash_flow',
   'dashboard.net_worth': 'keel_net_worth_as_of',
   'dashboard.net_worth_daily': 'keel_net_worth_daily',
@@ -2408,7 +2410,8 @@ export default {
         query.query === 'recurring.schedule_links' ||
         query.query === 'paychecks.list' ||
         query.query === 'reimbursements.list' ||
-        query.query === 'statements.list'
+        query.query === 'statements.list' ||
+        query.query === 'statements.cadence'
       ) {
         const parsedHousehold = HouseholdIdSchema.safeParse(query.householdId);
         if (!parsedHousehold.success) {
