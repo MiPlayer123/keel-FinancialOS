@@ -1,7 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { usePlaidLink, type PlaidLinkOnSuccess } from 'react-plaid-link';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { usePlaidLink, type PlaidLinkOnExit, type PlaidLinkOnSuccess } from 'react-plaid-link';
+import { useQueryClient } from '@tanstack/react-query';
 import { Plus, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -23,6 +24,27 @@ import {
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 
+function PlaidLinkLauncher({
+  token,
+  onSuccess,
+  onExit,
+}: {
+  token: string;
+  onSuccess: PlaidLinkOnSuccess;
+  onExit: PlaidLinkOnExit;
+}) {
+  const opened = useRef(false);
+  const { open, ready } = usePlaidLink({ token, onSuccess, onExit });
+
+  useEffect(() => {
+    if (!ready || opened.current) return;
+    opened.current = true;
+    (open as () => void)();
+  }, [open, ready]);
+
+  return null;
+}
+
 /**
  * Opens the real Plaid Link modal (works in sandbox + production). Flow:
  * click → resolve which entity the connection belongs to (silently, when
@@ -38,9 +60,9 @@ export function PlaidLinkButton({
   householdId: string;
   onLinked: () => void;
 }) {
+  const queryClient = useQueryClient();
   const [token, setToken] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [shouldOpen, setShouldOpen] = useState(false);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
 
   const [entities, setEntities] = useState<EntityRow[] | null>(null);
@@ -64,6 +86,7 @@ export function PlaidLinkButton({
             ...(institutionName ? { institutionName } : {}),
           });
           toast.success(institutionName ? `${institutionName} connected.` : 'Bank connected.');
+          void queryClient.invalidateQueries({ queryKey: ['keel-query'] });
           onLinked();
         } catch (err) {
           toast.error(err instanceof Error ? err.message : 'Could not finish linking.');
@@ -73,25 +96,17 @@ export function PlaidLinkButton({
         }
       })();
     },
-    [householdId, onLinked, selectedEntityId],
+    [householdId, onLinked, queryClient, selectedEntityId],
   );
 
-  const { open, ready } = usePlaidLink({
-    token,
-    onSuccess,
-    onExit: () => {
-      setBusy(false);
-      setToken(null);
-      setShouldOpen(false);
-    },
-  });
-
-  useEffect(() => {
-    if (shouldOpen && ready && token) {
-      (open as () => void)();
-      setShouldOpen(false);
+  const onExit = useCallback<PlaidLinkOnExit>((error) => {
+    if (error) {
+      const detail = error.display_message || error.error_code || 'unknown error';
+      toast.error(`Plaid couldn't connect: ${detail}`);
     }
-  }, [shouldOpen, ready, token, open]);
+    setBusy(false);
+    setToken(null);
+  }, []);
 
   async function beginPlaidFlow(entityId: string) {
     setSelectedEntityId(entityId);
@@ -99,7 +114,6 @@ export function PlaidLinkButton({
     try {
       const t = await createLinkToken(householdId);
       setToken(t);
-      setShouldOpen(true);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not start Plaid.');
       setBusy(false);
@@ -138,6 +152,9 @@ export function PlaidLinkButton({
 
   return (
     <>
+      {token ? (
+        <PlaidLinkLauncher key={token} token={token} onSuccess={onSuccess} onExit={onExit} />
+      ) : null}
       <Button
         size="sm"
         disabled={busy}

@@ -155,7 +155,7 @@ interface ListedRecurringSeries {
 const providerFailure = (error: PlaidClientError): Response =>
   json(502, {
     code: 'provider_failed',
-    message: 'Provider request failed.',
+    message: `Provider request failed: ${error.errorCode ?? 'provider_error'}.`,
     details: {
       error_code: error.errorCode,
       error_type: error.errorType,
@@ -815,6 +815,10 @@ export default {
         });
         return internalFailure();
       }
+
+      // Start the initial backfill immediately; the 3-minute cron remains the
+      // fallback. Best-effort: a drain failure must not undo a successful link.
+      await ctx.supabaseAdmin.rpc('keel_cron_drain_sync', {});
 
       // Record the institution's human name (from Plaid Link metadata) so the
       // connection reads as "Chase" rather than "plaid". Best-effort: a naming
