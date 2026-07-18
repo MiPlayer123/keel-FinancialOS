@@ -91,6 +91,17 @@ insert into expected_export_tables(table_name,allowed_columns,omitted_columns) v
  ('holdings',array['id','household_id','account_id','as_of','symbol','name','qty','price_minor','value_minor','cost_basis_minor','currency','source','security_type','created_at','updated_at'],'{}'),
  ('holdings_snapshots',array['id','household_id','account_id','snapshot_date','symbol','name','qty','price_minor','value_minor','cost_basis_minor','currency','source','created_at'],'{}'),
  ('investment_sync_state',array['connection_id','household_id','last_pulled_through','window_from','window_to','continuation_offset','last_synced_at','created_at','updated_at'],'{}');
+-- WS-J / F-030: receipts document family now exported (Law 6). documents/
+-- document_versions/document_attachments close the X-004 attach-only gap;
+-- document_extractions/document_transaction_matches are new this slice. The
+-- extracted merchant text + raw_evidence are exportable user data (business
+-- expense records), not secrets — object bytes live in Storage, never a column.
+insert into expected_export_tables(table_name,allowed_columns,omitted_columns) values
+ ('documents',array['id','household_id','entity_id','kind','original_filename','created_by','created_at','deleted_at'],'{}'),
+ ('document_versions',array['id','document_id','storage_bucket','storage_path','content_sha256','mime_type','byte_size','created_at'],'{}'),
+ ('document_attachments',array['id','household_id','document_id','canonical_transaction_id','paycheck_id','reimbursement_claim_id','statement_id','attached_by','attached_at','detached_by','detached_at'],'{}'),
+ ('document_extractions',array['id','household_id','document_version_id','status','extractor','extractor_version','merchant','amount_minor','currency','txn_date','confidence','raw_evidence','error_code','created_at'],'{}'),
+ ('document_transaction_matches',array['id','household_id','document_version_id','canonical_transaction_id','status','score','reason_codes','suggested_by','attachment_id','decided_by','decided_at','created_at'],'{}');
 
 create temporary table excluded_export_tables(table_name text primary key) on commit drop;
 insert into excluded_export_tables(table_name) values
@@ -101,15 +112,14 @@ insert into excluded_export_tables(table_name) values
 insert into excluded_export_tables(table_name) values ('recurring_detection_claims');
 -- Export layer pending (Law 6 gap, honestly excluded rather than silently
 -- unclassified — tracked in NOTES.md, pgTAP-debt cleanup 2026-07-18):
---   documents / document_versions / document_attachments: attach-only receipts
---     substrate shipped 2026-07-17 (20260717234500) without export wiring.
 --   household_notes / household_tasks: notes/tasks shipped 2026-07-18
 --     (20260718000000) without export wiring.
--- keel_export has no SELECT grant on any of these five, so assertion 4
--- ("zero SELECT on every non-included table") already proves they are not
--- exported today; flip each to expected_export_tables when its layer ships.
+-- keel_export has no SELECT grant on either, so assertion 4 ("zero SELECT on
+-- every non-included table") already proves they are not exported today; flip
+-- each to expected_export_tables when its layer ships.
+-- (documents / document_versions / document_attachments moved to INCLUDE by
+-- WS-J's receipts export layer, 20260718171000_receipts_export.sql.)
 insert into excluded_export_tables(table_name) values
-  ('documents'), ('document_versions'), ('document_attachments'),
   ('household_notes'), ('household_tasks');
 
 select has_role('keel_export', 'dedicated export role exists');
@@ -121,8 +131,8 @@ select ok(
 select is(
   (select count(*)::int from expected_export_tables
     where has_table_privilege('keel_export', format('public.%I', table_name), 'SELECT')),
-  73,
-  'keel_export can SELECT all 73 included tables'
+  78,
+  'keel_export can SELECT all 78 included tables'
 );
 select is(
   (select count(*)::int
@@ -253,8 +263,8 @@ reset role;
 select is(
   (select count(*)::int from jsonb_object_keys(
     public.keel_export_household('00000000-0000-4000-8000-00000000a001')->'tables')),
-  73,
-  'snapshot contains all 73 included table arrays'
+  78,
+  'snapshot contains all 78 included table arrays'
 );
 select is(
   (select count(*)::int from excluded_export_tables e
