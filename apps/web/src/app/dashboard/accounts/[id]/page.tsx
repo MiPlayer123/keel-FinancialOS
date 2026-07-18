@@ -95,6 +95,21 @@ function isoDay(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
+// keel_account_balance_daily rejects spans over 366 days (KEEL_INVALID_RANGE).
+const MAX_BALANCE_RANGE_SPAN_DAYS = 366;
+
+function shiftIsoDay(day: string, days: number): string {
+  const date = new Date(`${day}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return isoDay(date);
+}
+
+function isoDaySpan(from: string, to: string): number {
+  return (
+    (Date.parse(`${to}T00:00:00.000Z`) - Date.parse(`${from}T00:00:00.000Z`)) / 86_400_000
+  );
+}
+
 function isIsoDay(value: unknown): value is string {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const parsed = new Date(`${value}T00:00:00.000Z`);
@@ -674,11 +689,17 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
                     onChange={(event) => {
                       const nextFrom = event.target.value;
                       if (!isIsoDay(nextFrom)) return;
-                      setBalanceRangePreference((current) => ({
-                        key: 'custom',
-                        customFrom: nextFrom,
-                        customTo: nextFrom > current.customTo ? nextFrom : current.customTo,
-                      }));
+                      setBalanceRangePreference((current) => {
+                        const nextTo = nextFrom > current.customTo ? nextFrom : current.customTo;
+                        return {
+                          key: 'custom',
+                          customFrom: nextFrom,
+                          customTo:
+                            isoDaySpan(nextFrom, nextTo) > MAX_BALANCE_RANGE_SPAN_DAYS
+                              ? shiftIsoDay(nextFrom, MAX_BALANCE_RANGE_SPAN_DAYS)
+                              : nextTo,
+                        };
+                      });
                     }}
                   />
                 </label>
@@ -692,11 +713,18 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
                     onChange={(event) => {
                       const nextTo = event.target.value;
                       if (!isIsoDay(nextTo) || nextTo > isoDay(balanceRangeAnchor)) return;
-                      setBalanceRangePreference((current) => ({
-                        key: 'custom',
-                        customFrom: nextTo < current.customFrom ? nextTo : current.customFrom,
-                        customTo: nextTo,
-                      }));
+                      setBalanceRangePreference((current) => {
+                        const nextFrom =
+                          nextTo < current.customFrom ? nextTo : current.customFrom;
+                        return {
+                          key: 'custom',
+                          customFrom:
+                            isoDaySpan(nextFrom, nextTo) > MAX_BALANCE_RANGE_SPAN_DAYS
+                              ? shiftIsoDay(nextTo, -MAX_BALANCE_RANGE_SPAN_DAYS)
+                              : nextFrom,
+                          customTo: nextTo,
+                        };
+                      });
                     }}
                   />
                 </label>
