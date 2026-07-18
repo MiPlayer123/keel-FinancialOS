@@ -68,6 +68,15 @@ export interface PlaidClient {
   publicTokenExchange(scopeKey: string, requestBody: { public_token: string }): Promise<{ access_token: string; item_id: string }>;
   accountsGet(scopeKey: string, requestBody: { access_token: string }): Promise<Record<string, unknown>>;
   investmentsHoldingsGet(scopeKey: string, requestBody: { access_token: string }): Promise<Record<string, unknown>>;
+  investmentsTransactionsGet(
+    scopeKey: string,
+    requestBody: {
+      access_token: string;
+      start_date: string;
+      end_date: string;
+      options?: { count?: number; offset?: number };
+    },
+  ): Promise<Record<string, unknown>>;
   itemRemove(scopeKey: string, requestBody: { access_token: string }): Promise<boolean>;
 }
 
@@ -280,6 +289,14 @@ export const createPlaidClient = (
 
     investmentsHoldingsGet: (scopeKey, requestBody) =>
       request(scopeKey, 'investments_holdings_get', '/investments/holdings/get', requestBody),
+
+    investmentsTransactionsGet: (scopeKey, requestBody) =>
+      request(
+        scopeKey,
+        'investments_transactions_get',
+        '/investments/transactions/get',
+        requestBody,
+      ),
 
     itemRemove: async (scopeKey, requestBody) => {
       let body: Record<string, unknown>;

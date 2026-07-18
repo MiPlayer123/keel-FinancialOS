@@ -14,6 +14,7 @@ export type ProviderCallKind =
   | 'webhook_key_get'
   | 'transactions_sync'
   | 'investments_holdings_get'
+  | 'investments_transactions_get'
   | 'cron_enqueue_syncs'
   | 'quarantine_capped'
   | 'budget_refused';

@@ -81,6 +81,168 @@ const symbolFor = (security: Record<string, unknown>): string => {
  * way). Non-USD holdings are skipped, matching the USD-only convention
  * `mapAccountsGetToKeel` already uses.
  */
+// ---------------------------------------------------------------------------
+// Investment transactions (F-013). Plaid's /investments/transactions/get is
+// the ONLY endpoint that returns brokerage cash-flow + trade activity;
+// /transactions/sync never carries it, so investment accounts otherwise show
+// zero register rows. This mapper turns one page of that response into KEEL
+// canonical-transaction inputs. Trades (buy/sell) are ingested as plain
+// cash-affecting transactions too (the cash side of the trade), but NO lot /
+// position accounting is done here (out of scope, docs/harness plans + F-013).
+//
+// Sign convention (mirrors mapAccountsGetToKeel / the /transactions/sync
+// adapter): KEEL stores the effect on the ACCOUNT balance. Plaid's investment
+// `amount` is POSITIVE for cash LEAVING the account (a buy, a fee, a
+// withdrawal/transfer out) and NEGATIVE for cash ENTERING (a sell, a deposit,
+// a dividend, a transfer in). So the account-effect minor amount is the
+// NEGATION of Plaid's amount. Non-USD and zero-amount rows are skipped.
+// ---------------------------------------------------------------------------
+
+/** One investment transaction mapped to a KEEL canonical-transaction input.
+ *  `amountMinor` is already the account-balance effect (BIGINT minor units,
+ *  as a decimal string): negative = money out, positive = money in. */
+export interface KeelPlaidInvestmentTxn {
+  readonly accountExternalRef: string;
+  /** Stable Plaid id — the idempotency anchor. */
+  readonly providerTransactionId: string;
+  readonly amountMinor: string;
+  readonly currency: 'USD';
+  /** ISO yyyy-mm-dd. */
+  readonly date: string;
+  readonly description: string;
+  /** Coarse KEEL classification of the cash-flow (never trusted for math,
+   *  only for narration / whether this is a cash-flow vs. a pure trade). */
+  readonly flow: KeelInvestmentFlow;
+  /** Plaid's raw `type` (buy, sell, cash, fee, transfer, cancel), preserved
+   *  for source fidelity. */
+  readonly plaidType: string;
+  readonly plaidSubtype: string | null;
+}
+
+export type KeelInvestmentFlow =
+  | 'deposit'
+  | 'withdrawal'
+  | 'transfer_in'
+  | 'transfer_out'
+  | 'dividend_interest'
+  | 'fee'
+  | 'buy'
+  | 'sell'
+  | 'other';
+
+export interface SkippedPlaidInvestmentTxn {
+  readonly providerTransactionId: string;
+  readonly reason: 'non_usd' | 'invalid_amount' | 'zero_amount' | 'cancelled';
+}
+
+export interface MappedPlaidInvestmentTxns {
+  readonly transactions: KeelPlaidInvestmentTxn[];
+  readonly skipped: SkippedPlaidInvestmentTxn[];
+}
+
+const optionalString = (record: Record<string, unknown>, key: string): string | null => {
+  const value = record[key];
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+};
+
+/** Classify a Plaid investment (type, subtype) pair into a coarse KEEL flow.
+ *  Purely descriptive — the economic amount is authoritative regardless. */
+const classifyFlow = (type: string, subtype: string | null): KeelInvestmentFlow => {
+  const t = type.toLowerCase();
+  const s = (subtype ?? '').toLowerCase();
+  if (t === 'buy') return 'buy';
+  if (t === 'sell') return 'sell';
+  if (t === 'fee') return 'fee';
+  if (t === 'cash') {
+    if (s === 'deposit' || s === 'contribution') return 'deposit';
+    if (s === 'withdrawal' || s === 'distribution') return 'withdrawal';
+    if (s === 'dividend' || s === 'interest' || s === 'non-qualified dividend' || s === 'qualified dividend' || s === 'interest receivable') {
+      return 'dividend_interest';
+    }
+    if (s === 'management fee' || s === 'miscellaneous fee' || s === 'account fee' || s === 'legal fee') {
+      return 'fee';
+    }
+    return 'other';
+  }
+  if (t === 'transfer') {
+    // Sign disambiguates direction; the label just narrates it.
+    return s === 'transfer fee' ? 'fee' : 'other';
+  }
+  return 'other';
+};
+
+/**
+ * Map one page of `/investments/transactions/get` into KEEL canonical
+ * transaction inputs. `investment_transactions` (array) + `securities` (array,
+ * for enriching the description) are the two arrays consumed. Cancelled
+ * transactions (Plaid `type: 'cancel'`) are skipped — they represent Plaid's
+ * own reversal bookkeeping and would double-count against the original.
+ */
+export const mapInvestmentsTransactionsToKeel = (body: unknown): MappedPlaidInvestmentTxns => {
+  if (!isRecord(body) || !Array.isArray(body['investment_transactions'])) {
+    throw new Error('Plaid investments transactions response must contain investment_transactions');
+  }
+  const securities = Array.isArray(body['securities']) ? body['securities'] : [];
+  const securitiesById = new Map<string, Record<string, unknown>>();
+  for (const value of securities) {
+    if (isRecord(value) && typeof value['security_id'] === 'string') {
+      securitiesById.set(value['security_id'], value);
+    }
+  }
+
+  const result: MappedPlaidInvestmentTxns = { transactions: [], skipped: [] };
+  for (const value of body['investment_transactions']) {
+    if (!isRecord(value)) throw new Error('Plaid investment transaction must be an object');
+    const providerTransactionId = stringField(value, 'investment_transaction_id');
+    const type = stringField(value, 'type');
+
+    if (type.toLowerCase() === 'cancel') {
+      result.skipped.push({ providerTransactionId, reason: 'cancelled' });
+      continue;
+    }
+
+    const currency =
+      typeof value['iso_currency_code'] === 'string' ? value['iso_currency_code'] : null;
+    if (currency !== 'USD') {
+      result.skipped.push({ providerTransactionId, reason: 'non_usd' });
+      continue;
+    }
+
+    const amount = value['amount'];
+    if (typeof amount !== 'number' || !Number.isFinite(amount)) {
+      result.skipped.push({ providerTransactionId, reason: 'invalid_amount' });
+      continue;
+    }
+    // Account-balance effect = negation of Plaid's cash-out-positive amount.
+    const accountEffect = Math.round(-amount * 100);
+    if (accountEffect === 0) {
+      result.skipped.push({ providerTransactionId, reason: 'zero_amount' });
+      continue;
+    }
+
+    const subtype = optionalString(value, 'subtype');
+    const accountExternalRef = stringField(value, 'account_id');
+    const securityId = optionalString(value, 'security_id');
+    const security = securityId ? securitiesById.get(securityId) : undefined;
+    const providerName = optionalString(value, 'name');
+    const securityName = security ? optionalString(security, 'name') : null;
+    const description = (providerName ?? securityName ?? `${type} transaction`).slice(0, 500);
+
+    result.transactions.push({
+      accountExternalRef,
+      providerTransactionId,
+      amountMinor: accountEffect.toString(),
+      currency: 'USD',
+      date: stringField(value, 'date'),
+      description,
+      flow: classifyFlow(type, subtype),
+      plaidType: type,
+      plaidSubtype: subtype,
+    });
+  }
+  return result;
+};
+
 export const mapHoldingsGetToKeel = (body: unknown): MappedPlaidHoldings => {
   if (!isRecord(body) || !Array.isArray(body['holdings']) || !Array.isArray(body['securities'])) {
     throw new Error('Plaid holdings response must contain holdings and securities arrays');

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mapHoldingsGetToKeel } from '../src/index.js';
+import { mapHoldingsGetToKeel, mapInvestmentsTransactionsToKeel } from '../src/index.js';
 
 const security = (
   securityId: string,
@@ -180,5 +180,101 @@ describe('mapHoldingsGetToKeel', () => {
   it('rejects a response missing the holdings or securities array', () => {
     expect(() => mapHoldingsGetToKeel({ holdings: [] })).toThrow();
     expect(() => mapHoldingsGetToKeel({})).toThrow();
+  });
+});
+
+const invTxn = (
+  id: string,
+  overrides: Record<string, unknown> = {},
+) => ({
+  investment_transaction_id: id,
+  account_id: 'acct-1',
+  security_id: 'sec-1',
+  type: 'cash',
+  subtype: 'dividend',
+  amount: -12.5,
+  date: '2026-07-15',
+  name: 'DIVIDEND RECEIVED',
+  iso_currency_code: 'USD',
+  ...overrides,
+});
+
+describe('mapInvestmentsTransactionsToKeel', () => {
+  it('maps a dividend (cash in) to a positive account-effect amount', () => {
+    const result = mapInvestmentsTransactionsToKeel({
+      investment_transactions: [invTxn('itx-1')],
+      securities: [],
+    });
+    expect(result.transactions).toHaveLength(1);
+    expect(result.transactions[0]).toEqual({
+      accountExternalRef: 'acct-1',
+      providerTransactionId: 'itx-1',
+      // Plaid amount -12.50 (cash IN) -> account effect +1250 minor.
+      amountMinor: '1250',
+      currency: 'USD',
+      date: '2026-07-15',
+      description: 'DIVIDEND RECEIVED',
+      flow: 'dividend_interest',
+      plaidType: 'cash',
+      plaidSubtype: 'dividend',
+    });
+  });
+
+  it('maps a buy (cash out) to a negative account-effect amount', () => {
+    const result = mapInvestmentsTransactionsToKeel({
+      investment_transactions: [
+        invTxn('itx-2', { type: 'buy', subtype: 'buy', amount: 500, name: 'BUY VTI' }),
+      ],
+      securities: [],
+    });
+    // Plaid amount +500 (cash OUT) -> account effect -50000 minor.
+    expect(result.transactions[0]?.amountMinor).toBe('-50000');
+    expect(result.transactions[0]?.flow).toBe('buy');
+  });
+
+  it('classifies deposits, withdrawals, transfers, and fees', () => {
+    const result = mapInvestmentsTransactionsToKeel({
+      investment_transactions: [
+        invTxn('d', { type: 'cash', subtype: 'deposit', amount: -100 }),
+        invTxn('w', { type: 'cash', subtype: 'withdrawal', amount: 100 }),
+        invTxn('f', { type: 'fee', subtype: 'management fee', amount: 5 }),
+        invTxn('ti', { type: 'transfer', subtype: 'transfer', amount: -200 }),
+      ],
+      securities: [],
+    });
+    const byId = new Map(result.transactions.map((t) => [t.providerTransactionId, t]));
+    expect(byId.get('d')?.flow).toBe('deposit');
+    expect(byId.get('w')?.flow).toBe('withdrawal');
+    expect(byId.get('f')?.flow).toBe('fee');
+    expect(byId.get('ti')?.flow).toBe('other');
+  });
+
+  it('skips cancelled, non-USD, and zero-amount transactions', () => {
+    const result = mapInvestmentsTransactionsToKeel({
+      investment_transactions: [
+        invTxn('c', { type: 'cancel' }),
+        invTxn('n', { iso_currency_code: 'EUR' }),
+        invTxn('z', { amount: 0 }),
+      ],
+      securities: [],
+    });
+    expect(result.transactions).toHaveLength(0);
+    expect(result.skipped.map((s) => s.reason).sort()).toEqual([
+      'cancelled',
+      'non_usd',
+      'zero_amount',
+    ]);
+  });
+
+  it('falls back to the security name when the transaction has no name', () => {
+    const result = mapInvestmentsTransactionsToKeel({
+      investment_transactions: [invTxn('s', { name: null })],
+      securities: [{ security_id: 'sec-1', name: 'Vanguard Total Stock' }],
+    });
+    expect(result.transactions[0]?.description).toBe('Vanguard Total Stock');
+  });
+
+  it('rejects a response missing the investment_transactions array', () => {
+    expect(() => mapInvestmentsTransactionsToKeel({})).toThrow();
   });
 });
