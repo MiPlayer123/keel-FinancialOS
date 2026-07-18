@@ -55,9 +55,14 @@ alter table public.connections
 --    Last-write-wins per day via the unique key: a second sync on the same
 --    day replaces that day's row, so the chart samples one point per day.
 --    Idempotent economics (Law 9 §9.1): re-running a sync can't inflate the
---    series. No `source` split by row-uniqueness because a snapshot is a
---    point-in-time total per (account, symbol, day) regardless of origin; the
---    `source` column is retained descriptively.
+--    series. `source` IS part of the row identity: the base `holdings` table
+--    legally allows both a (account,symbol,manual) row AND a
+--    (account,symbol,plaid) row for the same security (a user can hold a
+--    manual position in a symbol the brokerage also reports), so the snapshot
+--    key must include `source` too — omitting it makes the INSERT…SELECT below
+--    present two conflicting rows to a single ON CONFLICT target ("cannot
+--    affect row a second time"). The value-over-time read model sums all
+--    sources per day, so the chart is unaffected by the finer key.
 -- ---------------------------------------------------------------------------
 create table public.holdings_snapshots (
   id uuid primary key default gen_random_uuid(),
@@ -73,7 +78,7 @@ create table public.holdings_snapshots (
   currency text not null default 'USD' check (currency = upper(currency)),
   source text not null check (source in ('manual', 'plaid')),
   created_at timestamptz not null default now(),
-  unique (account_id, snapshot_date, symbol)
+  unique (account_id, snapshot_date, symbol, source)
 );
 
 create index holdings_snapshots_household_date
@@ -190,10 +195,10 @@ begin
       on a.id = h.account_id
      and a.connection_id = p_connection_id
      and a.household_id = p_household_id
-  on conflict (account_id, snapshot_date, symbol) do update
+  on conflict (account_id, snapshot_date, symbol, source) do update
     set name = excluded.name, qty = excluded.qty, price_minor = excluded.price_minor,
         value_minor = excluded.value_minor, cost_basis_minor = excluded.cost_basis_minor,
-        currency = excluded.currency, source = excluded.source;
+        currency = excluded.currency;
   get diagnostics v_count = row_count;
   return v_count;
 end;
