@@ -31,6 +31,7 @@ import {
   overrideTransaction,
   setTransactionDate,
   setTransactionSplits,
+  undoTransfer,
   voidManualTransaction,
   type AccountRow,
   type CategoryRow,
@@ -61,6 +62,7 @@ import { isUncategorized } from '@/lib/needs-attention';
 import { isAutoCategorized } from '@/lib/review-state';
 import { useHousehold } from '@/components/keel/household-context';
 import { AttachmentsSection } from '@/components/keel/attachments-section';
+import { TransferCounterpartyFlow } from '@/components/keel/transfer-counterparty-flow';
 import { Money } from '@/components/keel/money';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -72,14 +74,14 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
+import { DialogFooter } from '@/components/ui/dialog';
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -88,6 +90,16 @@ import { Textarea } from '@/components/ui/textarea';
 // Single definition now lives in lib (Home's "Needs attention" module counts
 // with it too); re-exported here so existing consumers keep their import path.
 export { isUncategorized } from '@/lib/needs-attention';
+
+/**
+ * A category is a "Transfers" category if it carries the seeded pfc_key
+ * (rename-proof) or is literally named Transfers (pre-key fallback). Shared so
+ * both the compact row picker and the detail picker route a Transfers pick
+ * into the counterparty flow instead of writing a one-sided tag (F-012, P1-6).
+ */
+function isTransferCategoryRow(c: Pick<CategoryRow, 'name' | 'pfcKey'>): boolean {
+  return c.pfcKey === 'transfers' || c.name.trim().toLowerCase() === 'transfers';
+}
 
 export type ListCallbacks = {
   onRecategorize: (txnId: string, categoryId: string) => void;
@@ -248,6 +260,12 @@ export function TxnList({
               row={t}
               categories={categories}
               auto={isAutoCategorized(t)}
+              // P1-6: the compact row picker must NOT write a one-sided
+              // "Transfers" tag. Picking Transfer here opens the detail Sheet,
+              // where the counterparty flow (match / book) runs.
+              onTransferPick={() => {
+                onEdit(t);
+              }}
               onPick={(catId) => {
                 onRecategorize(t.transactionId, catId);
               }}
@@ -320,6 +338,7 @@ export function CategoryPicker({
   row,
   categories,
   onPick,
+  onTransferPick,
   wide,
   createEntityId,
   auto,
@@ -327,6 +346,17 @@ export function CategoryPicker({
   row: RichTransactionRow;
   categories: CategoryRow[];
   onPick: (categoryLedgerAccountId: string, categoryName?: string) => void;
+  /**
+   * F-012 / P1-6 / P1-7: picking "Transfers" is never a one-sided category
+   * write — it opens the counterparty flow. When provided, this is called
+   * instead of onPick for a Transfers pick, and the "Transfer" affordance is
+   * offered as a single DIRECTION-NEUTRAL option (outside the income/expense
+   * kind filter, so an inflow row can reach it too — P1-7). Transfer
+   * categories are removed from the ordinary kind groups so a silent one-sided
+   * tag is impossible. When omitted (a caller with no flow host), Transfers
+   * simply doesn't appear — the pick can only happen through the detail Sheet.
+   */
+  onTransferPick?: () => void;
   /** Full-width dialog variant; default is the compact ledger-row trigger. */
   wide?: boolean;
   /**
@@ -351,15 +381,36 @@ export function CategoryPicker({
   const [query, setQuery] = useState('');
   const [recents, setRecents] = useState<string[]>([]);
   const [createKind, setCreateKind] = useState<'income' | 'expense'>('expense');
+  // F-016 (picker slice): inline-create can now nest under a parent. null =
+  // top-level. Reset whenever the popover opens or the kind flips (a parent of
+  // the other kind can't hold this child).
+  const [createParentId, setCreateParentId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   // Categories created inline, merged in so a new one is pickable (and its
   // name resolvable) immediately, before the parent refetches categories.
   const [created, setCreated] = useState<CategoryRow[]>([]);
 
-  const merged = useMemo(() => {
+  const allMerged = useMemo(() => {
     const known = new Set(categories.map((c) => c.ledgerAccountId));
     return [...categories, ...created.filter((c) => !known.has(c.ledgerAccountId))];
   }, [categories, created]);
+
+  // A "Transfer" category exists on the taxonomy (any entity/kind). Used to
+  // decide whether to show the direction-neutral Transfer affordance (P1-7).
+  const hasTransferCategory = useMemo(
+    () => allMerged.some((c) => isTransferCategoryRow(c)),
+    [allMerged],
+  );
+
+  // Transfers are handled by the counterparty flow, never as a plain category
+  // pick — drop them from the ordinary groups in EVERY picker so a one-sided
+  // tag is impossible anywhere (P1-6, incl. the Review page). Callers that can
+  // host the flow pass onTransferPick and get the direction-neutral "Transfer"
+  // affordance below; callers that can't simply don't surface Transfers.
+  const merged = useMemo(
+    () => allMerged.filter((c) => !isTransferCategoryRow(c)),
+    [allMerged],
+  );
 
   // Only offer categories matching the transaction's direction (income/expense).
   const options = useMemo(
@@ -376,6 +427,17 @@ export function CategoryPicker({
         .map((id) => options.find((c) => c.ledgerAccountId === id))
         .filter((c): c is CategoryRow => c !== undefined),
     [recents, options],
+  );
+
+  // Parents an inline-created child can nest under: top-level categories
+  // (no parent themselves — the schema is one level deep) of the SELECTED
+  // kind. Empty until at least one top-level category of that kind exists.
+  const parentOptions = useMemo(
+    () =>
+      merged.filter(
+        (c) => c.kind === createKind && (c.parentLedgerAccountId ?? null) === null,
+      ),
+    [merged, createKind],
   );
 
   const label = row.categoryName ?? 'Uncategorized';
@@ -396,6 +458,7 @@ export function CategoryPicker({
     setQuery('');
     // Kind for inline create: the transaction's sign (explicit toggle below).
     setCreateKind(row.categoryKind ?? inferKindFromAmount(row.amountMinor));
+    setCreateParentId(null);
     setRecents(
       householdId
         ? parseRecents(window.localStorage.getItem(recentCategoriesKey(householdId)))
@@ -439,14 +502,27 @@ export function CategoryPicker({
         merged.find((c) => c.ledgerAccountId === currentId)?.entityId ??
         options[0]?.entityId ??
         null;
-      const res = await createCategory({ householdId, name, kind: createKind, entityId });
+      // If a parent is chosen, the child MUST live in the parent's entity (the
+      // one-level nesting trigger + reparent proc enforce same-entity); pin the
+      // create to that entity so the server doesn't reject the pairing.
+      const parent = createParentId
+        ? merged.find((c) => c.ledgerAccountId === createParentId)
+        : null;
+      const createEntity = parent?.entityId ?? entityId;
+      const res = await createCategory({
+        householdId,
+        name,
+        kind: createKind,
+        entityId: createEntity,
+        parentLedgerAccountId: createParentId,
+      });
       if (typeof res.ledgerAccountId === 'string') {
         const newCat: CategoryRow = {
           ledgerAccountId: res.ledgerAccountId,
           name,
           kind: createKind,
-          entityId: entityId ?? '',
-          parentLedgerAccountId: null,
+          entityId: createEntity ?? '',
+          parentLedgerAccountId: createParentId,
         };
         setCreated((prev) => [...prev, newCat]);
         toast.success(`Added ${name}. It's available in every picker now.`);
@@ -512,8 +588,28 @@ export function CategoryPicker({
             autoFocus
           />
           <CommandList>
-            {groups.length === 0 && !canCreate ? (
+            {groups.length === 0 && !canCreate && !(onTransferPick && hasTransferCategory) ? (
               <CommandEmpty>No matching category.</CommandEmpty>
+            ) : null}
+            {/* P1-6/P1-7: direction-neutral Transfer affordance. Available to
+                inflow AND outflow rows (outside the kind filter). Picking it
+                opens the counterparty flow — the one-sided overlay is never
+                written. Filtered by the query like a real option would be. */}
+            {onTransferPick &&
+            hasTransferCategory &&
+            (trimmed.length === 0 || 'transfer'.includes(trimmed.toLowerCase())) ? (
+              <CommandGroup heading="Transfer">
+                <CommandItem
+                  value="transfer:flow"
+                  onSelect={() => {
+                    setOpen(false);
+                    onTransferPick();
+                  }}
+                >
+                  <ArrowLeftRight className="size-4" />
+                  <span className="truncate">Transfer between accounts…</span>
+                </CommandItem>
+              </CommandGroup>
             ) : null}
             {trimmed.length === 0 && recentOptions.length > 0 ? (
               <CommandGroup heading="Recent">
@@ -580,12 +676,37 @@ export function CategoryPicker({
                       }`}
                       onClick={() => {
                         setCreateKind(k);
+                        // A parent of the OTHER kind can't hold this child.
+                        setCreateParentId(null);
                       }}
                     >
                       {k === 'expense' ? 'Expense' : 'Income'}
                     </button>
                   ))}
                 </div>
+                {/* F-016: optional parent for the new category (one level deep).
+                    Hidden when there's no top-level category of this kind to
+                    nest under. */}
+                {parentOptions.length > 0 ? (
+                  <div className="flex items-center gap-1.5 px-2 pb-1.5">
+                    <span className="text-xs text-muted-foreground">under</span>
+                    <select
+                      aria-label="Parent category"
+                      className="h-6 min-w-0 flex-1 rounded-md border border-border bg-transparent px-1.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      value={createParentId ?? ''}
+                      onChange={(e) => {
+                        setCreateParentId(e.target.value === '' ? null : e.target.value);
+                      }}
+                    >
+                      <option value="">Nothing (top level)</option>
+                      {parentOptions.map((c) => (
+                        <option key={c.ledgerAccountId} value={c.ledgerAccountId}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
               </CommandGroup>
             ) : null}
           </CommandList>
@@ -620,6 +741,10 @@ type TxnEditFormProps = {
   /** The transaction's owning account's entity — required to attach a document. */
   entityId: string | null;
   categories: CategoryRow[];
+  /** All household accounts — counterparty choices for the transfer flow (F-012). */
+  accounts: AccountRow[];
+  /** Rows already loaded on the page — used to detect a matching opposite leg. */
+  allRows: RichTransactionRow[];
   allTags: TagRow[];
   onTagsMutated: () => void;
   onClose: () => void;
@@ -651,6 +776,8 @@ function TxnEditForm({
   userId,
   entityId,
   categories,
+  accounts,
+  allRows,
   allTags,
   onTagsMutated,
   onClose,
@@ -668,10 +795,22 @@ function TxnEditForm({
   const [dateAttemptKey, setDateAttemptKey] = useState(() => crypto.randomUUID());
   const [saving, setSaving] = useState(false);
   const [voiding, setVoiding] = useState(false);
+  // A manual txn can be voided from here only while it is NOT part of an active
+  // (suggested/confirmed) transfer — those legs must be undone first (the server
+  // enforces this with P0009; see the Void footer below, review follow-up c).
+  const voidable =
+    row.source === 'manual' &&
+    row.transferStatus !== 'suggested' &&
+    row.transferStatus !== 'confirmed';
   // Category picked in THIS dialog session. The row prop keeps the pre-change
   // category until close, so old→new stays visible (teardown C4: the change
   // you just made is legible, not silent).
   const [picked, setPicked] = useState<{ id: string; name: string } | null>(null);
+  // F-012: when the user picks the "Transfers" category, we intercept with the
+  // counterparty step instead of writing a one-sided tag. Null = not in the
+  // flow (plain picker shown).
+  const [transferFlow, setTransferFlow] = useState(false);
+  const [undoingTransfer, setUndoingTransfer] = useState(false);
   // Split editor rows (teardown C7): null = not splitting (single-category
   // picker shown); non-null = editable rows whose "Left to split" remainder
   // must reach exactly 0 before Save splits enables (Law 3 made visible).
@@ -718,6 +857,8 @@ function TxnEditForm({
     setDateAttemptKey(crypto.randomUUID());
     setVoiding(false);
     setPicked(null);
+    setTransferFlow(false);
+    setUndoingTransfer(false);
     // Multi-split rows open straight into the editor, seeded from the real
     // postings; single-category rows start in picker mode with a "Split…"
     // affordance.
@@ -812,6 +953,24 @@ function TxnEditForm({
       toast.error(err instanceof Error ? err.message : 'Could not void the transaction.');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function undoTransferLink() {
+    if (!householdId || !row.transferLinkId) return;
+    setUndoingTransfer(true);
+    try {
+      await undoTransfer({ householdId, linkId: row.transferLinkId });
+      toast.success(
+        row.transferBooked
+          ? 'Transfer undone — the booked leg was reversed, not deleted.'
+          : 'Unlinked — both sides are back in income and spending.',
+      );
+      onSaved(row.transactionId);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not undo the transfer.');
+    } finally {
+      setUndoingTransfer(false);
     }
   }
 
@@ -1106,10 +1265,27 @@ function TxnEditForm({
                 {row.counterpartyAccountName ?? 'another account'}
               </span>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Confirmed as a transfer on the Review page — excluded from income/expense totals. Not
-              editable here.
-            </p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="min-w-0 text-xs text-muted-foreground">
+                Excluded from income and spending.
+                {row.transferBooked ? ' KEEL booked the other side.' : ''}
+              </p>
+              {row.transferLinkId ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 shrink-0 text-xs text-muted-foreground hover:text-foreground"
+                  disabled={undoingTransfer}
+                  onClick={() => {
+                    void undoTransferLink();
+                  }}
+                >
+                  {undoingTransfer ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                  {row.transferBooked ? 'Undo transfer' : 'Unlink'}
+                </Button>
+              ) : null}
+            </div>
           </div>
         ) : null}
         {row.transferStatus !== 'confirmed' && splitRows === null && categoryOptions.length > 0 ? (
@@ -1118,52 +1294,84 @@ function TxnEditForm({
               <Label>Category</Label>
               {/* Teardown C7: every competitor has this. Expands into two
                       rows with the full amount seeded on row 1. */}
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-7 text-xs"
-                onClick={() => {
-                  setSplitRows(
-                    seedRowsForNewSplit(row.amountMinor, picked?.id ?? row.categoryLedgerAccountId),
-                  );
-                }}
-              >
-                <Split className="size-3.5" />
-                Split…
-              </Button>
+              {!transferFlow ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => {
+                    setSplitRows(
+                      seedRowsForNewSplit(
+                        row.amountMinor,
+                        picked?.id ?? row.categoryLedgerAccountId,
+                      ),
+                    );
+                  }}
+                >
+                  <Split className="size-3.5" />
+                  Split…
+                </Button>
+              ) : null}
             </div>
-            <CategoryPicker
-              // Overlay the in-dialog pick so the trigger shows the NEW
-              // category while the strike-through below keeps the old one.
-              row={
-                picked
-                  ? { ...row, categoryLedgerAccountId: picked.id, categoryName: picked.name }
-                  : row
-              }
-              categories={categories}
-              wide
-              // Once picked in THIS session the badge would be stale —
-              // saving always writes source='user' regardless of pick.
-              auto={!picked && isAutoCategorized(row)}
-              onPick={(catId, catName) => {
-                setPicked({
-                  id: catId,
-                  name:
-                    catName ??
-                    categories.find((c) => c.ledgerAccountId === catId)?.name ??
-                    'Updated',
-                });
-                onRecategorize(row.transactionId, catId);
-              }}
-            />
-            {picked && picked.id !== row.categoryLedgerAccountId ? (
-              <p className="text-xs text-muted-foreground">
-                <span className="line-through">{row.categoryName ?? 'Uncategorized'}</span>
-                <span aria-hidden="true"> → </span>
-                <span className="text-foreground">{picked.name}</span>
-              </p>
-            ) : null}
+            {transferFlow ? (
+              // F-012: picking "Transfers" opens the counterparty step here
+              // (match an existing opposite leg, or book one on a manual
+              // account) instead of writing a one-sided classification tag.
+              <TransferCounterpartyFlow
+                householdId={householdId}
+                row={row}
+                accounts={accounts}
+                allRows={allRows}
+                onDone={() => {
+                  setTransferFlow(false);
+                  onSaved(row.transactionId);
+                }}
+                onCancel={() => {
+                  setTransferFlow(false);
+                }}
+              />
+            ) : (
+              <>
+                <CategoryPicker
+                  // Overlay the in-dialog pick so the trigger shows the NEW
+                  // category while the strike-through below keeps the old one.
+                  row={
+                    picked
+                      ? { ...row, categoryLedgerAccountId: picked.id, categoryName: picked.name }
+                      : row
+                  }
+                  categories={categories}
+                  wide
+                  // Once picked in THIS session the badge would be stale —
+                  // saving always writes source='user' regardless of pick.
+                  auto={!picked && isAutoCategorized(row)}
+                  // F-012 / P1-7: picking "Transfers" opens the counterparty
+                  // step (direction-neutral, so an inflow row reaches it too)
+                  // instead of writing a one-sided classification tag.
+                  onTransferPick={() => {
+                    setTransferFlow(true);
+                  }}
+                  onPick={(catId, catName) => {
+                    setPicked({
+                      id: catId,
+                      name:
+                        catName ??
+                        categories.find((c) => c.ledgerAccountId === catId)?.name ??
+                        'Updated',
+                    });
+                    onRecategorize(row.transactionId, catId);
+                  }}
+                />
+                {picked && picked.id !== row.categoryLedgerAccountId ? (
+                  <p className="text-xs text-muted-foreground">
+                    <span className="line-through">{row.categoryName ?? 'Uncategorized'}</span>
+                    <span aria-hidden="true"> → </span>
+                    <span className="text-foreground">{picked.name}</span>
+                  </p>
+                ) : null}
+              </>
+            )}
           </div>
         ) : null}
         <div className="space-y-1.5">
@@ -1229,7 +1437,12 @@ function TxnEditForm({
         />
       </div>
       <DialogFooter className="gap-2 sm:justify-between">
-        {row.source === 'manual' && !voiding ? (
+        {/* Void is offered only for manual txns that are NOT part of an active
+            transfer. The server already rejects voiding an active transfer leg
+            (P0009 "undo the transfer first"); hiding the button keeps the UI
+            from offering an action that can only fail — undo the transfer via
+            the transfer panel above instead (review follow-up c). */}
+        {voidable && !voiding ? (
           <Button
             variant="ghost"
             className="text-destructive hover:text-destructive"
@@ -1241,7 +1454,7 @@ function TxnEditForm({
             <Trash2 className="size-4" />
             Void
           </Button>
-        ) : row.source === 'manual' ? (
+        ) : voidable ? (
           <Button
             variant="destructive"
             disabled={saving}
@@ -1273,35 +1486,15 @@ function TxnEditForm({
   );
 }
 
-/**
- * Mobile/narrow shell for TxnEditForm — a centered modal. Behavior is
- * unchanged from before the master-detail slice (teardown C6): every
- * existing caller, including the Accounts register page, keeps this exact
- * modal with zero prop changes. The ledger page (below the desktop
- * breakpoint, or always on the Accounts page) is the only caller; at desktop
- * widths the ledger page passes `row={null}` here and shows TxnDetailPanel
- * instead.
- */
-export function TxnEditDialog({
-  row,
-  householdId,
-  userId,
-  accounts,
-  categories,
-  allTags,
-  onTagsMutated,
-  onClose,
-  onSaved,
-  onRecategorize,
-  onMerchantSearch,
-  formRef,
-}: {
+type TxnDetailSheetProps = {
   row: RichTransactionRow | null;
   householdId: string | null;
   userId: string | null;
   /** Looked up by row.accountId to find the entity a new attachment belongs to. */
   accounts: AccountRow[];
   categories: CategoryRow[];
+  /** Rows already loaded on the page — transfer match detection (F-012). */
+  allRows?: RichTransactionRow[];
   allTags: TagRow[];
   onTagsMutated: () => void;
   onClose: () => void;
@@ -1309,66 +1502,30 @@ export function TxnEditDialog({
   onRecategorize: (txnId: string, categoryId: string) => void;
   onMerchantSearch: (description: string) => void;
   /**
-   * Optional external handle (ledger page master-detail): lets the caller
-   * trigger the SAME flush-then-close path this dialog already uses for
-   * Escape/overlay/× — e.g. right before switching the desktop panel to a
-   * different transaction. Falls back to a local ref, so every other caller
-   * (Accounts register) is unaffected.
+   * Optional external handle: lets the caller trigger the SAME flush-then-
+   * close path this sheet uses for Escape/overlay/× — e.g. right before
+   * switching the panel to a different transaction without an intermediate
+   * close. Falls back to a local ref.
    */
   formRef?: RefObject<TxnEditFormHandle | null>;
-}) {
-  const localRef = useRef<TxnEditFormHandle>(null);
-  const activeRef = formRef ?? localRef;
-
-  return (
-    <Dialog
-      open={row !== null}
-      onOpenChange={(open) => {
-        if (!open) activeRef.current?.requestClose();
-      }}
-    >
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Edit transaction</DialogTitle>
-          <DialogDescription>
-            Rename it or add a note. The bank&apos;s original description is kept.
-          </DialogDescription>
-        </DialogHeader>
-        {row ? (
-          <TxnEditForm
-            ref={activeRef}
-            row={row}
-            householdId={householdId}
-            userId={userId}
-            entityId={accounts.find((a) => a.id === row.accountId)?.entityId ?? null}
-            categories={categories}
-            allTags={allTags}
-            onTagsMutated={onTagsMutated}
-            onClose={onClose}
-            onSaved={onSaved}
-            onRecategorize={onRecategorize}
-            onMerchantSearch={onMerchantSearch}
-          />
-        ) : null}
-      </DialogContent>
-    </Dialog>
-  );
-}
+};
 
 /**
- * Desktop-width master-detail side panel (teardown C6 residual): the SAME
- * TxnEditForm as the modal, hosted in a static bordered card next to the
- * list instead of a Dialog overlay — the list stays visible and clickable,
- * no navigation-losing modal (Law 8). Only the ledger page mounts this, and
- * only with a non-null row at `lg`+ widths; renders nothing otherwise so it
- * never reserves layout space when no transaction is selected.
+ * F-010 — Transaction detail as a full-height RIGHT-SIDE panel (shadcn Sheet).
+ * One surface for every width and every caller (ledger + account pages): a
+ * fixed panel down the full right edge on desktop, a full-screen sheet at
+ * 390px. The list underneath keeps its scroll position (the Sheet overlays,
+ * it doesn't reflow the page). Hosts the unchanged TxnEditForm — category
+ * (with the F-012 transfer flow), tags, notes, splits, attachments, transfer
+ * status — so this is a re-house + polish, not a rewrite of form logic.
  */
-export function TxnDetailPanel({
+export function TxnDetailSheet({
   row,
   householdId,
   userId,
   accounts,
   categories,
+  allRows,
   allTags,
   onTagsMutated,
   onClose,
@@ -1376,60 +1533,68 @@ export function TxnDetailPanel({
   onRecategorize,
   onMerchantSearch,
   formRef,
-}: {
-  row: RichTransactionRow | null;
-  householdId: string | null;
-  userId: string | null;
-  /** Looked up by row.accountId to find the entity a new attachment belongs to. */
-  accounts: AccountRow[];
-  categories: CategoryRow[];
-  allTags: TagRow[];
-  onTagsMutated: () => void;
-  onClose: () => void;
-  onSaved: (txnId: string) => void;
-  onRecategorize: (txnId: string, categoryId: string) => void;
-  onMerchantSearch: (description: string) => void;
-  /** Lets the ledger page pre-flush this panel before switching selection. */
-  formRef: RefObject<TxnEditFormHandle | null>;
-}) {
-  if (!row) return null;
+}: TxnDetailSheetProps) {
+  const localRef = useRef<TxnEditFormHandle>(null);
+  const activeRef = formRef ?? localRef;
+
   return (
-    <div className="flex flex-col overflow-hidden rounded-xl border border-border bg-popover text-sm text-popover-foreground ring-1 ring-foreground/10">
-      <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
-        <div>
-          <h2 className="font-heading text-base font-medium">Edit transaction</h2>
-          <p className="text-sm text-muted-foreground">
+    <Sheet
+      open={row !== null}
+      onOpenChange={(open) => {
+        if (!open) activeRef.current?.requestClose();
+      }}
+    >
+      {/* Full-screen on mobile; a comfortable fixed-width panel down the full
+          right edge on sm+ (Sheet's own right-side positioning gives the
+          full viewport height). Scrolls internally so long transactions —
+          many splits, attachments — never clip. */}
+      <SheetContent
+        side="right"
+        className="w-full gap-0 overflow-y-auto p-0 sm:max-w-md"
+      >
+        <SheetHeader className="border-b border-border px-4 py-3">
+          <SheetTitle>Edit transaction</SheetTitle>
+          <SheetDescription>
             Rename it or add a note. The bank&apos;s original description is kept.
-          </p>
-        </div>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Close detail panel"
-          className="shrink-0"
-          onClick={() => {
-            formRef.current?.requestClose();
-          }}
-        >
-          <X className="size-4" />
-        </Button>
-      </div>
-      <div className="p-4">
-        <TxnEditForm
-          ref={formRef}
-          row={row}
-          householdId={householdId}
-          userId={userId}
-          entityId={accounts.find((a) => a.id === row.accountId)?.entityId ?? null}
-          categories={categories}
-          allTags={allTags}
-          onTagsMutated={onTagsMutated}
-          onClose={onClose}
-          onSaved={onSaved}
-          onRecategorize={onRecategorize}
-          onMerchantSearch={onMerchantSearch}
-        />
-      </div>
-    </div>
+          </SheetDescription>
+        </SheetHeader>
+        {row ? (
+          <div className="px-4 py-4">
+            <TxnEditForm
+              ref={activeRef}
+              row={row}
+              householdId={householdId}
+              userId={userId}
+              entityId={accounts.find((a) => a.id === row.accountId)?.entityId ?? null}
+              categories={categories}
+              accounts={accounts}
+              allRows={allRows ?? []}
+              allTags={allTags}
+              onTagsMutated={onTagsMutated}
+              onClose={onClose}
+              onSaved={onSaved}
+              onRecategorize={onRecategorize}
+              onMerchantSearch={onMerchantSearch}
+            />
+          </div>
+        ) : null}
+      </SheetContent>
+    </Sheet>
   );
+}
+
+/**
+ * Back-compat aliases so existing callers keep compiling while the pages
+ * migrate to the single Sheet surface. Both now resolve to TxnDetailSheet —
+ * the old centered-modal / inline-card split is gone (F-010). TxnDetailPanel
+ * ignores its old always-required formRef shape by threading it through.
+ */
+export function TxnEditDialog(props: TxnDetailSheetProps) {
+  return <TxnDetailSheet {...props} />;
+}
+
+export function TxnDetailPanel(
+  props: TxnDetailSheetProps & { formRef: RefObject<TxnEditFormHandle | null> },
+) {
+  return <TxnDetailSheet {...props} />;
 }

@@ -662,6 +662,10 @@ export type RichTransactionRow = {
   tags?: { tagId: string; name: string }[];
   /** Present when this transaction is one side of a suggested/confirmed transfer pair. */
   transferStatus?: 'suggested' | 'confirmed' | null;
+  /** The transfer_links row id, so the sidebar can undo/unlink it (F-012). */
+  transferLinkId?: string | null;
+  /** True when KEEL synthesized the counterparty leg (undo reverses it); false for match/detector pairs (undo just unlinks). */
+  transferBooked?: boolean | null;
   /** Other leg's account, present only once the pairing is CONFIRMED (absent pre-migration). */
   counterpartyAccountId?: string | null;
   counterpartyAccountName?: string | null;
@@ -800,6 +804,67 @@ export async function linkTransfer(input: {
     householdId: input.householdId,
     txnA: input.txnA,
     txnB: input.txnB,
+  });
+}
+
+/**
+ * F-012 MATCH path: link two existing opposite transactions AND confirm the
+ * pairing in one round-trip. Used when the user picks the "Transfers" category
+ * and KEEL found an existing opposite transaction on the counterparty account
+ * — the counterparty pick is the approval, so the pair is confirmed
+ * immediately and excluded from cash flow (no intermediate Review step).
+ */
+export async function linkAndConfirmTransfer(input: {
+  householdId: string;
+  txnA: string;
+  txnB: string;
+}): Promise<{ linkId?: string }> {
+  return invoke('api/transfers/link-confirm', {
+    householdId: input.householdId,
+    txnA: input.txnA,
+    txnB: input.txnB,
+  });
+}
+
+/**
+ * F-012 BOOK path: no opposite transaction exists on the chosen counterparty
+ * account (typical for a manual/unconnected account — a cash jar, a 401k).
+ * The server posts the balanced opposite cash leg there, creates its
+ * canonical transaction, and confirms the pairing — atomically and idempotent
+ * on the source transaction id (a retry replays to the same booked leg).
+ */
+export async function bookTransferCounterparty(input: {
+  householdId: string;
+  sourceTxnId: string;
+  counterpartyAccountId: string;
+  /**
+   * Per-attempt idempotency nonce (P1-4). A retry of the SAME click replays to
+   * the same booked leg; a book→undo→re-book uses a FRESH key and is a new
+   * attempt, so undo no longer wedges re-booking.
+   */
+  attemptKey: string;
+}): Promise<{ effects?: { linkId?: string; bookedTxnId?: string } }> {
+  return invoke('api/transfers/book', {
+    householdId: input.householdId,
+    sourceTxnId: input.sourceTxnId,
+    counterpartyAccountId: input.counterpartyAccountId,
+    attemptKey: input.attemptKey,
+  });
+}
+
+/**
+ * F-012 UNDO path: reverse/unlink a confirmed transfer from the txn detail.
+ * A booked transfer reverses the synthesized counterparty leg (compensating
+ * reversal, never a delete); a match/detector pair is simply unlinked. Both
+ * re-include the affected legs in cash flow.
+ */
+export async function undoTransfer(input: {
+  householdId: string;
+  linkId: string;
+}): Promise<{ status?: string }> {
+  return invoke('api/transfers/undo', {
+    householdId: input.householdId,
+    linkId: input.linkId,
   });
 }
 

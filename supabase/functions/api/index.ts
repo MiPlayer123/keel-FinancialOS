@@ -1863,6 +1863,97 @@ export default {
       return json(200, { linkId });
     }
 
+    if (path === '/transfers/link-confirm') {
+      // F-012 MATCH path: the user picked the "Transfers" category and chose a
+      // counterparty account whose existing opposite transaction we matched.
+      // Link + confirm atomically (no intermediate 'suggested' the user would
+      // have to re-approve on Review) — cash-flow exclusion via the existing
+      // confirmed-links mechanism (Law 2: the user's counterparty pick IS the
+      // approval).
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const txnA = CanonicalTransactionIdSchema.safeParse(input['txnA']);
+      const txnB = CanonicalTransactionIdSchema.safeParse(input['txnB']);
+      if (!householdId.success || !txnA.success || !txnB.success) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Transfer link-confirm request failed validation.',
+          details: {},
+        });
+      }
+      const { data: linkId, error: lcError } = await ctx.supabase.rpc(
+        'keel_link_and_confirm_transfer',
+        { p_household_id: householdId.data, p_txn_a: txnA.data, p_txn_b: txnB.data },
+      );
+      if (lcError) return mapDbError(lcError);
+      return json(200, { linkId });
+    }
+
+    if (path === '/transfers/book') {
+      // F-012 BOOK path: no opposite transaction exists on the chosen
+      // counterparty account (the common case for a manual/unconnected account
+      // — a cash jar, a 401k). Post the balanced opposite cash leg there,
+      // create its canonical transaction, and confirm the pairing — all
+      // atomically, idempotent on the source transaction id (replay-safe).
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const sourceTxnId = CanonicalTransactionIdSchema.safeParse(input['sourceTxnId']);
+      const counterpartyAccountId = AccountIdSchema.safeParse(input['counterpartyAccountId']);
+      // P1-4: per-attempt idempotency nonce (like the manual-transaction
+      // attemptKey). A retry of the SAME click dedupes; a book→undo→re-book is
+      // a fresh attempt, no longer wedged by a permanent stale key.
+      const attemptKey = input['attemptKey'];
+      if (
+        !householdId.success ||
+        !sourceTxnId.success ||
+        !counterpartyAccountId.success ||
+        typeof attemptKey !== 'string' ||
+        attemptKey.trim().length < 1 ||
+        attemptKey.length > 100
+      ) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Transfer book request failed validation.',
+          details: {},
+        });
+      }
+      const { data: result, error: bookError } = await ctx.supabase.rpc(
+        'keel_book_transfer_counterparty',
+        {
+          p_household_id: householdId.data,
+          p_source_txn_id: sourceTxnId.data,
+          p_counterparty_account_id: counterpartyAccountId.data,
+          p_attempt_key: attemptKey,
+        },
+      );
+      if (bookError) return mapDbError(bookError);
+      return json(200, result ?? { ok: true });
+    }
+
+    if (path === '/transfers/undo') {
+      // F-012 UNDO path (from the txn detail sidebar): reverse a booked
+      // transfer (compensating reversal on the synthesized leg — never a
+      // DELETE, Law 2) or plain-unlink a match/detector pair. Both branch on
+      // transfer_links.booked_txn inside the proc.
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const linkId = input['linkId'];
+      if (!householdId.success || typeof linkId !== 'string' || !uuidRe.test(linkId)) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Transfer undo request failed validation.',
+          details: {},
+        });
+      }
+      const { data: result, error: undoError } = await ctx.supabase.rpc('keel_undo_transfer', {
+        p_household_id: householdId.data,
+        p_link_id: linkId,
+      });
+      if (undoError) return mapDbError(undoError);
+      return json(200, result ?? { ok: true });
+    }
+
     if (path === '/connections/sync') {
       const input = body as Record<string, unknown>;
       const householdId = HouseholdIdSchema.safeParse(input['householdId']);
