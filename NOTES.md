@@ -3563,3 +3563,40 @@ behavior, not a project-specific fact that needed discovery the way the
 `keel_worker` grant did. What needed verifying here was narrower and
 project-specific — does the owning role have enough privilege to take the
 lock at all — and that was checked directly rather than assumed.
+
+## Follow-up #5: the staleness heuristic itself could be fooled
+
+Sixth review round, another genuine P1: the 15-minute continuation
+staleness escape hatch (follow-up #2) can be wrong at the exact moment a
+worker resumes a long-delayed continuation. Confirmed directly by reading
+`keel_worker_acquire_sync_lease` (20260711130000_c5b_sync_pull.sql:11-58):
+it sets `sync_lease_owner`/`sync_leased_until` but never touches
+`sync_continuation_pending`/`sync_continuation_marked_at`. So a worker can
+pick a stale (>15min) continuation back up, hold a live unexpired lease,
+and actively post new transactions right now — while
+`sync_continuation_marked_at` still reads as stale, and follow-up #4's
+`FOR NO KEY UPDATE` lock doesn't catch it either, since the worker's
+lease-acquire already happened and committed as its own separate,
+finished transaction before the reanchor call even started (the lock only
+fences NEW acquisitions/bumps starting *during* the reanchor transaction).
+
+Fixed by also rejecting while an unexpired lease exists
+(`sync_leased_until is not null and sync_leased_until > now()`),
+independent of the staleness heuristic. `sync_leased_until` is the
+authoritative signal for "is a worker actively claiming this connection
+right now" — a crashed/abandoned worker's lease still expires on its own
+TTL regardless of this check, so it doesn't reopen the genuinely-stuck-
+connection escape hatch the staleness cutoff exists for; it only blocks
+while a worker verifiably still holds the lease. Verified live in two
+rolled-back transactions: an unexpired lease correctly blocks reanchor, an
+expired one correctly falls through and computes the right result;
+confirmed zero side effects afterward. Re-ran `015_reanchor_balance.sql`'s
+full pgTAP suite clean with this change — no regression from the four
+prior fixes to this same function tonight.
+
+Six rounds in, the guard now checks: generation match, continuation-
+pending freshness, AND live lease state, with a row lock spanning the
+whole computation. This is a lot of layered defense for one function —
+worth noting for whoever next touches `keel_cmd_reanchor_balance` that
+each layer exists because a specific, real, verified race was found
+through it, not speculative hardening.
