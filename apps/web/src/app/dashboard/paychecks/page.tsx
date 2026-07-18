@@ -238,6 +238,12 @@ function PaychecksBody() {
       if (p.status !== 'active') continue;
       const key = p.employerName.trim().toLowerCase();
       if (map.has(key)) continue; // first = most recent (rows are pay_date desc)
+      // Skip employers whose latest paycheck carries a kind the v1 form can't
+      // handle: scaleTemplate + save() only rebuild EARNING/reimbursement/
+      // DEDUCTION/direct_deposit lines, so any other kind (retirement_401k, hsa,
+      // employer_match, …) would make keel_paycheck_create reject the prefilled
+      // command. No template = no broken "usual breakdown" button.
+      if (!p.components.every((c) => V1_EDITABLE_KINDS.includes(c.kind))) continue;
       const lines = p.components
         .filter((c) => c.kind !== 'direct_deposit')
         .map((c) => ({ kind: c.kind, amountMinor: BigInt(c.amountMinor) }));

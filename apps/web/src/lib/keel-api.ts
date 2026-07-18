@@ -1514,7 +1514,7 @@ export async function linkRecurringSchedule(input: {
   return keelCommand({
     commandId: newId(),
     command: 'recurring.link_schedule',
-    economicEventKey: `recurring.link_schedule:${input.seriesId}:${input.scheduleId}`,
+    economicEventKey: `recurring.link_schedule:${input.seriesId}:${input.scheduleId}:${newId()}`,
     actor: { kind: 'user', userId: input.userId },
     householdId: input.householdId,
     payload: { seriesId: input.seriesId, scheduleId: input.scheduleId },
