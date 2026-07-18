@@ -281,9 +281,9 @@ begin
 end;
 $$;
 
-revoke all on function public.keel_list_transactions_rich_page(uuid, integer, date, uuid, uuid, text)
+revoke all on function public.keel_list_transactions_rich_page(uuid, integer, date, uuid, uuid, uuid, text)
   from public, anon;
-grant execute on function public.keel_list_transactions_rich_page(uuid, integer, date, uuid, uuid, text)
+grant execute on function public.keel_list_transactions_rich_page(uuid, integer, date, uuid, uuid, uuid, text)
   to authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
