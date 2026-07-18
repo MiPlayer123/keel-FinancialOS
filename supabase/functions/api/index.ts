@@ -106,6 +106,11 @@ const QUERY_TO_PROC: Record<string, string> = {
   'ledger.trial_balance': 'keel_trial_balance',
   'transactions.list': 'keel_list_transactions',
   'transactions.rich': 'keel_list_transactions_rich',
+  // WS-H (F-005): bounded, keyset-paginated + server-filtered variant of the
+  // rich read. Same per-row DTO as transactions.rich; carries a nextCursor.
+  'transactions.rich_page': 'keel_list_transactions_rich_page',
+  // WS-H (F-021): slim server-side transaction search for the command palette.
+  'transactions.search': 'keel_search_transactions',
   'categories.list': 'keel_list_categories',
   'balances.latest': 'keel_latest_balances',
   'recurring.list': 'keel_list_recurring',
@@ -2469,6 +2474,47 @@ export default {
         past.setUTCDate(past.getUTCDate() - 365);
         rpcArgs.p_from = isoDate(db.from) ?? past.toISOString().slice(0, 10);
         rpcArgs.p_to = isoDate(db.to) ?? todayIso;
+      } else if (query.query === 'transactions.rich_page') {
+        // WS-H (F-005): keyset page params. Everything is optional; each is
+        // validated to its shape (bad input degrades to "no filter", never an
+        // error, so a stale/garbage cursor can't wedge the ledger). The proc
+        // itself clamps p_limit to [1,200] and re-checks membership.
+        const db = body as {
+          limit?: unknown;
+          cursorDate?: unknown;
+          cursorId?: unknown;
+          accountId?: unknown;
+          categoryId?: unknown;
+          search?: unknown;
+        };
+        const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (typeof db.limit === 'number' && Number.isFinite(db.limit)) {
+          rpcArgs.p_limit = Math.trunc(db.limit);
+        }
+        // Cursor is only honoured as a MATCHED pair (date + id); a half-cursor
+        // is ignored so the first page is served rather than a malformed keyset.
+        if (isoDate(db.cursorDate) && typeof db.cursorId === 'string' && uuidRe.test(db.cursorId)) {
+          rpcArgs.p_cursor_date = db.cursorDate;
+          rpcArgs.p_cursor_id = db.cursorId;
+        }
+        if (typeof db.accountId === 'string' && uuidRe.test(db.accountId)) {
+          rpcArgs.p_account_id = db.accountId;
+        }
+        if (typeof db.categoryId === 'string' && uuidRe.test(db.categoryId)) {
+          rpcArgs.p_category_id = db.categoryId;
+        }
+        if (typeof db.search === 'string' && db.search.length <= 200) {
+          rpcArgs.p_search = db.search;
+        }
+      } else if (query.query === 'transactions.search') {
+        // WS-H (F-021): command-palette typeahead. Requires a search term; the
+        // proc returns an empty page for a blank/absent one.
+        const db = body as { search?: unknown; limit?: unknown };
+        rpcArgs.p_search =
+          typeof db.search === 'string' && db.search.length <= 200 ? db.search : '';
+        if (typeof db.limit === 'number' && Number.isFinite(db.limit)) {
+          rpcArgs.p_limit = Math.trunc(db.limit);
+        }
       }
       const rpcStartedAt = performance.now();
       const { data, error } = await ctx.supabase.rpc(proc, rpcArgs);
