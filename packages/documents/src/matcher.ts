@@ -137,10 +137,10 @@ const scoreMerchant = (
   const sim = merchantSimilarity(receiptMerchant, txnDescription);
   if (sim >= 1) return { points: 25, code: 'MERCHANT_EXACT' };
   if (sim >= config.merchantFuzzyFloor) {
-    // Grade fuzzy 10..20 across [floor, 1).
+    // Grade fuzzy 10..20 across [floor, 1). This block is only entered when
+    // floor ≤ sim < 1, so floor < 1 and span > 0 (no divide-by-zero possible).
     const span = 1 - config.merchantFuzzyFloor;
-    const graded =
-      span <= 0 ? 20 : 10 + Math.round((10 * (sim - config.merchantFuzzyFloor)) / span);
+    const graded = 10 + Math.round((10 * (sim - config.merchantFuzzyFloor)) / span);
     return { points: Math.min(20, graded), code: 'MERCHANT_FUZZY' };
   }
   return null;

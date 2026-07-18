@@ -78,6 +78,33 @@ describe('decideMatch — tip range', () => {
     ]);
     expect(out.kind).toBe('none');
   });
+
+  it('a survivor that clears blocking but scores below the multi floor → none (not multi)', () => {
+    // The candidate PASSES every blocking guard (currency ok, T+5 within the
+    // 5-day window, amount within the 25% tip band) yet its total score is only
+    // tip(30) + far-date(5) = 35, with no merchant signal (unrelated descriptor).
+    // 35 < minMultiScore(50), so the matcher offers nothing at all — exercising
+    // the score-too-low `none` branch (distinct from the zero-survivor `none`).
+    const out = decideMatch(extraction({ merchant: 'Totally Unrelated Vendor' }), [
+      candidate({
+        amountMinor: '-4900', // ~16% over 4217 → tip band
+        effectiveDate: '2026-07-17', // T+5
+        description: 'ZZ *NONMATCHING CO 0000',
+      }),
+    ]);
+    expect(out.kind).toBe('none');
+    // Proof the candidate really did survive blocking and score in-range.
+    const scored = scoreCandidates(extraction({ merchant: 'Totally Unrelated Vendor' }), [
+      candidate({
+        amountMinor: '-4900',
+        effectiveDate: '2026-07-17',
+        description: 'ZZ *NONMATCHING CO 0000',
+      }),
+    ]);
+    expect(scored).toHaveLength(1);
+    expect(scored[0]!.score).toBe(35);
+    expect(scored[0]!.score).toBeLessThan(DEFAULT_MATCHER_CONFIG.minMultiScore);
+  });
 });
 
 describe('decideMatch — nothing', () => {
@@ -171,6 +198,49 @@ describe('decideMatch — guards', () => {
       candidate({ effectiveDate: '2026-07-12', previouslyRejected: true }),
     ]);
     expect(out.kind).toBe('none');
+  });
+});
+
+describe('decideMatch — sign + null-merchant survivors', () => {
+  it('matches a POSITIVE account-side amount (refund/inflow) on absolute value', () => {
+    // Candidate amount is positive (e.g. a refund posting); abs-compare still
+    // matches the receipt total. Exercises the positive branch of txn abs().
+    const out = decideMatch(extraction({ merchant: 'Blue Bottle' }), [
+      candidate({ amountMinor: '4217', effectiveDate: '2026-07-12' }),
+    ]);
+    expect(out.kind).toBe('suggest');
+  });
+
+  it('matches when the extracted total itself is negative (abs-compared)', () => {
+    // A negative receipt total is still compared on absolute value.
+    const out = decideMatch(extraction({ merchant: 'Blue Bottle', totalMinor: '-4217' }), [
+      candidate({ amountMinor: '-4217', effectiveDate: '2026-07-12' }),
+    ]);
+    expect(out.kind).toBe('suggest');
+  });
+
+  it('scores a survivor even when the extraction merchant is null (no merchant signal)', () => {
+    // Exact amount(50) + same day(25) = 75, merchant null → no merchant points,
+    // still a valid single suggestion. Exercises the null-merchant branch.
+    const out = decideMatch(extraction({ merchant: null }), [
+      candidate({ effectiveDate: '2026-07-12' }),
+    ]);
+    expect(out.kind).toBe('suggest');
+    if (out.kind === 'suggest') {
+      expect(out.candidate.score).toBe(75);
+      expect(out.candidate.reasonCodes).not.toContain('MERCHANT_EXACT');
+      expect(out.candidate.reasonCodes).not.toContain('MERCHANT_FUZZY');
+    }
+  });
+
+  it('tie-break on equal id compares equal (stable sort, zero comparator)', () => {
+    // Two entries with the SAME transactionId, score, and dayGap force the
+    // id-equality comparator branch (returns 0). Ranking stays length-2.
+    const dupe = candidate({ effectiveDate: '2026-07-12', description: 'SHELL GAS 88' });
+    const scored = scoreCandidates(extraction({ merchant: 'Unknown Vendor' }), [dupe, dupe]);
+    expect(scored).toHaveLength(2);
+    expect(scored[0]!.transactionId).toBe(scored[1]!.transactionId);
+    expect(scored[0]!.score).toBe(scored[1]!.score);
   });
 });
 

@@ -81,8 +81,10 @@ export const tokenOverlap = (aNorm: string, bNorm: string): number => {
   for (const token of a) {
     if (b.has(token)) intersection += 1;
   }
+  // Both sets are non-empty here (guarded above), so unionSize ≥ 1 always
+  // (union ≥ max(|a|,|b|) ≥ 1) — no divide-by-zero guard needed.
   const unionSize = a.size + b.size - intersection;
-  return unionSize === 0 ? 0 : intersection / unionSize;
+  return intersection / unionSize;
 };
 
 /** Character trigrams of a normalized stem (spaces removed first). */
