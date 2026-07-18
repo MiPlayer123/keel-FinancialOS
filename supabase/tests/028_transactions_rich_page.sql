@@ -15,15 +15,15 @@ begin;select no_plan();
 -- authenticated + service_role may execute, anon may not).
 -- ---------------------------------------------------------------------------
 select has_function('public','keel_list_transactions_rich_page',
-  array['uuid','integer','date','uuid','uuid','text'],
+  array['uuid','integer','date','uuid','uuid','uuid','text'],
   'paginated rich read exists with the page/cursor/filter signature');
 select has_function('public','keel_search_transactions', array['uuid','text','integer'],
   'command-palette search read exists');
 select ok(not has_function_privilege('anon',
-  'public.keel_list_transactions_rich_page(uuid,integer,date,uuid,uuid,text)', 'execute'),
+  'public.keel_list_transactions_rich_page(uuid,integer,date,uuid,uuid,uuid,text)', 'execute'),
   'anon may NOT read the paginated rich list');
 select ok(has_function_privilege('authenticated',
-  'public.keel_list_transactions_rich_page(uuid,integer,date,uuid,uuid,text)', 'execute'),
+  'public.keel_list_transactions_rich_page(uuid,integer,date,uuid,uuid,uuid,text)', 'execute'),
   'authenticated may read the paginated rich list');
 select ok(not has_function_privilege('anon',
   'public.keel_search_transactions(uuid,text,integer)', 'execute'),
@@ -137,7 +137,7 @@ select is(
   (select count(*) from jsonb_array_elements((select r from _all)->'rows') e
      where e->>'transactionId' like 'd8000000-%'),
   5::bigint, 'a full page contains all five fixture rows');
-select is((select r->'nextCursor' from _all), null::jsonb,
+select is((select r->'nextCursor' from _all), 'null'::jsonb,
   'nextCursor is null on the last page (no more rows)');
 
 -- Account filter: only the card account (a402) → just P3.
