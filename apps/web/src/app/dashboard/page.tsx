@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Wallet } from 'lucide-react';
 
@@ -10,11 +10,13 @@ import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
 import {
   fetchAccounts,
+  fetchBudgets,
   fetchCashFlowForecast,
   fetchConnections,
   fetchSchedules,
   syncConnection,
   type AccountRow,
+  type BudgetRow,
   type ConnectionRow,
   type DailyBalanceRow,
   type ForecastBill,
@@ -35,17 +37,19 @@ import { NetWorthHero } from '@/components/keel/net-worth-hero';
 import { NotesTasksCard } from '@/components/keel/notes-tasks-card';
 import { NeedsAttention } from '@/components/keel/needs-attention';
 import { formatMoney } from '@/lib/money';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button, buttonVariants } from '@/components/ui/button';
-import { RefreshCw, Loader2, TrendingUp } from 'lucide-react';
+import { CalendarClock, RefreshCw, Loader2, TrendingUp } from 'lucide-react';
 import { toast } from 'sonner';
+import { Separator } from '@/components/ui/separator';
+import { cn } from '@/lib/utils';
 
 export default function HomePage() {
   return (
     <>
       <PageHeader title="Home" description="Your financial position at a glance." />
-      <div className="space-y-8 p-6">
+      <div className="flex flex-col gap-6 p-4 sm:p-6">
         <HomeBody />
       </div>
     </>
@@ -365,13 +369,13 @@ function FreeToSpendCard({
   if (!fts) return null;
 
   return (
-    <Card>
+    <Card size="sm">
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-medium text-muted-foreground">
           Free to spend · this month
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="flex flex-col gap-3">
         <div>
           <Money
             amountMinor={fts.freeMinor.toString()}
@@ -386,7 +390,7 @@ function FreeToSpendCard({
             </p>
           ) : null}
         </div>
-        <div className={`grid grid-cols-2 gap-3 ${fts.hasRecurringData ? 'sm:grid-cols-4' : ''}`}>
+        <div className={cn('grid grid-cols-2 gap-3', fts.hasRecurringData && 'sm:grid-cols-4')}>
           <div>
             <p className="text-xs text-muted-foreground">In so far</p>
             <Money
@@ -438,6 +442,297 @@ function FreeToSpendCard({
   );
 }
 
+type UpcomingRecurring = {
+  series: RecurringSeriesRow;
+  occurrence: RecurringSeriesRow['occurrences'][number];
+};
+
+function RecentTransactionsCard({ rows }: { rows: RichTransactionRow[] }) {
+  return (
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle>Recent transactions</CardTitle>
+        <CardAction>
+          <Link
+            href="/dashboard/ledger"
+            className={buttonVariants({ variant: 'ghost', size: 'xs' })}
+          >
+            View all
+          </Link>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Transactions appear here after they sync.</p>
+        ) : (
+          rows.map((transaction, index) => (
+            <Fragment key={transaction.transactionId}>
+              <Link
+                href={`/dashboard/ledger?q=${encodeURIComponent(transaction.description)}`}
+                className="flex min-w-0 items-center gap-3 py-2 first:pt-0 last:pb-0"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">
+                    {merchantDisplayName(transaction.description)}
+                  </p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    <time dateTime={transaction.effectiveDate}>
+                      {transaction.effectiveDate.slice(5)}
+                    </time>{' '}
+                    · {transaction.accountName}
+                  </p>
+                </div>
+                <Money
+                  amountMinor={transaction.amountMinor}
+                  currency={transaction.currency}
+                  signed
+                  className="shrink-0 text-sm"
+                />
+              </Link>
+              {index < rows.length - 1 ? <Separator /> : null}
+            </Fragment>
+          ))
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function UpcomingRecurringCard({
+  rows,
+  todayIso,
+}: {
+  rows: UpcomingRecurring[];
+  todayIso: string;
+}) {
+  return (
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle>Upcoming recurring</CardTitle>
+        <CardAction>
+          <Link
+            href="/dashboard/recurring"
+            className={buttonVariants({ variant: 'ghost', size: 'xs' })}
+          >
+            View recurring
+          </Link>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Confirm recurring bills and income to see what is coming up.
+          </p>
+        ) : (
+          rows.map(({ series, occurrence }, index) => (
+            <Fragment key={occurrence.occurrenceId}>
+              <div className="flex min-w-0 items-center gap-3 py-2 first:pt-0 last:pb-0">
+                <CalendarClock className="size-4 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">
+                    {merchantDisplayName(series.counterpartyKey)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {relativeDueLabel(occurrence.expectedDate, todayIso) ??
+                      occurrence.expectedDate.slice(5)}
+                  </p>
+                </div>
+                <Money
+                  amountMinor={
+                    series.sign === 'outflow'
+                      ? `-${occurrence.expectedAmountMinor}`
+                      : occurrence.expectedAmountMinor
+                  }
+                  currency={occurrence.currency}
+                  signed
+                  className="shrink-0 text-sm"
+                />
+              </div>
+              {index < rows.length - 1 ? <Separator /> : null}
+            </Fragment>
+          ))
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function AccountsSummaryCard({
+  accounts,
+  balanceByLedger,
+}: {
+  accounts: AccountRow[];
+  balanceByLedger: Map<string, string>;
+}) {
+  const visibleAccounts = accounts.slice(0, 5);
+  return (
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle>Accounts</CardTitle>
+        <CardAction className="flex items-center gap-2">
+          <Badge variant="secondary" className="font-normal">
+            {String(accounts.length)}
+          </Badge>
+          <Link
+            href="/dashboard/accounts"
+            className={buttonVariants({ variant: 'ghost', size: 'xs' })}
+          >
+            View all
+          </Link>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {visibleAccounts.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Connect a bank or add an account to start tracking balances.
+          </p>
+        ) : (
+          visibleAccounts.map((account, index) => (
+            <Fragment key={account.id}>
+              <Link
+                href={`/dashboard/accounts/${account.id}`}
+                className="flex min-w-0 items-center justify-between gap-3 py-2 first:pt-0 last:pb-0"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">{account.name}</p>
+                  <p className="truncate text-xs capitalize text-muted-foreground">
+                    {account.subtype.replaceAll('_', ' ')}
+                  </p>
+                </div>
+                <Money
+                  amountMinor={balanceByLedger.get(account.ledgerAccountId) ?? '0'}
+                  currency={account.currency}
+                  className="shrink-0 text-sm"
+                />
+              </Link>
+              {index < visibleAccounts.length - 1 ? <Separator /> : null}
+            </Fragment>
+          ))
+        )}
+        {accounts.length > visibleAccounts.length ? (
+          <p className="pt-2 text-xs text-muted-foreground">
+            +{String(accounts.length - visibleAccounts.length)} more accounts
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function SpendingCard({
+  spending,
+  insights,
+}: {
+  spending: ReturnType<typeof spendingMix>;
+  insights: Insight[];
+}) {
+  return (
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle>Spending · last 30 days</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {spending.length > 0 ? (
+          <CategoryBarList items={spending} />
+        ) : (
+          <p className="text-sm text-muted-foreground">No spending to summarize yet.</p>
+        )}
+        {insights.length > 0 ? (
+          <>
+            <Separator />
+            <div className="flex flex-col gap-3">
+              {insights.map((insight) => (
+                <div key={insight.label} className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="text-xs text-muted-foreground">{insight.label}</p>
+                    <p
+                      className="truncate text-xs text-muted-foreground"
+                      title={insight.rawDetail ?? insight.detail}
+                    >
+                      {insight.detail}
+                    </p>
+                  </div>
+                  <p className="shrink-0 font-medium tabular-nums">{insight.value}</p>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ProjectedCashCard({
+  forecast,
+  varies,
+  todayIso,
+}: {
+  forecast: { rows: DailyBalanceRow[]; bills: ForecastBill[] };
+  varies: boolean;
+  todayIso: string;
+}) {
+  return (
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle>Projected cash · next 30 days</CardTitle>
+        <CardAction>
+          <Badge variant="outline" className="text-[10px] uppercase">
+            Projection
+          </Badge>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {varies ? (
+          <>
+            <BalanceTrendChart points={forecast.rows} height={160} />
+            {forecast.bills.length > 0 ? (
+              <div className="flex flex-col gap-1">
+                {forecast.bills.slice(0, 5).map((bill) => (
+                  <div
+                    key={`${bill.seriesId}-${bill.date}`}
+                    className="flex items-center gap-3 text-sm"
+                  >
+                    <span className="w-16 shrink-0 text-xs text-muted-foreground">
+                      {relativeDueLabel(bill.date, todayIso) ?? bill.date.slice(5)}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{bill.name}</span>
+                    <Money
+                      amountMinor={
+                        bill.sign === 'outflow' ? `-${bill.amountMinor}` : bill.amountMinor
+                      }
+                      currency={bill.currency}
+                      signed
+                      className="shrink-0 text-sm"
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <p className="text-xs text-muted-foreground">
+              A preview from your confirmed recurring bills — not a statement of record.
+            </p>
+          </>
+        ) : (
+          <EmptyState
+            icon={<TrendingUp className="size-6" />}
+            title="No projection yet"
+            description="Confirm your recurring bills and income and KEEL will roll your balance forward here."
+            action={
+              <Link
+                href="/dashboard/recurring"
+                className={buttonVariants({ variant: 'outline', size: 'sm' })}
+              >
+                Review recurring
+              </Link>
+            }
+          />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function HomeBody() {
   const { householdId, ready } = useHousehold();
   const balances = useKeelQuery<TrialBalanceRow>('ledger.trial_balance', householdId);
@@ -452,6 +747,7 @@ function HomeBody() {
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
   const [connections, setConnections] = useState<ConnectionRow[] | null>(null);
   const [schedules, setSchedules] = useState<ScheduleRow[]>([]);
+  const [budgets, setBudgets] = useState<BudgetRow[] | null>(null);
   const [forecast, setForecast] = useState<{
     rows: DailyBalanceRow[];
     bills: ForecastBill[];
@@ -463,6 +759,28 @@ function HomeBody() {
     void fetchCashFlowForecast(householdId, 30).then((f) => {
       if (active) setForecast(f);
     });
+    return () => {
+      active = false;
+    };
+  }, [householdId]);
+
+  // Match the Budgets page's current-month read. budgets.list includes every
+  // category, so a real budget exists only when at least one row has a
+  // non-null budgetMinor (F-006).
+  useEffect(() => {
+    if (!householdId) return;
+    let active = true;
+    const now = new Date();
+    const monthIso = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+      .toISOString()
+      .slice(0, 10);
+    void fetchBudgets(householdId, monthIso)
+      .then((rows) => {
+        if (active) setBudgets(rows);
+      })
+      .catch(() => {
+        if (active) setBudgets([]);
+      });
     return () => {
       active = false;
     };
@@ -523,6 +841,30 @@ function HomeBody() {
   // whole dashboard — caught by the live UI verification pass).
   const spending = useMemo(() => spendingMix(richTxns ?? []), [richTxns]);
   const insights = useMemo(() => buildInsights(richTxns ?? []), [richTxns]);
+  const recentTransactions = useMemo(
+    () =>
+      [...(richTxns ?? [])]
+        .sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate))
+        .slice(0, 8),
+    [richTxns],
+  );
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const upcomingRecurring = useMemo(
+    () =>
+      (recurringSeries ?? [])
+        .filter((series) => series.status === 'confirmed')
+        .flatMap((series) =>
+          series.occurrences
+            .filter(
+              (occurrence) =>
+                occurrence.status === 'expected' && occurrence.expectedDate >= todayIso,
+            )
+            .map((occurrence) => ({ series, occurrence })),
+        )
+        .sort((a, b) => a.occurrence.expectedDate.localeCompare(b.occurrence.expectedDate))
+        .slice(0, 6),
+    [recurringSeries, todayIso],
+  );
 
   if (loading) {
     return (
@@ -562,10 +904,24 @@ function HomeBody() {
     forecast !== null &&
     forecast.rows.length > 1 &&
     new Set(forecast.rows.map((r) => r.balanceMinor)).size > 1;
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const hasBudget = budgets?.some((row) => row.budgetMinor !== null) ?? false;
 
   return (
     <>
+      {/* Fused net-worth hero (C11): number + Δ + % + window + chart as one
+          unit, with range pills (C10). Replaces the old bare Net position
+          card AND the separate 90-day net-worth chart card. */}
+      <div className="flex flex-col gap-2">
+        <NetWorthHero
+          householdId={householdId}
+          fallbackNetMinor={netMinor.toString()}
+          fallbackAsOf={balances.asOf}
+        />
+        <div className="flex justify-end px-1">
+          <SyncStatus householdId={householdId} connections={connections ?? []} />
+        </div>
+      </div>
+
       {/* Unified actionable inbox (C16). Absorbs the old TransferNudgeBanner:
           suggested transfers are part of the review row's count, and Review is
           where confirming them (excluding from spending) actually happens. */}
@@ -577,163 +933,37 @@ function HomeBody() {
         transactions={richTxns}
       />
 
-      <FreeToSpendCard
-        richTxns={richTxns ?? []}
-        series={recurringSeries ?? []}
-        schedules={schedules}
-      />
-
-      <NotesTasksCard householdId={householdId} compact />
-
-      {/* Fused net-worth hero (C11): number + Δ + % + window + chart as one
-          unit, with range pills (C10). Replaces the old bare Net position
-          card AND the separate 90-day net-worth chart card. */}
-      <NetWorthHero
-        householdId={householdId}
-        fallbackNetMinor={netMinor.toString()}
-        fallbackAsOf={balances.asOf}
-      />
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <CashFlowCard householdId={householdId} />
-      </div>
-
-      {insights.length > 0 ? (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          {insights.map((i) => (
-            <div key={i.label} className="rounded-lg border border-border bg-card px-4 py-3">
-              <p className="text-xs text-muted-foreground">{i.label}</p>
-              <p className="text-lg font-semibold tabular-nums">{i.value}</p>
-              <p className="truncate text-xs text-muted-foreground" title={i.rawDetail ?? i.detail}>
-                {i.detail}
-              </p>
-            </div>
-          ))}
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+        <div className="flex min-w-0 flex-col gap-4 [&>*]:max-w-none">
+          <CashFlowCard householdId={householdId} />
+          {showMonthlyFlow ? (
+            <Card size="sm">
+              <CardHeader>
+                <CardTitle>Cash flow by month</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <CashFlowMonthlyChart rows={monthlyFlow} height={180} />
+              </CardContent>
+            </Card>
+          ) : null}
         </div>
-      ) : null}
 
-      {forecast !== null && forecast.rows.length > 1 ? (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-              Projected cash · next 30 days
-              <Badge variant="outline" className="text-[10px] uppercase">
-                Projection
-              </Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {forecastVaries ? (
-              <>
-                <BalanceTrendChart points={forecast.rows} height={160} />
-                {forecast.bills.length > 0 ? (
-                  <div className="space-y-1">
-                    {forecast.bills.slice(0, 5).map((b) => (
-                      <div
-                        key={`${b.seriesId}-${b.date}`}
-                        className="flex items-center gap-3 text-sm"
-                      >
-                        <span className="w-16 shrink-0 text-xs text-muted-foreground">
-                          {relativeDueLabel(b.date, todayIso) ?? b.date.slice(5)}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate">{b.name}</span>
-                        <Money
-                          amountMinor={b.sign === 'outflow' ? `-${b.amountMinor}` : b.amountMinor}
-                          currency={b.currency}
-                          signed
-                          className="shrink-0 text-sm"
-                        />
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-                <p className="text-xs text-muted-foreground">
-                  A preview from your confirmed recurring bills — not a statement of record.
-                </p>
-              </>
-            ) : (
-              <EmptyState
-                icon={<TrendingUp className="size-6" />}
-                title="No projection yet"
-                description="Confirm your recurring bills and income and KEEL will roll your balance forward here."
-                action={
-                  <Link
-                    href="/dashboard/recurring"
-                    className={buttonVariants({ variant: 'outline', size: 'sm' })}
-                  >
-                    Review recurring
-                  </Link>
-                }
-              />
-            )}
-          </CardContent>
-        </Card>
-      ) : null}
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {showMonthlyFlow ? (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Cash flow by month
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <CashFlowMonthlyChart rows={monthlyFlow} />
-            </CardContent>
-          </Card>
+        <SpendingCard spending={spending} insights={insights} />
+        <RecentTransactionsCard rows={recentTransactions} />
+        <UpcomingRecurringCard rows={upcomingRecurring} todayIso={todayIso} />
+        <AccountsSummaryCard accounts={accountList} balanceByLedger={balanceByLedger} />
+        <NotesTasksCard householdId={householdId} compact />
+        {forecast !== null ? (
+          <ProjectedCashCard forecast={forecast} varies={forecastVaries} todayIso={todayIso} />
         ) : null}
-        {spending.length > 0 ? (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Spending · last 30 days
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <CategoryBarList items={spending} />
-            </CardContent>
-          </Card>
-        ) : null}
-      </div>
-
-      <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-medium text-muted-foreground">Accounts</h2>
-          <SyncStatus householdId={householdId} connections={connections ?? []} />
-        </div>
-        {accountList.length === 0 ? (
-          <EmptyState
-            icon={<Wallet className="size-6" />}
-            title="No accounts yet"
-            description="Connect a bank or add an account to start tracking balances."
+        {hasBudget ? (
+          <FreeToSpendCard
+            richTxns={richTxns ?? []}
+            series={recurringSeries ?? []}
+            schedules={schedules}
           />
-        ) : (
-          <div className="overflow-hidden rounded-lg border border-border">
-            {accountList.map((a, i) => (
-              <Link
-                key={a.id}
-                href={`/dashboard/accounts/${a.id}`}
-                className={`flex items-center justify-between px-4 py-3 transition-colors hover:bg-secondary/50 ${
-                  i > 0 ? 'border-t border-border' : ''
-                }`}
-              >
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{a.name}</p>
-                  <p className="text-xs capitalize text-muted-foreground">
-                    {a.subtype.replaceAll('_', ' ')}
-                  </p>
-                </div>
-                <Money
-                  amountMinor={balanceByLedger.get(a.ledgerAccountId) ?? '0'}
-                  currency={a.currency}
-                  className="text-sm"
-                />
-              </Link>
-            ))}
-          </div>
-        )}
-      </section>
+        ) : null}
+      </div>
     </>
   );
 }

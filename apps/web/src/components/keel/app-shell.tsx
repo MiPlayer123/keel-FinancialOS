@@ -17,14 +17,13 @@ import {
   ArrowLeftRight,
   FileCheck2,
   BadgeCheck,
-  Link2,
   Settings,
   LogOut,
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
   Sparkles,
-  ClipboardList,
+  TrendingUp,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -32,6 +31,8 @@ import { getSupabaseBrowserClient } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from '@/components/ui/sheet';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -57,72 +58,138 @@ import { BottomTabBar } from '@/components/keel/bottom-tab-bar';
 
 type NavItem = { label: string; href: string; icon: LucideIcon };
 
-const NAV: NavItem[] = [
+const PRIMARY_NAV: NavItem[] = [
   { label: 'Home', href: '/dashboard', icon: LayoutDashboard },
   { label: 'Accounts', href: '/dashboard/accounts', icon: Wallet },
-  { label: 'Ledger', href: '/dashboard/ledger', icon: ReceiptText },
+  { label: 'Transactions', href: '/dashboard/ledger', icon: ReceiptText },
+  { label: 'Investments', href: '/dashboard/investments', icon: TrendingUp },
   { label: 'Recurring', href: '/dashboard/recurring', icon: Repeat },
   { label: 'Budgets', href: '/dashboard/budgets', icon: PiggyBank },
   { label: 'Goals', href: '/dashboard/goals', icon: Target },
   { label: 'Investments', href: '/dashboard/investments', icon: TrendingUp },
   { label: 'Reports', href: '/dashboard/reports', icon: BarChart3 },
-  { label: 'Assistant', href: '/dashboard/assistant', icon: Sparkles },
+  { label: 'Review', href: '/dashboard/review', icon: BadgeCheck },
+];
+
+const SECONDARY_NAV: NavItem[] = [
   { label: 'Paychecks', href: '/dashboard/paychecks', icon: Banknote },
   { label: 'Reimbursements', href: '/dashboard/reimbursements', icon: ArrowLeftRight },
   { label: 'Statements', href: '/dashboard/statements', icon: FileCheck2 },
-  { label: 'Review', href: '/dashboard/review', icon: BadgeCheck },
-  { label: 'Notes & Tasks', href: '/dashboard/notes-tasks', icon: ClipboardList },
-  { label: 'Connections', href: '/dashboard/connections', icon: Link2 },
-  { label: 'Settings', href: '/dashboard/settings', icon: Settings },
+  { label: 'Assistant', href: '/dashboard/assistant', icon: Sparkles },
 ];
 
+const SETTINGS_NAV: NavItem = {
+  label: 'Settings',
+  href: '/dashboard/settings',
+  icon: Settings,
+};
+
 const COLLAPSE_KEY = 'keel-sidebar-collapsed';
+
+function NavItemLink({
+  item: { label, href, icon: Icon },
+  pathname,
+  collapsed,
+  onNavigate,
+}: {
+  item: NavItem;
+  pathname: string;
+  collapsed: boolean;
+  onNavigate?: (() => void) | undefined;
+}) {
+  const active = pathname === href || (href !== '/dashboard' && pathname.startsWith(href));
+  const link = (
+    <Link
+      href={href}
+      onClick={() => onNavigate?.()}
+      className={cn(
+        'flex items-center gap-3 rounded-md py-2 text-sm font-medium transition-colors',
+        collapsed ? 'justify-center px-0' : 'px-3',
+        active
+          ? 'bg-secondary text-foreground'
+          : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
+      )}
+    >
+      <Icon className="size-4 shrink-0" />
+      {collapsed ? null : label}
+      {!collapsed && href === '/dashboard/review' ? <ReviewBadge /> : null}
+      {!collapsed && href === '/dashboard/assistant' ? (
+        <Badge variant="outline" className="ml-auto px-1.5 text-[10px] text-muted-foreground">
+          Preview
+        </Badge>
+      ) : null}
+    </Link>
+  );
+
+  if (!collapsed) return link;
+  return (
+    <Tooltip>
+      <TooltipTrigger render={link} />
+      <TooltipContent side="right">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
 
 function NavLinks({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: () => void }) {
   const pathname = usePathname();
   return (
-    <nav className="flex flex-col gap-0.5">
-      {NAV.map(({ label, href, icon: Icon }) => {
-        const active = pathname === href || (href !== '/dashboard' && pathname.startsWith(href));
-        const link = (
-          <Link
-            key={href}
-            href={href}
-            onClick={() => onNavigate?.()}
-            className={cn(
-              'flex items-center gap-3 rounded-md py-2 text-sm font-medium transition-colors',
-              collapsed ? 'justify-center px-0' : 'px-3',
-              active
-                ? 'bg-secondary text-foreground'
-                : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
-            )}
-          >
-            <Icon className="size-4 shrink-0" />
-            {collapsed ? null : label}
-            {!collapsed && href === '/dashboard/review' ? <ReviewBadge /> : null}
-            {!collapsed && href === '/dashboard/assistant' ? (
-              <span className="ml-auto rounded-full border border-border px-1.5 py-px text-[10px] font-medium text-muted-foreground">
-                Preview
-              </span>
-            ) : null}
-          </Link>
-        );
-        const withSubnav =
-          !collapsed && href === '/dashboard/accounts' ? (
-            <div key={href}>
-              {link}
-              <SidebarAccounts pathname={pathname} onNavigate={onNavigate} />
-            </div>
-          ) : null;
-        if (!collapsed) return withSubnav ?? link;
-        return (
-          <Tooltip key={href}>
-            <TooltipTrigger render={link} />
-            <TooltipContent side="right">{label}</TooltipContent>
-          </Tooltip>
-        );
-      })}
+    <nav aria-label="Main navigation" className="flex flex-col gap-0.5">
+      {PRIMARY_NAV.map((item) =>
+        !collapsed && item.href === '/dashboard/accounts' ? (
+          <div key={item.href}>
+            <NavItemLink
+              item={item}
+              pathname={pathname}
+              collapsed={collapsed}
+              onNavigate={onNavigate}
+            />
+            <SidebarAccounts pathname={pathname} onNavigate={onNavigate} />
+          </div>
+        ) : (
+          <NavItemLink
+            key={item.href}
+            item={item}
+            pathname={pathname}
+            collapsed={collapsed}
+            onNavigate={onNavigate}
+          />
+        ),
+      )}
+
+      <Separator className={cn('my-2', collapsed && 'mx-auto w-6')} />
+      {collapsed ? null : (
+        <p className="px-3 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+          Manage
+        </p>
+      )}
+      {SECONDARY_NAV.map((item) => (
+        <NavItemLink
+          key={item.href}
+          item={item}
+          pathname={pathname}
+          collapsed={collapsed}
+          onNavigate={onNavigate}
+        />
+      ))}
     </nav>
+  );
+}
+
+function FooterSettingsLink({
+  collapsed,
+  onNavigate,
+}: {
+  collapsed: boolean;
+  onNavigate?: () => void;
+}) {
+  const pathname = usePathname();
+  return (
+    <NavItemLink
+      item={SETTINGS_NAV}
+      pathname={pathname}
+      collapsed={collapsed}
+      onNavigate={onNavigate}
+    />
   );
 }
 
@@ -376,6 +443,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   function sidebarInner(isCollapsed: boolean, showCollapseToggle: boolean) {
+    // The mobile drawer is the only caller with showCollapseToggle=false; on
+    // desktop the <aside> (h-dvh overflow-y-auto) is the scroll region, but the
+    // Sheet popup is a plain flex column, so the nav list must scroll itself or
+    // its lower items sit past the viewport unreachable (X-007).
+    const isMobileDrawer = !showCollapseToggle;
     return (
       <div className="flex h-full flex-col">
         <div
@@ -401,7 +473,18 @@ export function AppShell({ children }: { children: ReactNode }) {
           ) : null}
         </div>
 
-        <div className={cn('flex-1', isCollapsed ? 'px-2' : 'px-3')}>
+        <div
+          className={cn(
+            'flex-1',
+            isCollapsed ? 'px-2' : 'px-3',
+            // Constrain + scroll the nav region inside the mobile drawer so
+            // every item is reachable; overscroll-contain keeps the gesture
+            // from chaining to the page, and the safe-area padding clears the
+            // bottom tab bar. Desktop is untouched (the <aside> still scrolls).
+            isMobileDrawer &&
+              'min-h-0 overflow-y-auto overscroll-contain pb-[calc(1rem+env(safe-area-inset-bottom))]',
+          )}
+        >
           <NavLinks
             collapsed={isCollapsed}
             onNavigate={() => {
@@ -411,6 +494,14 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
 
         <div className={cn('border-t border-border', isCollapsed ? 'p-2' : 'p-3')}>
+          <div className="mb-2">
+            <FooterSettingsLink
+              collapsed={isCollapsed}
+              onNavigate={() => {
+                setMobileOpen(false);
+              }}
+            />
+          </div>
           {isCollapsed ? (
             <div className="flex flex-col items-center gap-1">
               <ThemeToggle />

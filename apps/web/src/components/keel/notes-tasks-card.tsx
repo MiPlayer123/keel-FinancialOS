@@ -1,7 +1,6 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import Link from 'next/link';
 import { Archive, Check, ClipboardList, Loader2, Pin, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -25,9 +24,8 @@ function dueLabel(dueOn: string | null): string | null {
  * `compact` drives the Home dashboard's "at a glance" placement: only
  * active work should compete for attention there, so completed tasks (the
  * server already excludes dismissed ones) are filtered out and the list is
- * capped at 6 rows with a link to the full page for everything else. The
- * dedicated Notes & Tasks page renders the same component with `compact`
- * left at its default `false` — the complete history, uncapped.
+ * capped at 6 rows. Extra rows fall away rather than linking out — Notes &
+ * tasks lives only as this dashboard card now (the dedicated page is gone).
  */
 export function NotesTasksCard({
   householdId,
@@ -54,7 +52,6 @@ export function NotesTasksCard({
     [rows, compact],
   );
   const previewRows = compact ? visibleRows.slice(0, 6) : visibleRows;
-  const hasMore = compact && visibleRows.length > previewRows.length;
 
   async function refreshAfter(action: () => Promise<unknown>, success: string) {
     setBusy(success);
@@ -94,14 +91,6 @@ export function NotesTasksCard({
           <Badge variant="secondary" className="font-normal">
             {String(openTasks.length)} open · {String(notes.length)} notes
           </Badge>
-          {hasMore ? (
-            <Link
-              href="/dashboard/notes-tasks"
-              className="text-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-            >
-              View all
-            </Link>
-          ) : null}
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
