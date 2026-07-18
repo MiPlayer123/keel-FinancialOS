@@ -122,12 +122,14 @@ select is(
     where economic_event_key = 'inv:pgtap:inv:item:plaid-itx-div-1'),
   1,
   'replay did not create a second canonical transaction');
+-- Raw events are versioned by the economic hash ('inv-txn:<id>:<hash>'); an
+-- unchanged replay reuses the same version row, so exactly one exists.
 select is(
   (select count(*)::int from public.raw_provider_events
     where connection_id = 'de000000-0000-4000-8000-000000000001'
-      and provider_event_id = 'inv-txn:plaid-itx-div-1'),
+      and provider_event_id like 'inv-txn:plaid-itx-div-1:%'),
   1,
-  'replay did not duplicate the raw source event');
+  'replay did not duplicate the raw source event version');
 
 -- ---------------------------------------------------------------------------
 -- A buy (money OUT) posts a NEGATIVE account-ledger amount.
@@ -225,8 +227,20 @@ select isnt(
   'holdings_last_success_at stamped on clear');
 
 -- ---------------------------------------------------------------------------
--- Read models (service path, no JWT claim -> membership check skipped).
+-- Read models FAIL CLOSED on a null subject (Finding 4): no JWT claim must
+-- raise KEEL_NOT_AUTHENTICATED (P0004), never silently return the household's
+-- data. This mirrors keel_list_holdings.
 -- ---------------------------------------------------------------------------
+select throws_ok(
+  $$select public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')$$,
+  'P0004', null, 'overview requires authentication (fail closed on null subject)');
+select throws_ok(
+  $$select public.keel_investments_value_daily('00000000-0000-4000-8000-00000000a001')$$,
+  'P0004', null, 'value-daily requires authentication (fail closed on null subject)');
+
+-- As a real member of Alpha household (seed owner uid), the read models resolve.
+select set_config('request.jwt.claim.sub', '00000000-0000-4000-8000-000000000001', true);
+
 select is(
   (public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->>'totalHoldingsValueMinor'),
   '75000',
@@ -241,12 +255,143 @@ select is(
   'investments-overview-v1',
   'overview carries a formula version (reproducible numbers)');
 
+-- Finding 7: totals are grouped by currency; USD headline is USD-only, and a
+-- per-currency array carries the rest honestly (no fabricated FX). The one
+-- USD holding shows up under holdingsValueByCurrency as USD.
+select is(
+  (select value->>'currency' from jsonb_array_elements(
+     public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')
+       ->'holdingsValueByCurrency') value
+    where value->>'currency' = 'USD'),
+  'USD',
+  'overview reports a USD holdings-value-by-currency group');
+
+-- Cross-tenant: a household the caller is not a member of -> P0006.
+select throws_ok(
+  $$select public.keel_investments_overview('00000000-0000-4000-8000-0000000000ff')$$,
+  'P0006', null, 'overview blocks cross-tenant access');
+
 select is(
   (select count(*)::int from jsonb_array_elements(
     public.keel_investments_value_daily(
       '00000000-0000-4000-8000-00000000a001', current_date - 30, current_date)->'points')),
   1,
   'value-daily returns one snapshot day');
+
+select set_config('request.jwt.claim.sub', '', true);
+
+-- ---------------------------------------------------------------------------
+-- Finding 6: a manual holding and a Plaid holding sharing a symbol on the same
+-- account must BOTH snapshot without an ON CONFLICT collision (the unique key
+-- includes `source`).
+-- ---------------------------------------------------------------------------
+insert into public.holdings
+  (household_id, account_id, as_of, symbol, name, qty, price_minor, value_minor, currency, source)
+values
+  ('00000000-0000-4000-8000-00000000a001', 'de000000-0000-4000-8000-000000000021',
+   current_date, 'VTI', 'Vanguard Total (manual lot)', 2, 25000, 50000, 'USD', 'manual');
+select lives_ok($$
+  select public.keel_worker_snapshot_holdings(
+    '00000000-0000-4000-8000-00000000a001', 'de000000-0000-4000-8000-000000000001')
+$$, 'snapshot with a manual + plaid holding on the same symbol does not collide');
+select is(
+  (select count(*)::int from public.holdings_snapshots
+    where account_id = 'de000000-0000-4000-8000-000000000021'
+      and snapshot_date = current_date and symbol = 'VTI'),
+  2,
+  'both source variants of the shared symbol are snapshotted');
+
+-- ---------------------------------------------------------------------------
+-- Finding 1: resumable pagination completeness. Simulate a window whose total
+-- exceeds one invocation's page cap by driving the state procs directly:
+-- opening a window freezes it; a continuation persists the resume offset WITHOUT
+-- advancing the date checkpoint; only a full advance moves last_pulled_through.
+-- ---------------------------------------------------------------------------
+-- Open a fresh window (first pull => 730-day reach-back, offset 0, frozen).
+select is(
+  (public.keel_worker_investment_sync_window(
+     '00000000-0000-4000-8000-00000000a001', 'de000000-0000-4000-8000-000000000001',
+     '2026-07-18'::date, 14) ->> 'offset')::int,
+  0,
+  'first window opens at offset 0');
+select is(
+  (select window_to from public.investment_sync_state
+    where connection_id = 'de000000-0000-4000-8000-000000000001'),
+  '2026-07-18'::date,
+  'the window is frozen with a stable end date');
+-- Hit the page cap mid-window: persist a resume offset. Checkpoint must NOT move.
+select lives_ok($$
+  select public.keel_worker_investment_sync_continue(
+    '00000000-0000-4000-8000-00000000a001', 'de000000-0000-4000-8000-000000000001',
+    '2026-07-18'::date - 730, '2026-07-18'::date, 500)
+$$, 'persist a mid-window continuation offset');
+-- Re-resolving the window returns the SAME frozen window and the saved offset,
+-- so the next cycle resumes at 500 (rows past the cap are NOT skipped).
+select is(
+  (public.keel_worker_investment_sync_window(
+     '00000000-0000-4000-8000-00000000a001', 'de000000-0000-4000-8000-000000000001',
+     '2026-07-19'::date, 14) ->> 'offset')::int,
+  500,
+  'a capped window resumes at the saved offset next cycle');
+select is(
+  (select last_pulled_through from public.investment_sync_state
+    where connection_id = 'de000000-0000-4000-8000-000000000001'),
+  null,
+  'the date checkpoint does NOT advance while a window is only partially paginated');
+-- Fully consuming the window advances the checkpoint and clears the frozen window.
+select lives_ok($$
+  select public.keel_worker_investment_sync_advance(
+    '00000000-0000-4000-8000-00000000a001', 'de000000-0000-4000-8000-000000000001',
+    '2026-07-18'::date - 730, '2026-07-18'::date)
+$$, 'advance a fully-consumed window');
+select is(
+  (select last_pulled_through from public.investment_sync_state
+    where connection_id = 'de000000-0000-4000-8000-000000000001'),
+  '2026-07-18'::date,
+  'the date checkpoint advances only once the window is fully consumed');
+select is(
+  (select window_from from public.investment_sync_state
+    where connection_id = 'de000000-0000-4000-8000-000000000001'),
+  null,
+  'the frozen window is cleared after a full advance');
+
+-- ---------------------------------------------------------------------------
+-- Finding 3: changed-body correction. Re-ingesting the SAME provider txn id
+-- with CHANGED economics (amount) must reverse the prior journal batch and
+-- post a fresh corrected one (compensating reversal, not a duplicate, not a
+-- silent no-op). Net account-ledger effect equals the corrected amount.
+-- ---------------------------------------------------------------------------
+select lives_ok($$
+  select public.keel_worker_ingest_investment_txn(
+    '00000000-0000-4000-8000-00000000a001',
+    'de000000-0000-4000-8000-000000000001',
+    'pgtap:inv:acct', 'plaid-itx-restate', 10000, 'USD',
+    '2026-07-12'::date, 'DIVIDEND (initial)', 'dividend_interest')
+$$, 'ingest the initial version of a restatable txn');
+select lives_ok($$
+  select public.keel_worker_ingest_investment_txn(
+    '00000000-0000-4000-8000-00000000a001',
+    'de000000-0000-4000-8000-000000000001',
+    'pgtap:inv:acct', 'plaid-itx-restate', 15000, 'USD',
+    '2026-07-12'::date, 'DIVIDEND (restated)', 'dividend_interest')
+$$, 'restate the same txn with a changed amount (correction, not conflict)');
+-- Still exactly one canonical transaction for that economic key.
+select is(
+  (select count(*)::int from public.canonical_transactions
+    where economic_event_key = 'inv:pgtap:inv:item:plaid-itx-restate'),
+  1,
+  'restatement keeps exactly one canonical transaction');
+-- Net posting to the account ledger for that txn equals the CORRECTED amount
+-- (original +10000 reversed, corrected +15000 posted => net +15000).
+select is(
+  (select coalesce(sum(p.amount_minor), 0)::bigint
+     from public.journal_postings p
+     join public.journal_batches b on b.id = p.batch_id
+     join public.canonical_transactions ct on ct.id = b.canonical_transaction_id
+    where ct.economic_event_key = 'inv:pgtap:inv:item:plaid-itx-restate'
+      and p.ledger_account_id = 'de000000-0000-4000-8000-000000000011'),
+  15000::bigint,
+  'restatement reverses the old amount and posts the corrected one');
 
 select * from finish();
 rollback;
