@@ -281,13 +281,20 @@ export type HoldingsErrorRow = {
   errorAt: string | null;
 };
 
+export type CurrencyTotalRow = { currency: string; totalMinor: string };
+export type CurrencyValueRow = { currency: string; valueMinor: string };
+
 export type InvestmentsOverview = {
   accounts: InvestmentAccountRow[];
   holdings: InvestmentHoldingRow[];
   allocation: InvestmentAllocationRow[];
   holdingsErrors: HoldingsErrorRow[];
+  /** USD-only headline figures. Non-USD amounts live in the *ByCurrency arrays;
+   *  they are never folded into these (no FX conversion happens server-side). */
   totalHoldingsValueMinor: string;
   totalBalanceMinor: string;
+  balancesByCurrency: CurrencyTotalRow[];
+  holdingsValueByCurrency: CurrencyValueRow[];
   currency: string;
 };
 
@@ -305,6 +312,10 @@ export async function fetchInvestmentsOverview(householdId: string): Promise<Inv
     holdingsErrors: Array.isArray(data.holdingsErrors) ? data.holdingsErrors : [],
     totalHoldingsValueMinor: data.totalHoldingsValueMinor ?? '0',
     totalBalanceMinor: data.totalBalanceMinor ?? '0',
+    balancesByCurrency: Array.isArray(data.balancesByCurrency) ? data.balancesByCurrency : [],
+    holdingsValueByCurrency: Array.isArray(data.holdingsValueByCurrency)
+      ? data.holdingsValueByCurrency
+      : [],
     currency: data.currency ?? 'USD',
   };
 }

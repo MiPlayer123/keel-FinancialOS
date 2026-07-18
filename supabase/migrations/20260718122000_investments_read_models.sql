@@ -51,8 +51,17 @@ declare
   v_errors jsonb;
   v_total_value bigint;
   v_total_balance bigint;
+  v_balances_by_currency jsonb;
+  v_holdings_value_by_currency jsonb;
 begin
-  if v_uid is not null and not exists (
+  -- Fail CLOSED (mirrors keel_list_holdings): a missing JWT subject is a hard
+  -- authentication failure, never an implicit service bypass. A real service
+  -- path uses service_role (which bypasses RLS entirely and does not call this
+  -- read model), so there is no legitimate null-subject caller here.
+  if v_uid is null then
+    raise exception 'KEEL_NOT_AUTHENTICATED' using errcode = 'P0004';
+  end if;
+  if not exists (
     select 1 from public.household_memberships m
      where m.household_id = p_household_id and m.user_id = v_uid
   ) then
@@ -87,10 +96,43 @@ begin
       'availableMinor', lb.available_minor::text,
       'balanceAsOf', lb.as_of
     ) order by ia.name), '[]'::jsonb),
-    coalesce(sum(coalesce(lb.current_minor, 0)), 0)
+    -- USD-only headline total: mixing currencies into one integer and calling
+    -- it USD is wrong (no FX here). Non-USD balances are surfaced separately in
+    -- balancesByCurrency below, never fabricated into the USD figure.
+    coalesce(sum(coalesce(lb.current_minor, 0)) filter (where ia.currency = 'USD'), 0)
     into v_accounts, v_total_balance
     from inv_accounts ia
     left join latest_bal lb on lb.account_id = ia.id;
+
+  -- Per-currency account-balance totals (one row per currency actually held),
+  -- so the UI renders each group in its own currency rather than a fabricated
+  -- global USD sum.
+  with inv_accounts as (
+    select a.id, a.currency
+      from public.accounts a
+     where a.household_id = p_household_id
+       and a.archived_at is null
+       and public.keel_is_investment_subtype(a.subtype)
+  ),
+  latest_bal as (
+    select distinct on (bs.account_id)
+           bs.account_id, bs.current_minor
+      from public.balance_snapshots bs
+      join inv_accounts ia on ia.id = bs.account_id
+     where bs.household_id = p_household_id
+     order by bs.account_id, bs.as_of desc
+  )
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'currency', currency,
+           'totalMinor', total::text
+         ) order by currency), '[]'::jsonb)
+    into v_balances_by_currency
+    from (
+      select ia.currency, coalesce(sum(coalesce(lb.current_minor, 0)), 0) as total
+        from inv_accounts ia
+        left join latest_bal lb on lb.account_id = ia.id
+       group by ia.currency
+    ) g;
 
   -- Household holdings: latest as_of snapshot per account (same "latest per
   -- account" rule as keel_list_holdings), across investment accounts only.
@@ -133,6 +175,37 @@ begin
     coalesce(sum(r.value_minor) filter (where r.currency = 'USD'), 0)
     into v_holdings, v_total_value
     from rows r;
+
+  -- Per-currency holdings-value totals (parallels balancesByCurrency). The
+  -- USD-only headline stays in totalHoldingsValueMinor; this array carries the
+  -- rest honestly rather than folding non-USD into the USD number.
+  with inv_accounts as (
+    select a.id from public.accounts a
+     where a.household_id = p_household_id
+       and a.archived_at is null
+       and public.keel_is_investment_subtype(a.subtype)
+  ),
+  latest as (
+    select h.account_id, max(h.as_of) as as_of
+      from public.holdings h
+      join inv_accounts ia on ia.id = h.account_id
+     where h.household_id = p_household_id
+     group by h.account_id
+  ),
+  rows as (
+    select h.currency, h.value_minor
+      from public.holdings h
+      join latest l on l.account_id = h.account_id and l.as_of = h.as_of
+     where h.household_id = p_household_id
+  )
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'currency', currency,
+           'valueMinor', total::text
+         ) order by currency), '[]'::jsonb)
+    into v_holdings_value_by_currency
+    from (
+      select currency, sum(value_minor) as total from rows group by currency
+    ) g;
 
   -- Allocation breakdown by symbol (USD only; largest first). A symbol-level
   -- breakdown is the reproducible baseline; the web layer can further bucket
@@ -193,6 +266,8 @@ begin
     'holdingsErrors', v_errors,
     'totalHoldingsValueMinor', v_total_value::text,
     'totalBalanceMinor', v_total_balance::text,
+    'balancesByCurrency', v_balances_by_currency,
+    'holdingsValueByCurrency', v_holdings_value_by_currency,
     'currency', 'USD'
   );
 end;
@@ -217,7 +292,11 @@ declare
   v_to date := coalesce(p_to, current_date);
   v_points jsonb;
 begin
-  if v_uid is not null and not exists (
+  -- Fail CLOSED (mirrors keel_list_holdings): missing subject = hard auth error.
+  if v_uid is null then
+    raise exception 'KEEL_NOT_AUTHENTICATED' using errcode = 'P0004';
+  end if;
+  if not exists (
     select 1 from public.household_memberships m
      where m.household_id = p_household_id and m.user_id = v_uid
   ) then

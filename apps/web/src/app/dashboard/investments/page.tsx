@@ -25,6 +25,11 @@ export default function InvestmentsPage() {
   const { householdId } = useHousehold();
   const [overview, setOverview] = useState<InvestmentsOverview | null>(null);
   const [valuePoints, setValuePoints] = useState<InvestmentValuePoint[] | null>(null);
+  // Distinct load/error/data state so a failed load can NEVER masquerade as
+  // "still loading" (skeletons forever) or as "empty". null overview means
+  // not-yet-loaded; `loadError` set means the last attempt failed.
+  const [loadState, setLoadState] = useState<'loading' | 'loaded' | 'error'>('loading');
+  const [valueHistoryFailed, setValueHistoryFailed] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogAccount, setDialogAccount] = useState<{ accountId: string; currency: string } | null>(
     null,
@@ -32,16 +37,25 @@ export default function InvestmentsPage() {
 
   const load = useCallback(() => {
     if (!householdId) return;
+    setLoadState('loading');
+    setValueHistoryFailed(false);
     fetchInvestmentsOverview(householdId)
-      .then(setOverview)
+      .then((data) => {
+        setOverview(data);
+        setLoadState('loaded');
+      })
       .catch((err: unknown) => {
         toast.error(err instanceof Error ? err.message : 'Could not load investments.');
-        setOverview(null);
+        setLoadState('error');
       });
     fetchInvestmentsValueDaily(householdId)
-      .then(setValuePoints)
+      .then((points) => {
+        setValuePoints(points);
+        setValueHistoryFailed(false);
+      })
       .catch(() => {
         setValuePoints([]);
+        setValueHistoryFailed(true);
       });
   }, [householdId]);
 
@@ -83,10 +97,15 @@ export default function InvestmentsPage() {
     [valuePoints, overview],
   );
 
+  // USD headline currency; non-USD amounts are surfaced explicitly (never
+  // folded into the USD figure — the server does no FX conversion).
   const currency = overview?.currency ?? 'USD';
-  const loading = overview === null;
+  const loading = loadState === 'loading';
+  const errored = loadState === 'error';
   const hasAnything =
     (overview?.accounts.length ?? 0) > 0 || (overview?.holdings.length ?? 0) > 0;
+  // Non-USD balance groups to render alongside the USD headline (Finding 7).
+  const nonUsdBalances = (overview?.balancesByCurrency ?? []).filter((b) => b.currency !== 'USD');
 
   return (
     <div className="space-y-6">
@@ -95,12 +114,47 @@ export default function InvestmentsPage() {
         description="Brokerage and retirement accounts, holdings, and allocation across your household."
       />
 
+      {/* Holdings sync errors (F-014): tells the user to re-link. Rendered
+          OUTSIDE the empty/non-empty switch so it is never hidden when the
+          household has no accounts yet but a connection is erroring. */}
+      {(overview?.holdingsErrors ?? []).map((e) => (
+        <Card key={e.connectionId} className="border-keel-negative/40 bg-keel-negative/5">
+          <CardContent className="flex items-start gap-3 py-4">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-keel-negative" />
+            <div className="text-sm">
+              <p className="font-medium">
+                Holdings unavailable{e.displayName ? ` — ${e.displayName}` : ''}
+              </p>
+              <p className="text-muted-foreground">
+                Reconnect this institution in update mode to grant investment access. Balances
+                still sync; only holdings and investment activity are affected.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+
       {loading ? (
         <div className="grid gap-4 sm:grid-cols-2">
           <Skeleton className="h-28 w-full" />
           <Skeleton className="h-28 w-full" />
         </div>
-      ) : !hasAnything ? (
+      ) : errored ? (
+        <Card className="border-keel-negative/40 bg-keel-negative/5">
+          <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
+            <AlertTriangle className="size-6 text-keel-negative" />
+            <div className="text-sm">
+              <p className="font-medium">Couldn&apos;t load investments</p>
+              <p className="text-muted-foreground">
+                Something went wrong fetching this page. Your data is safe.
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onClick={load}>
+              Try again
+            </Button>
+          </CardContent>
+        </Card>
+      ) : !overview || !hasAnything ? (
         <EmptyState
           icon={<TrendingUp className="size-6" />}
           title="No investment accounts yet"
@@ -108,24 +162,6 @@ export default function InvestmentsPage() {
         />
       ) : (
         <>
-          {/* Holdings sync errors (F-014): tells the user to re-link. */}
-          {overview.holdingsErrors.map((e) => (
-            <Card key={e.connectionId} className="border-keel-negative/40 bg-keel-negative/5">
-              <CardContent className="flex items-start gap-3 py-4">
-                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-keel-negative" />
-                <div className="text-sm">
-                  <p className="font-medium">
-                    Holdings unavailable{e.displayName ? ` — ${e.displayName}` : ''}
-                  </p>
-                  <p className="text-muted-foreground">
-                    Reconnect this institution in update mode to grant investment access. Balances
-                    still sync; only holdings and investment activity are affected.
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-
           {/* Totals */}
           <div className="grid gap-4 sm:grid-cols-2">
             <Card>
@@ -140,6 +176,19 @@ export default function InvestmentsPage() {
                   currency={currency}
                   className="text-2xl font-semibold"
                 />
+                {nonUsdBalances.length > 0 ? (
+                  <div className="mt-2 space-y-0.5">
+                    {nonUsdBalances.map((b) => (
+                      <div
+                        key={b.currency}
+                        className="flex items-center justify-between text-xs text-muted-foreground"
+                      >
+                        <span>{b.currency}</span>
+                        <Money amountMinor={b.totalMinor} currency={b.currency} className="text-xs" />
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
             <Card>
@@ -171,6 +220,17 @@ export default function InvestmentsPage() {
             <CardContent>
               {trendPoints.length >= 2 ? (
                 <BalanceTrendChart points={trendPoints} />
+              ) : valueHistoryFailed ? (
+                <p className="py-8 text-center text-sm text-muted-foreground">
+                  Couldn&apos;t load value history.{' '}
+                  <button
+                    type="button"
+                    onClick={load}
+                    className="font-medium text-foreground underline underline-offset-2"
+                  >
+                    Retry
+                  </button>
+                </p>
               ) : (
                 <p className="py-8 text-center text-sm text-muted-foreground">
                   Value history builds up as syncs run. Check back after a day or two of tracking.
@@ -249,10 +309,16 @@ export default function InvestmentsPage() {
               </CardHeader>
               <CardContent className="space-y-5">
                 {holdingsByAccount.map((group) => {
-                  const total = group.rows.reduce(
-                    (acc, r) => acc + BigInt(r.valueMinor || '0'),
-                    0n,
-                  );
+                  // Sum per currency so a mixed-currency account never sums
+                  // apples to oranges under one (wrong) currency label.
+                  const totalsByCurrency = new Map<string, bigint>();
+                  for (const r of group.rows) {
+                    totalsByCurrency.set(
+                      r.currency,
+                      (totalsByCurrency.get(r.currency) ?? 0n) + BigInt(r.valueMinor || '0'),
+                    );
+                  }
+                  const groupTotals = [...totalsByCurrency.entries()];
                   return (
                     <div key={group.accountId} className="space-y-2">
                       <p className="text-xs font-medium text-muted-foreground">{group.accountName}</p>
@@ -292,13 +358,19 @@ export default function InvestmentsPage() {
                           </div>
                         </div>
                       ))}
-                      <div className="flex items-center justify-between border-t pt-2 text-sm">
-                        <span className="text-muted-foreground">Total</span>
-                        <Money
-                          amountMinor={total.toString()}
-                          currency={currency}
-                          className="font-medium"
-                        />
+                      <div className="space-y-1 border-t pt-2 text-sm">
+                        {groupTotals.map(([cur, total], idx) => (
+                          <div key={cur} className="flex items-center justify-between">
+                            <span className="text-muted-foreground">
+                              {idx === 0 ? 'Total' : ''}
+                            </span>
+                            <Money
+                              amountMinor={total.toString()}
+                              currency={cur}
+                              className="font-medium"
+                            />
+                          </div>
+                        ))}
                       </div>
                     </div>
                   );
