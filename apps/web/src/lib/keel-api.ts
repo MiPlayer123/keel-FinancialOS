@@ -1477,6 +1477,65 @@ export type RecurringSeriesRow = {
   statusEvents: RecurringStatusEvent[];
 };
 
+// ---- F-028 recurring classification + manual-schedule linking --------------
+export type RecurringBucket = 'income' | 'subscription' | 'utility' | 'bill';
+export type RecurringClassificationRow = {
+  seriesId: string;
+  bucket: RecurringBucket;
+  dominantPfc: string | null;
+  matchedCount: number;
+};
+export type RecurringScheduleLink = {
+  linkId: string;
+  seriesId: string;
+  scheduleId: string;
+};
+
+export async function fetchRecurringClassification(
+  householdId: string,
+): Promise<RecurringClassificationRow[]> {
+  const res = await keelQuery<RecurringClassificationRow>('recurring.classification', householdId);
+  return res.rows;
+}
+
+export async function fetchRecurringScheduleLinks(
+  householdId: string,
+): Promise<RecurringScheduleLink[]> {
+  const res = await keelQuery<RecurringScheduleLink>('recurring.schedule_links', householdId);
+  return res.rows;
+}
+
+export async function linkRecurringSchedule(input: {
+  householdId: string;
+  userId: string;
+  seriesId: string;
+  scheduleId: string;
+}): Promise<unknown> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'recurring.link_schedule',
+    economicEventKey: `recurring.link_schedule:${input.seriesId}:${input.scheduleId}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: { seriesId: input.seriesId, scheduleId: input.scheduleId },
+  });
+}
+
+export async function unlinkRecurringSchedule(input: {
+  householdId: string;
+  userId: string;
+  linkId: string;
+}): Promise<unknown> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'recurring.unlink_schedule',
+    economicEventKey: `recurring.unlink_schedule:${input.linkId}:${newId()}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: { linkId: input.linkId },
+  });
+}
+
 // ---- 1D domain read rows (shapes finalized against Codex's query procs) ----
 
 export type PaycheckRow = {

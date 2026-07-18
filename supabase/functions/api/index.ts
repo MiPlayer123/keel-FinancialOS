@@ -79,6 +79,8 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'recurring.resume': 'keel_recurring_resume',
   'recurring.cancel': 'keel_recurring_cancel',
   'recurring.reject': 'keel_recurring_reject',
+  'recurring.link_schedule': 'keel_recurring_link_schedule',
+  'recurring.unlink_schedule': 'keel_recurring_unlink_schedule',
   'paychecks.create': 'keel_paycheck_create',
   'paychecks.edit': 'keel_paycheck_edit',
   'paychecks.reverse': 'keel_paycheck_reverse',
@@ -114,6 +116,8 @@ const QUERY_TO_PROC: Record<string, string> = {
   'categories.list': 'keel_list_categories',
   'balances.latest': 'keel_latest_balances',
   'recurring.list': 'keel_list_recurring',
+  'recurring.classification': 'keel_recurring_classification',
+  'recurring.schedule_links': 'keel_list_recurring_schedule_links',
   'paychecks.list': 'keel_list_paychecks',
   'reimbursements.list': 'keel_list_reimbursements',
   'statements.list': 'keel_list_statements',
@@ -2338,7 +2342,14 @@ export default {
       // Fail-closed TS authorization before the database re-checks (Law 9).
       const authzCtx = await loadAuthzContext(ctx.supabase, userId);
       let recurringSeries: ListedRecurringSeries | undefined;
-      if (envelope.data.command.startsWith('recurring.')) {
+      // recurring.* commands that name a series (confirm/pause/…/link_schedule)
+      // gate on that series' account. recurring.unlink_schedule names only a
+      // linkId — it falls through to the household partner check here and the
+      // DB proc re-checks account access on the series behind the link.
+      if (
+        envelope.data.command.startsWith('recurring.') &&
+        typeof payload['seriesId'] === 'string'
+      ) {
         const { data: recurringList, error: recurringListError } = await ctx.supabase.rpc(
           'keel_list_recurring',
           { p_household_id: envelope.data.householdId },
@@ -2393,6 +2404,8 @@ export default {
       }
       if (
         query.query === 'recurring.list' ||
+        query.query === 'recurring.classification' ||
+        query.query === 'recurring.schedule_links' ||
         query.query === 'paychecks.list' ||
         query.query === 'reimbursements.list' ||
         query.query === 'statements.list'

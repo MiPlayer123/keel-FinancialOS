@@ -4363,3 +4363,32 @@ applies at merge.
   settlement, one txn per suggestion) surfaces a "Record repayment" that opens
   the settle dialog PRE-FILLED (new `prefill` prop on SettleDialog). Never
   auto-posts. Surfaced on the reimbursements page, not the shared Review page.
+
+### F-028 recurring classification + grouping + schedule link (migration + web)
+- Migration 20260718161000. Detector is UNTOUCHED (constraint).
+- Classification: keel_recurring_classification(household) — deterministic
+  bucket per series from SIGN + dominant Plaid PFC-primary of matched txns
+  (join canonical_transactions → transaction_source_links →
+  normalized_source_records.pfc_primary from 20260717170000). Inflow→income;
+  outflow buckets RENT_AND_UTILITIES→utility, LOAN/INSURANCE/MEDICAL/
+  GOVERNMENT→bill, ENTERTAINMENT/GENERAL_SERVICES/default→subscription. No LLM.
+- Double-count fix: recurring_series_schedule_links table + recurring.link_schedule
+  / recurring.unlink_schedule commands. Unlink is a SOFT detach (detached_at,
+  keel_rssl_guard blocks hard DELETE — user directive 2026-07-17). Partial
+  unique index (detached_at is null) allows re-link after detach. Direction
+  must agree (inflow series ↔ income schedule). Projection (client) now skips
+  linked schedules → counts the detected series once. Recurring page groups
+  Active/Suggested/Paused series by bucket and offers a link/unlink control per
+  confirmed series.
+- Registered: COMMAND_TO_PROC + QUERY_TO_PROC (api), authz WRITE/READ actions +
+  min-roles, contracts COMMAND_PAYLOAD_SCHEMAS + 2 payload schemas. api command
+  authz gate now only does the seriesId lookup when payload carries seriesId
+  (unlink names only linkId → household partner check + DB re-check).
+- scheduled_transactions gained a composite (household_id,id) unique so the link
+  FK is tenant-scoped (it had PK id only). Additive.
+- Export: new table in SQL chain + manifest.ts + pgTAP 008 (count 71→72).
+- pgTAP 029: classification (utility via PFC, income via sign), link/unlink,
+  direction + duplicate rejection, soft-delete persistence + re-link, hard-delete
+  block, export privilege.
+- Test count deltas fixed: authz action vocabulary (+4), exports manifest &
+  formats.property (71→72). Full vitest 834 pass.

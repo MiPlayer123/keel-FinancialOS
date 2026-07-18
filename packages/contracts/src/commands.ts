@@ -127,6 +127,18 @@ export const RecurringResumePayloadSchema = RecurringTransitionPayloadSchema.ext
 export const RecurringCancelPayloadSchema = RecurringTransitionPayloadSchema;
 export const RecurringRejectPayloadSchema = RecurringTransitionPayloadSchema;
 
+// F-028: link a detected series to a manual scheduled transaction so the
+// projection stops double-counting. schedule_id / link_id are plain UUIDs
+// (scheduled_transactions has no branded id schema — it uses a bespoke route).
+export const RecurringLinkSchedulePayloadSchema = z.object({
+  seriesId: RecurringSeriesIdSchema,
+  scheduleId: z.string().uuid(),
+}).strict();
+export const RecurringUnlinkSchedulePayloadSchema = z.object({
+  linkId: z.string().uuid(),
+  reason: z.string().max(500).optional(),
+}).strict();
+
 const PaycheckComponentSchema = z.object({
   key: z.string().min(1).max(100),
   kind: z.enum([
@@ -384,6 +396,8 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'recurring.resume': RecurringResumePayloadSchema,
   'recurring.cancel': RecurringCancelPayloadSchema,
   'recurring.reject': RecurringRejectPayloadSchema,
+  'recurring.link_schedule': RecurringLinkSchedulePayloadSchema,
+  'recurring.unlink_schedule': RecurringUnlinkSchedulePayloadSchema,
   'paychecks.create': CreatePaycheckPayloadSchema,
   'paychecks.edit': EditPaycheckPayloadSchema,
   'paychecks.reverse': PaycheckStatusPayloadSchema,
