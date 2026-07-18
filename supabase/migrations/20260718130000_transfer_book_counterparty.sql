@@ -53,6 +53,27 @@ comment on column public.transfer_links.booked_txn is
   'leg when set.';
 
 -- ---------------------------------------------------------------------------
+-- 0b. Concurrency invariant (WS-E review P0-3): a single transaction may take
+--    part in AT MOST ONE ACTIVE (suggested|confirmed) transfer link on either
+--    side. The base table only has unique(txn_out, txn_in), so two concurrent
+--    link/confirm/book calls pairing (A,B) and (A,C) could both commit — cash
+--    flow would then exclude two inflows against one outflow. These partial
+--    unique indexes make the DB reject the second one; the link/confirm/book
+--    procs catch the unique_violation and surface KEEL_INVALID_COMMAND.
+--    Rejected links carry no exclusion, so they are intentionally excluded from
+--    the predicate (a pair can be re-suggested after rejection elsewhere).
+--    Concurrency-safe: a partial UNIQUE index takes a real index-level lock, so
+--    even two transactions that each pass the proc's advisory `exists` check
+--    still serialize here and exactly one wins.
+-- ---------------------------------------------------------------------------
+create unique index if not exists transfer_links_active_out_once
+  on public.transfer_links (txn_out)
+  where status in ('suggested', 'confirmed');
+create unique index if not exists transfer_links_active_in_once
+  on public.transfer_links (txn_in)
+  where status in ('suggested', 'confirmed');
+
+-- ---------------------------------------------------------------------------
 -- 1. keel_link_and_confirm_transfer — MATCH path. The user picked "Transfers"
 --    and KEEL (or the user) found an existing opposite transaction on the
 --    counterparty account. Create the link AND confirm it in one round-trip,
@@ -74,15 +95,11 @@ declare
   v_uid uuid := auth.uid();
   v_link_id uuid;
 begin
-  if v_uid is null then
-    raise exception 'KEEL_NOT_AUTHENTICATED' using errcode = 'P0004';
-  end if;
-  if not exists (
-    select 1 from public.household_memberships
-    where household_id = p_household_id and user_id = v_uid
-  ) then
-    raise exception 'KEEL_NOT_FOUND' using errcode = 'P0006';
-  end if;
+  -- WS-E review P0-1: viewer/professional are read-only and must NOT move the
+  -- ledger. keel_assert_member_write re-checks auth + membership + write role
+  -- (mirrors packages/authz), replacing the membership-only guard that let a
+  -- read-only role confirm a transfer.
+  perform public.keel_assert_member_write(p_household_id);
 
   -- Reuse the fully-guarded suggested-link creation (self-link, same-account,
   -- currency, one-out/one-in, already-linked, rejected-pair — all enforced
@@ -96,6 +113,15 @@ begin
   perform public.keel_decide_transfer(p_household_id, v_link_id, true);
 
   return v_link_id;
+exception
+  -- WS-E review P0-3: a concurrent link/confirm/book that already made one of
+  -- these transactions part of another ACTIVE link trips the partial unique
+  -- index (transfer_links_active_out_once/_in_once). Surface it as a typed
+  -- command error rather than a raw 23505 so the client shows a clear message.
+  when unique_violation then
+    raise exception
+      'KEEL_INVALID_COMMAND: one of these transactions is already part of another transfer'
+      using errcode = 'P0009';
 end;
 $$;
 
@@ -130,7 +156,8 @@ grant execute on function public.keel_link_and_confirm_transfer(uuid, uuid, uuid
 create or replace function public.keel_book_transfer_counterparty(
   p_household_id uuid,
   p_source_txn_id uuid,
-  p_counterparty_account_id uuid
+  p_counterparty_account_id uuid,
+  p_attempt_key text
 ) returns jsonb
 language plpgsql
 security definer
@@ -154,22 +181,27 @@ declare
   v_in uuid;
   v_result jsonb;
 begin
-  if v_uid is null then
-    raise exception 'KEEL_NOT_AUTHENTICATED' using errcode = 'P0004';
-  end if;
-  if not exists (
-    select 1 from public.household_memberships
-    where household_id = p_household_id and user_id = v_uid
-  ) then
-    raise exception 'KEEL_NOT_FOUND' using errcode = 'P0006';
-  end if;
+  -- WS-E review P0-1: viewer/professional are read-only. keel_assert_member_write
+  -- re-checks auth + membership + write role (was membership-only, which let a
+  -- read-only role synthesize a ledger posting).
+  perform public.keel_assert_member_write(p_household_id);
+  v_uid := (public.keel_actor_from_jwt() ->> 'userId')::uuid;
   v_actor := jsonb_build_object('kind', 'user', 'userId', v_uid::text);
 
-  -- Idempotency: key off the SOURCE transaction so a replayed click can't
-  -- book a second phantom leg. Payload hash covers the counterparty account
-  -- too, so re-invoking with a DIFFERENT counterparty is a typed conflict
-  -- rather than a silent no-op.
-  v_key := 'transfer.book:' || p_source_txn_id::text;
+  -- WS-E review P1-4: the idempotency key is bound to a per-attempt nonce
+  -- supplied by the client (same pattern as the manual-transaction attemptKey),
+  -- NOT to the source transaction id alone. A retry of the SAME click replays
+  -- (same nonce → same key → dedupe); but a book→undo→re-book is a NEW attempt
+  -- with a fresh nonce, so it is no longer wedged by a permanent stale key
+  -- (the old 'transfer.book:<src>' returned the voided result or P0007-
+  -- conflicted forever). Double-booking a still-active source is still blocked
+  -- by the "already part of an active transfer" check below + the partial
+  -- unique indexes (P0-3), which now work reliably.
+  if p_attempt_key is null or char_length(btrim(p_attempt_key)) < 1
+     or char_length(p_attempt_key) > 100 then
+    raise exception 'KEEL_INVALID_COMMAND: attempt key required' using errcode = 'P0009';
+  end if;
+  v_key := 'transfer.book:' || p_source_txn_id::text || ':' || p_attempt_key;
   v_hash := public.keel_payload_hash(jsonb_build_object(
     'sourceTxnId', p_source_txn_id, 'counterpartyAccountId', p_counterparty_account_id
   ));
@@ -208,7 +240,7 @@ begin
 
   -- Resolve the counterparty account (must be postable, same household, same
   -- currency — a transfer is a same-currency move).
-  select a.id, a.entity_id, a.ledger_account_id, a.name,
+  select a.id, a.entity_id, a.ledger_account_id, a.name, a.connection_id,
          la.currency, la.is_category, la.archived_at as ledger_archived_at, a.archived_at
     into v_cp
     from public.accounts a
@@ -225,9 +257,27 @@ begin
     raise exception 'KEEL_INVALID_COMMAND: counterparty account is not postable'
       using errcode = 'P0009';
   end if;
+  -- WS-E review P0-2: NEVER synthesize a leg onto a CONNECTED account. The bank
+  -- feed will deliver that side on its own; booking a synthetic leg there
+  -- double-posts the money (a $200 transfer becomes +$400 of movement). Only
+  -- manual/unconnected accounts (a cash jar, a 401k, a private loan) may be
+  -- booked; for a connected counterparty the caller must use the MATCH path
+  -- (keel_link_and_confirm_transfer) or leave the other side to arrive on sync.
+  if v_cp.connection_id is not null then
+    raise exception
+      'KEEL_INVALID_COMMAND: cannot book a leg onto a connected account — the bank feed will deliver it; match it instead'
+      using errcode = 'P0009';
+  end if;
   if v_cp.currency <> v_src.currency then
     raise exception 'KEEL_CURRENCY_MISMATCH: accounts use different currencies'
       using errcode = 'P0010';
+  end if;
+
+  -- WS-E review P2-8: BIGINT has no positive counterpart for its minimum, so
+  -- negating it overflows. Reject the pathological source amount before any
+  -- sign flip (a real cash leg is never anywhere near this magnitude).
+  if v_src.amount_minor = -9223372036854775808 then
+    raise exception 'KEEL_INVALID_MONEY: amount out of range' using errcode = 'P0008';
   end if;
 
   -- The booked leg is the exact negation of the source cash amount (Law 1: no
@@ -270,6 +320,21 @@ begin
   if v_cat_id is null then
     raise exception 'KEEL_INVALID_COMMAND: no category available on the counterparty entity to offset the transfer'
       using errcode = 'P0009';
+  end if;
+
+  -- WS-E review P2-10: locked-period typed precheck (mirrors
+  -- keel_cmd_manual_transaction) against the booked leg's effective_date, so a
+  -- transfer into a locked period fails with KEEL_PERIOD_LOCKED rather than a
+  -- raw trigger error. The BEFORE-INSERT posting trigger remains the backstop.
+  if exists (
+    select 1 from public.period_locks l
+    where l.household_id = p_household_id
+      and (l.entity_id is null or l.entity_id = v_cp.entity_id)
+      and l.reopened_at is null
+      and v_src.effective_date between l.start_date and l.end_date
+  ) then
+    raise exception 'KEEL_PERIOD_LOCKED: % falls in a locked period', v_src.effective_date
+      using errcode = 'P0003';
   end if;
 
   -- a) Canonical transaction for the booked leg.
@@ -336,6 +401,14 @@ begin
   );
 
   return v_result;
+exception
+  -- WS-E review P0-3: a concurrent link/book already made the source (or the
+  -- freshly synthesized leg) part of an active link — the partial unique index
+  -- rejects the second insert. Surface a typed command error, not a raw 23505.
+  when unique_violation then
+    raise exception
+      'KEEL_INVALID_COMMAND: this transaction is already part of a transfer'
+      using errcode = 'P0009';
 end;
 $$;
 
@@ -345,10 +418,10 @@ $$;
 -- couldn't touch the canonical tables). Same ownership ritual as
 -- keel_cmd_manual_transaction (20260713100000).
 grant create on schema public to keel_api;
-alter function public.keel_book_transfer_counterparty(uuid, uuid, uuid) owner to keel_api;
+alter function public.keel_book_transfer_counterparty(uuid, uuid, uuid, text) owner to keel_api;
 revoke create on schema public from keel_api;
-revoke all on function public.keel_book_transfer_counterparty(uuid, uuid, uuid) from public, anon;
-grant execute on function public.keel_book_transfer_counterparty(uuid, uuid, uuid) to authenticated;
+revoke all on function public.keel_book_transfer_counterparty(uuid, uuid, uuid, text) from public, anon;
+grant execute on function public.keel_book_transfer_counterparty(uuid, uuid, uuid, text) to authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 3. keel_undo_transfer — reverse a confirmed transfer from the txn detail.
@@ -375,15 +448,11 @@ declare
   v_reversal_id uuid;
   v_command_id uuid := gen_random_uuid();
 begin
-  if v_uid is null then
-    raise exception 'KEEL_NOT_AUTHENTICATED' using errcode = 'P0004';
-  end if;
-  if not exists (
-    select 1 from public.household_memberships
-    where household_id = p_household_id and user_id = v_uid
-  ) then
-    raise exception 'KEEL_NOT_FOUND' using errcode = 'P0006';
-  end if;
+  -- WS-E review P0-1: undo reverses a ledger posting — a write. viewer/
+  -- professional must be rejected. keel_assert_member_write re-checks auth +
+  -- membership + write role (was membership-only).
+  perform public.keel_assert_member_write(p_household_id);
+  v_uid := (public.keel_actor_from_jwt() ->> 'userId')::uuid;
   v_actor := jsonb_build_object('kind', 'user', 'userId', v_uid::text);
 
   -- FOR UPDATE: serialize concurrent undos so a booked leg can't be reversed
@@ -460,6 +529,147 @@ alter function public.keel_undo_transfer(uuid, uuid) owner to keel_api;
 revoke create on schema public from keel_api;
 revoke all on function public.keel_undo_transfer(uuid, uuid) from public, anon;
 grant execute on function public.keel_undo_transfer(uuid, uuid) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 3b. WS-E review P1-5 — voiding a transfer leg must not leave a dangling
+--    confirmed link. keel_cmd_manual_void (20260713100000) only checked
+--    source='manual', so voiding a BOOKED counterparty leg (source='manual')
+--    reversed the cash posting yet left its transfer_links row 'confirmed' —
+--    cash flow kept excluding a now-nonexistent leg against a live one. Also,
+--    a manually-created transaction that the user later linked as a real
+--    transfer had the same exposure. Recreate the void proc (SAME signature →
+--    create or replace, no overload) with an added guard: reject the void when
+--    the transaction participates in an ACTIVE (suggested|confirmed) transfer
+--    link, telling the user to Undo/Unlink the transfer first. Everything else
+--    is byte-identical to the original.
+-- ---------------------------------------------------------------------------
+create or replace function public.keel_cmd_manual_void(
+  p_command_id uuid,
+  p_economic_event_key text,
+  p_actor jsonb,
+  p_household_id uuid,
+  p_payload jsonb
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_hash text := public.keel_payload_hash(p_payload);
+  v_replay jsonb;
+  v_txn public.canonical_transactions%rowtype;
+  v_batch public.journal_batches%rowtype;
+  v_reason text := btrim(coalesce(p_payload->>'reason', ''));
+  v_reversal_id uuid;
+  v_result jsonb;
+begin
+  perform public.keel_assert_member_write(p_household_id);
+  p_actor := public.keel_actor_from_jwt();  -- ignore caller-supplied actor (forgery guard)
+  v_replay := public.keel_idempotency_check(p_household_id, p_economic_event_key, v_hash);
+  if v_replay is not null then
+    return v_replay;
+  end if;
+
+  if char_length(v_reason) < 1 or char_length(v_reason) > 500 then
+    raise exception 'KEEL_INVALID_COMMAND: reason must be 1-500 characters' using errcode = 'P0009';
+  end if;
+
+  -- FOR UPDATE: two concurrent voids with DIFFERENT client keys would both
+  -- see voided_at null on a snapshot and double-reverse (adversarial-review
+  -- P1). The row lock serializes them; the second then sees voided_at set.
+  select * into v_txn
+    from public.canonical_transactions
+    where id = (p_payload->>'transaction_id')::uuid
+      and household_id = p_household_id
+    for update;
+  if not found then
+    raise exception 'KEEL_SCOPE_VIOLATION: transaction not in household' using errcode = 'P0006';
+  end if;
+  if v_txn.source <> 'manual' then
+    raise exception 'KEEL_INVALID_COMMAND: only manual transactions can be voided here' using errcode = 'P0009';
+  end if;
+  if v_txn.voided_at is not null then
+    raise exception 'KEEL_IMMUTABLE: transaction is already voided' using errcode = 'P0001';
+  end if;
+
+  -- WS-E review P1-5: refuse to void a leg that is part of an ACTIVE transfer.
+  -- Voiding it directly would strand the confirmed link (cash flow keeps
+  -- excluding a reversed leg). The user must Undo/Unlink the transfer first,
+  -- which reverses the booked leg AND rejects the link atomically.
+  if exists (
+    select 1 from public.transfer_links tl
+     where tl.household_id = p_household_id
+       and tl.status in ('suggested', 'confirmed')
+       and (tl.txn_out = v_txn.id or tl.txn_in = v_txn.id)
+  ) then
+    raise exception
+      'KEEL_INVALID_COMMAND: this transaction is part of a transfer — undo the transfer first'
+      using errcode = 'P0009';
+  end if;
+
+  -- The live batch: non-reversal, not superseded by a revision.
+  select jb.* into v_batch
+    from public.journal_batches jb
+    where jb.canonical_transaction_id = v_txn.id
+      and jb.reverses_batch_id is null
+      and not exists (
+        select 1 from public.journal_revisions rev where rev.original_batch_id = jb.id
+      )
+    order by jb.posted_at desc, jb.id desc
+    limit 1;
+  if not found then
+    raise exception 'KEEL_IMMUTABLE: no live batch to void' using errcode = 'P0001';
+  end if;
+
+  insert into public.journal_batches
+    (household_id, canonical_transaction_id, description, effective_date,
+     reverses_batch_id, command_id)
+  values
+    (p_household_id, v_txn.id, left('VOID: ' || v_reason, 500),
+     v_batch.effective_date, v_batch.id, p_command_id)
+  returning id into v_reversal_id;
+
+  insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency)
+  select v_reversal_id, p.ledger_account_id, p.entity_id, -p.amount_minor, p.currency
+    from public.journal_postings p
+   where p.batch_id = v_batch.id;
+
+  insert into public.journal_revisions (original_batch_id, reversal_batch_id, reason)
+  values (v_batch.id, v_reversal_id, v_reason);
+
+  update public.canonical_transactions
+     set status = 'voided', voided_at = now()
+   where id = v_txn.id;
+
+  v_result := jsonb_build_object(
+    'commandId', p_command_id,
+    'economicEventKey', p_economic_event_key,
+    'idempotentReplay', false,
+    'effects', jsonb_build_object(
+      'canonicalTransactionId', v_txn.id,
+      'originalBatchId', v_batch.id,
+      'reversalBatchId', v_reversal_id
+    ),
+    'asOf', to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+  );
+
+  perform public.keel_finish_command(
+    p_command_id, 'transactions.manual_void', p_economic_event_key, p_household_id, p_actor,
+    v_hash, 'transactions.manual_voided', 'canonical_transaction', v_txn.id,
+    jsonb_build_object('canonicalTransactionId', v_txn.id,
+                       'originalBatchId', v_batch.id, 'reversalBatchId', v_reversal_id),
+    v_result
+  );
+
+  return v_result;
+end;
+$$;
+
+grant create on schema public to keel_api;
+alter function public.keel_cmd_manual_void(uuid, text, jsonb, uuid, jsonb) owner to keel_api;
+revoke create on schema public from keel_api;
+revoke all on function public.keel_cmd_manual_void(uuid, text, jsonb, uuid, jsonb) from public, anon;
+grant execute on function public.keel_cmd_manual_void(uuid, text, jsonb, uuid, jsonb) to authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 4. Rich list: surface the transfer LINK ID + whether the counterparty leg

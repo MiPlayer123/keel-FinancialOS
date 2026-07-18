@@ -69,6 +69,10 @@ begin
       where ct.household_id = p_household_id
         and ct.voided_at is null
         and p.amount_minor <> 0
+        -- WS-E review P2-8: BIGINT min has no positive counterpart, so
+        -- -amount_minor / abs(amount_minor) below would overflow. Exclude it
+        -- (no real cash leg approaches this magnitude).
+        and p.amount_minor <> -9223372036854775808
   ),
   linked as (
     select txn_out as txn from public.transfer_links
@@ -138,6 +142,8 @@ begin
       where ct.household_id = p_household_id
         and ct.voided_at is null
         and p.amount_minor <> 0
+        -- WS-E review P2-8: same BIGINT-min guard as tier 1 (abs() overflows).
+        and p.amount_minor <> -9223372036854775808
   ),
   linked as (
     select txn_out as txn from public.transfer_links
