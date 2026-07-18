@@ -49,6 +49,7 @@ type PaycheckFull = {
   netMinor: string;
   currency: string;
   status: 'active' | 'reversed';
+  supersededByPaycheckId: string | null;
   components: { componentId: string; key: string; kind: string; amountMinor: string }[];
   matches: { componentId: string; transactionId: string }[];
 };
@@ -448,6 +449,11 @@ function PaycheckCard({
                 </Button>
               </div>
             </div>
+          ) : reversed && p.supersededByPaycheckId ? (
+            <p className="text-xs text-muted-foreground">
+              Corrected — replaced by a newer entry. Restoring this one back would double-count
+              the deposit, so it stays in history only.
+            </p>
           ) : (
             <div className="flex gap-2">
               {/* Paychecks are immutable once recorded (correction is
