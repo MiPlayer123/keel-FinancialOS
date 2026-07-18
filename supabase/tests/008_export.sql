@@ -25,7 +25,7 @@ insert into expected_export_tables(table_name, allowed_columns, omitted_columns)
   ('journal_revisions', array['id','original_batch_id','reversal_batch_id','replacement_batch_id','reason','created_at'], '{}'),
   ('period_locks', array['id','household_id','entity_id','start_date','end_date','locked_by','locked_at','reopened_at','reopen_reason'], '{}'),
   ('transaction_source_links', array['canonical_transaction_id','normalized_source_record_id','created_at','household_id'], '{}'),
-  ('transfer_links', array['id','household_id','txn_out','txn_in','status','decided_by','decided_at','created_at'], '{}'),
+  ('transfer_links', array['id','household_id','txn_out','txn_in','status','booked_txn','decided_by','decided_at','created_at'], '{}'),
   ('raw_provider_events', array['id','household_id','connection_id','provider','provider_event_id','account_external_ref','received_at','recorded_at','body_text','body_sha256'], array['body']),
   ('normalized_source_records', array['id','raw_event_id','household_id','account_id','provider_transaction_id','amount_minor','currency','effective_date','description','pending','pending_transaction_ref','created_at','kind'], array['pfc_primary']),
   ('import_batches', array['id','household_id','account_id','source_kind','filename','row_count','created_at','committed_at','rolled_back_at'], '{}'),
