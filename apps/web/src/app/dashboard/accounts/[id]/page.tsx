@@ -45,7 +45,6 @@ import {
 import { relativeSyncLabel } from '@/lib/relative-date';
 import { utilizationPercent } from '@/lib/credit-utilization';
 import { resolveEditingAfterSave } from '@/lib/txn-edit-guard';
-import { useIsDesktopDetail } from '@/lib/use-desktop-detail';
 import { looksLikeInvestmentAccount } from '@/lib/investment-subtype';
 import { ReauthLink } from '@/components/keel/reauth-link';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
@@ -54,8 +53,7 @@ import { ReassignEntityDialog } from '@/components/keel/reassign-entity-dialog';
 import { SetOpeningBalanceDialog } from '@/components/keel/set-opening-balance-dialog';
 import { HoldingsCard } from '@/components/keel/holdings-card';
 import {
-  TxnDetailPanel,
-  TxnEditDialog,
+  TxnDetailSheet,
   TxnList,
   type TxnEditFormHandle,
 } from '@/components/keel/txn-edit-dialog';
@@ -208,10 +206,8 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
   const [entities, setEntities] = useState<EntityRow[]>([]);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<RichTransactionRow | null>(null);
-  // Master-detail (same pattern as the ledger register, teardown C6
-  // residual): at desktop widths the panel sits beside the list instead of
-  // opening a modal — the two surfaces must stay consistent, not diverge.
-  const isDesktop = useIsDesktopDetail();
+  // F-010: one full-height right-side detail sheet, same surface as the ledger
+  // register (TxnDetailSheet). editorRef pre-flushes it when switching rows.
   const editorRef = useRef<TxnEditFormHandle>(null);
   const [renaming, setRenaming] = useState(false);
   const [reassigning, setReassigning] = useState(false);
@@ -397,12 +393,10 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
       : null;
   const entityName = entities.find((e) => e.entityId === account.entityId)?.name ?? null;
 
-  // Shared by both edit shells (TxnEditDialog's modal, TxnDetailPanel's
-  // desktop panel) — same closures as the ledger register so the two never
-  // drift on what "closed"/"saved"/"tags changed"/"search this merchant"
-  // mean, just routed to whichever shell `isDesktop` says is active below.
+  // F-010: one full-height right-side detail sheet (TxnDetailSheet). Flush the
+  // outgoing row before switching to another so no pending write is stranded.
   function selectForEdit(next: RichTransactionRow) {
-    if (isDesktop && editing && editing.transactionId !== next.transactionId) {
+    if (editing && editing.transactionId !== next.transactionId) {
       editorRef.current?.requestClose();
     }
     setEditing(next);
@@ -438,7 +432,6 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
   const merchantSearchEditing = (description: string) => {
     router.push(`/dashboard/ledger?q=${encodeURIComponent(description)}`);
   };
-  const showPanel = isDesktop && editing !== null;
 
   return (
     <div className="space-y-6 p-6">
@@ -762,12 +755,8 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
       ) : null}
 
       <div>
-        <div
-          className={
-            showPanel ? 'items-start gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_22rem]' : ''
-          }
-        >
-          <section className={showPanel ? 'min-w-0 space-y-2' : 'space-y-2'}>
+        <div>
+          <section className="space-y-2">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-medium text-muted-foreground">
                 Transactions{accountTxns.length > 0 ? ` (${String(accountTxns.length)})` : ''}
@@ -820,35 +809,16 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
               />
             )}
           </section>
-          {showPanel ? (
-            <div className="lg:sticky lg:top-4">
-              <TxnDetailPanel
-                row={editing}
-                householdId={householdId}
-                userId={userId}
-                accounts={accounts}
-                categories={categories}
-                allTags={tags}
-                formRef={editorRef}
-                onTagsMutated={tagsMutatedEditing}
-                onClose={closeEditing}
-                onSaved={savedEditing}
-                onRecategorize={recategorizeEditing}
-                onMerchantSearch={merchantSearchEditing}
-              />
-            </div>
-          ) : null}
         </div>
 
-        {/* Below the desktop breakpoint (or before isDesktop resolves), this
-            is the ONLY edit surface — showPanel keeps it closed (row=null)
-            whenever the desktop panel above is showing instead. */}
-        <TxnEditDialog
-          row={showPanel ? null : editing}
+        {/* F-010: single full-height right-side detail sheet for every width. */}
+        <TxnDetailSheet
+          row={editing}
           householdId={householdId}
           userId={userId}
           accounts={accounts}
           categories={categories}
+          allRows={txns.rows}
           allTags={tags}
           formRef={editorRef}
           onTagsMutated={tagsMutatedEditing}

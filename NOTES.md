@@ -3890,3 +3890,91 @@ gates green: `pnpm vitest run` (820), deno function tests (13/59 steps),
   cloud (read-only). Fix: `reset role` around the two pgTAP-only status flips,
   then re-assume `authenticated`; assertions unchanged. No production
   migration needed.
+
+---
+
+## WS-E — Transfers & Transaction detail (FEEDBACK.md F-010 / F-011 / F-012 + picker parent)
+
+Branch `ws-e-transactions`. Migration timestamp range 20260718130000–20260718139999.
+No migration was applied to any DB (authored files only; orchestrator applies at merge).
+
+### F-012 — Transfer counterparty flow (centerpiece)
+Migration `20260718130000_transfer_book_counterparty.sql`:
+- Added `transfer_links.booked_txn uuid` (nullable, FK canonical_transactions) — marks the
+  leg KEEL synthesized so undo knows whether to reverse a booked leg or just unlink. Detector/
+  manual-link rows keep it NULL (both legs are real bank transactions).
+- `keel_book_transfer_counterparty(household, source_txn, counterparty_account)` — BOOK path.
+  Atomically posts the balanced opposite cash leg on the counterparty account (mirrors
+  keel_cmd_manual_transaction posting semantics via keel_insert_postings), creates its canonical
+  transaction (source='manual'), inserts a CONFIRMED transfer_links row with booked_txn set, and
+  writes audit + domain event + command_executions via keel_finish_command. Idempotent
+  economic_event_key = `transfer.book:<source_txn_id>` (payload hash also covers the counterparty
+  account, so a re-book with a different counterparty is a typed P0007 conflict, not a silent
+  no-op). Fails CLOSED on null auth.uid(). keel_api-owned (calls keel_api-owned helpers), same
+  ownership ritual as keel_cmd_manual_transaction.
+- `keel_link_and_confirm_transfer(household, txnA, txnB)` — MATCH path. Calls the existing,
+  fully-guarded keel_link_transfer (suggested) then keel_decide_transfer(confirm) in ONE
+  transaction, so cash-flow exclusion takes effect immediately with no intermediate Review step.
+  Decision (checked the prompt's "atomic link-then-confirm?" question): reusing the two existing
+  procs inside one server transaction IS the atomic path — no need to duplicate their guards into
+  a new monolithic proc.
+- `keel_undo_transfer(household, link)` — booked links reverse the synthesized leg with a
+  compensating reversal batch + journal_revisions + voided status (mirrors keel_cmd_manual_void;
+  Law 2 — never a DELETE) and mark the link rejected; match/detector links (booked_txn null) just
+  mark rejected (plain unlink, no reversal). FOR UPDATE race guard; idempotent on an already-
+  rejected link.
+- Rich list (`keel_list_transactions_rich`) now surfaces `transferLinkId` + `transferBooked` so
+  the sidebar can offer Undo and know whether it reverses a leg.
+- **Offset category deviation:** the transfer's balancing offset uses the entity's single seeded
+  system "Transfers" category (pfc_key 'transfers', expense-kind — the seed defines exactly one,
+  NO income counterpart; supabase/migrations/20260713090000_subcategories.sql). Σ per currency = 0
+  is amount-based only (keel_insert_postings enforces no kind/sign correlation) and the CONFIRMED
+  link excludes both legs from cash flow, so the offset's kind is irrelevant. Falls back to
+  'uncategorized_expense' if no Transfers category exists (e.g. the fixture entity a101, which the
+  seed does not give a Transfers category) so a partially-seeded taxonomy never strands a manual
+  account. Documented inline; flagged here as the one judgment call.
+- API endpoints added to supabase/functions/api/index.ts: `/transfers/link-confirm`,
+  `/transfers/book`, `/transfers/undo`. Client fns in apps/web/src/lib/keel-api.ts:
+  linkAndConfirmTransfer / bookTransferCounterparty / undoTransfer.
+- UI: apps/web/src/components/keel/transfer-counterparty-flow.tsx intercepts the "Transfers"
+  category pick (detected by pfcKey 'transfers' or name) with a counterparty step — deterministic
+  client-side match detection (exact opposite amount, ≤7d, unlinked) → link+confirm, else book.
+  Wired into TxnEditForm.
+
+### F-010 — Transaction detail sidebar
+Rehoused the existing TxnEditForm into a single full-height right-side Sheet (`TxnDetailSheet`,
+shadcn Sheet side=right, full-screen at 390px). Removed the old two-surface split (centered modal
++ inline master-detail card / `showPanel`/`useIsDesktopDetail` two-column grid) from BOTH the
+ledger page and the account [id] page. `TxnEditDialog`/`TxnDetailPanel` are now thin back-compat
+aliases that render TxnDetailSheet. Form logic unchanged (category incl. transfer flow, tags,
+notes, splits, attachments, transfer status) — re-house + polish, not a rewrite. Confirmed
+transfers show an Undo/Unlink control.
+
+### F-011 — Near-miss transfer suggestions (built by sub-agent, reviewed)
+Migration `20260718131000_transfer_near_miss.sql` + pgTAP `supabase/tests/024_transfer_near_miss.sql`.
+Extends keel_detect_transfers with a deterministic second tier: opposite magnitudes differing by
+0 < delta ≤ least(100 minor, floor(1% of larger leg)), ≤4-day gap, ranked strictly below exact
+matches (linked CTE recomputed between the two INSERT passes so tier-1 rows are visible). Integer
+arithmetic only. Exact-match behavior unchanged. Reason line ("amounts differ by X") is derived
+client-side from the delta keel_list_transfers already returns. Verified the test's fixture UUIDs
+(a301/a302/a317/a318/a401/a402) match supabase/seed.sql.
+
+### Picker inline-create with parent (F-016 slice)
+CategoryPicker inline "create category" now has an optional parent `<select>` (top-level
+categories of the chosen kind, one level deep), passing parentLedgerAccountId (already accepted by
+keel_create_category) and pinning the child's entity to the parent's.
+
+### Export system (Law 6)
+transfer_links.booked_txn added to all three export surfaces: the SQL export DTO via the wrapper-
+chain pattern (rename keel_export_household → _pre_transfer_booked, new fn overrides the
+transfer_links key with jsonb `||`), packages/exports/src/manifest.ts, and the pgTAP allowlist
+supabase/tests/008_export.sql.
+
+### Verification
+- `cd apps/web && pnpm build` — PASS (ESLint clean; fixed a no-restricted-syntax hit by using
+  Math.trunc, not Math.round, for the date-gap helper).
+- root `pnpm vitest run` — PASS (70 files, 811 tests).
+- `deno test _shared + worker` — PASS (14 tests, 59 steps). `node scripts/build-functions.mjs` —
+  PASS. `deno check api/index.ts` fails only on a pre-existing npm-resolution issue for
+  @supabase/server in this sandbox (unrelated to these changes; the esbuild bundle succeeds).
+- New pgTAP `024`/`025` NOT executed here (orchestrator runs supabase db test serially at merge).
