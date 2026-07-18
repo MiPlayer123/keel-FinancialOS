@@ -3393,3 +3393,45 @@ correctly blocks reanchor; an artificially-staled one (>15 min)
 correctly falls through to the escape hatch. `pnpm test` required updating
 three exact-payload assertions in `sync-completion.test.ts` for the new
 `p_continuation_pending` field — all pass (811 total). Worker redeployed.
+
+## Follow-up #2: the fix itself would have broken all Plaid syncing
+
+A THIRD review round on the same PR caught something more serious than a
+logic gap: `keel_worker_complete_attempt` (owned by `keel_worker`,
+SECURITY DEFINER) writes the two new columns from follow-up #1, but
+`keel_worker`'s column-scoped UPDATE grant on `connections`
+(20260711130000_c5b_sync_pull.sql:489-491) predates them. Confirmed live
+via `information_schema.column_privileges`: `keel_worker` had SELECT but
+not UPDATE on `sync_continuation_pending`/`sync_continuation_marked_at`.
+Since the function only runs with the OWNER's privileges (SECURITY
+DEFINER doesn't grant blanket table access, only what the owner role has
+been explicitly granted), every real sync completion would have hit a
+permission-denied error the instant it ran against the already-redeployed
+worker code — breaking ALL Plaid syncing for every connection, not just
+the specific reanchor-guard edge case this whole PR exists to fix. This
+is exactly the kind of self-inflicted regression the review loop exists
+to catch before it reaches production.
+
+Checked `sync_attempts.created_at` against the worker redeploy timestamp
+before fixing — no real sync had completed against the broken code yet,
+so this was caught in the window, not after damage. Fixed with the
+missing `grant update (...)`. Critically, didn't just add the grant and
+trust it: re-ran the SAME kind of live verification as everywhere else
+this session, but this time actually exercising the broken code path —
+a synthetic lease + `sync_attempts` row inside a rolled-back transaction,
+calling `keel_worker_complete_attempt` directly. It failed with permission
+denied *before* the grant and succeeded (correctly flipping
+`sync_continuation_pending`) *after* it. This caught a real blind spot in
+my own earlier verification: every previous "verify live" step this
+session called `keel_cmd_reanchor_balance`, whose owner (`keel_api`) I'd
+already confirmed had the right grants — I never actually invoked
+`keel_worker_complete_attempt` itself end-to-end, only reasoned about its
+SQL body and redeployed the TS caller. Reasoning about a function's logic
+is not the same as exercising its actual runtime privileges.
+
+Also fixed a second-round UI finding: the client's `isSyncing` read
+`sync_continuation_pending` with no staleness cutoff, so once a
+continuation genuinely got stuck past 15 minutes, the backend would
+correctly allow "Fix balance" again but the button would stay disabled
+forever — the escape hatch existed but was unreachable through the UI.
+Client now applies the identical 15-minute cutoff.
