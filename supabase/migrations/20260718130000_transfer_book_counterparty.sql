@@ -92,7 +92,14 @@ security definer
 set search_path = public
 as $$
 declare
-  v_uid uuid := auth.uid();
+  -- Read the caller via request.jwt claims (the KEEL command-proc convention,
+  -- same as keel_assert_member_write) rather than auth.uid(): these procs are
+  -- SECURITY DEFINER owned by keel_api, which has no USAGE on schema auth, so
+  -- auth.uid() would raise 42501 permission denied under the definer role.
+  v_uid uuid := coalesce(
+    nullif(pg_catalog.current_setting('request.jwt.claim.sub', true), ''),
+    nullif(pg_catalog.current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'
+  )::uuid;
   v_link_id uuid;
 begin
   -- WS-E review P0-1: viewer/professional are read-only and must NOT move the
@@ -164,7 +171,14 @@ security definer
 set search_path = public
 as $$
 declare
-  v_uid uuid := auth.uid();
+  -- Read the caller via request.jwt claims (the KEEL command-proc convention,
+  -- same as keel_assert_member_write) rather than auth.uid(): these procs are
+  -- SECURITY DEFINER owned by keel_api, which has no USAGE on schema auth, so
+  -- auth.uid() would raise 42501 permission denied under the definer role.
+  v_uid uuid := coalesce(
+    nullif(pg_catalog.current_setting('request.jwt.claim.sub', true), ''),
+    nullif(pg_catalog.current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'
+  )::uuid;
   v_actor jsonb;
   v_key text;
   v_hash text;
@@ -441,7 +455,14 @@ security definer
 set search_path = public
 as $$
 declare
-  v_uid uuid := auth.uid();
+  -- Read the caller via request.jwt claims (the KEEL command-proc convention,
+  -- same as keel_assert_member_write) rather than auth.uid(): these procs are
+  -- SECURITY DEFINER owned by keel_api, which has no USAGE on schema auth, so
+  -- auth.uid() would raise 42501 permission denied under the definer role.
+  v_uid uuid := coalesce(
+    nullif(pg_catalog.current_setting('request.jwt.claim.sub', true), ''),
+    nullif(pg_catalog.current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'
+  )::uuid;
   v_actor jsonb;
   v_link public.transfer_links%rowtype;
   v_batch public.journal_batches%rowtype;
@@ -715,6 +736,12 @@ begin
         'source', ct.source,
         'accountId', acc.id,
         'accountName', acc.name,
+        -- Account last-4 (teardown C6/D-050): masked suffix for disambiguating
+        -- multiple accounts at the same institution. Null until the owning
+        -- connection's accounts have gone through a link/resync that captured
+        -- Plaid's `mask` field — the UI must hide the suffix, never guess it,
+        -- when this is null (Law 8/9). Preserved from 20260717220000.
+        'accountMask', acc.mask,
         'amountMinor', cashp.amount_minor::text,
         'currency', cashp.currency,
         'categoryLedgerAccountId',
@@ -725,6 +752,10 @@ begin
           case when offs.n = 1 then coalesce(catov.kind::text, offs.one_kind) end,
         'categoryPfcKey',
           case when offs.n = 1 then coalesce(catov.pfc_key, offs.one_pfc_key) end,
+        -- categorySource (019): explicit-ownership signal (Law 9). Splits are
+        -- reviewed by construction ('user'); otherwise the overlay's source.
+        -- Preserved from 20260717200000/20260717220000.
+        'categorySource', case when offs.n > 1 then 'user' else tc.source end,
         'splits', case when offs.n > 1 then offs.splits end,
         'tags', tgs.tags,
         'transferStatus', tl.status,
@@ -733,7 +764,16 @@ begin
         'transferBooked', tl.booked_txn is not null,
         'counterpartyAccountId', case when tl.status = 'confirmed' then cp.account_id end,
         'counterpartyAccountName', case when tl.status = 'confirmed' then cp.account_name end,
-        'counterpartyTransactionId', case when tl.status = 'confirmed' then cp.txn_id end
+        'counterpartyTransactionId', case when tl.status = 'confirmed' then cp.txn_id end,
+        -- Reconciled (D-047): permanent once a closed reconciliation session
+        -- matched this transaction to a statement line. Preserved from
+        -- 20260717210000/20260717220000.
+        'reconciled', exists (
+          select 1 from public.reconciliation_items ri
+           where ri.household_id = ct.household_id
+             and ri.transaction_id = ct.id
+             and ri.resolution = 'matched_transaction'
+        )
       ) as row
       from public.canonical_transactions ct
       join public.journal_batches jb

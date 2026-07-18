@@ -103,6 +103,29 @@ insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amo
   ('e5000000-0000-4000-8000-0000000000b3', '00000000-0000-4000-8000-00000000a318',
    '00000000-0000-4000-8000-00000000a101', -15000, 'USD');
 
+-- ---------------------------------------------------------------------------
+-- P0-3 (review follow-up a): the partial UNIQUE indexes themselves must reject
+-- a SECOND active link on a txn already in one — this is what makes cash-flow
+-- exclusion safe under concurrency (a proc's advisory `exists` pre-check can
+-- race; the index is the real serialization point). Insert a raw active link,
+-- then a conflicting one on the SAME txn_out, and assert unique_violation
+-- (23505) fires from the index predicate directly. Wrapped in a savepoint so it
+-- does not consume the source txn for the book/match tests below.
+-- ---------------------------------------------------------------------------
+savepoint before_conflict_probe;
+insert into public.transfer_links (id, household_id, txn_out, txn_in, status, created_at)
+values ('e5000000-0000-4000-8000-0000000000f1', '00000000-0000-4000-8000-00000000a001',
+        'e5000000-0000-4000-8000-000000000001', 'e5000000-0000-4000-8000-000000000002',
+        'suggested', now());
+select throws_ok($$
+  insert into public.transfer_links (id, household_id, txn_out, txn_in, status, created_at)
+  values ('e5000000-0000-4000-8000-0000000000f2', '00000000-0000-4000-8000-00000000a001',
+          'e5000000-0000-4000-8000-000000000001', 'e5000000-0000-4000-8000-000000000003',
+          'suggested', now())
+$$, '23505', null,
+  'a second ACTIVE transfer_link on the same txn_out violates transfer_links_active_out_once (protects the partial-index predicate)');
+rollback to savepoint before_conflict_probe;
+
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
 
@@ -389,14 +412,20 @@ select throws_ok($$
 $$, 'P0005', null, 'a PROFESSIONAL may not link-and-confirm a transfer (read-only, P0-1)');
 reset role;
 
--- NULL JWT: no claims at all → fail closed (member-write assert raises).
+-- NULL JWT: no claims at all → fail closed. keel_assert_member_write reads the
+-- caller from request.jwt claims; with none set v_uid is null and it raises
+-- KEEL_NOT_AUTHENTICATED (P0004). Pinned to the exact code (review follow-up b)
+-- so a future refactor that lets a null caller slip past auth can't pass by
+-- raising some other error. Must clear the claim the prior (professional) block
+-- set — `set local role` alone does NOT reset request.jwt.claims.
 set local role authenticated;
+set local request.jwt.claims to '';
 select throws_ok($$
   select public.keel_book_transfer_counterparty(
     '00000000-0000-4000-8000-00000000a001',
     'e5000000-0000-4000-8000-000000000001',
     '00000000-0000-4000-8000-0000000004f0', 'pgtap:att:nojwt')
-$$, null, null, 'a null JWT fails closed (no book)');
+$$, 'P0004', null, 'a null JWT fails closed with KEEL_NOT_AUTHENTICATED (P0004)');
 reset role;
 
 select * from finish();rollback;

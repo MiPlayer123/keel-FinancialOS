@@ -795,6 +795,13 @@ function TxnEditForm({
   const [dateAttemptKey, setDateAttemptKey] = useState(() => crypto.randomUUID());
   const [saving, setSaving] = useState(false);
   const [voiding, setVoiding] = useState(false);
+  // A manual txn can be voided from here only while it is NOT part of an active
+  // (suggested/confirmed) transfer — those legs must be undone first (the server
+  // enforces this with P0009; see the Void footer below, review follow-up c).
+  const voidable =
+    row.source === 'manual' &&
+    row.transferStatus !== 'suggested' &&
+    row.transferStatus !== 'confirmed';
   // Category picked in THIS dialog session. The row prop keeps the pre-change
   // category until close, so old→new stays visible (teardown C4: the change
   // you just made is legible, not silent).
@@ -1430,7 +1437,12 @@ function TxnEditForm({
         />
       </div>
       <DialogFooter className="gap-2 sm:justify-between">
-        {row.source === 'manual' && !voiding ? (
+        {/* Void is offered only for manual txns that are NOT part of an active
+            transfer. The server already rejects voiding an active transfer leg
+            (P0009 "undo the transfer first"); hiding the button keeps the UI
+            from offering an action that can only fail — undo the transfer via
+            the transfer panel above instead (review follow-up c). */}
+        {voidable && !voiding ? (
           <Button
             variant="ghost"
             className="text-destructive hover:text-destructive"
@@ -1442,7 +1454,7 @@ function TxnEditForm({
             <Trash2 className="size-4" />
             Void
           </Button>
-        ) : row.source === 'manual' ? (
+        ) : voidable ? (
           <Button
             variant="destructive"
             disabled={saving}

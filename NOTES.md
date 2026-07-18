@@ -4035,7 +4035,7 @@ notes, splits, attachments, transfer status) — re-house + polish, not a rewrit
 transfers show an Undo/Unlink control.
 
 ### F-011 — Near-miss transfer suggestions (built by sub-agent, reviewed)
-Migration `20260718131000_transfer_near_miss.sql` + pgTAP `supabase/tests/024_transfer_near_miss.sql`.
+Migration `20260718131000_transfer_near_miss.sql` + pgTAP `supabase/tests/025_transfer_near_miss.sql`.
 Extends keel_detect_transfers with a deterministic second tier: opposite magnitudes differing by
 0 < delta ≤ least(100 minor, floor(1% of larger leg)), ≤4-day gap, ranked strictly below exact
 matches (linked CTE recomputed between the two INSERT passes so tier-1 rows are visible). Integer
@@ -4061,4 +4061,85 @@ supabase/tests/008_export.sql.
 - `deno test _shared + worker` — PASS (14 tests, 59 steps). `node scripts/build-functions.mjs` —
   PASS. `deno check api/index.ts` fails only on a pre-existing npm-resolution issue for
   @supabase/server in this sandbox (unrelated to these changes; the esbuild bundle succeeds).
-- New pgTAP `024`/`025` NOT executed here (orchestrator runs supabase db test serially at merge).
+- New pgTAP `025`/`026` NOT executed here (orchestrator runs supabase db test serially at merge).
+
+---
+
+## 2026-07-18 — WS-E finalize: rebase onto main + fix 019/025 + review follow-ups
+
+Integration pass to make `ws-e-transactions` mergeable onto current main
+(`b983ec6`, i.e. after WS-C investments PR #62). Rebased (not merged) for a
+clean linear history; no migration was applied to the remote cloud DB — all
+verification ran on a fresh LOCAL supabase stack only.
+
+### Rebase conflicts + resolutions
+- `NOTES.md` — only true content conflict. Union: kept WS-C's investments
+  journal entry AND WS-E's transfers entry, in order.
+- `supabase/functions/api/index.ts`, `packages/exports/src/manifest.ts`,
+  `supabase/tests/008_export.sql` — git auto-merged cleanly (WS-C and WS-E
+  touched disjoint regions). Verified each is a genuine UNION, not a silent
+  drop: api has BOTH investment routes (`/holdings/*`, investments.overview…)
+  and all WS-E transfer routes (`/transfers/{book,link-confirm,undo,…}`);
+  manifest has WS-C investment tables + accounts.mask + documents/notes EXCLUDE
+  AND WS-E `transfer_links.booked_txn`; 008's only WS-E delta vs main is the
+  `booked_txn` allowlist entry (documents/notes/accounts.mask already in main).
+
+### Test-file renumbering (collision with main's 024_investments.sql)
+- `git mv 024_transfer_near_miss.sql → 025_transfer_near_miss.sql`
+- `git mv 025_transfer_book_counterparty.sql → 026_transfer_book_counterparty.sql`
+- Updated the two WS-E NOTES references to the new numbers.
+
+### 019 regression (transaction_review_state, tests 1-5) — ROOT CAUSE + FIX
+This branch's migration `20260718130000` did `create or replace
+keel_list_transactions_rich` to ADD `transferLinkId`/`transferBooked`, but the
+rewrite silently DROPPED three fields main's version (20260717220000) emitted:
+`accountMask`, `categorySource`, and `reconciled`. 019 asserts `categorySource`
+per review-state. Since this migration applies AFTER WS-C's, it is the final
+definition and must be a strict superset. Fix: restored all three dropped
+fields alongside the new transfer fields.
+
+### 025/026 booked-leg failure — ROOT CAUSE (auth hypothesis DENIED) + FIX
+The pre-supplied hypothesis was that the book test called the guarded proc
+without an owner JWT. FALSE: the fixture sets
+`request.jwt.claims sub=…0001`, and seed.sql line 54 makes user …0001 the
+OWNER of household a001 — the guard was satisfied. The REAL failure was
+`42501: permission denied for schema auth`, raised at
+`keel_book_transfer_counterparty` line 3: `v_uid uuid := auth.uid();`. That proc
+is SECURITY DEFINER owned by `keel_api`, and `keel_api` has NO USAGE on schema
+`auth` (verified: `has_schema_privilege('keel_api','auth','USAGE') = false`),
+so `auth.uid()` fails under the definer role. (025_near_miss's detector proc
+uses `auth.uid()` too but is owned by `postgres`, which HAS auth USAGE — that's
+why it passed and 026 didn't.) Fix (migration, not test): replaced all three
+`auth.uid()` declarations in the book/link/undo procs with the KEEL
+command-proc convention — the `current_setting('request.jwt.claim.sub' …)`
+coalesce that `keel_assert_member_write` and every other command proc already
+use, which is definer-owner-agnostic. Left the near-miss proc untouched (it
+passes; changing its `auth.uid() is null` service-path check risked regressing
+025).
+
+### Review follow-ups (scope-tight)
+- (a) 026: added a raw-INSERT probe that a SECOND active (suggested) link on the
+  same `txn_out` raises `23505 unique_violation` from
+  `transfer_links_active_out_once` — protects the partial-index predicate from
+  regression. Wrapped in a savepoint so it doesn't consume the source txn.
+- (b) 026: pinned the null-JWT case to `P0004` (KEEL_NOT_AUTHENTICATED) instead
+  of any-error. Had to `set local request.jwt.claims to ''` first — `set local
+  role` alone does NOT clear the claim the prior professional block set, so
+  without the reset v_uid resolved to the professional user and the test caught
+  P0005 (which the old any-error assertion silently accepted).
+- (c) ledger `txn-edit-dialog.tsx`: gated the Sheet's Void button behind a
+  `voidable` flag (`source==='manual' && transferStatus not in
+  suggested/confirmed`). Cosmetic — the server already blocks voiding an active
+  transfer leg with P0009; this stops the UI offering an action that can only
+  fail. Undo the transfer via the transfer panel first.
+
+### Verification (LOCAL stack, genuinely run)
+- Clean stack (stale `supabase_db_keel` volume removed, `supabase start`,
+  `supabase db reset`): `supabase test db` → **Files=26, Tests=690, Result:
+  PASS** (all 26 files green, including 008/019/023/024 and renumbered
+  025/026). Confirmed from a full clean-slate reset.
+- `cd apps/web && pnpm build` → exit 0 (ESLint clean).
+- root `pnpm vitest run` → 70 files, 820 tests, all pass.
+- `deno test _shared + worker` → 14 passed, 0 failed. `node
+  scripts/build-functions.mjs` → exit 0.
+- No migration applied to remote; no deploy; no push (worktree only).
