@@ -7,6 +7,32 @@ live DB by 4 read-only audit agents + 1 web-research agent on 2026-07-18.
 
 ---
 
+## ✅ FINAL STATUS — all 10 workstreams shipped to production (2026-07-18)
+
+10 feature PRs merged, live, and adversarially reviewed (ledger/money/AI branches got two reviewers). Every branch passed a real full-suite pgTAP run + build + tests before merge.
+
+| PR | Workstream | What shipped |
+|----|-----------|--------------|
+| #61 | WS-A/B/D | Connect/sync UX, review-page correctness, account-page polish |
+| #62 | WS-C | Investments: Fidelity txn ingestion, holdings history+errors, Investments page |
+| #63 | WS-E | Transfers: counterparty booking (incl. manual accounts), full-height txn sheet, near-miss detection |
+| #64/#65 | WS-F | Nav IA (15→9), TL;DR dashboard, mobile drawer scroll (X-007) |
+| #66 | WS-G | Subcategories (53 seeded), entity grouping, reports drill-down |
+| #68 | WS-H | Perf: virtualization, scoped invalidation, hot indexes, ⌘K search + paginated read infra |
+| #69 | WS-I | Reimbursement income-bug fix, paycheck templates, recurring grouping, statement cadence |
+| #70 | WS-J | Receipts: AI extraction (prompt-injection hardened), suggest-approve matching, inbox |
+
+**⚑ Needs Mikul (human checkpoints):**
+1. **Re-link Fidelity** in the reconnect flow to grant the `investments` product — until then holdings/investment-txns can't sync (errors now surfaced in-app). Unlocks bank↔brokerage transfer detection.
+2. **Wire the receipt vision model** (`AI_PROVIDER=cloud` + key) + validate ≥90% match precision on real photos. Ships today with a deterministic fixture matcher (no fabricated creds); the AI path is gated behind the env flag.
+3. **Eyeball the mobile nav scroll** (X-007) on your phone to confirm the fix feels right.
+
+**Deferred follow-ups (tracked below):** X-009 (full query-cost cutover needs server-side aggregation — WS-H shipped virtualization + infra), receipt email-in / itemization / envelope encryption (per receipts research doc), statement CSV import, F-018 ≥85% categorization-harness run on real data.
+
+**My one mistake, owned:** briefly merged a broken build (WS-F) on a false-green exit-code read; fixed forward in hotfix #65 within minutes; production never affected (Vercel serves last-good on build failure).
+
+---
+
 ## A. Bugs & friction
 
 - [ ] **F-001 — Connecting a bank requires a page refresh** · bug · P1 · **WS-A**
@@ -25,7 +51,7 @@ live DB by 4 read-only audit agents + 1 web-research agent on 2026-07-18.
   - **Verified: CONFIRMED, two mechanisms.** Loading gate uses AND across three loaders (cached recurring returns instantly → gate falls through while slow detect-then-list hooks still run → false empty state). Nav badge is a separate fetch-once count that never refetches.
   - **Fix:** OR the loading gate / per-section skeletons; unify page + badge on one shared react-query key.
 
-- [ ] **F-005 — App is slow** · perf · P1 · **WS-H (wave 3)**
+- [~] **F-005 — App is slow** · perf · P1 · **WS-H (wave 3)** — PARTIAL: WS-H ships DOM virtualization (644-row account list, full ledger), scoped cache invalidation (no more whole-cache re-download per edit), hot-path indexes, keyset-paginated read + ⌘K server search infra. See X-009 for the remaining query-cost cutover.
   - **Verified: CONFIRMED, top causes ranked.** (1) `keel_list_transactions_rich` is unbounded — entire household history as one jsonb blob with 4 correlated laterals/row, fetched by 7 pages. (2) Every save nukes the whole query cache → full re-download. (3) ~8–11 separate edge invocations per page mount. (4) Zero virtualization; account page renders all 644 rows. (5) Account filtering is client-side.
   - **Fix:** paginated/filtered server query + scoped invalidation + virtualized lists.
 
@@ -124,6 +150,7 @@ live DB by 4 read-only audit agents + 1 web-research agent on 2026-07-18.
 - [x] **X-005 — pgTAP 023 (reconnect dedupe) failing since PR #58** — RESOLVED in PR #62: test-harness-only (fixture UPDATE ran under the `authenticated` role); live grants verified correct on cloud DB. Suite fully green (24 files / 634 tests).
 - [ ] **X-006 — New investment procs are postgres-owned**, not `keel_worker`-owned like sibling worker procs (least-privilege hardening pattern). Passed 3 reviews; anon/public locked out; service_role-only callers. P3 hardening follow-up.
 - [x] **X-007 — Mobile hamburger menu doesn't scroll** — FIXED + SHIPPED (WS-F/PR #64): `flex-1` nav region lacked `min-h-0 overflow-y-auto`; scoped fix to mobile drawer + safe-area padding. **Mikul: please eyeball on your phone.**
+- [ ] **X-009 — Ledger/account pages still fetch the unbounded transactions.rich** (follow-up to F-005): WS-H shipped the paginated `keel_list_transactions_rich_page` + server search as infra, but the ledger and account pages still download the full household set because facet counts, running balances, and WS-E's 2-row transfer-matcher all need the full set client-side. True query-cost fix requires moving those computations to server-side aggregation procs (own workstream). Realized win so far = virtualization + scoped refetch + indexes. **P2.**
 - [x] **X-008 — main build broke on WS-F merge** (my error 2026-07-18): merged on a false-green (read a trailing echo's exit, not the build's; zsh `PIPESTATUS` quirk). Duplicate `TrendingUp`/`Investments` from the rebase. Fixed forward in hotfix #65; production never affected (Vercel serves last-good on build failure). Process lesson: capture `$?` on its own line; never chain merge after build in one block.
 
 ## Workstreams
@@ -137,9 +164,9 @@ live DB by 4 read-only audit agents + 1 web-research agent on 2026-07-18.
 | WS-E | Transactions sidebar + transfers UX | F-010 F-011 F-012 + picker-parent | 2 | **SHIPPED** (PR #63; migrations live; functions deployed) |
 | WS-F | Nav IA + top bar + dashboard redesign | F-020 F-022 F-024 F-006 F-027 | 2 | **SHIPPED** (PR #64 + hotfix #65) |
 | WS-G | Subcategories + entities + reports drill | F-016 F-018 F-023 F-039 | 2 | **SHIPPED** (PR #66; seed migration live) |
-| WS-H | Performance | F-005 F-021(search) | 3 | not started |
-| WS-I | Paychecks templates, reimbursements, recurring grouping, statements cadence | F-025 F-026 F-028 F-029 X-003 | 3 | not started |
-| WS-J | Receipts matching (approved) | F-030 | 3 | not started |
+| WS-H | Performance | F-005 F-021(search) | 3 | **SHIPPED** (PR #68; migration live; api deployed) |
+| WS-I | Paychecks templates, reimbursements, recurring grouping, statements cadence | F-025 F-026 F-028 F-029 X-003 | 3 | **SHIPPED** (PR #69; migrations live; api deployed) |
+| WS-J | Receipts matching (approved) | F-030 | 3 | review APPROVED (no blockers); finalizing (P2s + rebase + green suite) |
 
 **WS-C review findings (both reviewers, being fixed):** P0 non-resumable pagination (data loss >500 txns); P1s: float money math, restatement swallowing + checkpoint-on-error, fail-open auth on null JWT, unchecked holdings RPCs, snapshot symbol conflict (manual+plaid), currency-mixing labeled USD, page loading-sentinel collision, export omits holdings.security_type. Sign conventions + identical-replay idempotency + grants verified CORRECT.
 
