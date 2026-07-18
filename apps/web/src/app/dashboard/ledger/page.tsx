@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ReceiptText,
@@ -18,7 +18,11 @@ import { toast } from 'sonner';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { useHousehold } from '@/components/keel/household-context';
-import { useKeelQuery } from '@/lib/use-keel-query';
+import {
+  useKeelInvalidate,
+  useKeelQuery,
+  TRANSACTION_MUTATION_KEYS,
+} from '@/lib/use-keel-query';
 import {
   fetchAccounts,
   fetchCategories,
@@ -42,6 +46,7 @@ import {
   type ListCallbacks,
   type TxnEditFormHandle,
 } from '@/components/keel/txn-edit-dialog';
+import { VirtualTxnList } from '@/components/keel/virtual-txn-list';
 import { Money } from '@/components/keel/money';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -80,8 +85,6 @@ export default function LedgerPage() {
 type Grouping = 'none' | 'date' | 'account' | 'category';
 type SortKey = 'date_desc' | 'date_asc' | 'amount_desc' | 'amount_asc';
 type DatePreset = 'this_month' | 'last_month' | '30d' | '90d' | 'ytd' | 'all';
-
-const PAGE_SIZE = 120;
 
 const DATE_PRESETS: { key: DatePreset; label: string }[] = [
   { key: 'this_month', label: 'This month' },
@@ -139,9 +142,19 @@ function LedgerTable() {
   const { householdId, userId, ready } = useHousehold();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { rows, loading, error, refetch } = useKeelQuery<RichTransactionRow>(
+  const { rows, loading, error } = useKeelQuery<RichTransactionRow>(
     'transactions.rich',
     householdId,
+  );
+  // WS-H (F-005): scoped invalidation. Every mutation on this page is a
+  // transaction edit (categorize / split / transfer / void / tag / date / add),
+  // so refreshing exactly TRANSACTION_MUTATION_KEYS (the rich lists + trial
+  // balance + suggestion queue) is correct AND stops the old blanket cache nuke
+  // from re-downloading budgets/goals/recurring/holdings/etc. on every save.
+  const invalidate = useKeelInvalidate(householdId);
+  const refetch = useCallback(
+    () => invalidate(TRANSACTION_MUTATION_KEYS),
+    [invalidate],
   );
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
@@ -208,22 +221,9 @@ function LedgerTable() {
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
   const [managingTags, setManagingTags] = useState(false);
-  // Render cap (quality bar: interactions <100ms without virtualization).
-  // Totals always compute over the FULL filtered set.
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  useEffect(() => {
-    setVisibleCount(PAGE_SIZE);
-  }, [
-    query,
-    datePreset,
-    customRange,
-    accountFilter,
-    categoryFilter,
-    tagFilter,
-    reconciledFilter,
-    sort,
-    grouping,
-  ]);
+  // WS-H (F-005): the render cap + reset-on-filter effect are gone — the
+  // ungrouped list is virtualized, so the whole filtered set renders with only
+  // the visible slice in the DOM. Totals still compute over the FULL set.
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -775,31 +775,20 @@ function LedgerTable() {
           and keeps its scroll position underneath. */}
       <div className="space-y-4">
         {grouping === 'none' ? (
-          <>
-            <TxnList
-              rows={filtered.slice(0, visibleCount)}
-              categories={categories}
-              onRecategorize={recategorizeEditing}
-              onEdit={selectForEdit}
-              selecting={selecting}
-              selected={selected}
-              onToggle={toggleSelected}
-            />
-            {filtered.length > visibleCount ? (
-              <div className="flex justify-center">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setVisibleCount((c) => c + PAGE_SIZE);
-                  }}
-                >
-                  Show {String(Math.min(PAGE_SIZE, filtered.length - visibleCount))} more of{' '}
-                  {String(filtered.length - visibleCount)}
-                </Button>
-              </div>
-            ) : null}
-          </>
+          // WS-H (F-005): the whole filtered set renders through a virtualized
+          // list (only the visible slice is in the DOM), so the old
+          // render-cap + "show more" button is gone — scrolling reveals
+          // everything with no per-row DOM cost. Client-side facets/totals are
+          // unchanged; `filtered` is still the full result they compute over.
+          <VirtualTxnList
+            rows={filtered}
+            categories={categories}
+            onRecategorize={recategorizeEditing}
+            onEdit={selectForEdit}
+            selecting={selecting}
+            selected={selected}
+            onToggle={toggleSelected}
+          />
         ) : (
           <GroupedList
             rows={filtered}

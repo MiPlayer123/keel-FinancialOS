@@ -135,12 +135,52 @@ export function TxnList({
       }
     >
       {rows.map((t, i) => (
-        <div
-          // Index suffix: category-grouped split fanning can place two shares
-          // of one transaction (or same-named categories) in one list.
+        // Index suffix: category-grouped split fanning can place two shares
+        // of one transaction (or same-named categories) in one list.
+        <TxnRow
           key={`${t.transactionId}:${String(i)}`}
-          className={`flex items-center gap-3 px-4 py-2.5 ${i > 0 ? 'border-t border-border' : ''}`}
-        >
+          t={t}
+          topBorder={i > 0}
+          categories={categories}
+          running={running}
+          onRecategorize={onRecategorize}
+          onEdit={onEdit}
+          selecting={selecting}
+          selected={selected}
+          onToggle={onToggle}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * WS-H (F-005): one transaction row, extracted from TxnList so both the plain
+ * list and the virtualized list (VirtualTxnList) render byte-identical markup.
+ * `topBorder` replaces the old index-based `i > 0` border: a virtualized row
+ * mounts in isolation and has no reliable "am I first" index, so the caller
+ * decides. Behaviour is otherwise identical to the pre-extraction inline row.
+ */
+export function TxnRow({
+  t,
+  topBorder,
+  categories,
+  running,
+  onRecategorize,
+  onEdit,
+  selecting,
+  selected,
+  onToggle,
+}: {
+  t: RichTransactionRow;
+  topBorder: boolean;
+  categories: CategoryRow[];
+  running?: Map<string, string> | undefined;
+} & ListCallbacks) {
+  return (
+    <div
+      className={`flex items-center gap-3 px-4 py-2.5 ${topBorder ? 'border-t border-border' : ''}`}
+    >
           {selecting ? (
             <button
               type="button"
@@ -321,8 +361,6 @@ export function TxnList({
             </Button>
           </div>
         </div>
-      ))}
-    </div>
   );
 }
 

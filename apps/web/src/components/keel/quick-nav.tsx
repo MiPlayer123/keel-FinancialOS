@@ -22,7 +22,15 @@ import {
 } from 'lucide-react';
 
 import { useHousehold } from '@/components/keel/household-context';
-import { fetchAccounts, fetchCategories, type AccountRow, type CategoryRow } from '@/lib/keel-api';
+import {
+  fetchAccounts,
+  fetchCategories,
+  searchTransactions,
+  type AccountRow,
+  type CategoryRow,
+  type TransactionSearchHit,
+} from '@/lib/keel-api';
+import { Money } from '@/components/keel/money';
 import {
   CommandDialog,
   CommandEmpty,
@@ -61,6 +69,11 @@ export function QuickNav() {
   const [open, setOpen] = useState(false);
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
   const [categories, setCategories] = useState<CategoryRow[] | null>(null);
+  // F-021: server-backed transaction/payee search. The palette input is
+  // controlled so the term can drive a DEBOUNCED server query (never a
+  // client-side scan over a full download — that's the whole point).
+  const [term, setTerm] = useState('');
+  const [txnHits, setTxnHits] = useState<TransactionSearchHit[]>([]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -94,6 +107,42 @@ export function QuickNav() {
     };
   }, [open, householdId, accounts]);
 
+  // Debounced server search: 200ms after the user stops typing, fetch up to 8
+  // matching transactions. A term under 2 chars clears results (too broad to be
+  // useful and needlessly heavy). Results are discarded if the term changed or
+  // the palette closed before the request resolved (stale-response guard).
+  useEffect(() => {
+    if (!open || !householdId) return;
+    const q = term.trim();
+    if (q.length < 2) {
+      setTxnHits([]);
+      return;
+    }
+    let active = true;
+    const timer = setTimeout(() => {
+      void searchTransactions(householdId, q, 8)
+        .then((hits) => {
+          if (active) setTxnHits(hits);
+        })
+        .catch(() => {
+          if (active) setTxnHits([]);
+        });
+    }, 200);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [term, open, householdId]);
+
+  // Reset the query + results whenever the palette closes so a fresh open
+  // starts clean (and doesn't flash the previous session's hits).
+  useEffect(() => {
+    if (!open) {
+      setTerm('');
+      setTxnHits([]);
+    }
+  }, [open]);
+
   const go = useCallback(
     (href: string) => {
       setOpen(false);
@@ -104,7 +153,11 @@ export function QuickNav() {
 
   return (
     <CommandDialog open={open} onOpenChange={setOpen} title="Quick navigation">
-      <CommandInput placeholder="Jump to a page, account, or category…" />
+      <CommandInput
+        placeholder="Jump to a page, account, or search transactions…"
+        value={term}
+        onValueChange={setTerm}
+      />
       <CommandList>
         <CommandEmpty>Nothing matches.</CommandEmpty>
         <CommandGroup heading="Actions">
@@ -177,6 +230,43 @@ export function QuickNav() {
                   {c.kind === 'income' ? (
                     <span className="text-xs text-muted-foreground">income</span>
                   ) : null}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </>
+        ) : null}
+        {txnHits.length > 0 ? (
+          <>
+            <CommandSeparator />
+            <CommandGroup heading="Transactions">
+              {txnHits.map((t) => (
+                <CommandItem
+                  key={t.transactionId}
+                  // Include the live term in the value so cmdk's own filter
+                  // (if active) never hides a server hit — the server already
+                  // decided it matches. Id keeps same-named payees distinct.
+                  value={`transaction ${term} ${t.description} ${t.transactionId}`}
+                  onSelect={() => {
+                    // Open the ledger scoped to this account with the search
+                    // pre-filled, landing the user on (or near) the row.
+                    go(
+                      `/dashboard/ledger?account=${t.accountId}&q=${encodeURIComponent(
+                        t.description,
+                      )}`,
+                    );
+                  }}
+                >
+                  <ReceiptText className="size-4" />
+                  <span className="min-w-0 flex-1 truncate">{t.description}</span>
+                  <span className="ml-auto flex shrink-0 items-center gap-2">
+                    <span className="text-xs text-muted-foreground">{t.effectiveDate}</span>
+                    <Money
+                      amountMinor={t.amountMinor}
+                      currency={t.currency}
+                      signed
+                      className="text-xs tabular-nums"
+                    />
+                  </span>
                 </CommandItem>
               ))}
             </CommandGroup>

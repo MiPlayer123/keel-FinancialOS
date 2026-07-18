@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { keelQuery, type QueryResult } from '@/lib/keel-api';
 
 /**
@@ -28,6 +28,69 @@ const KEEL_QUERY_KEY = 'keel-query';
  */
 export function keelQueryKey(query: string, householdId: string | null) {
   return [KEEL_QUERY_KEY, query, householdId] as const;
+}
+
+/**
+ * WS-H (F-005): SCOPED invalidation. The blanket `['keel-query']` prefix nuke
+ * (still the `refetch()` default below) re-downloads EVERYTHING mounted on
+ * every save — the single biggest cause of the "app is slow" report after the
+ * unbounded read itself. This helper invalidates only the named query prefixes
+ * for the given household, so a categorize edit refreshes the transaction lists
+ * + trial balance without also re-pulling budgets, goals, recurring, holdings,
+ * investments, connections, etc.
+ *
+ * Correctness contract: a caller MUST pass every query a mutation can dirty. If
+ * unsure, prefer the broad `refetch()` — a missed key means a stale number,
+ * which is worse than an over-fetch. We only narrow the two heaviest surfaces
+ * (ledger, account-detail) where the dirtied set is well understood.
+ *
+ * Both the exact-name key `[prefix, query, householdId]` AND the extra-param
+ * variants `[prefix, query, householdId, extraKey]` (silent/envelope reads,
+ * and the paginated rich page) start with `[prefix, query, householdId]`, so a
+ * single prefix-scoped `invalidateQueries` covers every variant of that query.
+ */
+export function invalidateKeelQueries(
+  queryClient: QueryClient,
+  queries: readonly string[],
+  householdId: string | null,
+): Promise<void> {
+  return Promise.all(
+    queries.map((query) =>
+      queryClient.invalidateQueries({ queryKey: [KEEL_QUERY_KEY, query, householdId] }),
+    ),
+  ).then(() => undefined);
+}
+
+/**
+ * The transaction-list reads a categorize/split/transfer/void/tag edit dirties:
+ * every rich surface (paginated + unbounded), the trial balance that renders
+ * account/category balances, and the Review suggestion queue + its badge count.
+ * Curated so the heavy pages can invalidate precisely instead of nuking the
+ * whole cache. Cash-flow / net-worth aggregates are intentionally NOT here:
+ * they live on Home/Reports, are date-bounded, and already refetch on their own
+ * mount — a ledger edit does not need to re-pull them while you're on the
+ * ledger (they revalidate on next navigation via staleTime). If a future
+ * mutation is found to need one of those live, add it to this list.
+ */
+export const TRANSACTION_MUTATION_KEYS = [
+  'transactions.rich',
+  'transactions.rich_page',
+  'ledger.trial_balance',
+  'categorization.suggestions',
+  'accounts.balance_daily',
+] as const;
+
+/**
+ * Hook returning a scoped invalidator bound to the current household. Use in
+ * the heavy list pages after a mutation instead of the per-read `refetch()`
+ * so unrelated mounted data is not re-downloaded (WS-H F-005).
+ */
+export function useKeelInvalidate(householdId: string | null) {
+  const queryClient = useQueryClient();
+  return useCallback(
+    (queries: readonly string[]) => invalidateKeelQueries(queryClient, queries, householdId),
+    [queryClient, householdId],
+  );
 }
 
 type State<Row> = {

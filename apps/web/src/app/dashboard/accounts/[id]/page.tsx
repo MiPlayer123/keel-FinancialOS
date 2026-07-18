@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
@@ -18,7 +18,12 @@ import {
 import { EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
-import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
+import {
+  useKeelInvalidate,
+  useKeelQuery,
+  useKeelQuerySilent,
+  TRANSACTION_MUTATION_KEYS,
+} from '@/lib/use-keel-query';
 import { toast } from 'sonner';
 import {
   categorizeTransaction,
@@ -54,9 +59,9 @@ import { SetOpeningBalanceDialog } from '@/components/keel/set-opening-balance-d
 import { HoldingsCard } from '@/components/keel/holdings-card';
 import {
   TxnDetailSheet,
-  TxnList,
   type TxnEditFormHandle,
 } from '@/components/keel/txn-edit-dialog';
+import { VirtualTxnList } from '@/components/keel/virtual-txn-list';
 import { BalanceTrendChart, CategoryBarList } from '@/components/keel/charts';
 import { spendingMix } from '@/lib/spending';
 import { Button } from '@/components/ui/button';
@@ -180,8 +185,22 @@ export default function AccountDetailPage() {
 
 function AccountDetailBody({ accountId }: { accountId: string }) {
   const { householdId, userId, ready } = useHousehold();
-  const balances = useKeelQuery<TrialBalanceRow>('ledger.trial_balance', householdId);
-  const txns = useKeelQuery<RichTransactionRow>('transactions.rich', householdId);
+  const balancesQuery = useKeelQuery<TrialBalanceRow>('ledger.trial_balance', householdId);
+  const txnsQuery = useKeelQuery<RichTransactionRow>('transactions.rich', householdId);
+  // WS-H (F-005): scoped invalidation. This page's mutations are transaction
+  // edits + opening/reanchor balance changes, all covered by
+  // TRANSACTION_MUTATION_KEYS (rich lists + trial balance + suggestions). We
+  // route both refetch()s through it so a save no longer nukes the whole cache
+  // (budgets/goals/recurring/holdings/etc. mounted elsewhere stay put). The old
+  // code paired `txns.refetch()` + `balances.refetch()`, which each blanket-
+  // invalidated everything twice; one scoped call now covers both.
+  const invalidate = useKeelInvalidate(householdId);
+  const refreshFinancials = useCallback(
+    () => invalidate(TRANSACTION_MUTATION_KEYS),
+    [invalidate],
+  );
+  const balances = { ...balancesQuery, refetch: refreshFinancials };
+  const txns = { ...txnsQuery, refetch: refreshFinancials };
   const [balanceRangeAnchor] = useState(() => new Date());
   const [balanceRangePreference, setBalanceRangePreference] = useState(() =>
     defaultBalanceRangePreference(balanceRangeAnchor),
@@ -797,7 +816,7 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
                 description="Transactions land here when the account syncs — or add one by hand."
               />
             ) : (
-              <TxnList
+              <VirtualTxnList
                 rows={accountTxns}
                 categories={categories}
                 running={runningByTxn}
