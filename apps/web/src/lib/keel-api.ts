@@ -680,6 +680,112 @@ export type RichTransactionRow = {
   reconciled?: boolean;
 };
 
+/** Keyset cursor for the paginated rich read (WS-H F-005). */
+export type RichPageCursor = { effectiveDate: string; transactionId: string };
+
+/**
+ * One page of the rich transaction read. `rows` uses the EXACT same DTO as the
+ * unbounded `transactions.rich` (RichTransactionRow); `nextCursor` is null when
+ * the last page has been reached. Deterministic order: effective_date desc, id.
+ */
+export type RichTransactionPage = {
+  rows: RichTransactionRow[];
+  nextCursor: RichPageCursor | null;
+  asOf: string;
+};
+
+/** Server-side filters for a rich page fetch. All optional. */
+export type RichPageFilters = {
+  limit?: number;
+  cursor?: RichPageCursor | null;
+  accountId?: string;
+  categoryId?: string;
+  search?: string;
+};
+
+/**
+ * Fetch ONE keyset page of the rich transaction read (WS-H F-005). Bounded and
+ * server-filtered — replaces downloading the whole household then filtering
+ * client-side. The envelope carries `nextCursor`; pass it back as `cursor` for
+ * the next page (infinite scroll / load-more).
+ */
+export async function fetchRichPage(
+  householdId: string,
+  filters: RichPageFilters = {},
+): Promise<RichTransactionPage> {
+  const extra: Record<string, unknown> = {};
+  if (filters.limit !== undefined) extra.limit = filters.limit;
+  if (filters.cursor) {
+    extra.cursorDate = filters.cursor.effectiveDate;
+    extra.cursorId = filters.cursor.transactionId;
+  }
+  if (filters.accountId) extra.accountId = filters.accountId;
+  if (filters.categoryId) extra.categoryId = filters.categoryId;
+  if (filters.search) extra.search = filters.search;
+  const result = await keelQuery<RichTransactionRow>('transactions.rich_page', householdId, extra);
+  const withCursor = result as QueryResult<RichTransactionRow> & {
+    nextCursor?: RichPageCursor | null;
+  };
+  return { rows: result.rows, nextCursor: withCursor.nextCursor ?? null, asOf: result.asOf };
+}
+
+/**
+ * Fetch EVERY transaction for one account by walking the keyset pages
+ * server-side (WS-H F-005). Replaces the account-detail page's old pattern of
+ * downloading the WHOLE household's rich list then filtering client-side by
+ * accountId — now the server filters, and only that account's rows cross the
+ * wire. A single account is bounded (hundreds of rows), and the running-balance
+ * + spending-mix computations on that page need the full account set, so we
+ * page through to completion (max ~pages of 200) rather than lazily. Guarded by
+ * a hard page cap so a pathological dataset can never loop forever.
+ */
+export async function fetchAllAccountTransactions(
+  householdId: string,
+  accountId: string,
+): Promise<RichTransactionRow[]> {
+  const all: RichTransactionRow[] = [];
+  let cursor: RichPageCursor | null = null;
+  for (let guard = 0; guard < 100; guard++) {
+    const page: RichTransactionPage = await fetchRichPage(householdId, {
+      accountId,
+      limit: 200,
+      cursor,
+    });
+    all.push(...page.rows);
+    if (!page.nextCursor) break;
+    cursor = page.nextCursor;
+  }
+  return all;
+}
+
+/** Slim command-palette search hit (WS-H F-021). */
+export type TransactionSearchHit = {
+  transactionId: string;
+  effectiveDate: string;
+  description: string;
+  accountId: string;
+  accountName: string;
+  amountMinor: string;
+  currency: string;
+};
+
+/**
+ * Server-side transaction/payee search for the command palette (F-021). Backed
+ * by `keel_search_transactions` — never a client-side scan over a full
+ * download. Returns at most `limit` (default 8, server-clamped to 25) hits.
+ */
+export async function searchTransactions(
+  householdId: string,
+  search: string,
+  limit = 8,
+): Promise<TransactionSearchHit[]> {
+  const result = await keelQuery<TransactionSearchHit>('transactions.search', householdId, {
+    search,
+    limit,
+  });
+  return result.rows;
+}
+
 export type CategoryRow = {
   ledgerAccountId: string;
   name: string;
