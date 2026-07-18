@@ -11,15 +11,18 @@ import { useKeelQuery } from '@/lib/use-keel-query';
 import {
   fetchAccounts,
   fetchConnections,
+  fetchEntities,
   fetchLatestBalances,
   fetchLedgerKinds,
   type AccountRow,
   type ConnectionRow,
+  type EntityRow,
   type LatestBalanceRow,
   type TrialBalanceRow,
 } from '@/lib/keel-api';
 import { relativeSyncLabel } from '@/lib/relative-date';
 import { utilizationPercent } from '@/lib/credit-utilization';
+import { looksLikeRetirementAccount } from '@/lib/investment-subtype';
 import { Skeleton } from '@/components/ui/skeleton';
 import { AddAccountDialog } from '@/components/keel/add-account-dialog';
 import { NetWorthHero } from '@/components/keel/net-worth-hero';
@@ -70,6 +73,7 @@ function AccountsBody() {
   const [kinds, setKinds] = useState<Map<string, string> | null>(null);
   const [connections, setConnections] = useState<ConnectionRow[]>([]);
   const [provider, setProvider] = useState<LatestBalanceRow[]>([]);
+  const [entities, setEntities] = useState<EntityRow[]>([]);
   const [reload, setReload] = useState(0);
 
   useEffect(() => {
@@ -107,6 +111,15 @@ function AccountsBody() {
       })
       .catch(() => {
         if (active) setProvider([]);
+      });
+    // F-023: entity grouping is additive — a failed entities read degrades
+    // to the single-entity layout, never blocks balances.
+    void fetchEntities(householdId)
+      .then((rows) => {
+        if (active) setEntities(rows);
+      })
+      .catch(() => {
+        if (active) setEntities([]);
       });
     return () => {
       active = false;
@@ -173,6 +186,10 @@ function AccountsBody() {
   const other = enriched.filter((a) => a.kind !== 'asset' && a.kind !== 'liability');
   const netMinor = enriched.reduce((acc, r) => acc + BigInt(r.balanceMinor || '0'), 0n).toString();
 
+  // F-023: entity grouping renders ONLY for multi-entity households — a
+  // single-entity household sees exactly the pre-slice layout below.
+  const multiEntity = entities.length > 1;
+
   return (
     <div className="space-y-8">
       {/* Fused hero (C11): number + Δ + % + window + chart as one unit. */}
@@ -199,9 +216,118 @@ function AccountsBody() {
         }
       />
 
-      <AccountGroup title="Assets" rows={assets} />
-      <AccountGroup title="Liabilities" rows={liabilities} />
-      {other.length > 0 ? <AccountGroup title="Other" rows={other} /> : null}
+      {multiEntity ? (
+        <EntityGroupedAccounts entities={entities} rows={enriched} />
+      ) : (
+        <>
+          <AccountGroup title="Assets" rows={assets} />
+          <AccountGroup title="Liabilities" rows={liabilities} />
+          {other.length > 0 ? <AccountGroup title="Other" rows={other} /> : null}
+        </>
+      )}
+    </div>
+  );
+}
+
+type EntitySection = {
+  entityId: string;
+  name: string;
+  rows: Enriched[];
+  assetsMinor: bigint;
+  liabilitiesMinor: bigint;
+  netMinor: bigint;
+};
+
+/**
+ * F-023: per-entity breakdown — net-worth chips up top, then each entity's
+ * accounts with Assets / Retirement / Liabilities subtotals. "Retirement" is
+ * an account class carved out of assets (subtype keywords), NOT a legal
+ * entity. Entities render in entities.list order (deterministic); accounts
+ * pointing at an entity the list doesn't know (an archived entity still
+ * owning live accounts) fall into a trailing "Other entity" section rather
+ * than silently vanishing from the page total.
+ */
+function EntityGroupedAccounts({ entities, rows }: { entities: EntityRow[]; rows: Enriched[] }) {
+  const byEntity = new Map<string, Enriched[]>();
+  for (const r of rows) {
+    const list = byEntity.get(r.entityId) ?? [];
+    list.push(r);
+    byEntity.set(r.entityId, list);
+  }
+  const known = new Set(entities.map((e) => e.entityId));
+  const orphanIds = [...byEntity.keys()].filter((id) => !known.has(id)).sort();
+  const sections: EntitySection[] = [
+    ...entities.map((e) => ({ entityId: e.entityId, name: e.name })),
+    ...orphanIds.map((id) => ({ entityId: id, name: 'Other entity' })),
+  ]
+    .map(({ entityId, name }) => {
+      const entityRows = byEntity.get(entityId) ?? [];
+      const sum = (pred: (r: Enriched) => boolean) =>
+        entityRows.filter(pred).reduce((acc, r) => acc + BigInt(r.balanceMinor || '0'), 0n);
+      return {
+        entityId,
+        name,
+        rows: entityRows,
+        assetsMinor: sum((r) => r.kind === 'asset'),
+        liabilitiesMinor: sum((r) => r.kind === 'liability'),
+        netMinor: sum(() => true),
+      };
+    })
+    .filter((s) => s.rows.length > 0);
+
+  return (
+    <div className="space-y-8">
+      {/* Per-entity net worth at a glance (F-023b). */}
+      <div className="flex flex-wrap gap-2">
+        {sections.map((s) => (
+          <div
+            key={s.entityId}
+            className="flex items-baseline gap-2 rounded-lg border border-border bg-card px-3 py-2"
+          >
+            <span className="text-xs font-medium text-muted-foreground">{s.name}</span>
+            <Money amountMinor={s.netMinor.toString()} className="text-sm font-semibold" />
+          </div>
+        ))}
+      </div>
+
+      {sections.map((s) => {
+        const retirement = s.rows.filter(
+          (r) => r.kind === 'asset' && looksLikeRetirementAccount(r.subtype),
+        );
+        const assets = s.rows.filter(
+          (r) => r.kind === 'asset' && !looksLikeRetirementAccount(r.subtype),
+        );
+        const liabilities = s.rows.filter((r) => r.kind === 'liability');
+        const other = s.rows.filter((r) => r.kind !== 'asset' && r.kind !== 'liability');
+        return (
+          <section key={s.entityId} className="space-y-4">
+            <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-border pb-2">
+              <h2 className="text-base font-semibold">{s.name}</h2>
+              <p className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                <span>
+                  Assets{' '}
+                  <Money amountMinor={s.assetsMinor.toString()} className="text-xs" />
+                </span>
+                <span>
+                  Liabilities{' '}
+                  <Money amountMinor={s.liabilitiesMinor.toString()} className="text-xs" />
+                </span>
+                <span>
+                  Net{' '}
+                  <Money
+                    amountMinor={s.netMinor.toString()}
+                    className="text-xs font-medium text-foreground"
+                  />
+                </span>
+              </p>
+            </div>
+            <AccountGroup title="Assets" rows={assets} />
+            <AccountGroup title="Retirement" rows={retirement} />
+            <AccountGroup title="Liabilities" rows={liabilities} />
+            {other.length > 0 ? <AccountGroup title="Other" rows={other} /> : null}
+          </section>
+        );
+      })}
     </div>
   );
 }
