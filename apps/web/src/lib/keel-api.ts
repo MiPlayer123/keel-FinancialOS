@@ -283,10 +283,11 @@ export type ConnectionRow = {
   displayName: string | null;
   institutionId: string | null;
   lastSuccessfulSyncAt: string | null;
-  /** True while the worker has an outstanding sync generation for this
-   * connection (queued, leased, or partially committed) — i.e. the backfill
-   * isn't fully landed yet, so ledger balances/totals are still a moving
-   * target. Mirrors the guard in keel_cmd_reanchor_balance. */
+  /** True while the worker has an outstanding sync generation OR a partial
+   * page's continuation hasn't landed yet for this connection — i.e. the
+   * backfill isn't fully done, so ledger balances/totals are still a moving
+   * target. Mirrors (a client-side, non-authoritative echo of) the guard in
+   * keel_cmd_reanchor_balance. */
   isSyncing: boolean;
 };
 
@@ -294,7 +295,7 @@ export async function fetchConnections(householdId: string): Promise<ConnectionR
   const { data, error } = await getSupabaseBrowserClient()
     .from('connections')
     .select(
-      'id, provider, status, display_name, institution_id, last_successful_sync_at, sync_desired_generation, sync_committed_generation',
+      'id, provider, status, display_name, institution_id, last_successful_sync_at, sync_desired_generation, sync_committed_generation, sync_continuation_pending',
     )
     .eq('household_id', householdId)
     .order('created_at', { ascending: false });
@@ -308,6 +309,7 @@ export async function fetchConnections(householdId: string): Promise<ConnectionR
     last_successful_sync_at: string | null;
     sync_desired_generation: number;
     sync_committed_generation: number;
+    sync_continuation_pending: boolean;
   };
   return ((data as Row[] | null) ?? []).map((r) => ({
     id: r.id,
@@ -316,7 +318,8 @@ export async function fetchConnections(householdId: string): Promise<ConnectionR
     displayName: r.display_name,
     institutionId: r.institution_id,
     lastSuccessfulSyncAt: r.last_successful_sync_at,
-    isSyncing: r.sync_desired_generation !== r.sync_committed_generation,
+    isSyncing:
+      r.sync_desired_generation !== r.sync_committed_generation || r.sync_continuation_pending,
   }));
 }
 

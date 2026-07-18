@@ -3353,3 +3353,43 @@ timeline confirms `sync_desired_generation <> sync_committed_generation`
 would have correctly blocked every one of the user's 12 clicks throughout
 the whole vulnerable window, including the final 22-transaction gap the
 auto-anchor's own gate was already protecting against.
+
+## Follow-up: independent review found the generation guard was incomplete
+
+Opened PR #60 for the fix above and asked for an independent adversarial
+pass before merging (user directive: "have an adversary agent attack and
+invalidate it. If it's good, then merge."). The GitHub-native codex review
+found a real P1 gap: `sync_committed_generation` gets bumped to match
+`sync_desired_generation` on EVERY attempt completion, including a PARTIAL
+page (`p_fully_synced=false`) — `completeSyncAttempt`
+(worker/sync-completion.ts:40-58) calls `keel_worker_complete_attempt`
+first, then enqueues the continuation as a separate step, and the
+continuation reopens at the SAME generation (`keel_worker_open_attempt`
+always uses the connection's current `sync_desired_generation`). So for
+the whole window between "this page committed" and "the continuation's own
+attempt completes," desired == committed even though the backfill is still
+mid-flight — the exact same corruption path, just not the one this
+specific incident happened to hit (its gap was covered by an unrelated
+new-generation bump, not the partial-continuation mechanism the reviewer
+correctly flagged as still open in general).
+
+Verified the finding directly against `sync-completion.ts` and
+`keel_worker_open_attempt` before accepting it (didn't just trust the bot).
+Fixed with a dedicated `connections.sync_continuation_pending` flag set
+atomically inside `keel_worker_complete_attempt` (same UPDATE, no
+ordering/fencing gap) whenever the completing page is `'partial'`, cleared
+on `'terminal'`/`'noop'`. Required changing that function's signature
+(new trailing parameter), which needed a full drop+recreate+re-own — `keel_worker_complete_attempt`
+is only ever called by the trusted worker/service_role context (two call
+sites, both in this repo), so the blast radius was fully auditable in one
+pass. Added a 15-minute staleness bound on the flag so a connection whose
+continuation job never gets picked up (worker crash, permanent reauth
+failure) doesn't stay permanently blocked from the "Fix balance" escape
+hatch that reanchor_balance.sql's own header documents as the intended
+recovery path for stuck syncs.
+
+Verified live in rolled-back transactions: a fresh `sync_continuation_pending`
+correctly blocks reanchor; an artificially-staled one (>15 min)
+correctly falls through to the escape hatch. `pnpm test` required updating
+three exact-payload assertions in `sync-completion.test.ts` for the new
+`p_continuation_pending` field — all pass (811 total). Worker redeployed.
