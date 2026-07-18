@@ -1088,9 +1088,10 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
                   p_description: t.description,
                   p_flow: t.flow,
                 });
-                // Finding 3: any ingest error fails this window — do NOT advance
-                // the checkpoint. Idempotency makes the whole window safe to
-                // retry next cycle.
+                // Finding 3 (re-review N1): any ingest error fails this window —
+                // do NOT advance the checkpoint, and resume from THIS page's
+                // start so the failed row is re-pulled. Idempotency makes
+                // re-ingesting the page's succeeded rows safe.
                 if (ingestErr) anyRowFailed = true;
                 else ingested += 1;
               }
@@ -1104,41 +1105,55 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
                   ? (invBody as { total_investment_transactions: number })
                       .total_investment_transactions
                   : 0;
+              // Re-review N1: stop paginating BEFORE advancing the offset so the
+              // saved continuation offset is this page's start, not the next
+              // page's — otherwise the failed page would be skipped on resume.
+              if (anyRowFailed) break;
               offset += INVESTMENT_TXN_PAGE_SIZE;
               if (offset >= total) break;
             }
 
             const windowFullyConsumed = offset >= total;
             if (anyRowFailed) {
-              // A row failed: leave the frozen window + current offset intact so
-              // the next cycle retries this window from where it stalled. Do not
-              // advance the date checkpoint.
-              await admin.rpc('keel_worker_investment_sync_continue', {
+              // A row failed: pagination stopped with `offset` still at the
+              // failed page's START, so the next cycle re-pulls that page from
+              // its beginning within the same frozen window. Do not advance the
+              // date checkpoint.
+              const { error: continueErr } = await admin.rpc('keel_worker_investment_sync_continue', {
                 p_household_id: c.household_id,
                 p_connection_id: c.id,
                 p_window_from: startDate,
                 p_window_to: windowTo,
                 p_next_offset: offset,
               });
+              if (continueErr) {
+                throw new Error(continueErr.message ?? 'investment sync continue failed');
+              }
             } else if (windowFullyConsumed) {
               // Whole window paginated cleanly: advance the date checkpoint and
               // clear the frozen window.
-              await admin.rpc('keel_worker_investment_sync_advance', {
+              const { error: advanceErr } = await admin.rpc('keel_worker_investment_sync_advance', {
                 p_household_id: c.household_id,
                 p_connection_id: c.id,
                 p_window_from: startDate,
                 p_window_to: windowTo,
               });
+              if (advanceErr) {
+                throw new Error(advanceErr.message ?? 'investment sync advance failed');
+              }
             } else {
               // Hit the page cap mid-window: persist the resume offset; the date
               // checkpoint stays put until the window is fully consumed.
-              await admin.rpc('keel_worker_investment_sync_continue', {
+              const { error: continueErr } = await admin.rpc('keel_worker_investment_sync_continue', {
                 p_household_id: c.household_id,
                 p_connection_id: c.id,
                 p_window_from: startDate,
                 p_window_to: windowTo,
                 p_next_offset: offset,
               });
+              if (continueErr) {
+                throw new Error(continueErr.message ?? 'investment sync continue failed');
+              }
             }
             investmentTxnResults.push({
               connectionId: c.id,
