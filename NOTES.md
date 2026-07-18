@@ -3700,3 +3700,101 @@ permanent, undetectable corruption. Deferred with this reasoning
 documented rather than expanding pgmq-touching scope this late in an
 already extensively-verified PR chain; flagged here for whoever next
 touches this continuation-tracking system.
+
+---
+
+## 2026-07-18 — WS-C Investments (F-013 / F-014 / F-015)
+
+Largest Wave-1 workstream: brokerage transactions ingestion, holdings error
+surfacing + history, and the Investments page. Branch `ws-c-investments`.
+Migrations authored in the assigned band 20260718120000–20260718123000.
+
+### F-013 — investment transactions ingestion
+- Plaid `/investments/transactions/get` is date-range + offset paginated (NOT
+  cursor-based), so it does not fit the existing `/transactions/sync`
+  cursor/attempt/lease state machine. Deliberately did NOT reuse
+  `keel_worker_create_normalized` + `keel_worker_apply_action` (they assert a
+  sync-attempt + attempt-owned raw page). Instead built a self-contained
+  idempotent proc `keel_worker_ingest_investment_txn`, modelled on the
+  simulator's `keel_worker_apply_promotion` create branch — records an
+  immutable raw event (source preservation), then creates a canonical txn +
+  journal batch + `[account, uncategorized offset]` postings that sum to zero,
+  keyed idempotently three ways (raw-event unique index, canonical
+  economic_event_key `inv:<connExtRef>:<plaidTxnId>`, and
+  `keel_idempotency_check` on apply key `inv-ingest:<plaidTxnId>`). A re-pull
+  of an overlapping date window therefore cannot duplicate an economic event
+  (Law 9 idempotent economics). NO lot/position/cost-basis accounting — a
+  buy/sell is ingested only for its cash effect, exactly like any other txn
+  (out of scope per F-013).
+- Sign: worker-side `mapInvestmentsTransactionsToKeel` (packages/providers/
+  plaid) negates Plaid's cash-out-positive `amount` so the stored minor amount
+  is the account-balance effect (negative = money out), matching
+  `mapAccountsGetToKeel` / the `/transactions/sync` adapter. Cancelled,
+  non-USD, and zero-amount rows are skipped. Cash-flow rows land in the ledger
+  and are visible to `keel_detect_transfers` (exact opposite pairing).
+- Bounded incremental window: `investment_sync_state.last_pulled_through` per
+  connection; each cycle pulls `[through - 14d overlap, today]` (first pull
+  reaches back 730d to match the link-token depth), bounded to
+  MAX_INVESTMENT_TXN_PAGES per invocation.
+
+### F-014 — holdings error persistence + surfacing
+- Added `connections.holdings_last_error_{code,message,at}` +
+  `holdings_last_success_at`; `keel_worker_record_holdings_error` (on any
+  holdings/investments failure) and `keel_worker_clear_holdings_error` (on
+  clean success, also stamps success). Surfaced on the Investments page
+  ("Holdings unavailable — reconnect …"). The connections page reads
+  `connections` directly (RLS), so the columns are already available there for
+  a future badge; kept the connections-page change out of scope to stay minimal.
+- FOUND + FIXED a live bug: `usage_events_provider_kind_check` never gained
+  `investments_holdings_get` (added to the TS ProviderCallKind yesterday but
+  not to the SQL constraint), so yesterday's holdings meterCall violates the
+  CHECK. Migration 120000 adds both it and the new
+  `investments_transactions_get`.
+
+### Cash-management concern (from the brief)
+- `accounts` has no Plaid `type` column (only `subtype`). Resolved by deciding
+  investment accounts in the worker from the LIVE accountsGet `type` (=
+  'investment', authoritative) UNIONed with the DB subtype keyword match, so a
+  brokerage cash-management account (subtype the keyword list misses, type
+  'investment') is now included in holdings + investment-txn sync. The SQL
+  read-model classifier `keel_is_investment_subtype` also broadens the keyword
+  list to include 'cash management' (the page shows the account); this is a
+  third mirror of the subtype list (web lib, worker _shared lib, SQL) — kept
+  in sync, documented in each.
+
+### History + page (F-015)
+- `holdings_snapshots` (append per account/security/day, last-write-wins per
+  day) appended by `keel_worker_snapshot_holdings` after each successful
+  holdings sync. Read model `keel_investments_value_daily` powers the
+  value-over-time chart (sparse initially — fine).
+- `keel_investments_overview` returns investment accounts (connected + manual)
+  with latest balances, household holdings grouped by account, per-symbol
+  allocation, totals, and holdings errors — one reproducible payload
+  (formulaVersion). Page at /dashboard/investments; nav entry added minimally.
+
+### Exports (Law 6)
+- Added `holdings`, `holdings_snapshots`, `investment_sync_state` to the SQL
+  export chain (new `keel_export_household_pre_investments` layer), the
+  `packages/exports` manifest, and the pgTAP allowlist. NOTE: `holdings` was a
+  PRE-EXISTING export gap from yesterday (created but never added to export or
+  allowlist — the 008 classification check was already failing on it live);
+  folded the fix in here. Bumped the included-table count 68 → 71 in
+  008_export.sql, manifest.test.ts, and formats.property.test.ts. Re-emitted
+  `connections` in the new layer to carry the 4 new holdings_* columns (the
+  base connections DTO is an explicit column list, so new columns are
+  otherwise silently dropped — same pattern as 20260718102500).
+
+### Ownership / grants
+- All new worker procs are postgres-owned SECURITY DEFINER (matching
+  `keel_worker_sync_holdings` / `keel_apply_account_balance`), with public
+  EXECUTE explicitly revoked and granted only to service_role (the missing-
+  revoke hole from the day before is explicitly avoided). Read models granted
+  to authenticated + service_role.
+
+### Open questions / flags
+- FEEDBACK.md was not present in this worktree; worked from the inline F-013/
+  F-014/F-015 descriptions in the task brief.
+- Could not run `supabase test db` locally (orchestrator runs the suite
+  serially at merge). pgTAP `024_investments.sql` authored but not executed
+  here; validated the `similar to` classifier and all signatures against the
+  live schema via read-only SELECTs.
