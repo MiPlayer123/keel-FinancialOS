@@ -1,6 +1,6 @@
 -- pgTAP: C5c completion signature, partial health semantics, and live-failure cleanup.
 begin;
-select plan(31);
+select plan(33);
 
 select is(
   to_regprocedure('public.keel_worker_create_normalized(uuid,uuid,uuid,text,text,text,text,text,text)'),
@@ -68,8 +68,8 @@ select is(
 );
 
 select ok(
-  to_regprocedure('public.keel_worker_complete_attempt(uuid,uuid,text,boolean)') is not null,
-  'the four-argument completion function exists'
+  to_regprocedure('public.keel_worker_complete_attempt(uuid,uuid,text,boolean,boolean)') is not null,
+  'the five-argument completion function exists'
 );
 
 select is(
@@ -84,15 +84,15 @@ select is(
 select is(
   (select p.pronargdefaults
      from pg_proc p
-    where p.oid = 'public.keel_worker_complete_attempt(uuid,uuid,text,boolean)'::regprocedure),
-  1::smallint,
-  'p_fully_synced is the sole defaulted completion argument'
+    where p.oid = 'public.keel_worker_complete_attempt(uuid,uuid,text,boolean,boolean)'::regprocedure),
+  2::smallint,
+  'p_fully_synced and p_continuation_pending are the defaulted completion arguments'
 );
 
 select is(
   (select r.rolname
      from pg_proc p join pg_roles r on r.oid = p.proowner
-    where p.oid = 'public.keel_worker_complete_attempt(uuid,uuid,text,boolean)'::regprocedure),
+    where p.oid = 'public.keel_worker_complete_attempt(uuid,uuid,text,boolean,boolean)'::regprocedure),
   'keel_worker',
   'completion remains owned by keel_worker'
 );
@@ -179,7 +179,8 @@ select lives_ok($$
     (select value from c5c_ids where label = 'attempt_partial'),
     (select value from c5c_ids where label = 'owner_partial'),
     'cursor-partial',
-    false
+    false,
+    true
   )
 $$, 'partial completion commits normally');
 
@@ -202,6 +203,14 @@ select is(
     where id = '96000000-0000-4000-8000-000000000001'),
   0::int,
   'partial completion still commits its attempt generation'
+);
+
+select ok(
+  (select sync_continuation_pending
+     and sync_continuation_marked_at is not null
+     from public.connections
+    where id = '96000000-0000-4000-8000-000000000001'),
+  'partial completion marks a continuation as pending'
 );
 
 select public.keel_worker_bump_generation('96000000-0000-4000-8000-000000000001');
@@ -280,6 +289,13 @@ select ok(
      from public.connections
     where id = '96000000-0000-4000-8000-000000000001'),
   'terminal completion sets health and commits the fresh generation'
+);
+
+select ok(
+  (select not sync_continuation_pending and sync_continuation_marked_at is null
+     from public.connections
+    where id = '96000000-0000-4000-8000-000000000001'),
+  'terminal completion clears any pending continuation'
 );
 
 select is(

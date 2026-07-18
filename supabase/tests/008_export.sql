@@ -16,7 +16,7 @@ insert into expected_export_tables(table_name, allowed_columns, omitted_columns)
   ('accounts', array['id','household_id','entity_id','connection_id','ledger_account_id','name','subtype','currency','external_ref','created_at','archived_at'], '{}'),
   ('account_owners', array['account_id','user_id','created_at'], '{}'),
   ('ledger_accounts', array['id','household_id','entity_id','name','kind','currency','is_category','created_at','archived_at','pfc_key','is_system','parent_ledger_account_id','tax_line'], '{}'),
-  ('connections', array['id','household_id','provider','external_ref','status','created_at','institution_id','consent_expires_at','last_successful_sync_at','sync_lease_owner','sync_leased_until','sync_desired_generation','sync_committed_generation','next_sync_eligible_at','display_name'], '{}'),
+  ('connections', array['id','household_id','provider','external_ref','status','created_at','institution_id','consent_expires_at','last_successful_sync_at','sync_lease_owner','sync_leased_until','sync_desired_generation','sync_committed_generation','next_sync_eligible_at','display_name','sync_continuation_pending','sync_continuation_marked_at'], '{}'),
   ('resource_permissions', array['id','household_id','user_id','resource_kind','resource_id','permission','created_at'], '{}'),
   ('approval_policies', array['id','household_id','risk_class','autonomy','created_at'], '{}'),
   ('canonical_transactions', array['id','household_id','entity_id','account_id','status','source','description','effective_date','economic_event_key','created_at','voided_at'], '{}'),
@@ -61,7 +61,7 @@ insert into expected_export_tables(table_name, allowed_columns, omitted_columns)
 insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
   ('employers',array['id','household_id','name','created_at'],'{}'),
   ('payroll_provider_imports',array['id','household_id','provider','source_ref','content_hash','imported_at'],'{}'),
-  ('paychecks',array['id','household_id','employer_id','pay_date','gross_minor','net_minor','currency','status','formula_version','created_by','created_at','updated_at'],'{}'),
+  ('paychecks',array['id','household_id','employer_id','pay_date','gross_minor','net_minor','currency','status','formula_version','created_by','created_at','updated_at','superseded_by_paycheck_id'],'{}'),
   ('paycheck_components',array['household_id','id','paycheck_id','component_key','kind','amount_minor','created_at'],'{}'),
   ('paycheck_templates',array['household_id','id','employer_id','template_version','component_blueprint','formula_version','created_at'],'{}'),
   ('paycheck_sources',array['household_id','id','paycheck_id','source_kind','source_ref','content_hash','payroll_provider_import_id','created_at'],'{}'),

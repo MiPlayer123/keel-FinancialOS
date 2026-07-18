@@ -38,6 +38,7 @@ Deno.test('C5c live partial completion opens a fresh notification before termina
         p_owner: 'owner-partial',
         p_next_cursor: 'cursor-partial',
         p_fully_synced: false,
+        p_continuation_pending: true,
       },
     },
     {
@@ -58,6 +59,7 @@ Deno.test('C5c live partial completion opens a fresh notification before termina
         p_owner: 'owner-terminal',
         p_next_cursor: 'cursor-terminal',
         p_fully_synced: true,
+        p_continuation_pending: false,
       },
     },
   ]);
@@ -90,6 +92,7 @@ Deno.test('C5c disabled no-op completes without setting sync health or enqueuein
       p_owner: 'owner-noop',
       p_next_cursor: 'cursor-unchanged',
       p_fully_synced: false,
+      p_continuation_pending: false,
     },
   }]);
 });

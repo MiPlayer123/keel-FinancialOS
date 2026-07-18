@@ -158,6 +158,26 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
     };
   }, [householdId, accountId, accountReload]);
 
+  // While a connection is mid-sync, isSyncing is a snapshot from the fetch
+  // above — nothing else refreshes it, so a page left open past the
+  // backend's completion (or the 15-minute staleness cutoff) would keep
+  // "Fix balance" disabled indefinitely. Poll only while genuinely syncing;
+  // stops itself once fetchConnections reports isSyncing=false.
+  const anyConnectionSyncing = useMemo(() => connections.some((c) => c.isSyncing), [connections]);
+  useEffect(() => {
+    if (!householdId || !anyConnectionSyncing) return;
+    const interval = setInterval(() => {
+      void fetchConnections(householdId)
+        .then((c) => {
+          setConnections(c);
+        })
+        .catch(() => {});
+    }, 60_000);
+    return () => {
+      clearInterval(interval);
+    };
+  }, [householdId, anyConnectionSyncing]);
+
   const accountTxns = useMemo(
     () => txns.rows.filter((t) => t.accountId === accountId),
     [txns.rows, accountId],
@@ -218,6 +238,10 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
   const syncLabel = connection?.lastSuccessfulSyncAt
     ? relativeSyncLabel(connection.lastSuccessfulSyncAt, new Date().toISOString())
     : null;
+  // Re-anchoring against a mid-backfill account computes against a moving
+  // target (production incident, 2026-07-18) — the backend now rejects this
+  // outright, but surface it here too so the button doesn't invite the click.
+  const isSyncing = connection?.isSyncing ?? false;
   // C9: utilization only when the provider reports a limit; currentMinor is
   // the positive owed magnitude, so the % is scaled-integer BigInt math.
   const utilization =
@@ -376,7 +400,12 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
                 type="button"
                 variant="ghost"
                 size="sm"
-                disabled={fixingBalance}
+                disabled={fixingBalance || isSyncing}
+                title={
+                  isSyncing
+                    ? 'Still syncing — the balance will settle once the initial sync finishes'
+                    : undefined
+                }
                 className="h-7 text-xs text-muted-foreground"
                 onClick={() => {
                   if (!householdId || !userId) return;
@@ -397,12 +426,12 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
                     });
                 }}
               >
-                {fixingBalance ? (
+                {fixingBalance || isSyncing ? (
                   <Loader2 className="size-3.5 animate-spin" />
                 ) : (
                   <Wand2 className="size-3.5" />
                 )}
-                Fix balance
+                {isSyncing ? 'Syncing…' : 'Fix balance'}
               </Button>
             ) : null}
           </div>

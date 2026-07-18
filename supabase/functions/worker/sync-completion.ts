@@ -43,6 +43,7 @@ export const completeSyncAttempt = async (
     p_owner: input.owner,
     p_next_cursor: input.nextCursor,
     p_fully_synced: fullySynced,
+    p_continuation_pending: input.status === 'partial',
   });
   if (completeError) throw new SyncCompletionError('attempt completion failed', false);
 

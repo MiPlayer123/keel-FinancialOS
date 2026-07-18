@@ -1,0 +1,16 @@
+-- Discovered while running `supabase test db` for real to verify PR #60
+-- (the pgTAP suite hadn't been run locally in a while -- a migration
+-- timestamp collision blocked a clean `supabase db reset` entirely; fixed
+-- separately). 015_reanchor_balance.sql failed with "function
+-- keel_apply_account_balance(...) is not unique": 20260717220000_account_mask.sql
+-- added an 8th parameter (p_mask) via `create or replace function`, but
+-- Postgres treats a changed argument list as a NEW function rather than a
+-- replacement -- it silently created a second overload instead of
+-- superseding 20260717180000_credit_limit.sql's 7-arg version, orphaning
+-- the old one. Not actively broken in production (the only real caller,
+-- worker/index.ts:934, always passes all 8 named parameters, which
+-- resolves unambiguously to the correct 8-arg overload) but a landmine
+-- for any future caller passing fewer args, and unrelated to this PR's
+-- reanchor-guard work -- discovered as a side effect of finally running
+-- the pgTAP suite that should have caught it when account_mask.sql shipped.
+drop function public.keel_apply_account_balance(uuid, uuid, bigint, bigint, text, timestamptz, bigint);

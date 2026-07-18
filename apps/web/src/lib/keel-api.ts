@@ -283,12 +283,25 @@ export type ConnectionRow = {
   displayName: string | null;
   institutionId: string | null;
   lastSuccessfulSyncAt: string | null;
+  /** True while the worker has an outstanding sync generation OR a partial
+   * page's continuation hasn't landed yet for this connection — i.e. the
+   * backfill isn't fully done, so ledger balances/totals are still a moving
+   * target. Mirrors (a client-side, non-authoritative echo of) the guard in
+   * keel_cmd_reanchor_balance. */
+  isSyncing: boolean;
 };
+
+/** Mirrors keel_cmd_reanchor_balance's staleness cutoff (20260718101500) —
+ * a continuation job that never got picked up (worker crash, permanent
+ * reauth failure) shouldn't leave "Fix balance" permanently disabled. */
+const CONTINUATION_STALE_AFTER_MS = 15 * 60 * 1000;
 
 export async function fetchConnections(householdId: string): Promise<ConnectionRow[]> {
   const { data, error } = await getSupabaseBrowserClient()
     .from('connections')
-    .select('id, provider, status, display_name, institution_id, last_successful_sync_at')
+    .select(
+      'id, provider, status, display_name, institution_id, last_successful_sync_at, sync_desired_generation, sync_committed_generation, sync_continuation_pending, sync_continuation_marked_at',
+    )
     .eq('household_id', householdId)
     .order('created_at', { ascending: false });
   if (error) throw error;
@@ -299,15 +312,27 @@ export async function fetchConnections(householdId: string): Promise<ConnectionR
     display_name: string | null;
     institution_id: string | null;
     last_successful_sync_at: string | null;
+    sync_desired_generation: number;
+    sync_committed_generation: number;
+    sync_continuation_pending: boolean;
+    sync_continuation_marked_at: string | null;
   };
-  return ((data as Row[] | null) ?? []).map((r) => ({
-    id: r.id,
-    provider: r.provider,
-    status: r.status,
-    displayName: r.display_name,
-    institutionId: r.institution_id,
-    lastSuccessfulSyncAt: r.last_successful_sync_at,
-  }));
+  const now = Date.now();
+  return ((data as Row[] | null) ?? []).map((r) => {
+    const continuationFresh =
+      r.sync_continuation_pending &&
+      r.sync_continuation_marked_at !== null &&
+      now - new Date(r.sync_continuation_marked_at).getTime() < CONTINUATION_STALE_AFTER_MS;
+    return {
+      id: r.id,
+      provider: r.provider,
+      status: r.status,
+      displayName: r.display_name,
+      institutionId: r.institution_id,
+      lastSuccessfulSyncAt: r.last_successful_sync_at,
+      isSyncing: r.sync_desired_generation !== r.sync_committed_generation || continuationFresh,
+    };
+  });
 }
 
 /** Trigger an immediate sync for one connection (also drained by the 3-min cron). */

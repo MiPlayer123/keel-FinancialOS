@@ -3277,3 +3277,426 @@ can't reference `paychecks.status` directly — cross-table predicates don't
 auto-update). Deferred rather than rushed into a 5th same-session
 migration on a live ledger table with zero current callers exercising the
 path; flagged here for whoever builds the paystub/provider ingestion path.
+
+## Production bug: Chase checking balance $2,632.76 off after linking
+
+User report: freshly-linked Chase checking + credit card showed balances
+that didn't match the bank ("random numbers"). Diagnosed live against the
+household's actual data (household `a1ba3759-...`, connection `716d335e-...`,
+accounts `89176108-...` checking / `e92e11e8-...` credit card):
+
+- Credit card was actually fine — ledger balance `-41505` minor matched
+  Plaid's `current_minor` (`41505`) exactly. A misread of an early diagnostic
+  query briefly suggested otherwise; a clean re-query confirmed it reconciled.
+- Chase checking was genuinely wrong: ledger balance `1,425,718` minor vs.
+  Plaid's `1,688,994` minor, a `263,276` minor (**$2,632.76**) gap.
+
+Root cause, traced via `balance_snapshots` + `journal_batches` history: the
+checking account has 554 transactions, which took Plaid ~4 minutes to fully
+backfill (`connections.created_at` 03:26:22 → `last_successful_sync_at`
+03:30:13). During that window the user clicked "Fix balance"
+(`accounts.reanchor_balance`) **12 times in 34 seconds** (03:26:44–03:27:18),
+each visible as a paired `Opening balance (re-anchored)` +
+`REVERSAL: re-anchoring opening balance` batch in the ledger history.
+`keel_cmd_reanchor_balance` computes `opening = provider_balance −
+Σ(journal_postings AS OF RIGHT NOW)` — a moving target while the worker is
+still landing backfill pages. The user's last click (03:27:18) landed ~3
+minutes *before* the sync actually finished, so its correction went stale
+the moment the remaining transactions posted, and nothing re-corrected it
+afterward. Nothing in the product told the user the account was still
+syncing, so repeatedly clicking a stuck-looking "Fix balance" button was a
+completely reasonable thing to do — the bug is in the system, not the click.
+
+**Data fix:** ran `keel_cmd_reanchor_balance` once more for the checking
+account through the real command path (simulating the household owner's
+JWT via `set_config('request.jwt.claim.sub', ...)` for that one call, not a
+raw ledger edit) after confirming via `connections.sync_leased_until`/
+`sync_desired_generation = sync_committed_generation` that the sync was
+fully settled. New ledger balance `1,688,994` minor — exact match to Plaid.
+
+**Root-cause fix** (`20260718100000_reanchor_sync_in_progress_guard.sql`):
+`keel_cmd_reanchor_balance` now rejects outright with a clear
+`KEEL_INVALID_COMMAND` if the account's connection has
+`sync_desired_generation <> sync_committed_generation` (covers queued,
+actively-leased, and partially-committed states) — the same signal
+`keel_apply_account_balance`'s one-time auto-anchor already deferred on,
+now applied to the manual correction path too, which had no such guard.
+This protects every caller (web, future API/MCP), not just the button —
+Law 7. Verified live: temporarily bumping `sync_desired_generation` inside
+a transaction and calling the proc raised the new error and left the
+household's real state untouched (confirmed via SELECT after — the
+statement's own exception aborted the transaction before rollback even
+ran). UI (`apps/web/src/lib/keel-api.ts` `ConnectionRow.isSyncing`,
+`apps/web/src/app/dashboard/accounts/[id]/page.tsx`) now also disables
+"Fix balance" and shows "Syncing…" while a sync is outstanding, so the
+backend rejection is a backstop, not the first thing the user sees.
+
+Initially suspected a residual gap in `keel_apply_account_balance`'s
+auto-anchor gate (`last_successful_sync_at is not null` possibly
+satisfiable by an early/intermediate generation, not just the final one) —
+checked it out rather than leave it speculative. `keel_worker_complete_attempt`
+(20260711155000_c5c_partial_complete.sql:44-51) only stamps
+`last_successful_sync_at = now()` when the worker passes
+`p_fully_synced = true`; a partial page leaves it untouched. Confirmed
+empirically against this exact incident: `canonical_transactions.created_at`
+for the checking account shows a continuous stream (~9-10/sec) from
+03:26:33-03:27:31 covering the bulk of the 554 transactions, then a gap,
+then a final batch of 22 landing 03:30:09-03:30:12 — exactly matching
+`sync_attempts` showing generation 2's first attempt getting orphaned
+(`state='open'`, never promoted) at 03:27:22 and only completing on retry
+at 03:30:12, with generation 3 (the final "nothing more" check) closing out
+at 03:30:13 — the same instant `last_successful_sync_at` landed. So the
+auto-anchor's gate was never actually early; it fired at the true
+completion. The bug was fully isolated to the manual "Fix balance" path
+having no gate at all, which this fix closes — and the transaction-landing
+timeline confirms `sync_desired_generation <> sync_committed_generation`
+would have correctly blocked every one of the user's 12 clicks throughout
+the whole vulnerable window, including the final 22-transaction gap the
+auto-anchor's own gate was already protecting against.
+
+## Follow-up: independent review found the generation guard was incomplete
+
+Opened PR #60 for the fix above and asked for an independent adversarial
+pass before merging (user directive: "have an adversary agent attack and
+invalidate it. If it's good, then merge."). The GitHub-native codex review
+found a real P1 gap: `sync_committed_generation` gets bumped to match
+`sync_desired_generation` on EVERY attempt completion, including a PARTIAL
+page (`p_fully_synced=false`) — `completeSyncAttempt`
+(worker/sync-completion.ts:40-58) calls `keel_worker_complete_attempt`
+first, then enqueues the continuation as a separate step, and the
+continuation reopens at the SAME generation (`keel_worker_open_attempt`
+always uses the connection's current `sync_desired_generation`). So for
+the whole window between "this page committed" and "the continuation's own
+attempt completes," desired == committed even though the backfill is still
+mid-flight — the exact same corruption path, just not the one this
+specific incident happened to hit (its gap was covered by an unrelated
+new-generation bump, not the partial-continuation mechanism the reviewer
+correctly flagged as still open in general).
+
+Verified the finding directly against `sync-completion.ts` and
+`keel_worker_open_attempt` before accepting it (didn't just trust the bot).
+Fixed with a dedicated `connections.sync_continuation_pending` flag set
+atomically inside `keel_worker_complete_attempt` (same UPDATE, no
+ordering/fencing gap) whenever the completing page is `'partial'`, cleared
+on `'terminal'`/`'noop'`. Required changing that function's signature
+(new trailing parameter), which needed a full drop+recreate+re-own — `keel_worker_complete_attempt`
+is only ever called by the trusted worker/service_role context (two call
+sites, both in this repo), so the blast radius was fully auditable in one
+pass. Added a 15-minute staleness bound on the flag so a connection whose
+continuation job never gets picked up (worker crash, permanent reauth
+failure) doesn't stay permanently blocked from the "Fix balance" escape
+hatch that reanchor_balance.sql's own header documents as the intended
+recovery path for stuck syncs.
+
+Verified live in rolled-back transactions: a fresh `sync_continuation_pending`
+correctly blocks reanchor; an artificially-staled one (>15 min)
+correctly falls through to the escape hatch. `pnpm test` required updating
+three exact-payload assertions in `sync-completion.test.ts` for the new
+`p_continuation_pending` field — all pass (811 total). Worker redeployed.
+
+## Follow-up #2: the fix itself would have broken all Plaid syncing
+
+A THIRD review round on the same PR caught something more serious than a
+logic gap: `keel_worker_complete_attempt` (owned by `keel_worker`,
+SECURITY DEFINER) writes the two new columns from follow-up #1, but
+`keel_worker`'s column-scoped UPDATE grant on `connections`
+(20260711130000_c5b_sync_pull.sql:489-491) predates them. Confirmed live
+via `information_schema.column_privileges`: `keel_worker` had SELECT but
+not UPDATE on `sync_continuation_pending`/`sync_continuation_marked_at`.
+Since the function only runs with the OWNER's privileges (SECURITY
+DEFINER doesn't grant blanket table access, only what the owner role has
+been explicitly granted), every real sync completion would have hit a
+permission-denied error the instant it ran against the already-redeployed
+worker code — breaking ALL Plaid syncing for every connection, not just
+the specific reanchor-guard edge case this whole PR exists to fix. This
+is exactly the kind of self-inflicted regression the review loop exists
+to catch before it reaches production.
+
+Checked `sync_attempts.created_at` against the worker redeploy timestamp
+before fixing — no real sync had completed against the broken code yet,
+so this was caught in the window, not after damage. Fixed with the
+missing `grant update (...)`. Critically, didn't just add the grant and
+trust it: re-ran the SAME kind of live verification as everywhere else
+this session, but this time actually exercising the broken code path —
+a synthetic lease + `sync_attempts` row inside a rolled-back transaction,
+calling `keel_worker_complete_attempt` directly. It failed with permission
+denied *before* the grant and succeeded (correctly flipping
+`sync_continuation_pending`) *after* it. This caught a real blind spot in
+my own earlier verification: every previous "verify live" step this
+session called `keel_cmd_reanchor_balance`, whose owner (`keel_api`) I'd
+already confirmed had the right grants — I never actually invoked
+`keel_worker_complete_attempt` itself end-to-end, only reasoned about its
+SQL body and redeployed the TS caller. Reasoning about a function's logic
+is not the same as exercising its actual runtime privileges.
+
+Also fixed a second-round UI finding: the client's `isSyncing` read
+`sync_continuation_pending` with no staleness cutoff, so once a
+continuation genuinely got stuck past 15 minutes, the backend would
+correctly allow "Fix balance" again but the button would stay disabled
+forever — the escape hatch existed but was unreachable through the UI.
+Client now applies the identical 15-minute cutoff.
+
+## Follow-up #3: a third review round + actually running `supabase test db`
+
+A third review round on the same PR flagged two more real gaps (both P2):
+`sync_continuation_pending`/`sync_continuation_marked_at` weren't in the
+export coverage allowlist (`supabase/tests/008_export.sql`) or the actual
+`connections` export DTO (`keel_export_household_pre_tags` — found by
+tracing the wrapper-chain of `create or replace` layers via `pg_proc.prosrc`,
+since the export function is built as ~15 stacked per-feature layers, not
+one file). Fixed both — the allowlist and the DTO builder itself, since
+`connections` (unlike `paychecks`, see below) is hand-written
+`jsonb_build_object`, not generic `to_jsonb(x)`, so the allowlist fix alone
+wouldn't have actually exported the data.
+
+Rather than keep trusting review findings without running the actual pgTAP
+suite (a real blind spot per follow-up #2), took the extra step of running
+`supabase test db` for real — Docker was available locally, and NOTES.md's
+own history shows this suite has repeatedly been skipped ("CI-only", "no
+Docker") across this project's life. That decision paid off immediately:
+a genuinely broken migration timestamp collision
+(`20260718040000_holdings.sql` vs `20260718040000_transaction_set_date.sql`)
+blocked `supabase db reset` outright with a hard `schema_migrations` PK
+violation — invisible on the live cloud DB (no migration-history table
+there to enforce uniqueness, per INFRA.md) but fatal locally. Found and
+fixed THREE such collisions total (renamed the later-authored file in each
+pair to a unique timestamp, verified no other references first):
+`20260718040000` (holdings.sql / transaction_set_date.sql →
+`20260718041000`), `20260718050000` (holdings_fixes.sql /
+credential_delete_guard.sql → `20260718051000`), `20260718060000`
+(holdings_fixes_2.sql / reconnect_dedupe.sql → `20260718061000`). None of
+these three collisions are related to tonight's reanchor-guard work —
+they're accumulated fallout from multiple parallel sessions working the
+same day and independently picking round-hour timestamps. Fixing them was
+necessary just to get a clean local migration replay at all, and benefits
+every future local/CI run, not just tonight's verification.
+
+With a clean reset, the real pgTAP run surfaced one more genuine, unrelated
+bug directly in this PR's neighborhood: `keel_apply_account_balance` had
+TWO overloads live (7-arg and 8-arg) because `20260717220000_account_mask.sql`
+added an 8th parameter via `create or replace function` — which Postgres
+treats as defining a NEW function when the argument list changes, silently
+orphaning the old 7-arg version instead of replacing it (the exact same
+failure mode PR #60's own `keel_worker_complete_attempt` change would have
+hit, had it not been fixed with a proper drop+recreate). Confirmed the
+orphaned 7-arg overload was truly dead — the only real caller
+(`worker/index.ts:934`) always passes all 8 named parameters, so production
+was never actually broken — but it was a live landmine for any future
+positional or partial caller, and it's what made `015_reanchor_balance.sql`
+fail with a "not unique" ambiguity error. Dropped the dead overload.
+
+Also fixed one export gap that genuinely was mine: `paychecks.superseded_by_paycheck_id`
+(added in tonight's earlier PR #59) was in the TS-side export manifest
+(`packages/exports/src/manifest.ts`) but never added to this separate
+SQL-side pgTAP allowlist — missed because I never actually ran `supabase
+test db` when fixing that finding either. The underlying `paychecks` export
+DTO (`keel_export_household_pre_reimbursements`) uses generic `to_jsonb(x)`
+whole-row conversion, so the data itself was already exported correctly;
+only the test's allowlist was stale.
+
+Explicitly NOT fixed, confirmed pre-existing and unrelated to this PR via
+migration dates (left for whoever owns that work): `008_export.sql` still
+has 6 tables never classified INCLUDE/EXCLUDE (`household_notes`,
+`documents`, `document_versions`, `document_attachments`, `holdings`,
+`household_tasks` — from the notes/tasks, documents, and holdings features)
+and one more unclassified column (`accounts.mask`, from
+`20260717220000_account_mask.sql`); `023_reconnect_dedupe.sql` fails with
+a permission-denied error on `connections` (needs `grant update on
+connections to authenticated`, from the reconnect-dedupe feature merged
+from a parallel session today). All three are real gaps but out of scope
+here — flagging so they don't get lost.
+
+After all of the above, `supabase test db` runs clean for every file this
+PR touches (`006_c5c_partial_complete.sql`, `015_reanchor_balance.sql`,
+and `008_export.sql`'s two assertions that were actually in scope). Full
+verification loop repeated once more end to end: `pnpm build` clean,
+`pnpm test` 811 passing, both verifiers clean, all migrations reapplied
+live and confirmed via `pg_proc`.
+
+## Follow-up #4: a genuine TOCTOU race in the guard itself
+
+A fourth review round found something deeper than the prior three: the
+sync-in-progress guard reads `sync_desired_generation` /
+`sync_committed_generation` / `sync_continuation_pending` with a plain,
+unlocked `SELECT`, once, near the top of `keel_cmd_reanchor_balance` — but
+the actual `Σ(journal_postings)` computation this whole guard exists to
+protect happens much later, after the currency check, two period-lock
+checks, and the reversal loop. Both `keel_worker_bump_generation` and
+`keel_worker_acquire_sync_lease` (confirmed by reading them directly, not
+just trusting the finding) commit their state via a plain `UPDATE` on the
+same `connections` row. So a sync that starts in the gap between the
+guard's read and the final `SUM` — passing the guard cleanly at the
+instant it's checked — could still post new transactions before the `SUM`
+runs, reproducing the exact race this whole PR exists to close, just
+through a narrower window than the original bug.
+
+Fixed by adding `FOR NO KEY UPDATE` to the guard's `SELECT` on
+`connections`, holding that row lock for the rest of the transaction.
+Since both `keel_worker_bump_generation` and `keel_worker_acquire_sync_lease`
+use plain `UPDATE`s on the same row, they'll block behind this lock until
+the reanchor transaction commits or rolls back — no concurrent sync can
+transition generation/lease state (and therefore can't start posting) for
+the remainder of the function's execution. Used `FOR NO KEY UPDATE` rather
+than the stronger `FOR UPDATE`, matching the convention `keel_worker_complete_attempt`
+already uses elsewhere in this codebase, so unrelated FK-referencing
+inserts against the row aren't blocked unnecessarily.
+
+Before applying, checked (given follow-up #2's lesson about not assuming
+grants) whether `keel_api` — the owner of `keel_cmd_reanchor_balance` —
+actually has UPDATE privilege on `connections`, since `FOR NO KEY UPDATE`
+requires it even without modifying any column and this function had never
+touched `connections` before. Confirmed live via
+`information_schema.column_privileges`: `keel_api` already has UPDATE on
+`status`/`sync_desired_generation`/`sync_lease_owner`/`sync_leased_until`
+(from other commands), which is sufficient — Postgres only requires
+UPDATE on at least one column of a row to lock it. Applied, then verified
+end to end: a real reanchor call still succeeds and produces the correct
+result, and `015_reanchor_balance.sql`'s full pgTAP suite (deferral while
+unsynced, anchor after first sync, both-legs marker, no-double-anchor
+idempotency) passes clean with the lock in place — no regression.
+
+Did not attempt to empirically reproduce the concurrent-blocking behavior
+itself (e.g., two simultaneous sessions racing against each other) — `FOR
+NO KEY UPDATE` blocking a conflicting `UPDATE` on the same row until the
+locking transaction ends is foundational, well-documented PostgreSQL MVCC
+behavior, not a project-specific fact that needed discovery the way the
+`keel_worker` grant did. What needed verifying here was narrower and
+project-specific — does the owning role have enough privilege to take the
+lock at all — and that was checked directly rather than assumed.
+
+## Follow-up #5: the staleness heuristic itself could be fooled
+
+Sixth review round, another genuine P1: the 15-minute continuation
+staleness escape hatch (follow-up #2) can be wrong at the exact moment a
+worker resumes a long-delayed continuation. Confirmed directly by reading
+`keel_worker_acquire_sync_lease` (20260711130000_c5b_sync_pull.sql:11-58):
+it sets `sync_lease_owner`/`sync_leased_until` but never touches
+`sync_continuation_pending`/`sync_continuation_marked_at`. So a worker can
+pick a stale (>15min) continuation back up, hold a live unexpired lease,
+and actively post new transactions right now — while
+`sync_continuation_marked_at` still reads as stale, and follow-up #4's
+`FOR NO KEY UPDATE` lock doesn't catch it either, since the worker's
+lease-acquire already happened and committed as its own separate,
+finished transaction before the reanchor call even started (the lock only
+fences NEW acquisitions/bumps starting *during* the reanchor transaction).
+
+Fixed by also rejecting while an unexpired lease exists
+(`sync_leased_until is not null and sync_leased_until > now()`),
+independent of the staleness heuristic. `sync_leased_until` is the
+authoritative signal for "is a worker actively claiming this connection
+right now" — a crashed/abandoned worker's lease still expires on its own
+TTL regardless of this check, so it doesn't reopen the genuinely-stuck-
+connection escape hatch the staleness cutoff exists for; it only blocks
+while a worker verifiably still holds the lease. Verified live in two
+rolled-back transactions: an unexpired lease correctly blocks reanchor, an
+expired one correctly falls through and computes the right result;
+confirmed zero side effects afterward. Re-ran `015_reanchor_balance.sql`'s
+full pgTAP suite clean with this change — no regression from the four
+prior fixes to this same function tonight.
+
+Six rounds in, the guard now checks: generation match, continuation-
+pending freshness, AND live lease state, with a row lock spanning the
+whole computation. This is a lot of layered defense for one function —
+worth noting for whoever next touches `keel_cmd_reanchor_balance` that
+each layer exists because a specific, real, verified race was found
+through it, not speculative hardening.
+
+## Follow-up #6: a real, live, pre-existing security hole (not caused by PR #60, but exposed by it)
+
+Seventh review round on PR #60 caught the most severe finding of the
+night, and it's not about `keel_cmd_reanchor_balance` at all:
+`keel_apply_account_balance` (SECURITY DEFINER, owned by `keel_worker`,
+no `keel_assert_member_write` or any auth check inside it -- by design,
+meant to be called ONLY by the trusted worker context) had EXECUTE
+granted to `PUBLIC`, `anon`, AND `authenticated`. Confirmed live via
+`information_schema.routine_privileges` before touching anything: any
+caller with the publishable key, or any logged-in user, could RPC this
+function directly with an arbitrary `p_household_id`/`p_account_id` and
+write a fake `balance_snapshots` row and/or book a fake opening-balance
+journal entry for **any household's account** -- a cross-tenant
+financial-integrity hole, not just a permissions gap.
+
+Root cause: `20260712190000_account_balances.sql`'s original `grant
+execute ... to service_role` was never paired with the `revoke all ...
+from public, anon, authenticated` this codebase uses everywhere else for
+worker-only SECURITY DEFINER functions (e.g. `keel_worker_complete_attempt`).
+PostgreSQL grants EXECUTE to PUBLIC by default on function creation; an
+*additional* grant to `service_role` doesn't remove that default. Every
+later touch of this function (`credit_limit.sql`'s 7-arg version,
+`account_mask.sql`'s 8-arg version) inherited the same gap, since none of
+them added the missing revoke either. This has been live and exploitable
+since `account_mask.sql` shipped (2026-07-17), well before tonight --
+follow-up #3's drop of the orphaned 7-arg overload didn't create this
+vulnerability, but it did make the vulnerable 8-arg version the sole
+remaining implementation, so fixed it as part of this PR rather than
+leaving it for a separate one.
+
+Fixed with `revoke all ... from public, anon, authenticated; grant
+execute ... to service_role;` on the current 8-arg signature, matching
+this codebase's established pattern elsewhere. Verified immediately via
+the same `information_schema.routine_privileges` query: only `postgres`
+and `service_role` remain.
+
+Given the severity, spot-checked (not a full audit) every other
+`keel_worker_%`/`keel_apply_%` SECURITY DEFINER function for the same
+class of gap (`PUBLIC`/`anon`/`authenticated` execute with no internal
+auth check). One more hit: `keel_apply_rules` grants `authenticated` --
+but it has its own real auth check (`if auth.uid() is not null and not
+exists(select 1 from household_memberships where ...) then raise
+KEEL_NOT_FOUND`), deliberately allowing NULL-`auth.uid()` system/cron
+callers through while still rejecting an authenticated user outside the
+target household. Confirmed safe as designed, not touched.
+
+This spot-check was NOT exhaustive -- it only covered functions matching
+the same naming convention as the one that was actually vulnerable.
+A dedicated pass auditing every SECURITY DEFINER function's grants against
+its actual internal auth checks would be worth doing separately; flagging
+here rather than expanding this PR further.
+
+## Follow-up #7: a real but bounded, self-recovering residual gap -- deferred
+
+Eighth review round found one more real issue in the 15-minute
+continuation-staleness escape hatch (follow-up #2), narrower than
+follow-ups #4/#5: if a continuation has been genuinely stuck for over 15
+minutes (worker outage, queue backlog) AND its `sync_notification` job is
+STILL sitting in the `sync_events` pgmq queue (not abandoned, just
+delayed) AND a user uses the staleness escape hatch to reanchor during
+that window, the reanchor computes a "corrected" balance against
+whatever's currently posted -- then, if that stale queued job eventually
+gets picked up and processed, it resumes from the old cursor and posts
+the remaining transactions, silently invalidating the just-computed
+opening balance a second time. Neither follow-up #4's row lock (only
+fences transitions starting *during* the reanchor transaction) nor
+follow-up #5's lease check (only catches a lease *already held right now*)
+sees this, because nothing in the database can currently distinguish "this
+continuation is truly abandoned" from "this continuation is delayed but
+still queued" -- that distinction only exists in pgmq's queue state, which
+`keel_cmd_reanchor_balance` has no way to inspect or act on.
+
+Traced what a correct fix would actually require before deciding whether
+to attempt it: `keel_enqueue` (20260710210400_events_audit_queues.sql:69-72)
+is a thin `select pgmq.send(...)` wrapper: the message ID `pgmq.send`
+returns is never captured or persisted anywhere (the TS caller in
+`sync-completion.ts` doesn't store it). So genuinely canceling a specific
+stale continuation's queued message -- the fix the reviewer suggested --
+isn't a small change; it needs new bookkeeping (persist the pgmq message
+ID at enqueue time, likely a new column) plus a new cancellation path
+(`pgmq.delete`/`pgmq.archive` keyed off that ID) plus its own test
+coverage. That's meaningfully more scope than a follow-up fix within an
+already-long single-session PR chain.
+
+Assessed the actual severity before deciding to defer rather than rush a
+new pgmq-touching mechanism: this is NOT a repeat of the original silent-
+permanent-corruption bug. The delayed continuation's eventual completion
+still runs `keel_worker_complete_attempt` normally, correctly settling
+`sync_committed_generation`/`last_successful_sync_at`/clearing
+`sync_continuation_pending` -- so the very next "Fix balance" click after
+that (whether the user notices unprompted, or is told to check again)
+recomputes against the now-genuinely-complete ledger and lands on the
+correct number. The gap is a possible *second* wrong-then-self-correcting
+balance in a narrow window (continuation stuck >15min AND later actually
+delivered AND reanchored via the staleness hatch in between), not a
+permanent, undetectable corruption. Deferred with this reasoning
+documented rather than expanding pgmq-touching scope this late in an
+already extensively-verified PR chain; flagged here for whoever next
+touches this continuation-tracking system.
