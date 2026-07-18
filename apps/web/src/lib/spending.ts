@@ -9,6 +9,20 @@ import type { CategorySpend } from '@/components/keel/charts';
 const DEBT_TRANSFER_PFC_KEYS = new Set(['loan_payments', 'transfers']);
 
 /**
+ * Seeded subcategories carry prefixed pfc_keys (e.g. `loan_payments_mortgage`,
+ * `transfers_internal`). A transaction filed under a sub is just as much
+ * money-movement as one filed under the parent, so the exclusion covers the
+ * whole family: exact parent key OR any key under its prefix.
+ */
+const DEBT_TRANSFER_PFC_PREFIXES = ['loan_payments_', 'transfers_'] as const;
+
+/** Rename-proof pfc_key check: exact parent bucket or any seeded sub under it. */
+function isDebtTransferPfcKey(pfcKey: string): boolean {
+  if (DEBT_TRANSFER_PFC_KEYS.has(pfcKey)) return true;
+  return DEBT_TRANSFER_PFC_PREFIXES.some((prefix) => pfcKey.startsWith(prefix));
+}
+
+/**
  * Same two buckets by seeded display name, for shapes that carry a category
  * name but no pfc_key (e.g. `budgets.list` rows). Exported so every surface
  * (budgets, rebalance) shares ONE definition rather than drifting copies.
@@ -51,7 +65,7 @@ export type DebtOrTransferLike = Pick<RichTransactionRow, 'transferStatus' | 'ca
 export function isDebtOrTransferLike(txn: DebtOrTransferLike): boolean {
   if (txn.transferStatus === 'confirmed') return true;
   const pfc = txn.categoryPfcKey;
-  if (pfc != null && DEBT_TRANSFER_PFC_KEYS.has(pfc)) return true;
+  if (pfc != null && isDebtTransferPfcKey(pfc)) return true;
   return txn.categoryName != null && isMoneyMovementCategoryName(txn.categoryName);
 }
 

@@ -1,13 +1,21 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { BarChart3, ArrowDownRight, ArrowUpRight, ChevronDown, Download } from 'lucide-react';
+import {
+  BarChart3,
+  ArrowDownRight,
+  ArrowUpRight,
+  ChevronDown,
+  ChevronRight,
+  Download,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
+import { formatMoney } from '@/lib/money';
 import { taxLineLabel, taxLineSchedule } from '@/lib/tax-lines';
 import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
@@ -167,6 +175,138 @@ function buildMatrix(
     );
   }
   return [...byCategory.values()].sort((a, b) => (b.total > a.total ? 1 : b.total < a.total ? -1 : 0));
+}
+
+type MatrixParentRow = {
+  categoryId: string | null;
+  name: string;
+  byMonth: Map<string, CategoryMonthCell>;
+  total: bigint;
+  /** Subcategory leaf rows under this parent (empty for standalone rows). */
+  children: CategoryReportRow[];
+  /** The parent's OWN (non-sub) activity, kept separate so an expanded
+   *  parent can show it as its own line and the sub lines still sum to the
+   *  parent row. Null when everything under this parent came from subs. */
+  direct: CategoryReportRow | null;
+};
+
+/** Deterministic report ordering: total desc, then name, then id. */
+function compareRows(
+  a: { total: bigint; name: string; categoryId: string | null },
+  b: { total: bigint; name: string; categoryId: string | null },
+): number {
+  if (a.total !== b.total) return b.total > a.total ? 1 : -1;
+  const byName = a.name.localeCompare(b.name);
+  if (byName !== 0) return byName;
+  return (a.categoryId ?? '').localeCompare(b.categoryId ?? '');
+}
+
+/**
+ * F-016b: roll the leaf-grain matrix up to parent categories. A leaf whose
+ * category has a live parent contributes to that parent's row and appears as
+ * an expandable child; everything else (top-level categories, Uncategorized,
+ * archived categories absent from categories.list) stands alone. Client-side
+ * and purely derived — the leaf matrix stays the single source of numbers,
+ * so parents are exactly the sum of what they contain.
+ */
+function rollupMatrix(leaves: CategoryReportRow[], categories: CategoryRow[]): MatrixParentRow[] {
+  const byId = new Map(categories.map((c) => [c.ledgerAccountId, c]));
+  const rows = new Map<string, MatrixParentRow>();
+  const ensure = (key: string, categoryId: string | null, name: string): MatrixParentRow => {
+    const existing = rows.get(key);
+    if (existing) return existing;
+    const created: MatrixParentRow = {
+      categoryId,
+      name,
+      byMonth: new Map<string, CategoryMonthCell>(),
+      total: 0n,
+      children: [],
+      direct: null,
+    };
+    rows.set(key, created);
+    return created;
+  };
+  const merge = (into: MatrixParentRow, leaf: CategoryReportRow) => {
+    for (const [mk, cell] of leaf.byMonth) {
+      const t = into.byMonth.get(mk) ?? { total: 0n };
+      t.total += cell.total;
+      into.byMonth.set(mk, t);
+    }
+    into.total += leaf.total;
+  };
+  for (const leaf of leaves) {
+    const cat = leaf.categoryId ? byId.get(leaf.categoryId) : undefined;
+    const parentCat = cat?.parentLedgerAccountId ? byId.get(cat.parentLedgerAccountId) : undefined;
+    if (parentCat) {
+      const parent = ensure(parentCat.ledgerAccountId, parentCat.ledgerAccountId, parentCat.name);
+      merge(parent, leaf);
+      parent.children.push(leaf);
+    } else {
+      const row = ensure(leaf.categoryId ?? 'uncategorized', leaf.categoryId, leaf.name);
+      merge(row, leaf);
+      row.direct = leaf;
+    }
+  }
+  const out = [...rows.values()].sort(compareRows);
+  for (const row of out) row.children.sort(compareRows);
+  return out;
+}
+
+/**
+ * F-039: top counterparties by money out, derived client-side from the same
+ * scoped rows as the rest of the page (payee = the transaction description —
+ * KEEL has no separate merchant table yet). Money-out only, dominant currency
+ * only, transfers & debt payments excluded; refunds deliberately do NOT
+ * offset a payee (this ranks where money goes, not net position).
+ */
+function payeeTotals(rows: RichTransactionRow[]): {
+  currency: string;
+  payees: { name: string; count: number; spendMinor: bigint }[];
+} {
+  const spendRows = rows.filter((t) => !isDebtOrTransferLike(t));
+  const currency = dominantCurrency(spendRows);
+  const byPayee = new Map<string, { name: string; count: number; spendMinor: bigint }>();
+  for (const t of spendRows) {
+    if (t.currency !== currency) continue;
+    const cash = BigInt(t.amountMinor || '0');
+    if (cash >= 0n) continue;
+    const key = t.description.trim().toLowerCase();
+    const e = byPayee.get(key) ?? { name: t.description.trim(), count: 0, spendMinor: 0n };
+    e.count += 1;
+    e.spendMinor += -cash;
+    byPayee.set(key, e);
+  }
+  return {
+    currency,
+    payees: [...byPayee.values()]
+      .sort((a, b) =>
+        a.spendMinor < b.spendMinor
+          ? 1
+          : a.spendMinor > b.spendMinor
+            ? -1
+            : a.name.localeCompare(b.name),
+      )
+      .slice(0, 15),
+  };
+}
+
+/**
+ * F-039 hover detail for a matrix cell: exact amount + integer share of that
+ * month's column total. Share renders only when both sides are positive spend
+ * (a net-refund cell's "share" of a month would be nonsense).
+ */
+function matrixCellTitle(
+  name: string,
+  mk: string,
+  v: bigint,
+  columnTotal: bigint,
+  currency: string,
+): string {
+  const base = `${name} · ${monthLabel(mk)}: ${formatMoney(v.toString(), { currency })}`;
+  if (v > 0n && columnTotal > 0n) {
+    return `${base} · ${String(Number((v * 100n) / columnTotal))}% of ${monthLabel(mk)}`;
+  }
+  return base;
 }
 
 function rangeLabel(from: string, to: string): string {
@@ -908,6 +1048,29 @@ function ReportsBody() {
     () => buildMatrix(rangedRows, months, view),
     [rangedRows, months, view],
   );
+  // F-016b: parent-level rollup is the default view of the matrix; leaves
+  // stay reachable behind each parent's chevron.
+  const rolledMatrix = useMemo(() => rollupMatrix(matrix, categories), [matrix, categories]);
+  const matrixMonthTotals = useMemo(() => {
+    const totals = new Map<string, bigint>();
+    for (const row of rolledMatrix) {
+      for (const [mk, cell] of row.byMonth) {
+        totals.set(mk, (totals.get(mk) ?? 0n) + cell.total);
+      }
+    }
+    return totals;
+  }, [rolledMatrix]);
+  const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());
+  const toggleCat = useCallback((key: string) => {
+    setExpandedCats((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+  // F-039: top payees from the very same scoped rows every widget uses.
+  const payeeReport = useMemo(() => payeeTotals(rangedRows), [rangedRows]);
 
   // Income vs spending per scope month, derived client-side from the scoped
   // rows (same net convention as the matrix — transfers & debt payments
@@ -932,10 +1095,12 @@ function ReportsBody() {
     });
   }, [rangedRows, months]);
 
+  // Parent grain (rolledMatrix), matching the matrix's default view — a
+  // seeded subcategory tree at leaf grain would fragment the biggest movers.
   const comparison = useMemo(() => {
     const [prev, curr] = [months[months.length - 2], months[months.length - 1]];
     if (!prev || !curr) return [];
-    return matrix
+    return rolledMatrix
       .map((row) => {
         const a = row.byMonth.get(prev)?.total ?? 0n;
         const b = row.byMonth.get(curr)?.total ?? 0n;
@@ -948,7 +1113,7 @@ function ReportsBody() {
         return ay > ax ? 1 : ay < ax ? -1 : 0;
       })
       .slice(0, 8);
-  }, [matrix, months]);
+  }, [rolledMatrix, months]);
 
   // C15: export EXACTLY the current scope bar's resolution — the full
   // scoped transaction set (accounts ∩ entity, [from, to]), not any single
@@ -1321,7 +1486,8 @@ function ReportsBody() {
             {view === 'expense'
               ? 'Net spending per month (refunds reduce it); transfers & debt payments excluded.'
               : 'Net income per month; transfers & debt payments excluded.'}{' '}
-            Click a category to open it in the ledger.
+            Click a category to open it in the ledger; expand a parent to see its
+            subcategories.
             {monthsTruncatedNote}
           </p>
           <div className="overflow-x-auto">
@@ -1338,47 +1504,147 @@ function ReportsBody() {
                 </tr>
               </thead>
               <tbody>
-                {matrix.map((row) => (
-                  <tr key={row.categoryId ?? 'uncategorized'} className="border-b border-border/60">
-                    <td className="max-w-44 truncate py-2 pr-3">
-                      <Link
-                        href={ledgerDrillHref({
-                          categoryId: row.categoryId,
-                          from: scope.from,
-                          to: scope.to,
-                          accountSet,
-                        })}
-                        className="hover:underline"
-                      >
-                        {row.name}
-                      </Link>
-                    </td>
-                    {months.map((m) => {
-                      const v = row.byMonth.get(m)?.total ?? 0n;
-                      return (
-                        <td key={m} className="px-2 py-2 text-right">
-                          {v === 0n ? (
-                            <span className="text-muted-foreground">—</span>
-                          ) : (
-                            <Money amountMinor={v.toString()} className="text-sm" />
-                          )}
+                {rolledMatrix.map((row) => {
+                  const rowKey = row.categoryId ?? 'uncategorized';
+                  const expandable = row.children.length > 0;
+                  const expanded = expandable && expandedCats.has(rowKey);
+                  // The parent's own (non-sub) activity renders as its own
+                  // sub-line so the visible children always sum to the parent.
+                  const childRows: { key: string; label: string; drillId: string | null; row: CategoryReportRow }[] =
+                    expanded
+                      ? [
+                          ...(row.direct
+                            ? [
+                                {
+                                  key: `${rowKey}:direct`,
+                                  label: `${row.name} (general)`,
+                                  drillId: row.direct.categoryId,
+                                  row: row.direct,
+                                },
+                              ]
+                            : []),
+                          ...row.children.map((c) => ({
+                            key: c.categoryId ?? `${rowKey}:uncat`,
+                            label: c.name,
+                            drillId: c.categoryId,
+                            row: c,
+                          })),
+                        ]
+                      : [];
+                  return (
+                    <Fragment key={rowKey}>
+                      <tr className="border-b border-border/60">
+                        <td className="max-w-52 py-2 pr-3">
+                          <span className="flex items-center gap-1">
+                            {expandable ? (
+                              <button
+                                type="button"
+                                aria-expanded={expanded}
+                                aria-label={`${expanded ? 'Collapse' : 'Expand'} ${row.name} subcategories`}
+                                className="-ml-1 shrink-0 rounded p-0.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                                onClick={() => {
+                                  toggleCat(rowKey);
+                                }}
+                              >
+                                {expanded ? (
+                                  <ChevronDown className="size-3.5" />
+                                ) : (
+                                  <ChevronRight className="size-3.5" />
+                                )}
+                              </button>
+                            ) : (
+                              <span className="w-3.5 shrink-0" aria-hidden="true" />
+                            )}
+                            <Link
+                              href={ledgerDrillHref({
+                                categoryId: row.categoryId,
+                                from: scope.from,
+                                to: scope.to,
+                                accountSet,
+                              })}
+                              className="min-w-0 truncate hover:underline"
+                            >
+                              {row.name}
+                            </Link>
+                          </span>
                         </td>
-                      );
-                    })}
-                    <td className="py-2 pl-2 text-right">
-                      <Money amountMinor={row.total.toString()} className="text-sm font-medium" />
-                    </td>
-                  </tr>
-                ))}
+                        {months.map((m) => {
+                          const v = row.byMonth.get(m)?.total ?? 0n;
+                          return (
+                            <td
+                              key={m}
+                              className="px-2 py-2 text-right"
+                              title={matrixCellTitle(
+                                row.name,
+                                m,
+                                v,
+                                matrixMonthTotals.get(m) ?? 0n,
+                                donutReport.currency,
+                              )}
+                            >
+                              {v === 0n ? (
+                                <span className="text-muted-foreground">—</span>
+                              ) : (
+                                <Money amountMinor={v.toString()} className="text-sm" />
+                              )}
+                            </td>
+                          );
+                        })}
+                        <td className="py-2 pl-2 text-right">
+                          <Money amountMinor={row.total.toString()} className="text-sm font-medium" />
+                        </td>
+                      </tr>
+                      {childRows.map((child) => (
+                        <tr key={child.key} className="border-b border-border/40 bg-secondary/30">
+                          <td className="max-w-52 py-1.5 pl-8 pr-3">
+                            <Link
+                              href={ledgerDrillHref({
+                                categoryId: child.drillId,
+                                from: scope.from,
+                                to: scope.to,
+                                accountSet,
+                              })}
+                              className="block truncate text-xs text-muted-foreground hover:underline"
+                            >
+                              {child.label}
+                            </Link>
+                          </td>
+                          {months.map((m) => {
+                            const v = child.row.byMonth.get(m)?.total ?? 0n;
+                            return (
+                              <td
+                                key={m}
+                                className="px-2 py-1.5 text-right"
+                                title={matrixCellTitle(
+                                  child.label,
+                                  m,
+                                  v,
+                                  matrixMonthTotals.get(m) ?? 0n,
+                                  donutReport.currency,
+                                )}
+                              >
+                                {v === 0n ? (
+                                  <span className="text-xs text-muted-foreground">—</span>
+                                ) : (
+                                  <Money amountMinor={v.toString()} className="text-xs" />
+                                )}
+                              </td>
+                            );
+                          })}
+                          <td className="py-1.5 pl-2 text-right">
+                            <Money amountMinor={child.row.total.toString()} className="text-xs" />
+                          </td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  );
+                })}
                 <tr>
                   <td className="py-2 pr-3 text-xs font-medium text-muted-foreground">
                     All categories
                   </td>
                   {months.map((m) => {
-                    const v = matrix.reduce(
-                      (acc, r) => acc + (r.byMonth.get(m)?.total ?? 0n),
-                      0n,
-                    );
+                    const v = matrixMonthTotals.get(m) ?? 0n;
                     return (
                       <td key={m} className="px-2 py-2 text-right">
                         <Money amountMinor={v.toString()} className="text-sm font-medium" />
@@ -1387,7 +1653,7 @@ function ReportsBody() {
                   })}
                   <td className="py-2 pl-2 text-right">
                     <Money
-                      amountMinor={matrix.reduce((acc, r) => acc + r.total, 0n).toString()}
+                      amountMinor={rolledMatrix.reduce((acc, r) => acc + r.total, 0n).toString()}
                       className="text-sm font-semibold"
                     />
                   </td>
@@ -1398,6 +1664,37 @@ function ReportsBody() {
         </CardContent>
       </Card>
 
+
+      {payeeReport.payees.length > 0 ? (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Top payees
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {payeeReport.payees.map((p) => (
+              <div key={p.name.toLowerCase()} className="flex items-center gap-3 text-sm">
+                <span className="min-w-0 flex-1 truncate">{p.name}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {String(p.count)} txn{p.count === 1 ? '' : 's'}
+                </span>
+                <Money
+                  amountMinor={p.spendMinor.toString()}
+                  currency={payeeReport.currency}
+                  className="w-28 shrink-0 text-right text-sm"
+                />
+              </div>
+            ))}
+            <p className="pt-1 text-xs text-muted-foreground">
+              {scopeText}. Top {String(payeeReport.payees.length)} payees by money out
+              (payee = transaction description), dominant currency only, transfers &
+              debt payments excluded. Refunds don&apos;t offset a payee — this ranks
+              where money goes.
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {allocation.length > 0 ? (
         <Card>
