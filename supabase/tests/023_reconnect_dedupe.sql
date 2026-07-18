@@ -157,8 +157,14 @@ select is(
     where id = 'c9000000-0000-4000-8000-000000000037'),
   true, 'the unrelated account''s transaction is untouched');
 
--- Guard: old account's connection must be disconnected.
+-- Guard: old account's connection must be disconnected. The status flips are
+-- pgTAP-only fixture scaffolding (like the privileged inserts above): in
+-- production `authenticated` has NO update grant on connections (status moves
+-- only via keel_api/keel_worker SECURITY DEFINER procs), so drop back to the
+-- privileged test role for the flip, then re-assume alex for the assertion.
+reset role;
 update public.connections set status = 'active' where id = 'c9000000-0000-4000-8000-000000000001';
+set local role authenticated;
 select throws_ok($$
   select public.keel_cmd_dedupe_reconnect_account(
     'c9000000-0000-4000-8000-0000000000e1', 'pgtap:reconnect:guard', '{}'::jsonb,
@@ -166,7 +172,9 @@ select throws_ok($$
     jsonb_build_object('new_account_id', 'c9000000-0000-4000-8000-000000000022',
       'old_account_id', 'c9000000-0000-4000-8000-000000000021'))
 $$, 'P0009', null, 'dedupe is rejected when the old account''s connection is not disconnected');
+reset role;
 update public.connections set status = 'disconnected' where id = 'c9000000-0000-4000-8000-000000000001';
+set local role authenticated;
 
 -- Happy path: exactly the two duplicates are voided.
 select is(

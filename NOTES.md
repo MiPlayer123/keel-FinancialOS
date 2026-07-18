@@ -3700,3 +3700,193 @@ permanent, undetectable corruption. Deferred with this reasoning
 documented rather than expanding pgmq-touching scope this late in an
 already extensively-verified PR chain; flagged here for whoever next
 touches this continuation-tracking system.
+
+---
+
+## 2026-07-18 — WS-C Investments (F-013 / F-014 / F-015)
+
+Largest Wave-1 workstream: brokerage transactions ingestion, holdings error
+surfacing + history, and the Investments page. Branch `ws-c-investments`.
+Migrations authored in the assigned band 20260718120000–20260718123000.
+
+### F-013 — investment transactions ingestion
+- Plaid `/investments/transactions/get` is date-range + offset paginated (NOT
+  cursor-based), so it does not fit the existing `/transactions/sync`
+  cursor/attempt/lease state machine. Deliberately did NOT reuse
+  `keel_worker_create_normalized` + `keel_worker_apply_action` (they assert a
+  sync-attempt + attempt-owned raw page). Instead built a self-contained
+  idempotent proc `keel_worker_ingest_investment_txn`, modelled on the
+  simulator's `keel_worker_apply_promotion` create branch — records an
+  immutable raw event (source preservation), then creates a canonical txn +
+  journal batch + `[account, uncategorized offset]` postings that sum to zero,
+  keyed idempotently three ways (raw-event unique index, canonical
+  economic_event_key `inv:<connExtRef>:<plaidTxnId>`, and
+  `keel_idempotency_check` on apply key `inv-ingest:<plaidTxnId>`). A re-pull
+  of an overlapping date window therefore cannot duplicate an economic event
+  (Law 9 idempotent economics). NO lot/position/cost-basis accounting — a
+  buy/sell is ingested only for its cash effect, exactly like any other txn
+  (out of scope per F-013).
+- Sign: worker-side `mapInvestmentsTransactionsToKeel` (packages/providers/
+  plaid) negates Plaid's cash-out-positive `amount` so the stored minor amount
+  is the account-balance effect (negative = money out), matching
+  `mapAccountsGetToKeel` / the `/transactions/sync` adapter. Cancelled,
+  non-USD, and zero-amount rows are skipped. Cash-flow rows land in the ledger
+  and are visible to `keel_detect_transfers` (exact opposite pairing).
+- Bounded incremental window: `investment_sync_state.last_pulled_through` per
+  connection; each cycle pulls `[through - 14d overlap, today]` (first pull
+  reaches back 730d to match the link-token depth), bounded to
+  MAX_INVESTMENT_TXN_PAGES per invocation.
+
+### F-014 — holdings error persistence + surfacing
+- Added `connections.holdings_last_error_{code,message,at}` +
+  `holdings_last_success_at`; `keel_worker_record_holdings_error` (on any
+  holdings/investments failure) and `keel_worker_clear_holdings_error` (on
+  clean success, also stamps success). Surfaced on the Investments page
+  ("Holdings unavailable — reconnect …"). The connections page reads
+  `connections` directly (RLS), so the columns are already available there for
+  a future badge; kept the connections-page change out of scope to stay minimal.
+- FOUND + FIXED a live bug: `usage_events_provider_kind_check` never gained
+  `investments_holdings_get` (added to the TS ProviderCallKind yesterday but
+  not to the SQL constraint), so yesterday's holdings meterCall violates the
+  CHECK. Migration 120000 adds both it and the new
+  `investments_transactions_get`.
+
+### Cash-management concern (from the brief)
+- `accounts` has no Plaid `type` column (only `subtype`). Resolved by deciding
+  investment accounts in the worker from the LIVE accountsGet `type` (=
+  'investment', authoritative) UNIONed with the DB subtype keyword match, so a
+  brokerage cash-management account (subtype the keyword list misses, type
+  'investment') is now included in holdings + investment-txn sync. The SQL
+  read-model classifier `keel_is_investment_subtype` also broadens the keyword
+  list to include 'cash management' (the page shows the account); this is a
+  third mirror of the subtype list (web lib, worker _shared lib, SQL) — kept
+  in sync, documented in each.
+
+### History + page (F-015)
+- `holdings_snapshots` (append per account/security/day, last-write-wins per
+  day) appended by `keel_worker_snapshot_holdings` after each successful
+  holdings sync. Read model `keel_investments_value_daily` powers the
+  value-over-time chart (sparse initially — fine).
+- `keel_investments_overview` returns investment accounts (connected + manual)
+  with latest balances, household holdings grouped by account, per-symbol
+  allocation, totals, and holdings errors — one reproducible payload
+  (formulaVersion). Page at /dashboard/investments; nav entry added minimally.
+
+### Exports (Law 6)
+- Added `holdings`, `holdings_snapshots`, `investment_sync_state` to the SQL
+  export chain (new `keel_export_household_pre_investments` layer), the
+  `packages/exports` manifest, and the pgTAP allowlist. NOTE: `holdings` was a
+  PRE-EXISTING export gap from yesterday (created but never added to export or
+  allowlist — the 008 classification check was already failing on it live);
+  folded the fix in here. Bumped the included-table count 68 → 71 in
+  008_export.sql, manifest.test.ts, and formats.property.test.ts. Re-emitted
+  `connections` in the new layer to carry the 4 new holdings_* columns (the
+  base connections DTO is an explicit column list, so new columns are
+  otherwise silently dropped — same pattern as 20260718102500).
+
+### Ownership / grants
+- All new worker procs are postgres-owned SECURITY DEFINER (matching
+  `keel_worker_sync_holdings` / `keel_apply_account_balance`), with public
+  EXECUTE explicitly revoked and granted only to service_role (the missing-
+  revoke hole from the day before is explicitly avoided). Read models granted
+  to authenticated + service_role.
+
+### Open questions / flags
+- FEEDBACK.md was not present in this worktree; worked from the inline F-013/
+  F-014/F-015 descriptions in the task brief.
+- Could not run `supabase test db` locally (orchestrator runs the suite
+  serially at merge). pgTAP `024_investments.sql` authored but not executed
+  here; validated the `similar to` classifier and all signatures against the
+  live schema via read-only SELECTs.
+
+## WS-C review fixes (Opus + Codex adversarial pass, 2026-07-18)
+
+Two independent reviews agreed on 9 defects in the pre-merge investments work.
+All fixed IN PLACE in the four unapplied migrations (120000/121000/122000/
+123000) + worker/mapper/web/export/test. Nothing applied to any DB; the four
+migrations were syntax+body validated and the complex procs smoke-tested in a
+throwaway local Postgres 17 cluster (port 59987), then torn down. Enforced
+gates green: `pnpm vitest run` (820), deno function tests (13/59 steps),
+`apps/web pnpm build` (ESLint).
+
+- **F1 (P0) resumable pagination** — `investment_sync_state` gained a frozen
+  window (`window_from`/`window_to`) + `continuation_offset`. `..._sync_window`
+  now takes `p_end` and returns jsonb `{from,to,offset}`, freezing the window;
+  `..._sync_advance` only advances `last_pulled_through` once a window's `total`
+  is fully consumed and clears the frozen window; new `..._sync_continue`
+  persists a resume offset without advancing. Worker paginates on the Plaid
+  response's authoritative `total` (never the mapped/filtered row count) so a
+  fully-skipped page can't end pagination early, and resumes at the saved
+  offset next cycle. Signatures changed (procs unapplied → edited in place).
+- **F2 (P1) lossless money** — investments/transactions response now parsed via
+  `parsePlaidJsonPreservingAmountLexemes` (plaid-client `request` gained a
+  `preserveAmountLexemes` flag; reads `response.text()`), and the mapper accepts
+  the `amount` STRING lexeme, converting through `plaidAmountToKeelMinor`
+  (BigInt) — same discipline as /transactions/sync. Worker passes `amountMinor`
+  string straight to the bigint RPC (no `Number()`). Numeric input still
+  accepted (rendered to a 2-decimal lexeme) for existing unit tests. No float
+  touches the ledger path; no deviation needed.
+- **F3 (P1) restatement + error-advance** — any ingest RPC error now fails the
+  window (no checkpoint advance; idempotent retry next cycle). The ingest proc
+  gained an immutable correction path: the command apply_key is versioned by the
+  economic hash, so a changed body is a NEW command row (append-only
+  command_executions) that drives a compensating REVERSAL + corrected
+  replacement batch + `journal_revisions` row and a versioned raw-event body —
+  never a duplicate, never a swallowed P0007.
+- **F4 (P1) fail-closed auth** — `keel_investments_overview` /
+  `keel_investments_value_daily` now raise `KEEL_NOT_AUTHENTICATED` (P0004) on a
+  null subject then check membership unconditionally, mirroring
+  `keel_list_holdings`. pgTAP switched from fail-open reliance to setting a JWT
+  claim.
+- **F5 (P1) checked RPCs** — worker inspects `error` on clear/snapshot/record;
+  holdings success reported only when sync+clear+snapshot all succeed; a
+  record-error failure is surfaced in the result.
+- **F6 (P1) snapshot collision** — `holdings_snapshots` unique key + on-conflict
+  now include `source`, so a manual and a Plaid row for the same symbol both
+  snapshot (was "cannot affect row a second time"). Value-daily read model sums
+  all sources per day, so the chart is unchanged.
+- **F7 (P1) per-currency totals** — overview headline totals are USD-only
+  (filtered), and new `balancesByCurrency` / `holdingsValueByCurrency` arrays
+  carry non-USD honestly (no fabricated FX). Page renders non-USD balances and
+  each holdings group total in its own currency.
+- **F8 (P1) loading vs error** — investments page tracks loading/error/data
+  distinctly (persistent retryable error card), value-history failure shows a
+  retry (not "history builds up"), and the connection-error banner moved OUTSIDE
+  the empty/non-empty switch so it always shows.
+- **F9 (P1) export security_type** — added `holdings.security_type` to the
+  123000 SQL DTO, the `packages/exports` manifest, and the 008 allowlist (it
+  existed on the table but was in none — the 008 completeness assertion was
+  failing). Also added the three new `investment_sync_state` columns to export
+  DTO/manifest/allowlist.
+
+## 2026-07-18 — pgTAP debt cleared before WS-C merge (008 + 023, pre-existing)
+
+- **008 export classification** — five public tables were classified neither
+  INCLUDE nor EXCLUDE (assertion 5), and `accounts.mask` was in neither column
+  list (assertion 13). Verified via `pg_get_functiondef` on the export chain
+  that none of them were exported.
+  - `documents` / `document_versions` / `document_attachments` (attach-only
+    receipts substrate, 20260717234500) and `household_notes` /
+    `household_tasks` (20260718000000) shipped WITHOUT export wiring — a Law 6
+    gap. Building their export layer is out of scope for this cleanup, so they
+    are honestly EXCLUDED (pgTAP fixture + `packages/exports` manifest, reason
+    strings marked "export layer pending"). keel_export has no SELECT grant on
+    any of the five, so 008 assertion 4 proves they truly aren't exported.
+    **Deviation vs Law 6, deliberate + tracked: flip to INCLUDE when their
+    export layer ships.**
+  - `accounts.mask` (20260717220000) — closed properly instead: non-sensitive
+    provider last-4 display metadata, added to the accounts DTO via an override
+    in the branch-owned 20260718123000 export layer + 008 allowlist + manifest
+    (same pattern as F9/security_type).
+- **023 reconnect dedupe (shipped with PR #58)** — died at the guard-flip
+  `update public.connections set status='active'` with `permission denied`.
+  Root cause: TEST-HARNESS ONLY, not a production grant gap. The raw fixture
+  UPDATE ran while `set local role authenticated` was active, and
+  `authenticated` has (correctly) no UPDATE grant on connections — locally AND
+  on the live project. The SECURITY DEFINER owner `keel_api` has every
+  privilege its proc body needs (SELECT on connections/accounts, column UPDATE
+  on canonical_transactions.status/voided_at, INSERT on
+  journal_batches/postings/revisions) — verified on both local stack and live
+  cloud (read-only). Fix: `reset role` around the two pgTAP-only status flips,
+  then re-assume `authenticated`; assertions unchanged. No production
+  migration needed.

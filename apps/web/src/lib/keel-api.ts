@@ -244,6 +244,95 @@ export async function fetchHoldings(householdId: string, accountId?: string): Pr
   return Array.isArray(data.rows) ? data.rows : [];
 }
 
+export type InvestmentAccountRow = {
+  accountId: string;
+  name: string;
+  subtype: string;
+  currency: string;
+  isManual: boolean;
+  connectionId: string | null;
+  currentMinor: string;
+  availableMinor: string | null;
+  balanceAsOf: string | null;
+};
+
+export type InvestmentHoldingRow = {
+  holdingId: string;
+  accountId: string;
+  accountName: string;
+  asOf: string;
+  symbol: string;
+  name: string | null;
+  qty: string;
+  priceMinor: string;
+  valueMinor: string;
+  costBasisMinor: string | null;
+  currency: string;
+  source: 'manual' | 'plaid';
+};
+
+export type InvestmentAllocationRow = { symbol: string; name: string | null; valueMinor: string };
+
+export type HoldingsErrorRow = {
+  connectionId: string;
+  displayName: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  errorAt: string | null;
+};
+
+export type CurrencyTotalRow = { currency: string; totalMinor: string };
+export type CurrencyValueRow = { currency: string; valueMinor: string };
+
+export type InvestmentsOverview = {
+  accounts: InvestmentAccountRow[];
+  holdings: InvestmentHoldingRow[];
+  allocation: InvestmentAllocationRow[];
+  holdingsErrors: HoldingsErrorRow[];
+  /** USD-only headline figures. Non-USD amounts live in the *ByCurrency arrays;
+   *  they are never folded into these (no FX conversion happens server-side). */
+  totalHoldingsValueMinor: string;
+  totalBalanceMinor: string;
+  balancesByCurrency: CurrencyTotalRow[];
+  holdingsValueByCurrency: CurrencyValueRow[];
+  currency: string;
+};
+
+/** Household-wide investments read model (accounts, holdings, allocation,
+ *  totals, and any per-connection holdings sync errors to surface). */
+export async function fetchInvestmentsOverview(householdId: string): Promise<InvestmentsOverview> {
+  const data = await invoke<Partial<InvestmentsOverview>>('api/queries', {
+    query: 'investments.overview',
+    householdId,
+  });
+  return {
+    accounts: Array.isArray(data.accounts) ? data.accounts : [],
+    holdings: Array.isArray(data.holdings) ? data.holdings : [],
+    allocation: Array.isArray(data.allocation) ? data.allocation : [],
+    holdingsErrors: Array.isArray(data.holdingsErrors) ? data.holdingsErrors : [],
+    totalHoldingsValueMinor: data.totalHoldingsValueMinor ?? '0',
+    totalBalanceMinor: data.totalBalanceMinor ?? '0',
+    balancesByCurrency: Array.isArray(data.balancesByCurrency) ? data.balancesByCurrency : [],
+    holdingsValueByCurrency: Array.isArray(data.holdingsValueByCurrency)
+      ? data.holdingsValueByCurrency
+      : [],
+    currency: data.currency ?? 'USD',
+  };
+}
+
+export type InvestmentValuePoint = { date: string; valueMinor: string };
+
+/** Daily total holdings value from snapshots, for the value-over-time chart. */
+export async function fetchInvestmentsValueDaily(
+  householdId: string,
+): Promise<InvestmentValuePoint[]> {
+  const data = await invoke<{ points?: InvestmentValuePoint[] }>('api/queries', {
+    query: 'investments.value_daily',
+    householdId,
+  });
+  return Array.isArray(data.points) ? data.points : [];
+}
+
 /** Create or edit a manual holding. Omit `holdingId` to create. */
 export async function upsertHolding(input: {
   householdId: string;

@@ -13,10 +13,10 @@ insert into expected_export_tables(table_name, allowed_columns, omitted_columns)
   ('entities', array['id','household_id','name','kind','created_at','archived_at'], '{}'),
   ('household_memberships', array['household_id','user_id','role','created_at'], '{}'),
   ('entity_memberships', array['entity_id','user_id','created_at'], '{}'),
-  ('accounts', array['id','household_id','entity_id','connection_id','ledger_account_id','name','subtype','currency','external_ref','created_at','archived_at'], '{}'),
+  ('accounts', array['id','household_id','entity_id','connection_id','ledger_account_id','name','subtype','currency','external_ref','mask','created_at','archived_at'], '{}'),
   ('account_owners', array['account_id','user_id','created_at'], '{}'),
   ('ledger_accounts', array['id','household_id','entity_id','name','kind','currency','is_category','created_at','archived_at','pfc_key','is_system','parent_ledger_account_id','tax_line'], '{}'),
-  ('connections', array['id','household_id','provider','external_ref','status','created_at','institution_id','consent_expires_at','last_successful_sync_at','sync_lease_owner','sync_leased_until','sync_desired_generation','sync_committed_generation','next_sync_eligible_at','display_name','sync_continuation_pending','sync_continuation_marked_at'], '{}'),
+  ('connections', array['id','household_id','provider','external_ref','status','created_at','institution_id','consent_expires_at','last_successful_sync_at','sync_lease_owner','sync_leased_until','sync_desired_generation','sync_committed_generation','next_sync_eligible_at','display_name','sync_continuation_pending','sync_continuation_marked_at','holdings_last_error_code','holdings_last_error_message','holdings_last_error_at','holdings_last_success_at'], '{}'),
   ('resource_permissions', array['id','household_id','user_id','resource_kind','resource_id','permission','created_at'], '{}'),
   ('approval_policies', array['id','household_id','risk_class','autonomy','created_at'], '{}'),
   ('canonical_transactions', array['id','household_id','entity_id','account_id','status','source','description','effective_date','economic_event_key','created_at','voided_at'], '{}'),
@@ -85,6 +85,10 @@ insert into expected_export_tables(table_name,allowed_columns,omitted_columns)va
 ('reconciliation_adjustments',array['household_id','id','session_id','kind','amount_minor','explanation','created_at'],'{}'),
 ('close_checklists',array['household_id','id','session_id','checklist_version','checks','created_at'],'{}'),
 ('reconciliation_status_events',array['household_id','id','session_id','transition','reason','actor','command_id','created_at'],'{}');
+insert into expected_export_tables(table_name,allowed_columns,omitted_columns) values
+ ('holdings',array['id','household_id','account_id','as_of','symbol','name','qty','price_minor','value_minor','cost_basis_minor','currency','source','security_type','created_at','updated_at'],'{}'),
+ ('holdings_snapshots',array['id','household_id','account_id','snapshot_date','symbol','name','qty','price_minor','value_minor','cost_basis_minor','currency','source','created_at'],'{}'),
+ ('investment_sync_state',array['connection_id','household_id','last_pulled_through','window_from','window_to','continuation_offset','last_synced_at','created_at','updated_at'],'{}');
 
 create temporary table excluded_export_tables(table_name text primary key) on commit drop;
 insert into excluded_export_tables(table_name) values
@@ -93,6 +97,18 @@ insert into excluded_export_tables(table_name) values
   ('plaid_test_responses'), ('plaid_webhook_key_test_responses'), ('sync_test_pages'),
   ('sync_attempts'), ('sync_checkpoints'), ('link_attempts'), ('removal_attempts');
 insert into excluded_export_tables(table_name) values ('recurring_detection_claims');
+-- Export layer pending (Law 6 gap, honestly excluded rather than silently
+-- unclassified — tracked in NOTES.md, pgTAP-debt cleanup 2026-07-18):
+--   documents / document_versions / document_attachments: attach-only receipts
+--     substrate shipped 2026-07-17 (20260717234500) without export wiring.
+--   household_notes / household_tasks: notes/tasks shipped 2026-07-18
+--     (20260718000000) without export wiring.
+-- keel_export has no SELECT grant on any of these five, so assertion 4
+-- ("zero SELECT on every non-included table") already proves they are not
+-- exported today; flip each to expected_export_tables when its layer ships.
+insert into excluded_export_tables(table_name) values
+  ('documents'), ('document_versions'), ('document_attachments'),
+  ('household_notes'), ('household_tasks');
 
 select has_role('keel_export', 'dedicated export role exists');
 select ok(
@@ -103,8 +119,8 @@ select ok(
 select is(
   (select count(*)::int from expected_export_tables
     where has_table_privilege('keel_export', format('public.%I', table_name), 'SELECT')),
-  68,
-  'keel_export can SELECT all 68 included tables'
+  71,
+  'keel_export can SELECT all 71 included tables'
 );
 select is(
   (select count(*)::int
@@ -235,8 +251,8 @@ reset role;
 select is(
   (select count(*)::int from jsonb_object_keys(
     public.keel_export_household('00000000-0000-4000-8000-00000000a001')->'tables')),
-  68,
-  'snapshot contains all 68 included table arrays'
+  71,
+  'snapshot contains all 71 included table arrays'
 );
 select is(
   (select count(*)::int from excluded_export_tables e
