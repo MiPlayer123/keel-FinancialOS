@@ -95,7 +95,66 @@ const KIND_LABELS: Record<string, string> = {
 
 type DraftComponent = { kind: string; amount: string };
 
-type PaycheckPrefill = { employer: string; netDollars: string; depositTxnId: string | null };
+type PaycheckPrefill = {
+  employer: string;
+  netDollars: string;
+  depositTxnId: string | null;
+  /** Full gross→net breakdown (F-025 template), already scaled to the deposit. */
+  components?: DraftComponent[];
+};
+
+/**
+ * Per-employer paycheck template (F-025): the non-deposit component lines of an
+ * employer's most recent active paycheck. Kept as minor-unit bigints so scaling
+ * is exact integer arithmetic (no floats, no LLM — the existing math-checked
+ * proc re-validates on save).
+ */
+type EmployerTemplate = {
+  employer: string;
+  netMinor: bigint;
+  lines: { kind: string; amountMinor: bigint }[];
+};
+
+/**
+ * Scale a template's lines so the resulting NET equals `targetNetMinor`, then
+ * pin any rounding drift onto the largest earning line so the server equation
+ * (gross = Σ earnings; net = gross + reimbursements − deductions = deposit)
+ * reconciles exactly. Returns draft components (dollar strings) for the form, or
+ * null when it can't produce a positive, reconciling breakdown.
+ */
+function scaleTemplate(
+  tpl: EmployerTemplate,
+  targetNetMinor: bigint,
+): DraftComponent[] | null {
+  if (tpl.netMinor <= 0n || targetNetMinor <= 0n) return null;
+  const scaled = tpl.lines.map((l) => ({
+    kind: l.kind,
+    // round-half-up on a positive rational: (a*t + net/2) / net
+    amountMinor:
+      (l.amountMinor * targetNetMinor + tpl.netMinor / 2n) / tpl.netMinor,
+  }));
+  const earningKinds: readonly string[] = EARNING_KINDS;
+  const deductionKinds: readonly string[] = DEDUCTION_KINDS;
+  const sum = (kinds: readonly string[]): bigint =>
+    scaled.filter((l) => kinds.includes(l.kind)).reduce((t, l) => t + l.amountMinor, 0n);
+  const net = sum(earningKinds) + sum(['reimbursement']) - sum(deductionKinds);
+  const delta = targetNetMinor - net;
+  if (delta !== 0n) {
+    // Pin drift onto the largest earning line (delta is a few cents at most).
+    let idx = -1;
+    for (let i = 0; i < scaled.length; i++) {
+      const l = scaled[i];
+      if (l && earningKinds.includes(l.kind) && (idx === -1 || l.amountMinor > (scaled[idx]?.amountMinor ?? 0n))) {
+        idx = i;
+      }
+    }
+    if (idx === -1) return null;
+    const target = scaled[idx];
+    if (target) target.amountMinor += delta;
+  }
+  if (scaled.some((l) => l.amountMinor <= 0n)) return null;
+  return scaled.map((l) => ({ kind: l.kind, amount: minorToDollars(l.amountMinor.toString()) }));
+}
 
 /** Human cadence label from the gaps between expected occurrence dates. */
 function cadenceLabel(dates: string[]): string {
@@ -169,6 +228,31 @@ function PaychecksBody() {
     [recurring.rows],
   );
 
+  // F-025: derive a per-employer template from that employer's most recent
+  // ACTIVE paycheck (rows are pay_date-desc), keyed by lowercased name so a
+  // detected series' counterparty can find it. Excludes the auto-derived
+  // direct_deposit line — it's recomputed from the other lines.
+  const templatesByEmployer = useMemo(() => {
+    const map = new Map<string, EmployerTemplate>();
+    for (const p of rows) {
+      if (p.status !== 'active') continue;
+      const key = p.employerName.trim().toLowerCase();
+      if (map.has(key)) continue; // first = most recent (rows are pay_date desc)
+      // Skip employers whose latest paycheck carries a kind the v1 form can't
+      // handle: scaleTemplate + save() only rebuild EARNING/reimbursement/
+      // DEDUCTION/direct_deposit lines, so any other kind (retirement_401k, hsa,
+      // employer_match, …) would make keel_paycheck_create reject the prefilled
+      // command. No template = no broken "usual breakdown" button.
+      if (!p.components.every((c) => V1_EDITABLE_KINDS.includes(c.kind))) continue;
+      const lines = p.components
+        .filter((c) => c.kind !== 'direct_deposit')
+        .map((c) => ({ kind: c.kind, amountMinor: BigInt(c.amountMinor) }));
+      if (lines.length === 0) continue;
+      map.set(key, { employer: p.employerName, netMinor: BigInt(p.netMinor), lines });
+    }
+    return map;
+  }, [rows]);
+
   if (!ready || loading) {
     return (
       <div className="space-y-2">
@@ -221,6 +305,7 @@ function PaychecksBody() {
                 .sort((a, b) => a.expectedDate.localeCompare(b.expectedDate));
               const next = upcoming.find((o) => o.expectedDate >= todayIso);
               const amount = next ?? upcoming[0];
+              const template = templatesByEmployer.get(series.counterpartyKey.trim().toLowerCase());
               return (
                 <div
                   key={series.seriesId}
@@ -250,24 +335,58 @@ function PaychecksBody() {
                       ) : null}
                     </p>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      const netMinor = amount?.expectedAmountMinor ?? '';
-                      const match = txns.rows.find(
-                        (t) => netMinor !== '' && t.amountMinor === netMinor,
-                      );
-                      setPrefill({
-                        employer: series.counterpartyKey,
-                        netDollars: netMinor ? minorToDollars(netMinor) : '',
-                        depositTxnId: match?.transactionId ?? null,
-                      });
-                      setCreating(true);
-                    }}
-                  >
-                    Record this paycheck
-                  </Button>
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    {template ? (
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          const netMinor = amount?.expectedAmountMinor ?? '';
+                          const match = txns.rows.find(
+                            (t) => netMinor !== '' && t.amountMinor === netMinor,
+                          );
+                          // Scale the usual breakdown to this deposit; fall back
+                          // to the template as-is if scaling can't reconcile.
+                          const scaled =
+                            netMinor !== ''
+                              ? scaleTemplate(template, BigInt(netMinor))
+                              : null;
+                          const lines =
+                            scaled ??
+                            template.lines.map((l) => ({
+                              kind: l.kind,
+                              amount: minorToDollars(l.amountMinor.toString()),
+                            }));
+                          setPrefill({
+                            employer: series.counterpartyKey,
+                            netDollars: netMinor ? minorToDollars(netMinor) : '',
+                            depositTxnId: match?.transactionId ?? null,
+                            components: lines,
+                          });
+                          setCreating(true);
+                        }}
+                      >
+                        Record with your usual breakdown
+                      </Button>
+                    ) : null}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const netMinor = amount?.expectedAmountMinor ?? '';
+                        const match = txns.rows.find(
+                          (t) => netMinor !== '' && t.amountMinor === netMinor,
+                        );
+                        setPrefill({
+                          employer: series.counterpartyKey,
+                          netDollars: netMinor ? minorToDollars(netMinor) : '',
+                          depositTxnId: match?.transactionId ?? null,
+                        });
+                        setCreating(true);
+                      }}
+                    >
+                      {template ? 'Start blank' : 'Record this paycheck'}
+                    </Button>
+                  </div>
                 </div>
               );
             })}
@@ -554,6 +673,10 @@ function PaycheckFormDialog({
     setDepositTxnId(prefill.depositTxnId);
     const deposit = txns.find((t) => t.transactionId === prefill.depositTxnId);
     if (deposit) setPayDate(deposit.effectiveDate);
+    // F-025: apply the scaled "usual breakdown" when the template button was used.
+    if (prefill.components && prefill.components.length > 0) {
+      setComponents(prefill.components);
+    }
     // Keyed on `open` only by design: apply the prefill once per open.
   }, [open, prefill, editing, txns]);
 

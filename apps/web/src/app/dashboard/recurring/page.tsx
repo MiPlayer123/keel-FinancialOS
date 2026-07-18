@@ -17,10 +17,17 @@ import {
   fetchCategories,
   fetchLedgerKinds,
   fetchSchedules,
+  fetchRecurringClassification,
+  fetchRecurringScheduleLinks,
+  linkRecurringSchedule,
+  unlinkRecurringSchedule,
   saveSchedule,
   setScheduleStatus,
   type AccountRow,
   type CategoryRow,
+  type RecurringBucket,
+  type RecurringClassificationRow,
+  type RecurringScheduleLink,
   type RecurringSeriesRow,
   type ScheduleRow,
   type TrialBalanceRow,
@@ -88,6 +95,8 @@ function RecurringBody() {
   const [ledgerKinds, setLedgerKinds] = useState<Map<string, string>>(new Map());
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [schedules, setSchedules] = useState<ScheduleRow[]>([]);
+  const [classification, setClassification] = useState<RecurringClassificationRow[]>([]);
+  const [links, setLinks] = useState<RecurringScheduleLink[]>([]);
 
   const reloadSchedules = useCallback(() => {
     if (!householdId) return;
@@ -95,6 +104,15 @@ function RecurringBody() {
       .then(setSchedules)
       .catch(() => {
         setSchedules([]);
+      });
+  }, [householdId]);
+
+  const reloadLinks = useCallback(() => {
+    if (!householdId) return;
+    void fetchRecurringScheduleLinks(householdId)
+      .then(setLinks)
+      .catch(() => {
+        setLinks([]);
       });
   }, [householdId]);
 
@@ -115,8 +133,28 @@ function RecurringBody() {
       .catch(() => {
         setCategories([]);
       });
+    void fetchRecurringClassification(householdId)
+      .then(setClassification)
+      .catch(() => {
+        setClassification([]);
+      });
     reloadSchedules();
-  }, [householdId, reloadSchedules]);
+    reloadLinks();
+  }, [householdId, reloadSchedules, reloadLinks]);
+
+  // seriesId → bucket, and seriesId → active link (if any).
+  const bucketBySeries = useMemo(
+    () => new Map(classification.map((c) => [c.seriesId, c.bucket])),
+    [classification],
+  );
+  const linkBySeries = useMemo(
+    () => new Map(links.map((l) => [l.seriesId, l])),
+    [links],
+  );
+  const linkedScheduleIds = useMemo(
+    () => new Set(links.map((l) => l.scheduleId)),
+    [links],
+  );
 
   const accountName = useMemo(() => {
     const map = new Map(accounts.map((a) => [a.id, a.name]));
@@ -224,6 +262,7 @@ function RecurringBody() {
       <ProjectedCash
         series={active}
         schedules={schedules}
+        linkedScheduleIds={linkedScheduleIds}
         balances={balanceRows ?? []}
         accounts={accounts}
         ledgerKinds={ledgerKinds}
@@ -234,10 +273,15 @@ function RecurringBody() {
           title="Suggested"
           hint="Detected from your transaction history — nothing is tracked until you confirm."
           rows={suggested}
+          bucketBySeries={bucketBySeries}
+          linkBySeries={linkBySeries}
+          schedules={schedules}
+          linkedScheduleIds={linkedScheduleIds}
           accountName={accountName}
           householdId={householdId}
           userId={userId}
           onDone={() => void refetch()}
+          onLinksChanged={reloadLinks}
         />
       ) : null}
 
@@ -245,10 +289,15 @@ function RecurringBody() {
         <SeriesSection
           title="Active"
           rows={active}
+          bucketBySeries={bucketBySeries}
+          linkBySeries={linkBySeries}
+          schedules={schedules}
+          linkedScheduleIds={linkedScheduleIds}
           accountName={accountName}
           householdId={householdId}
           userId={userId}
           onDone={() => void refetch()}
+          onLinksChanged={reloadLinks}
         />
       ) : null}
 
@@ -256,49 +305,100 @@ function RecurringBody() {
         <SeriesSection
           title="Paused"
           rows={paused}
+          bucketBySeries={bucketBySeries}
+          linkBySeries={linkBySeries}
+          schedules={schedules}
+          linkedScheduleIds={linkedScheduleIds}
           accountName={accountName}
           householdId={householdId}
           userId={userId}
           onDone={() => void refetch()}
+          onLinksChanged={reloadLinks}
         />
       ) : null}
     </div>
   );
 }
 
+const BUCKET_ORDER: RecurringBucket[] = ['income', 'bill', 'utility', 'subscription'];
+const BUCKET_LABELS: Record<RecurringBucket, string> = {
+  income: 'Income',
+  bill: 'Bills',
+  utility: 'Utilities',
+  subscription: 'Subscriptions',
+};
+
 function SeriesSection({
   title,
   hint,
   rows,
+  bucketBySeries,
+  linkBySeries,
+  schedules,
+  linkedScheduleIds,
   accountName,
   householdId,
   userId,
   onDone,
+  onLinksChanged,
 }: {
   title: string;
   hint?: string;
   rows: RecurringSeriesRow[];
+  bucketBySeries: Map<string, RecurringBucket>;
+  linkBySeries: Map<string, RecurringScheduleLink>;
+  schedules: ScheduleRow[];
+  linkedScheduleIds: Set<string>;
   accountName: (id: string) => string;
   householdId: string;
   userId: string | null;
   onDone: () => void;
+  onLinksChanged: () => void;
 }) {
+  // F-028: group rows by classification bucket (income/bill/utility/subscription).
+  const groups = useMemo(() => {
+    const byBucket = new Map<RecurringBucket, RecurringSeriesRow[]>();
+    for (const s of rows) {
+      const bucket = bucketBySeries.get(s.seriesId) ?? (s.sign === 'inflow' ? 'income' : 'subscription');
+      const list = byBucket.get(bucket) ?? [];
+      list.push(s);
+      byBucket.set(bucket, list);
+    }
+    return BUCKET_ORDER.filter((b) => byBucket.has(b)).map((b) => ({
+      bucket: b,
+      rows: byBucket.get(b) ?? [],
+    }));
+  }, [rows, bucketBySeries]);
+
+  const showBucketHeadings = groups.length > 1;
+
   return (
-    <section className="space-y-2">
+    <section className="space-y-3">
       <h2 className="text-sm font-medium text-muted-foreground">{title}</h2>
       {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
-      <div className="space-y-2">
-        {rows.map((s) => (
-          <SeriesCard
-            key={s.seriesId}
-            series={s}
-            accountName={accountName(s.accountId)}
-            householdId={householdId}
-            userId={userId}
-            onDone={onDone}
-          />
-        ))}
-      </div>
+      {groups.map((g) => (
+        <div key={g.bucket} className="space-y-2">
+          {showBucketHeadings ? (
+            <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {BUCKET_LABELS[g.bucket]}
+            </h3>
+          ) : null}
+          {g.rows.map((s) => (
+            <SeriesCard
+              key={s.seriesId}
+              series={s}
+              accountName={accountName(s.accountId)}
+              link={linkBySeries.get(s.seriesId) ?? null}
+              schedules={schedules}
+              linkedScheduleIds={linkedScheduleIds}
+              householdId={householdId}
+              userId={userId}
+              onDone={onDone}
+              onLinksChanged={onLinksChanged}
+            />
+          ))}
+        </div>
+      ))}
     </section>
   );
 }
@@ -306,20 +406,71 @@ function SeriesSection({
 function SeriesCard({
   series,
   accountName,
+  link,
+  schedules,
+  linkedScheduleIds,
   householdId,
   userId,
   onDone,
+  onLinksChanged,
 }: {
   series: RecurringSeriesRow;
   accountName: string;
+  link: RecurringScheduleLink | null;
+  schedules: ScheduleRow[];
+  linkedScheduleIds: Set<string>;
   householdId: string;
   userId: string | null;
   onDone: () => void;
+  onLinksChanged: () => void;
 }) {
   const [busy, setBusy] = useState<RecurringCommand | null>(null);
+  const [linkBusy, setLinkBusy] = useState(false);
   const next = nextOccurrence(series, todayIso());
   const lockedToday = series.status !== 'suggested' && changedToday(series, todayIso());
   const actions = RECURRING_ACTIONS[series.status];
+
+  // Same-direction schedules not already linked to another series are eligible
+  // to merge with this one so the projection stops double-counting.
+  const linkableSchedules = useMemo(
+    () =>
+      schedules.filter(
+        (sc) =>
+          !linkedScheduleIds.has(sc.scheduleId) &&
+          (series.sign === 'inflow') === BigInt(sc.amountMinor || '0') > 0n,
+      ),
+    [schedules, linkedScheduleIds, series.sign],
+  );
+  const linkedSchedule = link
+    ? schedules.find((sc) => sc.scheduleId === link.scheduleId)
+    : undefined;
+
+  async function doLink(scheduleId: string) {
+    if (!userId) return;
+    setLinkBusy(true);
+    try {
+      await linkRecurringSchedule({ householdId, userId, seriesId: series.seriesId, scheduleId });
+      toast.success('Linked — the projection now counts this once.');
+      onLinksChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not link the schedule.');
+    } finally {
+      setLinkBusy(false);
+    }
+  }
+  async function doUnlink() {
+    if (!userId || !link) return;
+    setLinkBusy(true);
+    try {
+      await unlinkRecurringSchedule({ householdId, userId, linkId: link.linkId });
+      toast.success('Unlinked.');
+      onLinksChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not unlink.');
+    } finally {
+      setLinkBusy(false);
+    }
+  }
   // Estimated annual total (teardown C13: "$X/mo · ~$Y/yr"). Derived purely
   // from this series' own projected occurrences — null (shown as nothing)
   // rather than a guess when the cadence isn't confidently inferable (Law 9).
@@ -374,6 +525,50 @@ function SeriesCard({
                 </>
               ) : null}
             </p>
+          ) : null}
+          {/* F-028: merge a manual schedule with this detected series so the
+              projection stops double-counting. */}
+          {series.status === 'confirmed' ? (
+            linkedSchedule ? (
+              <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span>
+                  Linked to schedule &ldquo;{linkedSchedule.description}&rdquo; — counted once.
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs"
+                  disabled={linkBusy}
+                  onClick={() => void doUnlink()}
+                >
+                  Unlink
+                </Button>
+              </p>
+            ) : linkableSchedules.length > 0 ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Same as a schedule?</span>
+                <Select
+                  value=""
+                  items={Object.fromEntries(
+                    linkableSchedules.map((sc) => [sc.scheduleId, sc.description]),
+                  )}
+                  onValueChange={(v) => {
+                    if (v) void doLink(v);
+                  }}
+                >
+                  <SelectTrigger className="h-7 w-44 text-xs" disabled={linkBusy}>
+                    <SelectValue placeholder="Link a schedule…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {linkableSchedules.map((sc) => (
+                      <SelectItem key={sc.scheduleId} value={sc.scheduleId}>
+                        {sc.description}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -521,12 +716,14 @@ const PROJECTION_DAYS = 60;
 function ProjectedCash({
   series,
   schedules,
+  linkedScheduleIds,
   balances,
   accounts,
   ledgerKinds,
 }: {
   series: RecurringSeriesRow[];
   schedules: ScheduleRow[];
+  linkedScheduleIds: Set<string>;
   balances: TrialBalanceRow[];
   accounts: AccountRow[];
   ledgerKinds: Map<string, string>;
@@ -573,6 +770,9 @@ function ProjectedCash({
     for (const sc of schedules) {
       if (sc.status !== 'active') continue;
       if (sc.currency !== currency) continue;
+      // F-028: a schedule linked to a detected series is the same economic
+      // stream — count the detected series only, never both.
+      if (linkedScheduleIds.has(sc.scheduleId)) continue;
       let due = sc.nextDueDate;
       let guard = 0;
       while (due <= endIso && guard < 200) {
@@ -602,7 +802,7 @@ function ProjectedCash({
     }
     points.push({ date: endIso, balanceMinor: running.toString(), currency });
     return { points, low, lowDate, currency };
-  }, [series, schedules, balances, accounts, ledgerKinds]);
+  }, [series, schedules, linkedScheduleIds, balances, accounts, ledgerKinds]);
 
   if (!projection) return null;
 
@@ -615,8 +815,8 @@ function ProjectedCash({
         <BalanceTrendChart points={projection.points} height={180} />
         <p className="mt-2 text-xs text-muted-foreground">
           Today&apos;s asset balances rolled forward through confirmed recurring bills,
-          income, and your schedules (if a schedule duplicates a detected series,
-          it counts twice — pause one). Lowest point:{' '}
+          income, and your schedules. Link a schedule to the detected series it
+          duplicates and it&apos;s counted once. Lowest point:{' '}
           <Money
             amountMinor={projection.low.toString()}
             currency={projection.currency}

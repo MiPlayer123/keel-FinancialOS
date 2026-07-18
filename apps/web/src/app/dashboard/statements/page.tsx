@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { FileCheck2, Plus, Trash2, Loader2, ChevronRight, LockOpen } from 'lucide-react';
+import { FileCheck2, Plus, Trash2, Loader2, ChevronRight, LockOpen, CalendarClock } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
@@ -10,11 +10,14 @@ import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery } from '@/lib/use-keel-query';
 import {
   fetchAccounts,
+  fetchStatementCadence,
+  setStatementCadence,
   keelCommand,
   keelQuery,
   newId,
   type AccountRow,
   type RichTransactionRow,
+  type StatementCadenceRow,
   type StatementRow,
 } from '@/lib/keel-api';
 import { sha256Hex, parseSignedDollars, minorToDollars } from '@/lib/hash';
@@ -62,8 +65,18 @@ function StatementsBody() {
     householdId,
   );
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
+  const [cadence, setCadence] = useState<StatementCadenceRow[]>([]);
   const [creating, setCreating] = useState(false);
   const [openDetail, setOpenDetail] = useState<string | null>(null);
+
+  const reloadCadence = () => {
+    if (!householdId) return;
+    void fetchStatementCadence(householdId)
+      .then(setCadence)
+      .catch(() => {
+        setCadence([]);
+      });
+  };
 
   useEffect(() => {
     if (!householdId) return;
@@ -72,6 +85,12 @@ function StatementsBody() {
       .catch(() => {
         setAccounts([]);
       });
+    void fetchStatementCadence(householdId)
+      .then(setCadence)
+      .catch(() => {
+        setCadence([]);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadCadence is stable per householdId
   }, [householdId]);
 
   const accountName = useMemo(() => {
@@ -117,6 +136,14 @@ function StatementsBody() {
         </Button>
       </div>
 
+      <StatementCadenceSection
+        cadence={cadence}
+        accountName={accountName}
+        householdId={householdId}
+        userId={userId}
+        onChanged={reloadCadence}
+      />
+
       {rows.length === 0 ? (
         <EmptyState
           icon={<FileCheck2 className="size-6" />}
@@ -159,6 +186,126 @@ function StatementsBody() {
         }}
       />
     </div>
+  );
+}
+
+const CLOSE_DAY_OPTIONS = Array.from({ length: 31 }, (_, i) => String(i + 1));
+
+// F-029: per-account statement cadence (expected close day) + a "statement due"
+// reminder. Derived from prior statements' close days or set manually. No CSV
+// line import here (deferred) — this is the cadence/reminder slice only.
+function StatementCadenceSection({
+  cadence,
+  accountName,
+  householdId,
+  userId,
+  onChanged,
+}: {
+  cadence: StatementCadenceRow[];
+  accountName: (id: string) => string;
+  householdId: string | null;
+  userId: string | null;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  if (cadence.length === 0) return null;
+
+  const overdue = cadence.filter((c) => c.overdue);
+
+  async function save(accountId: string, closeDay: number | null) {
+    if (!householdId || !userId) return;
+    setBusy(accountId);
+    try {
+      await setStatementCadence({ householdId, userId, accountId, closeDay });
+      toast.success(closeDay === null ? 'Cadence cleared.' : 'Statement cadence saved.');
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not update cadence.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="space-y-2">
+      {overdue.length > 0 ? (
+        <div className="space-y-1 rounded-lg border border-keel-negative/40 bg-keel-negative/5 p-3">
+          <div className="flex items-center gap-2 text-sm font-medium text-keel-negative">
+            <CalendarClock className="size-4" />
+            Statement due
+          </div>
+          {overdue.map((c) => (
+            <p key={c.accountId} className="text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">{accountName(c.accountId)}</span>{' '}
+              — a statement was expected around{' '}
+              <span className="font-mono">{c.nextExpectedClose}</span>
+              {c.lastPeriodEnd ? (
+                <>
+                  {' '}(last one covered through{' '}
+                  <span className="font-mono">{c.lastPeriodEnd}</span>)
+                </>
+              ) : null}
+              . Enter it to reconcile the period.
+            </p>
+          ))}
+        </div>
+      ) : null}
+
+      <details className="rounded-lg border border-border">
+        <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted-foreground">
+          Statement cadence
+        </summary>
+        <div className="space-y-2 border-t border-border p-3">
+          {cadence.map((c) => (
+            <div
+              key={c.accountId}
+              className="flex flex-wrap items-center justify-between gap-2 text-sm"
+            >
+              <div className="min-w-0">
+                <span className="font-medium">{accountName(c.accountId)}</span>{' '}
+                <span className="text-xs text-muted-foreground">
+                  {c.closeDay
+                    ? `closes ~day ${String(c.closeDay)} (${c.closeDaySource})`
+                    : 'no cadence yet'}
+                  {c.nextExpectedClose ? ` · next ${c.nextExpectedClose}` : ''}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Select
+                  value={c.closeDay ? String(c.closeDay) : ''}
+                  items={Object.fromEntries(CLOSE_DAY_OPTIONS.map((d) => [d, `Day ${d}`]))}
+                  onValueChange={(v) => {
+                    if (v) void save(c.accountId, Number(v));
+                  }}
+                >
+                  <SelectTrigger className="h-7 w-28 text-xs" disabled={busy === c.accountId}>
+                    <SelectValue placeholder="Set close day" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CLOSE_DAY_OPTIONS.map((d) => (
+                      <SelectItem key={d} value={d}>
+                        Day {d}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {c.closeDaySource === 'manual' ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    disabled={busy === c.accountId}
+                    onClick={() => void save(c.accountId, null)}
+                  >
+                    Clear
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      </details>
+    </section>
   );
 }
 

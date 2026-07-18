@@ -127,6 +127,18 @@ export const RecurringResumePayloadSchema = RecurringTransitionPayloadSchema.ext
 export const RecurringCancelPayloadSchema = RecurringTransitionPayloadSchema;
 export const RecurringRejectPayloadSchema = RecurringTransitionPayloadSchema;
 
+// F-028: link a detected series to a manual scheduled transaction so the
+// projection stops double-counting. schedule_id / link_id are plain UUIDs
+// (scheduled_transactions has no branded id schema — it uses a bespoke route).
+export const RecurringLinkSchedulePayloadSchema = z.object({
+  seriesId: RecurringSeriesIdSchema,
+  scheduleId: z.string().uuid(),
+}).strict();
+export const RecurringUnlinkSchedulePayloadSchema = z.object({
+  linkId: z.string().uuid(),
+  reason: z.string().max(500).optional(),
+}).strict();
+
 const PaycheckComponentSchema = z.object({
   key: z.string().min(1).max(100),
   kind: z.enum([
@@ -185,6 +197,8 @@ const ResolutionSchema=z.enum(['matched_transaction','stale_balance','missing_ev
 export const CloseReconciliationPayloadSchema=z.object({statementId:StatementIdSchema,items:z.array(z.object({lineId:z.uuid(),resolution:ResolutionSchema,transactionId:CanonicalTransactionIdSchema.optional(),explanation:z.string().min(1).max(500)}).strict()).min(1).max(5000),
  adjustments:z.array(z.object({kind:ResolutionSchema.exclude(['matched_transaction']),amountMinor:MinorUnitsStringSchema,explanation:z.string().min(1).max(500)}).strict()).max(100)}).strict();
 export const ReopenReconciliationPayloadSchema=z.object({sessionId:ReconciliationSessionIdSchema,reason:z.string().min(1).max(500)}).strict();
+// F-029: set (1-31) or clear (null) an account's expected statement close day.
+export const SetStatementCadencePayloadSchema=z.object({accountId:AccountIdSchema,closeDay:z.number().int().min(1).max(31).nullable()}).strict();
 
 /** One split of a manual transaction: a category and its debit-positive share. */
 export const ManualTransactionSplitSchema = z.object({
@@ -384,6 +398,8 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'recurring.resume': RecurringResumePayloadSchema,
   'recurring.cancel': RecurringCancelPayloadSchema,
   'recurring.reject': RecurringRejectPayloadSchema,
+  'recurring.link_schedule': RecurringLinkSchedulePayloadSchema,
+  'recurring.unlink_schedule': RecurringUnlinkSchedulePayloadSchema,
   'paychecks.create': CreatePaycheckPayloadSchema,
   'paychecks.edit': EditPaycheckPayloadSchema,
   'paychecks.reverse': PaycheckStatusPayloadSchema,
@@ -393,6 +409,7 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'reimbursements.reverse_settlement':ReverseSettlementPayloadSchema,
   'reimbursements.reverse_claim':ReverseClaimPayloadSchema,
   'statements.create':CreateStatementPayloadSchema,
+  'statements.set_cadence':SetStatementCadencePayloadSchema,
   'reconciliations.close':CloseReconciliationPayloadSchema,
   'reconciliations.reopen':ReopenReconciliationPayloadSchema,
   'transactions.manual_create': ManualTransactionPayloadSchema,

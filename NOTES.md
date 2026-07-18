@@ -4309,3 +4309,130 @@ it; gitignored, not a WS-H regression).
 --single-transaction); run `supabase test db` (incl. new 028); deploy the `api`
 edge function (QUERY_TO_PROC additions); Vercel auto-deploys web on merge to
 main (dep + lockfile already committed).
+---
+
+## WS-I (F-025/F-026/F-028/F-029/X-003) — money features (2026-07-18)
+
+Worktree: keel-wt/ws-i, branch ws-i-money-features. Migrations authored as
+FILES ONLY (timestamps 20260718160000–169999); NEVER applied. Orchestrator
+applies at merge.
+
+### X-003 / F-026 income bug (fix first)
+- Root cause: `keel_is_non_income_settlement(household,txn)` exists but is
+  never called by any read model. `keel_cash_flow` (20260712160000) and
+  `keel_cash_flow_monthly` (20260713030000) both sum `la.kind='income'`
+  postings; a settled reimbursement deposit posts to an income ledger
+  account (worker default = Uncategorized Income) so it wrongly counts as
+  income.
+- Fix (20260718160000): drop+recreate BOTH read models (changed-body
+  create-or-replace is fine — signatures unchanged, but I DROP first to be
+  explicit and safe re the "changed body" rule; signatures identical so no
+  overload risk). Add `and not public.keel_is_non_income_settlement(
+  b.household_id, b.canonical_transaction_id)` to the income/expense posting
+  filter. This excludes the whole deposit txn's postings; since the deposit
+  posts only income+asset, and asset isn't in ('income','expense'), only the
+  income leg is filtered — exactly the desired exclusion. Formula version
+  bumped so reproducibility is honest.
+- Scope note: `keel_cash_flow` did NOT previously exclude transfers (only the
+  monthly variant did). I add ONLY the reimbursement exclusion to cash_flow
+  to stay in-scope; the transfer-exclusion asymmetry is pre-existing and left
+  for the read-path owner. Documented, not silently changed.
+- pgTAP 028: settled reimbursement deposit excluded from cash_flow income.
+
+### F-025 paycheck templates + detection (web-only, no migration)
+- Chose "compute on the fly" over populating the dead `paycheck_templates`
+  table: the brief explicitly allows either, and computing from the already-
+  fetched paychecks.list avoids a new write path/proc/idempotency surface for
+  zero user-visible benefit. paycheck_templates stays dead (documented).
+- Template = non-deposit component lines of an employer's most recent ACTIVE
+  paycheck (rows are pay_date desc), keyed by lowercased employer name.
+- Detected-income card: when a recurring inflow's counterparty matches a
+  known employer template, show "Record with your usual breakdown" (primary)
+  + "Start blank" (the old prefill). The breakdown is SCALED to the detected
+  deposit via scaleTemplate() — exact integer arithmetic (round-half-up on a
+  rational), rounding drift pinned to the largest earning line so the server
+  equation reconciles. NOT an LLM (Law 1 safe). Suggest→approve: it only
+  prefills the form; keel_paycheck_create re-checks the math on save (class B).
+- No migration; no new proc. Falls back to template-as-is if scaling can't
+  reconcile, and to blank if no template.
+
+### F-026 reimbursement UX (web-only)
+- Explainer callout above the claim list + richer empty-state (reimbursement
+  != income). Suggest-approve auto-match: an inflow whose amount == an open
+  claim's remaining (same currency, not already consumed by an active
+  settlement, one txn per suggestion) surfaces a "Record repayment" that opens
+  the settle dialog PRE-FILLED (new `prefill` prop on SettleDialog). Never
+  auto-posts. Surfaced on the reimbursements page, not the shared Review page.
+
+### F-028 recurring classification + grouping + schedule link (migration + web)
+- Migration 20260718161000. Detector is UNTOUCHED (constraint).
+- Classification: keel_recurring_classification(household) — deterministic
+  bucket per series from SIGN + dominant Plaid PFC-primary of matched txns
+  (join canonical_transactions → transaction_source_links →
+  normalized_source_records.pfc_primary from 20260717170000). Inflow→income;
+  outflow buckets RENT_AND_UTILITIES→utility, LOAN/INSURANCE/MEDICAL/
+  GOVERNMENT→bill, ENTERTAINMENT/GENERAL_SERVICES/default→subscription. No LLM.
+- Double-count fix: recurring_series_schedule_links table + recurring.link_schedule
+  / recurring.unlink_schedule commands. Unlink is a SOFT detach (detached_at,
+  keel_rssl_guard blocks hard DELETE — user directive 2026-07-17). Partial
+  unique index (detached_at is null) allows re-link after detach. Direction
+  must agree (inflow series ↔ income schedule). Projection (client) now skips
+  linked schedules → counts the detected series once. Recurring page groups
+  Active/Suggested/Paused series by bucket and offers a link/unlink control per
+  confirmed series.
+- Registered: COMMAND_TO_PROC + QUERY_TO_PROC (api), authz WRITE/READ actions +
+  min-roles, contracts COMMAND_PAYLOAD_SCHEMAS + 2 payload schemas. api command
+  authz gate now only does the seriesId lookup when payload carries seriesId
+  (unlink names only linkId → household partner check + DB re-check).
+- scheduled_transactions gained a composite (household_id,id) unique so the link
+  FK is tenant-scoped (it had PK id only). Additive.
+- Export: new table in SQL chain + manifest.ts + pgTAP 008 (count 71→72).
+- pgTAP 029: classification (utility via PFC, income via sign), link/unlink,
+  direction + duplicate rejection, soft-delete persistence + re-link, hard-delete
+  block, export privilege.
+- Test count deltas fixed: authz action vocabulary (+4), exports manifest &
+  formats.property (71→72). Full vitest 834 pass.
+
+### F-029 statement cadence + due reminder (migration + web; CSV import DEFERRED)
+- Migration 20260718162000. account_statement_cadence table (manual override:
+  close_day 1-31 per account; mutable/DELETE-able since it's a live setting,
+  not an economic event — audited via the command). keel_statement_set_cadence
+  (set/clear) + keel_statement_cadence read model. Read model: effective close
+  day = manual override else modal day-of-month of prior statements' period_end;
+  computes next expected close (first monthly close-day strictly after the last
+  period_end, month-length-clamped) + overdue flag. Only accounts that actually
+  reconcile (have a manual cadence or a statement) appear.
+- Web: Statements page shows a "Statement due" reminder (overdue accounts) +
+  a collapsible per-account cadence editor (set day / clear). No feed into the
+  shared needs-attention card (kept on the feature page per scope; hook exists
+  if wanted later).
+- CSV line import DEFERRED per brief (F-029 slice 1). Uploads stay attach-only.
+- Registered command/query, authz actions + min-roles, contracts schema, export
+  chain + manifest + pgTAP 008 (count 72→73). pgTAP 030.
+
+### Cross-cutting
+- Three migrations authored (FILES ONLY, never applied):
+  20260718160000 cash_flow_exclude_settlements,
+  20260718161000 recurring_classification_and_schedule_links,
+  20260718162000 statement_cadence. Orchestrator applies at merge.
+- pgTAP added: 028 (X-003), 029 (F-028), 030 (F-029). 008/manifest counts and
+  authz action vocabulary updated for the new tables/actions.
+- Migrations were NOT run against any DB (constraint). SQL validated by
+  inspection against sibling procs + the existing patterns; pgTAP runs serially
+  at merge under the orchestrator.
+- Web `pnpm build` green; root `pnpm vitest run` 836 pass. Worker deno tests
+  not run (worker untouched). Deno check of api/index.ts blocked locally by
+  @supabase/server module resolution (deploy-time only) — changes are
+  string-map + guard additions matching existing patterns; the web build's
+  contracts/authz typecheck covers the shared surface.
+
+### X-003 correction (post-review self-catch)
+- CRITICAL: the LIVE keel_cash_flow is the one redefined by the transfers
+  migration (20260713020000, create-or-replace), which ALREADY excludes
+  confirmed transfers (formulaVersion cash-flow-v2-transfer-excluded). My first
+  draft of 20260718160000 rebuilt keel_cash_flow from the OLDER dashboard_readmodel
+  body and would have REGRESSED the transfer exclusion. Fixed: keel_cash_flow now
+  keeps the transfer-exclusion filter AND adds the settlement exclusion
+  (formulaVersion cash-flow-v3-transfer-and-settlement-excluded). Monthly variant
+  was only ever defined in dashboard_trends (already had transfer exclusion) — my
+  recreation preserved it. pgTAP 028 formula-version assertion updated.
