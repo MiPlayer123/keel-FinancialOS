@@ -120,20 +120,27 @@ live DB by 4 read-only audit agents + 1 web-research agent on 2026-07-18.
 - [ ] **X-001 — Dashboard "Sync" button only syncs `connections[0]`** — other banks never sync from Home; "Updated Xh ago" misleading. → **WS-A**
 - [ ] **X-002 — No react-query invalidation on rename/disconnect/reconnect either** — same class as F-001. → **WS-A**
 - [ ] **X-003 — Settled reimbursements count as income** (`keel_is_non_income_settlement` unwired). → **WS-I** (folded into F-026)
+- [ ] **X-004 — Export gaps from earlier features**: `documents`/`document_versions`/`document_attachments` and `household_notes`/`household_tasks` shipped without export-chain coverage (Law 6 gap). Classified excluded-with-reason in pgTAP 008 for now; real export layers belong to WS-J (documents) and WS-F/WS-I (notes). `accounts.mask` closed in WS-C.
+- [x] **X-005 — pgTAP 023 (reconnect dedupe) failing since PR #58** — RESOLVED in PR #62: test-harness-only (fixture UPDATE ran under the `authenticated` role); live grants verified correct on cloud DB. Suite fully green (24 files / 634 tests).
+- [ ] **X-006 — New investment procs are postgres-owned**, not `keel_worker`-owned like sibling worker procs (least-privilege hardening pattern). Passed 3 reviews; anon/public locked out; service_role-only callers. P3 hardening follow-up.
+- [x] **X-007 — Mobile hamburger menu doesn't scroll** — FIXED + SHIPPED (WS-F/PR #64): `flex-1` nav region lacked `min-h-0 overflow-y-auto`; scoped fix to mobile drawer + safe-area padding. **Mikul: please eyeball on your phone.**
+- [x] **X-008 — main build broke on WS-F merge** (my error 2026-07-18): merged on a false-green (read a trailing echo's exit, not the build's; zsh `PIPESTATUS` quirk). Duplicate `TrendingUp`/`Investments` from the rebase. Fixed forward in hotfix #65; production never affected (Vercel serves last-good on build failure). Process lesson: capture `$?` on its own line; never chain merge after build in one block.
 
 ## Workstreams
 
 | WS | Scope | Items | Wave | Status (2026-07-18) |
 |----|-------|-------|------|--------|
-| WS-A | Connect/sync UX + Link error surfacing | F-001 F-002 F-032 X-001 X-002 | 1 | built (green) + committed; adversarial review running |
-| WS-B | Review page correctness + speed | F-003 F-004 F-017 F-019 | 1 | **reviewed: safe-to-merge**; P2 cleanups applied; ready to merge |
-| WS-C | Investments: txn ingestion, holdings errors, page | F-013 F-014 F-015 | 1 | agent still building (largest task) |
-| WS-D | Account page polish | F-007 F-008 F-009 | 1 | built (green) + committed; review running (verifying F-007 not cosmetic) |
-| WS-E | Transfers UX | F-011 F-012 | 2 | not started |
-| WS-F | IA/nav + dashboard redesign + txn sidebar | F-020 F-022 F-024 F-006 F-010 F-027 | 2 | not started |
-| WS-G | Categories/subcategories + entities + reports drill | F-016 F-018 F-023 F-039 | 2 | not started |
+| WS-A | Connect/sync UX + Link error surfacing | F-001 F-002 F-032 X-001 X-002 | 1 | **SHIPPED** (PR #61, live) |
+| WS-B | Review page correctness + speed | F-003 F-004 F-017 F-019 | 1 | **SHIPPED** (PR #61, live) |
+| WS-C | Investments: txn ingestion, holdings errors, page | F-013 F-014 F-015 | 1 | **SHIPPED** (PR #62; migrations live; functions deployed) — ⚑ awaiting Mikul's Fidelity update-mode re-link to start data flowing |
+| WS-D | Account page polish | F-007 F-008 F-009 | 1 | **SHIPPED** (PR #61, live) |
+| WS-E | Transactions sidebar + transfers UX | F-010 F-011 F-012 + picker-parent | 2 | **SHIPPED** (PR #63; migrations live; functions deployed) |
+| WS-F | Nav IA + top bar + dashboard redesign | F-020 F-022 F-024 F-006 F-027 | 2 | **SHIPPED** (PR #64 + hotfix #65) |
+| WS-G | Subcategories + entities + reports drill | F-016 F-018 F-023 F-039 | 2 | **SHIPPED** (PR #66; seed migration live) |
 | WS-H | Performance | F-005 F-021(search) | 3 | not started |
 | WS-I | Paychecks templates, reimbursements, recurring grouping, statements cadence | F-025 F-026 F-028 F-029 X-003 | 3 | not started |
 | WS-J | Receipts matching (approved) | F-030 | 3 | not started |
+
+**WS-C review findings (both reviewers, being fixed):** P0 non-resumable pagination (data loss >500 txns); P1s: float money math, restatement swallowing + checkpoint-on-error, fail-open auth on null JWT, unchecked holdings RPCs, snapshot symbol conflict (manual+plaid), currency-mixing labeled USD, page loading-sentinel collision, export omits holdings.security_type. Sign conventions + identical-replay idempotency + grants verified CORRECT.
 
 **Merge plan:** WS-B/WS-A/WS-D are pure-web (no migrations, no edge-function-only risk except WS-A's plaid-client/api tweaks) → integrate the three together after all reviews clean, one build, one push/deploy. WS-C (migrations + worker/api deploy + human Fidelity re-link) merges separately with backend coordination. WS-A and WS-C both touch `plaid-client.ts`/`api/index.ts` → WS-C rebases onto WS-A.
