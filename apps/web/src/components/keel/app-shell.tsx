@@ -23,7 +23,6 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Sparkles,
-  TrendingUp,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -66,7 +65,6 @@ const PRIMARY_NAV: NavItem[] = [
   { label: 'Recurring', href: '/dashboard/recurring', icon: Repeat },
   { label: 'Budgets', href: '/dashboard/budgets', icon: PiggyBank },
   { label: 'Goals', href: '/dashboard/goals', icon: Target },
-  { label: 'Investments', href: '/dashboard/investments', icon: TrendingUp },
   { label: 'Reports', href: '/dashboard/reports', icon: BarChart3 },
   { label: 'Review', href: '/dashboard/review', icon: BadgeCheck },
 ];
