@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Banknote, Plus, Loader2, ChevronRight, Trash2, Undo2, Sparkles } from 'lucide-react';
+import { Banknote, Plus, Loader2, ChevronRight, Pencil, Trash2, Undo2, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
@@ -49,7 +49,9 @@ type PaycheckFull = {
   netMinor: string;
   currency: string;
   status: 'active' | 'reversed';
+  supersededByPaycheckId: string | null;
   components: { componentId: string; key: string; kind: string; amountMinor: string }[];
+  matches: { componentId: string; transactionId: string }[];
 };
 
 /**
@@ -67,6 +69,15 @@ const DEDUCTION_KINDS = [
   'rsu_withholding',
   'garnishment',
 ] as const;
+/**
+ * Kinds this v1 form can safely round-trip. A paycheck with a component
+ * outside this set (retirement_401k/hsa/fsa/espp/employer_match -- only
+ * reachable via a direct API/payroll-provider write, never this UI) can't
+ * be edited here: save() only rebuilds a single direct_deposit match and
+ * sums deductions from DEDUCTION_KINDS, so it would silently drop that
+ * component's data and/or fail the backend's net-reconciliation check.
+ */
+const V1_EDITABLE_KINDS: readonly string[] = [...EARNING_KINDS, 'reimbursement', ...DEDUCTION_KINDS, 'direct_deposit'];
 const KIND_LABELS: Record<string, string> = {
   gross_salary: 'Salary / wages',
   bonus: 'Bonus',
@@ -130,6 +141,7 @@ function PaychecksBody() {
   const recurring = useKeelQuery<RecurringSeriesRow>('recurring.list', householdId);
   const [creating, setCreating] = useState(false);
   const [prefill, setPrefill] = useState<PaycheckPrefill | null>(null);
+  const [editing, setEditing] = useState<PaycheckFull | null>(null);
   const [openDetail, setOpenDetail] = useState<string | null>(null);
   // Paychecks have no entity_id of their own; a paystub attachment needs
   // SOME entity, so the household's first (personal households only ever
@@ -282,6 +294,9 @@ function PaychecksBody() {
               householdId={householdId}
               userId={userId}
               entityId={entityId}
+              onEdit={() => {
+                setEditing(p);
+              }}
               onChanged={() => {
                 void refetch();
               }}
@@ -290,8 +305,9 @@ function PaychecksBody() {
         </div>
       )}
 
-      <CreatePaycheckDialog
-        open={creating}
+      <PaycheckFormDialog
+        open={creating || editing !== null}
+        editing={editing}
         txns={txns.rows}
         prefill={prefill}
         householdId={householdId}
@@ -299,10 +315,12 @@ function PaychecksBody() {
         onClose={() => {
           setCreating(false);
           setPrefill(null);
+          setEditing(null);
         }}
-        onCreated={() => {
+        onSaved={() => {
           setCreating(false);
           setPrefill(null);
+          setEditing(null);
           void refetch();
         }}
       />
@@ -317,6 +335,7 @@ function PaycheckCard({
   householdId,
   userId,
   entityId,
+  onEdit,
   onChanged,
 }: {
   paycheck: PaycheckFull;
@@ -325,12 +344,21 @@ function PaycheckCard({
   householdId: string | null;
   userId: string | null;
   entityId: string | null;
+  onEdit: () => void;
   onChanged: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const reversed = p.status === 'reversed';
+  // The v1 form always prefills/rebuilds a single deposit-1 match (see
+  // save() below), so a paycheck with more than one direct_deposit
+  // component (split across accounts -- only reachable via a direct
+  // API/payroll-provider write) would have its extra deposit match
+  // silently collapsed away on save. Require exactly one.
+  const editable =
+    p.components.every((c) => V1_EDITABLE_KINDS.includes(c.kind)) &&
+    p.components.filter((c) => c.kind === 'direct_deposit').length === 1;
 
   async function transition() {
     if (!householdId || !userId || reason.trim().length === 0) return;
@@ -438,18 +466,38 @@ function PaycheckCard({
                 </Button>
               </div>
             </div>
+          ) : reversed && p.supersededByPaycheckId ? (
+            <p className="text-xs text-muted-foreground">
+              Corrected — replaced by a newer entry. Restoring this one back would double-count
+              the deposit, so it stays in history only.
+            </p>
           ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setConfirming(true);
-                setReason('');
-              }}
-            >
-              <Undo2 className="size-4" />
-              {reversed ? 'Restore' : 'Reverse'}
-            </Button>
+            <div className="flex gap-2">
+              {/* Paychecks are immutable once recorded (correction is
+                  reverse + recreate, not an in-place edit) -- so editing
+                  only makes sense for an ACTIVE paycheck; a reversed one
+                  has nothing to reverse-and-replace. Paychecks with
+                  components outside the v1 form's supported kinds (only
+                  reachable via direct API/payroll-provider writes) also
+                  can't be edited here -- the form can't round-trip them. */}
+              {reversed || !editable ? null : (
+                <Button variant="outline" size="sm" onClick={onEdit}>
+                  <Pencil className="size-4" />
+                  Edit
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setConfirming(true);
+                  setReason('');
+                }}
+              >
+                <Undo2 className="size-4" />
+                {reversed ? 'Restore' : 'Reverse'}
+              </Button>
+            </div>
           )}
         </div>
       ) : null}
@@ -468,22 +516,25 @@ function sumMinor(items: DraftComponent[], kinds: readonly string[]): bigint {
   return total;
 }
 
-function CreatePaycheckDialog({
+function PaycheckFormDialog({
   open,
+  editing,
   txns,
   prefill,
   householdId,
   userId,
   onClose,
-  onCreated,
+  onSaved,
 }: {
   open: boolean;
+  /** Non-null = editing this paycheck (reverse + recreate); null = a fresh record. */
+  editing: PaycheckFull | null;
   txns: RichTransactionRow[];
   prefill: PaycheckPrefill | null;
   householdId: string | null;
   userId: string | null;
   onClose: () => void;
-  onCreated: () => void;
+  onSaved: () => void;
 }) {
   const [employer, setEmployer] = useState('');
   const [payDate, setPayDate] = useState('');
@@ -492,17 +543,47 @@ function CreatePaycheckDialog({
     { kind: 'federal_withholding', amount: '' },
   ]);
   const [depositTxnId, setDepositTxnId] = useState<string | null>(null);
+  const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
 
-  // Prefill from a detected income series when the dialog opens.
+  // Prefill from a detected income series when the dialog opens for a NEW
+  // paycheck. Editing takes priority when both happen to be set.
   useEffect(() => {
-    if (!open || !prefill) return;
+    if (!open || !prefill || editing) return;
     setEmployer(prefill.employer);
     setDepositTxnId(prefill.depositTxnId);
     const deposit = txns.find((t) => t.transactionId === prefill.depositTxnId);
     if (deposit) setPayDate(deposit.effectiveDate);
     // Keyed on `open` only by design: apply the prefill once per open.
-  }, [open, prefill, txns]);
+  }, [open, prefill, editing, txns]);
+
+  // Prefill every field from the paycheck being edited. Paychecks always
+  // carry exactly one auto-derived direct_deposit line (see `create`/`save`
+  // below) — that one is excluded here since it's re-computed from the
+  // other lines, not user-editable.
+  useEffect(() => {
+    if (!open || !editing) return;
+    setEmployer(editing.employerName);
+    setPayDate(editing.payDate);
+    setComponents(
+      editing.components
+        .filter((c) => c.kind !== 'direct_deposit')
+        .map((c) => ({ kind: c.kind, amount: minorToDollars(c.amountMinor) })),
+    );
+    const depositComponent = editing.components.find((c) => c.kind === 'direct_deposit');
+    const depositMatch = depositComponent
+      ? editing.matches.find((m) => m.componentId === depositComponent.componentId)
+      : undefined;
+    setDepositTxnId(depositMatch?.transactionId ?? null);
+    setReason('');
+    // Deliberately keyed on the paycheck ID, not the `editing` object
+    // itself: the parent re-renders with a fresh object reference for the
+    // same underlying paycheck on every refetch, and re-running this
+    // effect then would silently discard whatever the user had already
+    // typed. Only actually switching WHICH paycheck is being edited (or
+    // opening the dialog) should re-prefill.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see above
+  }, [open, editing?.paycheckId]);
 
   // Server equations (keel_paycheck_create): gross = Σ earnings;
   // net = gross + reimbursements − deductions; Σ direct_deposit = net.
@@ -530,8 +611,9 @@ function CreatePaycheckDialog({
     setComponents((prev) => prev.map((c, idx) => (idx === i ? { ...c, ...patch } : c)));
   }
 
-  async function create() {
+  async function save() {
     if (!householdId || !userId || !depositTxnId || !math.valid) return;
+    if (editing && reason.trim().length === 0) return;
     setBusy(true);
     try {
       const payloadComponents = [
@@ -554,22 +636,26 @@ function CreatePaycheckDialog({
         ],
       };
       const contentHash = await sha256Hex(JSON.stringify(body));
+      const source = {
+        kind: 'manual' as const,
+        ref: `manual:${employer.trim()}:${payDate}`,
+        contentHash,
+      };
       await keelCommand({
         commandId: newId(),
-        command: 'paychecks.create',
-        economicEventKey: `paychecks.create:${contentHash}`,
+        command: editing ? 'paychecks.edit' : 'paychecks.create',
+        economicEventKey: editing
+          ? `paychecks.edit:${editing.paycheckId}:${contentHash}`
+          : `paychecks.create:${contentHash}`,
         actor: { kind: 'user', userId },
         householdId,
-        payload: {
-          ...body,
-          source: {
-            kind: 'manual',
-            ref: `manual:${employer.trim()}:${payDate}`,
-            contentHash,
-          },
-        },
+        payload: editing
+          ? { ...body, source, paycheckId: editing.paycheckId, reason: reason.trim() }
+          : { ...body, source },
       });
-      toast.success('Paycheck recorded and reconciled to the deposit.');
+      toast.success(
+        editing ? 'Paycheck corrected — the old record stays as reversed history.' : 'Paycheck recorded and reconciled to the deposit.',
+      );
       setEmployer('');
       setPayDate('');
       setComponents([
@@ -577,15 +663,16 @@ function CreatePaycheckDialog({
         { kind: 'federal_withholding', amount: '' },
       ]);
       setDepositTxnId(null);
-      onCreated();
+      setReason('');
+      onSaved();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not record the paycheck.');
+      toast.error(err instanceof Error ? err.message : 'Could not save the paycheck.');
     } finally {
       setBusy(false);
     }
   }
 
-  const kindOptions = [...EARNING_KINDS, 'reimbursement', ...DEDUCTION_KINDS];
+  const kindOptions = V1_EDITABLE_KINDS.filter((k) => k !== 'direct_deposit');
 
   return (
     <Dialog
@@ -596,13 +683,28 @@ function CreatePaycheckDialog({
     >
       <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>Record a paycheck</DialogTitle>
+          <DialogTitle>{editing ? 'Edit paycheck' : 'Record a paycheck'}</DialogTitle>
           <DialogDescription>
-            Copy the lines from your paystub. KEEL derives gross and net and ties the
-            net to your actual bank deposit.
+            {editing
+              ? "Paychecks are immutable once recorded, so saving reverses the old one and records this as its replacement — the original stays in history, marked reversed."
+              : 'Copy the lines from your paystub. KEEL derives gross and net and ties the net to your actual bank deposit.'}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
+          {editing ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="pc-edit-reason">Reason for the correction</Label>
+              <Input
+                id="pc-edit-reason"
+                value={reason}
+                maxLength={500}
+                placeholder="e.g. Fixed a typo in the withholding amount"
+                onChange={(e) => {
+                  setReason(e.target.value);
+                }}
+              />
+            </div>
+          ) : null}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="pc-employer">Employer</Label>
@@ -719,14 +821,19 @@ function CreatePaycheckDialog({
           </Button>
           <Button
             disabled={
-              busy || !math.valid || !depositTxnId || employer.trim().length === 0 || !payDate
+              busy ||
+              !math.valid ||
+              !depositTxnId ||
+              employer.trim().length === 0 ||
+              !payDate ||
+              (editing !== null && reason.trim().length === 0)
             }
             onClick={() => {
-              void create();
+              void save();
             }}
           >
             {busy ? <Loader2 className="size-4 animate-spin" /> : null}
-            Record paycheck
+            {editing ? 'Save correction' : 'Record paycheck'}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -27,6 +27,7 @@ describe('action vocabulary', () => {
       'recurring.cancel',
       'recurring.reject',
       'paychecks.create',
+      'paychecks.edit',
       'paychecks.reverse',
       'paychecks.restore',
       'reimbursements.create_claim',
@@ -61,6 +62,7 @@ describe('action vocabulary', () => {
 
   it('requires partner for paycheck mutations and viewer for paycheck reads', () => {
     expect(ACTION_MINIMUM_ROLES['paychecks.create']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['paychecks.edit']).toBe('partner');
     expect(ACTION_MINIMUM_ROLES['paychecks.reverse']).toBe('partner');
     expect(ACTION_MINIMUM_ROLES['paychecks.restore']).toBe('partner');
     expect(ACTION_MINIMUM_ROLES['paychecks.list']).toBe('viewer');
