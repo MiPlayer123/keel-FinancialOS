@@ -253,8 +253,8 @@ reset role;
 select is(
   (select count(*)::int from jsonb_object_keys(
     public.keel_export_household('00000000-0000-4000-8000-00000000a001')->'tables')),
-  71,
-  'snapshot contains all 71 included table arrays'
+  73,
+  'snapshot contains all 73 included table arrays'
 );
 select is(
   (select count(*)::int from excluded_export_tables e
