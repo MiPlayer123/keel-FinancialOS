@@ -3435,3 +3435,80 @@ continuation genuinely got stuck past 15 minutes, the backend would
 correctly allow "Fix balance" again but the button would stay disabled
 forever — the escape hatch existed but was unreachable through the UI.
 Client now applies the identical 15-minute cutoff.
+
+## Follow-up #3: a third review round + actually running `supabase test db`
+
+A third review round on the same PR flagged two more real gaps (both P2):
+`sync_continuation_pending`/`sync_continuation_marked_at` weren't in the
+export coverage allowlist (`supabase/tests/008_export.sql`) or the actual
+`connections` export DTO (`keel_export_household_pre_tags` — found by
+tracing the wrapper-chain of `create or replace` layers via `pg_proc.prosrc`,
+since the export function is built as ~15 stacked per-feature layers, not
+one file). Fixed both — the allowlist and the DTO builder itself, since
+`connections` (unlike `paychecks`, see below) is hand-written
+`jsonb_build_object`, not generic `to_jsonb(x)`, so the allowlist fix alone
+wouldn't have actually exported the data.
+
+Rather than keep trusting review findings without running the actual pgTAP
+suite (a real blind spot per follow-up #2), took the extra step of running
+`supabase test db` for real — Docker was available locally, and NOTES.md's
+own history shows this suite has repeatedly been skipped ("CI-only", "no
+Docker") across this project's life. That decision paid off immediately:
+a genuinely broken migration timestamp collision
+(`20260718040000_holdings.sql` vs `20260718040000_transaction_set_date.sql`)
+blocked `supabase db reset` outright with a hard `schema_migrations` PK
+violation — invisible on the live cloud DB (no migration-history table
+there to enforce uniqueness, per INFRA.md) but fatal locally. Found and
+fixed THREE such collisions total (renamed the later-authored file in each
+pair to a unique timestamp, verified no other references first):
+`20260718040000` (holdings.sql / transaction_set_date.sql →
+`20260718041000`), `20260718050000` (holdings_fixes.sql /
+credential_delete_guard.sql → `20260718051000`), `20260718060000`
+(holdings_fixes_2.sql / reconnect_dedupe.sql → `20260718061000`). None of
+these three collisions are related to tonight's reanchor-guard work —
+they're accumulated fallout from multiple parallel sessions working the
+same day and independently picking round-hour timestamps. Fixing them was
+necessary just to get a clean local migration replay at all, and benefits
+every future local/CI run, not just tonight's verification.
+
+With a clean reset, the real pgTAP run surfaced one more genuine, unrelated
+bug directly in this PR's neighborhood: `keel_apply_account_balance` had
+TWO overloads live (7-arg and 8-arg) because `20260717220000_account_mask.sql`
+added an 8th parameter via `create or replace function` — which Postgres
+treats as defining a NEW function when the argument list changes, silently
+orphaning the old 7-arg version instead of replacing it (the exact same
+failure mode PR #60's own `keel_worker_complete_attempt` change would have
+hit, had it not been fixed with a proper drop+recreate). Confirmed the
+orphaned 7-arg overload was truly dead — the only real caller
+(`worker/index.ts:934`) always passes all 8 named parameters, so production
+was never actually broken — but it was a live landmine for any future
+positional or partial caller, and it's what made `015_reanchor_balance.sql`
+fail with a "not unique" ambiguity error. Dropped the dead overload.
+
+Also fixed one export gap that genuinely was mine: `paychecks.superseded_by_paycheck_id`
+(added in tonight's earlier PR #59) was in the TS-side export manifest
+(`packages/exports/src/manifest.ts`) but never added to this separate
+SQL-side pgTAP allowlist — missed because I never actually ran `supabase
+test db` when fixing that finding either. The underlying `paychecks` export
+DTO (`keel_export_household_pre_reimbursements`) uses generic `to_jsonb(x)`
+whole-row conversion, so the data itself was already exported correctly;
+only the test's allowlist was stale.
+
+Explicitly NOT fixed, confirmed pre-existing and unrelated to this PR via
+migration dates (left for whoever owns that work): `008_export.sql` still
+has 6 tables never classified INCLUDE/EXCLUDE (`household_notes`,
+`documents`, `document_versions`, `document_attachments`, `holdings`,
+`household_tasks` — from the notes/tasks, documents, and holdings features)
+and one more unclassified column (`accounts.mask`, from
+`20260717220000_account_mask.sql`); `023_reconnect_dedupe.sql` fails with
+a permission-denied error on `connections` (needs `grant update on
+connections to authenticated`, from the reconnect-dedupe feature merged
+from a parallel session today). All three are real gaps but out of scope
+here — flagging so they don't get lost.
+
+After all of the above, `supabase test db` runs clean for every file this
+PR touches (`006_c5c_partial_complete.sql`, `015_reanchor_balance.sql`,
+and `008_export.sql`'s two assertions that were actually in scope). Full
+verification loop repeated once more end to end: `pnpm build` clean,
+`pnpm test` 811 passing, both verifiers clean, all migrations reapplied
+live and confirmed via `pg_proc`.
