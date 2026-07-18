@@ -17,6 +17,7 @@ import {
   NORMALIZER_VERSION,
   detectRecurringSeries,
   mapHoldingsGetToKeel,
+  mapInvestmentsTransactionsToKeel,
   planEvent,
   reconcileSyncBatch,
   type CanonicalTxnView,
@@ -49,6 +50,12 @@ import {
 
 const MAX_ATTEMPTS = 5;
 const VISIBILITY_TIMEOUT_S = 8;
+// Investment transactions (F-013): /investments/transactions/get is
+// offset-paginated. Bound the pages pulled per connection per invocation so a
+// single connection can't monopolize a refresh cycle; the window advances and
+// the next cron continues.
+const INVESTMENT_TXN_PAGE_SIZE = 100;
+const MAX_INVESTMENT_TXN_PAGES = 5;
 const MAX_PAGES_PER_INVOCATION = 5;
 const MAX_MUTATION_RESTARTS = 3;
 const SYNC_LEASE_TTL_S = 30;
@@ -867,6 +874,8 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
 
   const results: Array<{ connectionId: string; accounts: number; error?: string }> = [];
   const holdingsResults: Array<{ connectionId: string; holdings: number; error?: string }> = [];
+  const investmentTxnResults: Array<{ connectionId: string; ingested: number; error?: string }> =
+    [];
   for (const c of (conns ?? []) as Array<{ id: string; household_id: string }>) {
     try {
       const { data: envData } = await admin.rpc('keel_get_connection_credential_envelope', {
@@ -893,6 +902,8 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
       const body = (await plaid.accountsGet(c.id, { access_token: token })) as {
         accounts?: Array<{
           account_id?: string;
+          type?: unknown;
+          subtype?: unknown;
           mask?: unknown;
           balances?: {
             current?: unknown;
@@ -945,17 +956,37 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
       }
       results.push({ connectionId: c.id, accounts: applied });
 
-      // S-inv-1b (docs/harness/plans/investments-v1.md): a separate
-      // try/catch, deliberately -- a holdings failure must never mark the
-      // balance refresh (already applied above) as failed, and skipping
-      // the sync call on ANY error (network, parse, RPC) is the safety
-      // rule: keel_worker_sync_holdings does a full replace, so calling it
-      // with a wrong/partial result because of a bug would wipe correct
-      // existing data. Only call it after a clean parse of a clean fetch.
-      const investmentAccounts = ((dbAccts ?? []) as Array<{ subtype: string | null }>).filter(
-        (a) => typeof a.subtype === 'string' && looksLikeInvestmentAccount(a.subtype),
-      );
-      if (investmentAccounts.length > 0) {
+      // Investment-account detection (F-013): decide by Plaid account `type`
+      // (authoritative) UNIONed with the DB subtype keyword match. A
+      // brokerage cash-management account can arrive as type 'investment' with
+      // a subtype the keyword list misses ('cash management'), so `type` is
+      // the primary signal; subtype keywords catch anything the DB knows about
+      // that the current accountsGet page didn't classify as investment.
+      const investmentRefs = new Set<string>();
+      for (const acct of body.accounts ?? []) {
+        if (
+          typeof acct.account_id === 'string' &&
+          (acct.type === 'investment' ||
+            (typeof acct.subtype === 'string' && looksLikeInvestmentAccount(acct.subtype)))
+        ) {
+          investmentRefs.add(acct.account_id);
+        }
+      }
+      const dbInvestmentRefs = ((dbAccts ?? []) as Array<{ external_ref: string | null; subtype: string | null }>)
+        .filter((a) => typeof a.subtype === 'string' && looksLikeInvestmentAccount(a.subtype))
+        .map((a) => a.external_ref)
+        .filter((r): r is string => typeof r === 'string');
+      for (const ref of dbInvestmentRefs) investmentRefs.add(ref);
+      const hasInvestmentAccounts = investmentRefs.size > 0;
+
+      // (F-014) Holdings sync + error persistence. A separate try/catch,
+      // deliberately -- a holdings failure must never mark the balance refresh
+      // (already applied above) as failed. keel_worker_sync_holdings does a
+      // full replace, so we only call it after a clean parse of a clean fetch;
+      // on ANY error we persist the reason to the connection so the UI can tell
+      // the user to re-link (F-014). On success we clear the error and append a
+      // history snapshot (value-over-time).
+      if (hasInvestmentAccounts) {
         try {
           const holdingsBody = await plaid.investmentsHoldingsGet(c.id, { access_token: token });
           const mapped = mapHoldingsGetToKeel(holdingsBody);
@@ -965,12 +996,90 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
             p_holdings: mapped.holdings,
           });
           if (syncErr) throw new Error(syncErr.message ?? 'holdings sync failed');
+          await admin.rpc('keel_worker_clear_holdings_error', {
+            p_household_id: c.household_id,
+            p_connection_id: c.id,
+          });
+          await admin.rpc('keel_worker_snapshot_holdings', {
+            p_household_id: c.household_id,
+            p_connection_id: c.id,
+          });
           holdingsResults.push({ connectionId: c.id, holdings: (synced as number | null) ?? 0 });
         } catch (he) {
-          holdingsResults.push({
+          const errorCode =
+            he instanceof PlaidClientError ? (he.errorCode ?? 'provider_error') : 'provider_error';
+          const errorMessage = he instanceof Error ? he.message : 'error';
+          await admin.rpc('keel_worker_record_holdings_error', {
+            p_household_id: c.household_id,
+            p_connection_id: c.id,
+            p_error_code: errorCode,
+            p_error_message: errorMessage,
+          });
+          holdingsResults.push({ connectionId: c.id, holdings: 0, error: errorMessage });
+        }
+
+        // (F-013) Investment transactions: /investments/transactions/get is
+        // date-range + offset paginated (NOT cursor-based). Pull a bounded
+        // window since the last successful pull (with overlap) and ingest each
+        // cash-flow / trade into the canonical pipeline idempotently. Separate
+        // try/catch: an investments-transactions failure must not fail the
+        // balance refresh either.
+        try {
+          const { data: windowStart } = await admin.rpc('keel_worker_investment_sync_window', {
+            p_household_id: c.household_id,
+            p_connection_id: c.id,
+            p_overlap_days: 14,
+          });
+          const startDate = typeof windowStart === 'string' ? windowStart : null;
+          const endDate = new Date().toISOString().slice(0, 10);
+          if (startDate) {
+            let offset = 0;
+            let ingested = 0;
+            // Bound the pages per invocation so one connection can't monopolize
+            // the cycle; the next 3-min cron continues from the advanced window.
+            for (let page = 0; page < MAX_INVESTMENT_TXN_PAGES; page += 1) {
+              const invBody = await plaid.investmentsTransactionsGet(c.id, {
+                access_token: token,
+                start_date: startDate,
+                end_date: endDate,
+                options: { count: INVESTMENT_TXN_PAGE_SIZE, offset },
+              });
+              const mappedTxns = mapInvestmentsTransactionsToKeel(invBody);
+              for (const t of mappedTxns.transactions) {
+                const { error: ingestErr } = await admin.rpc('keel_worker_ingest_investment_txn', {
+                  p_household_id: c.household_id,
+                  p_connection_id: c.id,
+                  p_account_external_ref: t.accountExternalRef,
+                  p_provider_transaction_id: t.providerTransactionId,
+                  p_amount_minor: Number(t.amountMinor),
+                  p_currency: t.currency,
+                  p_effective_date: t.date,
+                  p_description: t.description,
+                  p_flow: t.flow,
+                });
+                if (!ingestErr) ingested += 1;
+              }
+              const total =
+                typeof (invBody as { total_investment_transactions?: unknown })
+                  .total_investment_transactions === 'number'
+                  ? (invBody as { total_investment_transactions: number })
+                      .total_investment_transactions
+                  : 0;
+              offset += INVESTMENT_TXN_PAGE_SIZE;
+              if (offset >= total || mappedTxns.transactions.length === 0) break;
+            }
+            await admin.rpc('keel_worker_investment_sync_advance', {
+              p_household_id: c.household_id,
+              p_connection_id: c.id,
+              p_pulled_through: endDate,
+            });
+            investmentTxnResults.push({ connectionId: c.id, ingested });
+          }
+        } catch (te) {
+          investmentTxnResults.push({
             connectionId: c.id,
-            holdings: 0,
-            error: he instanceof Error ? he.message : 'error',
+            ingested: 0,
+            error: te instanceof Error ? te.message : 'error',
           });
         }
       }
@@ -1013,7 +1122,12 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
     classified.push(entry);
   }
 
-  return json(200, { refreshed: results, holdings: holdingsResults, classified });
+  return json(200, {
+    refreshed: results,
+    holdings: holdingsResults,
+    investmentTransactions: investmentTxnResults,
+    classified,
+  });
 };
 
 export default {

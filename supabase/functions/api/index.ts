@@ -128,6 +128,8 @@ const QUERY_TO_PROC: Record<string, string> = {
   'entities.list': 'keel_list_entities',
   'dashboard.cash_flow_forecast': 'keel_cash_flow_forecast',
   'holdings.list': 'keel_list_holdings',
+  'investments.overview': 'keel_investments_overview',
+  'investments.value_daily': 'keel_investments_value_daily',
   'connections.list_reconnect_matches': 'keel_list_reconnect_matches',
 };
 
@@ -2366,6 +2368,12 @@ export default {
           }
           rpcArgs.p_account_id = db.accountId;
         }
+      } else if (query.query === 'investments.value_daily') {
+        const db = body as { from?: unknown; to?: unknown };
+        const past = new Date();
+        past.setUTCDate(past.getUTCDate() - 365);
+        rpcArgs.p_from = isoDate(db.from) ?? past.toISOString().slice(0, 10);
+        rpcArgs.p_to = isoDate(db.to) ?? todayIso;
       }
       const rpcStartedAt = performance.now();
       const { data, error } = await ctx.supabase.rpc(proc, rpcArgs);
