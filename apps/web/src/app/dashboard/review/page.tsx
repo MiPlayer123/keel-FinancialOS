@@ -51,7 +51,7 @@ function today(): string {
 export default function ReviewPage() {
   return (
     <>
-      <PageHeader title="Review" description="Approve or dismiss what the AI suggests." />
+      <PageHeader title="Review" description="Approve or dismiss what KEEL detected." />
       <div className="p-6">
         <ReviewBody />
       </div>
