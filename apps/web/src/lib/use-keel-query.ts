@@ -21,6 +21,15 @@ import { keelQuery, type QueryResult } from '@/lib/keel-api';
  */
 const KEEL_QUERY_KEY = 'keel-query';
 
+/**
+ * Cache key for one `useKeelQuery` read — exported so surfaces that share a
+ * list (Review's suggest→approve queues + the nav ReviewBadge) can target the
+ * exact key for optimistic updates and list-only invalidation (F-003/F-004).
+ */
+export function keelQueryKey(query: string, householdId: string | null) {
+  return [KEEL_QUERY_KEY, query, householdId] as const;
+}
+
 type State<Row> = {
   rows: Row[];
   asOf: string | null;
@@ -37,7 +46,7 @@ export function useKeelQuery<Row>(query: string, householdId: string | null) {
   const queryClient = useQueryClient();
 
   const result = useQuery({
-    queryKey: [KEEL_QUERY_KEY, query, householdId],
+    queryKey: keelQueryKey(query, householdId),
     queryFn: async (): Promise<QueryResult<Row>> => {
       if (!householdId) throw new Error('useKeelQuery: disabled (no household)');
       return keelQuery<Row>(query, householdId);
