@@ -295,8 +295,14 @@ function payeeTotals(rows: RichTransactionRow[]): {
  * month's column total. Share renders only when both sides are positive spend
  * (a net-refund cell's "share" of a month would be nonsense).
  */
-function matrixCellTitle(name: string, mk: string, v: bigint, columnTotal: bigint): string {
-  const base = `${name} · ${monthLabel(mk)}: ${formatMoney(v.toString(), { currency: 'USD' })}`;
+function matrixCellTitle(
+  name: string,
+  mk: string,
+  v: bigint,
+  columnTotal: bigint,
+  currency: string,
+): string {
+  const base = `${name} · ${monthLabel(mk)}: ${formatMoney(v.toString(), { currency })}`;
   if (v > 0n && columnTotal > 0n) {
     return `${base} · ${String(Number((v * 100n) / columnTotal))}% of ${monthLabel(mk)}`;
   }
@@ -1568,7 +1574,13 @@ function ReportsBody() {
                             <td
                               key={m}
                               className="px-2 py-2 text-right"
-                              title={matrixCellTitle(row.name, m, v, matrixMonthTotals.get(m) ?? 0n)}
+                              title={matrixCellTitle(
+                                row.name,
+                                m,
+                                v,
+                                matrixMonthTotals.get(m) ?? 0n,
+                                donutReport.currency,
+                              )}
                             >
                               {v === 0n ? (
                                 <span className="text-muted-foreground">—</span>
@@ -1603,7 +1615,13 @@ function ReportsBody() {
                               <td
                                 key={m}
                                 className="px-2 py-1.5 text-right"
-                                title={matrixCellTitle(child.label, m, v, matrixMonthTotals.get(m) ?? 0n)}
+                                title={matrixCellTitle(
+                                  child.label,
+                                  m,
+                                  v,
+                                  matrixMonthTotals.get(m) ?? 0n,
+                                  donutReport.currency,
+                                )}
                               >
                                 {v === 0n ? (
                                   <span className="text-xs text-muted-foreground">—</span>
