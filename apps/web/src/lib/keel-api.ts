@@ -291,11 +291,16 @@ export type ConnectionRow = {
   isSyncing: boolean;
 };
 
+/** Mirrors keel_cmd_reanchor_balance's staleness cutoff (20260718101500) —
+ * a continuation job that never got picked up (worker crash, permanent
+ * reauth failure) shouldn't leave "Fix balance" permanently disabled. */
+const CONTINUATION_STALE_AFTER_MS = 15 * 60 * 1000;
+
 export async function fetchConnections(householdId: string): Promise<ConnectionRow[]> {
   const { data, error } = await getSupabaseBrowserClient()
     .from('connections')
     .select(
-      'id, provider, status, display_name, institution_id, last_successful_sync_at, sync_desired_generation, sync_committed_generation, sync_continuation_pending',
+      'id, provider, status, display_name, institution_id, last_successful_sync_at, sync_desired_generation, sync_committed_generation, sync_continuation_pending, sync_continuation_marked_at',
     )
     .eq('household_id', householdId)
     .order('created_at', { ascending: false });
@@ -310,17 +315,24 @@ export async function fetchConnections(householdId: string): Promise<ConnectionR
     sync_desired_generation: number;
     sync_committed_generation: number;
     sync_continuation_pending: boolean;
+    sync_continuation_marked_at: string | null;
   };
-  return ((data as Row[] | null) ?? []).map((r) => ({
-    id: r.id,
-    provider: r.provider,
-    status: r.status,
-    displayName: r.display_name,
-    institutionId: r.institution_id,
-    lastSuccessfulSyncAt: r.last_successful_sync_at,
-    isSyncing:
-      r.sync_desired_generation !== r.sync_committed_generation || r.sync_continuation_pending,
-  }));
+  const now = Date.now();
+  return ((data as Row[] | null) ?? []).map((r) => {
+    const continuationFresh =
+      r.sync_continuation_pending &&
+      r.sync_continuation_marked_at !== null &&
+      now - new Date(r.sync_continuation_marked_at).getTime() < CONTINUATION_STALE_AFTER_MS;
+    return {
+      id: r.id,
+      provider: r.provider,
+      status: r.status,
+      displayName: r.display_name,
+      institutionId: r.institution_id,
+      lastSuccessfulSyncAt: r.last_successful_sync_at,
+      isSyncing: r.sync_desired_generation !== r.sync_committed_generation || continuationFresh,
+    };
+  });
 }
 
 /** Trigger an immediate sync for one connection (also drained by the 3-min cron). */
