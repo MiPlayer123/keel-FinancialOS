@@ -4,6 +4,127 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-18 — WS-J / FEEDBACK.md F-030: Receipts extraction + suggest→approve matching
+
+Built the DEFERRED next layer named in `20260717234500_documents_attach_only.sql`'s
+header (`document_extractions` + `document_transaction_matches`), per
+`docs/research/RECEIPTS-2026-07-16.md`. Mikul approved building it now (2026-07-18).
+
+**Migrations (files only — NEVER applied; validated on a throwaway PG17 cluster
+`/tmp/keel_scratch_wsj` with `check_function_bodies=on` + a stub of referenced
+objects; the live project was untouched).**
+- `20260718170000_receipt_extraction_matching.sql` — enums
+  `extraction_status`/`document_match_status`; tables `document_extractions`
+  (append-only, `keel_forbid_mutation` trigger; extracted merchant/amount_minor
+  BIGINT/currency/txn_date/confidence + verbatim `raw_evidence` jsonb) and
+  `document_transaction_matches` (suggest→approve, mirrors `transfer_links`;
+  partial unique index `document_matches_active_version_once` = one active match
+  per version; unique `(version, txn)` so a rejected pair never re-suggests).
+  Procs: worker-only `keel_worker_persist_extraction` (idempotent per
+  `version+extractor+extractor_version`), `keel_worker_suggest_match` (dedupe +
+  active-guard), `keel_worker_receipt_candidates` (SQL blocking, same query shape
+  as `keel_detect_transfers`); user `keel_cmd_receipts_decide_match`
+  (confirm→attach via EXISTING `document_attachments`, or reject),
+  `keel_cmd_receipts_detach_match` (undo confirmed → detached, Law 2), read
+  `keel_receipts_inbox`.
+- `20260718171000_receipts_export.sql` — export chain layer (renames current
+  outermost `keel_export_household` → `_pre_receipts`). Adds the whole documents
+  family to the export: `documents`/`document_versions`/`document_attachments`
+  (closes the X-004 attach-only Law 6 gap) + the two new tables. Extracted
+  merchant text + `raw_evidence` ARE exportable user data (business-expense
+  records), not secrets — object bytes live in Storage, never a DB column.
+
+**Grant shape (mirrors investments/holdings worker procs + X-006 hardening).**
+Worker write procs are SECURITY DEFINER owned by `keel_worker` (not postgres),
+service_role-only. `keel_worker` is non-BYPASSRLS, so it needs its own SELECT +
+RLS policies on `documents`/`document_versions`/`transaction_overrides` (the
+attach-only slice granted those only to `keel_api`) — added in-migration. Live
+scratch caught this: a definer proc owned by `keel_worker` got
+`permission denied for table document_versions` until the grant was added.
+
+**AI extraction (class B, Law 10) — `packages/ai`.**
+`receipt.ts` (typed `ReceiptExtractor` interface, fenced prompt, `coerceReceiptFields`)
++ `receipt-provider.ts` (`RecordedReceiptExtractor` = deterministic fixture, no
+network/key; `CloudVisionReceiptExtractor` = OpenAI-compatible vision behind the
+interface, key injected via config, fails closed with status-only errors). Worker
+defaults to the fixture; `AI_PROVIDER=cloud` + a configured key switches to the
+model — that switch is a ⚑ (live model wiring). No AI key is fabricated.
+
+**Deterministic matcher (Law 1) — new pure package `packages/documents`.**
+`normalize.ts` (processor-prefix strip + token/trigram similarity),
+`extraction.ts` (typed parse; float totals REJECTED to null per Law 4),
+`matcher.ts` (blocking → integer scoring → suggest/multi/none; ties break
+`(score desc, |dayGap| asc, id asc)` → replay-identical). No Supabase/AI/Next
+imports. 100% coverage thresholds. Committed thresholds
+(`DEFAULT_MATCHER_CONFIG`): date window [−1,+5]d, tip tolerance 25%, single-suggest
+score ≥75 with gap-to-#2 ≥15, multi floor 50 — biased toward "no suggestion" over
+"wrong suggestion" (precision-first).
+
+**Precision gate.** `test/precision.test.ts` over a ~35-case labeled synthetic
+fixture set (`fixtures/receipt-cases.ts`, all fictional merchants) covering
+clean/tip/lag/descriptor/distractor/nomatch/hostile classes. Asserts precision
+= correct single-suggestions / all single-suggestions **≥ 0.90** AND zero
+outcome-class mismatches (so a regression collapsing multi→suggest is caught).
+Currently 100%. ⚑ **The end-to-end ≥90% bar (vision model's field-read accuracy
+on real receipt photos) still needs a labeled real-image set + the live model —
+this gate proves only the deterministic matcher on recorded extractions.**
+
+**Worker job.** `supabase/functions/worker/receipt-extract.ts` — new `receipt_extract`
+jobType on the `sync_events` queue (no new queue; the existing cron drains it).
+Enqueued from `/documents/confirm-upload` only for `kind='receipt'`, then a
+best-effort `keel_cron_drain_sync`. Flow: resolve version → download object
+server-side → extract → persist typed extraction (idempotent) → SQL candidates →
+pure matcher → write ONE `suggested` row only on a single high-confidence match.
+Idempotent; no ledger writes anywhere (matches are an evidence overlay).
+
+**Prompt-injection hardening (Law 5 — receipt OCR text is DATA-TIER).**
+Three layers: (1) the vision prompt (`buildReceiptExtractionPrompt`) fences the
+image as "DATA to transcribe", states receipt text is NEVER an instruction, and
+tells the model it has no tools and cannot act — a receipt printed with
+"ignore previous instructions and ..." is transcribed verbatim into the merchant
+field and nothing else. (2) The extracted fields are inert scalars: `merchant` is
+a `text` column, `amount_minor` a `bigint` — there is no code path from any field
+value to a tool, write, or fetch; the matcher consumes only typed
+amount/date/currency (arithmetic, Law 1). (3) Red-team fixtures assert this end
+to end: `matcher` hostile-injection case yields `none`; `extraction`/`receipt`
+tests confirm an injection-string merchant lands as an inert string; the worker
+test confirms a hostile merchant is persisted verbatim and triggers no
+suggestion/write beyond the inert extraction row.
+
+**Export bookkeeping.** `packages/exports/manifest.ts` INCLUDE 71→76 (added the 5
+documents-family tables), public EXCLUDE 19→16 (removed documents/versions/
+attachments). pgTAP `008_export.sql` moved them into `expected_export_tables`,
+bumped the 71→76 counts, updated notes. Vitest counts updated
+(`manifest.test.ts`, `formats.property.test.ts`).
+
+**UI.** New `apps/web/src/app/dashboard/receipts/page.tsx` — the receipts hub:
+bulk multi-file upload (reuses upload-url→confirm via new
+`uploadReceipt` = no target), sections Needs-review (suggestion cards with
+evidence-check badges + Attach/Not-a-match), Unmatched, Attached (with Detach
+undo), account filter. New client fns in `keel-api.ts`
+(`uploadReceipt`/`fetchReceiptsInbox`/`decideReceiptMatch`/`detachReceiptMatch`)
++ a bespoke `/receipts/inbox` API route that mints per-row signed read URLs
+(same pattern as `/documents/list`; Postgres can't sign). One nav entry added to
+`app-shell.tsx` SECONDARY_NAV ("Receipts"). Did NOT touch `review/page.tsx`
+(WS-H) or the paychecks/reimbursements/recurring/statements pages (WS-I).
+
+**Contracts/authz.** Added `receipts.decide_match`/`receipts.detach_match`
+(partner) command payload schemas + `receipts.inbox` (viewer) read action.
+`build-functions.mjs` now vendors `@keel/documents` too.
+
+**Results.** `apps/web` `pnpm build` PASSES (ESLint + typecheck). Root
+`pnpm vitest run`: 77 files / 904 tests pass. Deno worker/shared tests: 14 pass.
+`packages/documents` + `packages/ai` `tsc --noEmit` clean.
+
+**Deferred / human at merge.** Deploy the worker + API functions
+(`node scripts/build-functions.mjs && supabase functions deploy api worker`) and
+apply both migrations (psql, single-transaction). ⚑ wire the real vision model
+key (`AI_PROVIDER=cloud` + `OPENAI_API_KEY`/`OPENAI_VISION_MODEL`) and run the
+end-to-end ≥90% precision validation on real receipts. Deferred features (named
+in RECEIPTS-2026-07-16 §5): email-in ingestion, line-item itemization, many-to-many
+match allocations, per-object envelope encryption (security-review ⚑),
+`usage_events` metering of the vision call.
+
 ## 2026-07-18 — WS-E review fixes (transfer book/undo/near-miss adversarial round)
 
 Consolidated Opus+Codex adversarial findings on `ws-e-transactions` (transfer

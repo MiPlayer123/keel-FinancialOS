@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   LayoutDashboard,
   Wallet,
+  Receipt,
   ReceiptText,
   Repeat,
   PiggyBank,
@@ -73,6 +74,7 @@ const SECONDARY_NAV: NavItem[] = [
   { label: 'Paychecks', href: '/dashboard/paychecks', icon: Banknote },
   { label: 'Reimbursements', href: '/dashboard/reimbursements', icon: ArrowLeftRight },
   { label: 'Statements', href: '/dashboard/statements', icon: FileCheck2 },
+  { label: 'Receipts', href: '/dashboard/receipts', icon: Receipt },
   { label: 'Assistant', href: '/dashboard/assistant', icon: Sparkles },
 ];
 

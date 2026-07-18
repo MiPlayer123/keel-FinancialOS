@@ -2167,3 +2167,132 @@ export async function detachDocument(input: {
     payload: { attachmentId: input.attachmentId, reason: input.reason },
   });
 }
+
+// ---------------------------------------------------------------------------
+// WS-J / F-030: Receipts hub — bulk upload (unattached), extraction + matching
+// inbox, confirm/reject/detach of suggested matches. See
+// docs/research/RECEIPTS-2026-07-16.md.
+// ---------------------------------------------------------------------------
+
+/**
+ * Upload a receipt WITHOUT attaching it to a target. The worker extracts the
+ * fields and (when a single high-confidence transaction lines up) suggests a
+ * match the user confirms in the receipts inbox. Used by the bulk-upload flow.
+ */
+export async function uploadReceipt(input: {
+  householdId: string;
+  entityId: string;
+  file: File;
+}): Promise<{ documentId: string }> {
+  const { householdId, entityId, file } = input;
+  const upload = await invoke<{
+    documentId: string;
+    storageBucket: string;
+    storagePath: string;
+    uploadUrl: string;
+    token: string;
+  }>('api/documents/upload-url', {
+    householdId,
+    entityId,
+    kind: 'receipt',
+    originalFilename: file.name,
+    mimeType: file.type,
+  });
+
+  const { error: uploadError } = await getSupabaseBrowserClient()
+    .storage.from(upload.storageBucket)
+    .uploadToSignedUrl(upload.storagePath, upload.token, file);
+  if (uploadError) throw uploadError;
+
+  const confirmed = await invoke<{ effects: { documentId: string } }>(
+    'api/documents/confirm-upload',
+    {
+      householdId,
+      entityId,
+      documentId: upload.documentId,
+      kind: 'receipt',
+      storageBucket: upload.storageBucket,
+      storagePath: upload.storagePath,
+      originalFilename: file.name,
+      // No targetType/targetId — matching decides the attachment later.
+    },
+  );
+  return confirmed.effects;
+}
+
+export type ReceiptExtractionView = {
+  status: 'pending' | 'extracted' | 'failed';
+  merchant: string | null;
+  amountMinor: string | null;
+  currency: string | null;
+  txnDate: string | null;
+  confidence: number | null;
+  errorCode: string | null;
+} | null;
+
+export type ReceiptMatchView = {
+  matchId: string;
+  status: 'suggested' | 'confirmed';
+  score: number | null;
+  reasonCodes: string[];
+  transactionId: string;
+  txnDescription: string;
+  txnAmountMinor: string | null;
+  txnDate: string;
+  txnAccountName: string;
+} | null;
+
+export type ReceiptInboxRow = {
+  documentId: string;
+  documentVersionId: string;
+  kind: DocumentKind;
+  originalFilename: string;
+  storageBucket: string;
+  storagePath: string;
+  mimeType: string;
+  byteSize: number;
+  createdAt: string;
+  entityId: string;
+  extraction: ReceiptExtractionView;
+  match: ReceiptMatchView;
+  /** Short-lived signed read URL (5 min TTL). */
+  url: string | null;
+};
+
+export async function fetchReceiptsInbox(householdId: string): Promise<ReceiptInboxRow[]> {
+  const res = await invoke<{ rows: ReceiptInboxRow[] }>('api/receipts/inbox', { householdId });
+  return res.rows;
+}
+
+/** Confirm (attach) or reject a suggested receipt→transaction match. */
+export async function decideReceiptMatch(input: {
+  householdId: string;
+  userId: string;
+  matchId: string;
+  confirm: boolean;
+}): Promise<CommandResult> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'receipts.decide_match',
+    economicEventKey: `receipts.decide:${input.matchId}:${newId()}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: { matchId: input.matchId, confirm: input.confirm },
+  });
+}
+
+/** Undo a confirmed receipt match (detach — never delete). */
+export async function detachReceiptMatch(input: {
+  householdId: string;
+  userId: string;
+  matchId: string;
+}): Promise<CommandResult> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'receipts.detach_match',
+    economicEventKey: `receipts.detach:${input.matchId}:${newId()}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: { matchId: input.matchId },
+  });
+}
