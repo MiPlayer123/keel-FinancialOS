@@ -351,7 +351,14 @@ function PaycheckCard({
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const reversed = p.status === 'reversed';
-  const editable = p.components.every((c) => V1_EDITABLE_KINDS.includes(c.kind));
+  // The v1 form always prefills/rebuilds a single deposit-1 match (see
+  // save() below), so a paycheck with more than one direct_deposit
+  // component (split across accounts -- only reachable via a direct
+  // API/payroll-provider write) would have its extra deposit match
+  // silently collapsed away on save. Require exactly one.
+  const editable =
+    p.components.every((c) => V1_EDITABLE_KINDS.includes(c.kind)) &&
+    p.components.filter((c) => c.kind === 'direct_deposit').length === 1;
 
   async function transition() {
     if (!householdId || !userId || reason.trim().length === 0) return;

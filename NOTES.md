@@ -3237,3 +3237,43 @@ merged.
 still listed ACTIVE in `list_edge_functions` but was already retired to an
 inert 410 stub in an earlier pass this session — no live secret access,
 left as-is.
+
+## Paycheck editing (task #22) + known deferred gap: source-reuse on edit
+
+Built `paychecks.edit` (PR #59) as reverse-old + create-new inside one
+command, the same shape as `transactions.manual_void` (immutable
+originals, correction is a new record, never an in-place mutation).
+Independent GitHub-native codex review ran 4 rounds against this PR and
+found 5 real bugs, all fixed same-session: two restore-time double-booking
+paths (an edit-superseded paycheck being restored, and the pre-existing
+manual Reverse-then-Create flow re-booking a deposit a reversed paycheck
+still held), a missing export-manifest column
+(`superseded_by_paycheck_id`), the v1 edit form silently corrupting
+paychecks with API/provider-only component shapes (non-deposit matched
+kinds, or split deposits), and a nested `economic_event_key` length
+overflow for non-UI callers near the 256-char contract ceiling.
+
+One 4th-round finding deliberately deferred rather than fixed same-session:
+`paycheck_sources` has a table-wide `unique(household_id, source_kind,
+source_ref, content_hash)` constraint (20260712130000_paychecks.sql:85).
+The edit's source-dedup *business* check was fixed to only count active
+paychecks (20260718090000), but the *physical* unique index isn't scoped
+to active paychecks the same way, so recreating a paycheck that reuses the
+exact same source evidence (same paystub/provider content_hash) as a
+reversed original still trips a physical `unique_violation` (caught
+cleanly as `KEEL_IDEMPOTENCY_CONFLICT`, not an ugly failure, but still
+blocks the edit). Not reachable today: the v1 UI always sources edits as
+`kind:'manual'` with a content_hash derived from the edited KEEL-side body
+(components + match), so the hash changes whenever the match or any
+dollar amount changes — the only way to hit an identical hash is a
+`paystub`/`payroll_provider` sourced record whose external document is
+unchanged across the edit, and no paystub-upload or payroll-provider
+integration exists in this codebase yet (only the schema + command
+surface). Correct fix is a denormalized `paycheck_status` mirror column on
+`paycheck_sources`, kept in sync in `keel_paycheck_transition_core`, with
+the unique constraint rebuilt as a partial index `where
+paycheck_status='active'` (a plain partial index on `paycheck_sources`
+can't reference `paychecks.status` directly — cross-table predicates don't
+auto-update). Deferred rather than rushed into a 5th same-session
+migration on a live ledger table with zero current callers exercising the
+path; flagged here for whoever builds the paystub/provider ingestion path.
