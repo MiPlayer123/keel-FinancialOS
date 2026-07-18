@@ -68,21 +68,29 @@ function SyncStatus({
 }) {
   const [busy, setBusy] = useState(false);
 
-  const synced = connections
-    .filter((c) => c.lastSuccessfulSyncAt !== null)
-    .sort((a, b) => (b.lastSuccessfulSyncAt ?? '').localeCompare(a.lastSuccessfulSyncAt ?? ''));
-  const lastSync = synced[0]?.lastSuccessfulSyncAt ?? null;
-  const connectionId = connections[0]?.id ?? null;
+  const syncableConnections = connections.filter(
+    (connection) => connection.status !== 'disconnected',
+  );
+  const syncTimestamps = syncableConnections.flatMap((connection) =>
+    connection.lastSuccessfulSyncAt ? [connection.lastSuccessfulSyncAt] : [],
+  );
+  const lastSync =
+    syncTimestamps.length === syncableConnections.length
+      ? (syncTimestamps.sort((a, b) => a.localeCompare(b))[0] ?? null)
+      : null;
 
-  if (!connectionId) return null;
+  if (syncableConnections.length === 0) return null;
 
   const ago = lastSync ? agoLabel(lastSync) : null;
 
   async function syncNow() {
-    if (!connectionId) return;
     setBusy(true);
     try {
-      await syncConnection({ householdId, connectionId });
+      await Promise.all(
+        syncableConnections.map((connection) =>
+          syncConnection({ householdId, connectionId: connection.id }),
+        ),
+      );
       toast.success('Sync started — new transactions land within a minute or two.');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Sync failed to start.');
