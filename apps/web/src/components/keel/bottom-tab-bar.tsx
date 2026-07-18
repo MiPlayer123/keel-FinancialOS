@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, ReceiptText, BadgeCheck, Wallet, PiggyBank } from 'lucide-react';
+import { LayoutDashboard, ReceiptText, BadgeCheck, Wallet, BarChart3 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
@@ -13,8 +13,8 @@ type TabItem = { label: string; href: string; icon: LucideIcon };
 /**
  * C17 residual (teardown ledger): a phone-only bottom tab bar. Five
  * destinations, not the full 13-item desktop nav — the small set a phone
- * user actually reaches for one-handed (Home, Ledger, Review, Accounts,
- * Budgets), same icons the desktop sidebar already uses for each so the
+ * user actually reaches for one-handed (Home, Transactions, Review, Accounts,
+ * Reports), same icons the desktop sidebar already uses for each so the
  * mapping is instantly familiar (`app-shell.tsx`'s NAV list).
  *
  * Desktop-first per Law 8: this is a pure ADDITION at phone widths, not a
@@ -24,10 +24,10 @@ type TabItem = { label: string; href: string; icon: LucideIcon };
  */
 const TABS: TabItem[] = [
   { label: 'Home', href: '/dashboard', icon: LayoutDashboard },
-  { label: 'Ledger', href: '/dashboard/ledger', icon: ReceiptText },
+  { label: 'Transactions', href: '/dashboard/ledger', icon: ReceiptText },
   { label: 'Review', href: '/dashboard/review', icon: BadgeCheck },
   { label: 'Accounts', href: '/dashboard/accounts', icon: Wallet },
-  { label: 'Budgets', href: '/dashboard/budgets', icon: PiggyBank },
+  { label: 'Reports', href: '/dashboard/reports', icon: BarChart3 },
 ];
 
 export function BottomTabBar() {

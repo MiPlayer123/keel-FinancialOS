@@ -25,6 +25,7 @@ import { AddAccountDialog } from '@/components/keel/add-account-dialog';
 import { NetWorthHero } from '@/components/keel/net-worth-hero';
 import { RecordTransferDialog } from '@/components/keel/record-transfer-dialog';
 import { ReauthLink } from '@/components/keel/reauth-link';
+import { buttonVariants } from '@/components/ui/button';
 
 type Enriched = AccountRow & {
   kind: string;
@@ -39,7 +40,18 @@ type Enriched = AccountRow & {
 export default function AccountsPage() {
   return (
     <>
-      <PageHeader title="Accounts" description="Everything you own and owe, by type." />
+      <PageHeader
+        title="Accounts"
+        description="Everything you own and owe, by type."
+        actions={
+          <Link
+            href="/dashboard/connections"
+            className={buttonVariants({ variant: 'outline', size: 'sm' })}
+          >
+            Manage connections
+          </Link>
+        }
+      />
       <div className="p-6">
         <AccountsBody />
       </div>
