@@ -3277,3 +3277,79 @@ can't reference `paychecks.status` directly — cross-table predicates don't
 auto-update). Deferred rather than rushed into a 5th same-session
 migration on a live ledger table with zero current callers exercising the
 path; flagged here for whoever builds the paystub/provider ingestion path.
+
+## Production bug: Chase checking balance $2,632.76 off after linking
+
+User report: freshly-linked Chase checking + credit card showed balances
+that didn't match the bank ("random numbers"). Diagnosed live against the
+household's actual data (household `a1ba3759-...`, connection `716d335e-...`,
+accounts `89176108-...` checking / `e92e11e8-...` credit card):
+
+- Credit card was actually fine — ledger balance `-41505` minor matched
+  Plaid's `current_minor` (`41505`) exactly. A misread of an early diagnostic
+  query briefly suggested otherwise; a clean re-query confirmed it reconciled.
+- Chase checking was genuinely wrong: ledger balance `1,425,718` minor vs.
+  Plaid's `1,688,994` minor, a `263,276` minor (**$2,632.76**) gap.
+
+Root cause, traced via `balance_snapshots` + `journal_batches` history: the
+checking account has 554 transactions, which took Plaid ~4 minutes to fully
+backfill (`connections.created_at` 03:26:22 → `last_successful_sync_at`
+03:30:13). During that window the user clicked "Fix balance"
+(`accounts.reanchor_balance`) **12 times in 34 seconds** (03:26:44–03:27:18),
+each visible as a paired `Opening balance (re-anchored)` +
+`REVERSAL: re-anchoring opening balance` batch in the ledger history.
+`keel_cmd_reanchor_balance` computes `opening = provider_balance −
+Σ(journal_postings AS OF RIGHT NOW)` — a moving target while the worker is
+still landing backfill pages. The user's last click (03:27:18) landed ~3
+minutes *before* the sync actually finished, so its correction went stale
+the moment the remaining transactions posted, and nothing re-corrected it
+afterward. Nothing in the product told the user the account was still
+syncing, so repeatedly clicking a stuck-looking "Fix balance" button was a
+completely reasonable thing to do — the bug is in the system, not the click.
+
+**Data fix:** ran `keel_cmd_reanchor_balance` once more for the checking
+account through the real command path (simulating the household owner's
+JWT via `set_config('request.jwt.claim.sub', ...)` for that one call, not a
+raw ledger edit) after confirming via `connections.sync_leased_until`/
+`sync_desired_generation = sync_committed_generation` that the sync was
+fully settled. New ledger balance `1,688,994` minor — exact match to Plaid.
+
+**Root-cause fix** (`20260718100000_reanchor_sync_in_progress_guard.sql`):
+`keel_cmd_reanchor_balance` now rejects outright with a clear
+`KEEL_INVALID_COMMAND` if the account's connection has
+`sync_desired_generation <> sync_committed_generation` (covers queued,
+actively-leased, and partially-committed states) — the same signal
+`keel_apply_account_balance`'s one-time auto-anchor already deferred on,
+now applied to the manual correction path too, which had no such guard.
+This protects every caller (web, future API/MCP), not just the button —
+Law 7. Verified live: temporarily bumping `sync_desired_generation` inside
+a transaction and calling the proc raised the new error and left the
+household's real state untouched (confirmed via SELECT after — the
+statement's own exception aborted the transaction before rollback even
+ran). UI (`apps/web/src/lib/keel-api.ts` `ConnectionRow.isSyncing`,
+`apps/web/src/app/dashboard/accounts/[id]/page.tsx`) now also disables
+"Fix balance" and shows "Syncing…" while a sync is outstanding, so the
+backend rejection is a backstop, not the first thing the user sees.
+
+Initially suspected a residual gap in `keel_apply_account_balance`'s
+auto-anchor gate (`last_successful_sync_at is not null` possibly
+satisfiable by an early/intermediate generation, not just the final one) —
+checked it out rather than leave it speculative. `keel_worker_complete_attempt`
+(20260711155000_c5c_partial_complete.sql:44-51) only stamps
+`last_successful_sync_at = now()` when the worker passes
+`p_fully_synced = true`; a partial page leaves it untouched. Confirmed
+empirically against this exact incident: `canonical_transactions.created_at`
+for the checking account shows a continuous stream (~9-10/sec) from
+03:26:33-03:27:31 covering the bulk of the 554 transactions, then a gap,
+then a final batch of 22 landing 03:30:09-03:30:12 — exactly matching
+`sync_attempts` showing generation 2's first attempt getting orphaned
+(`state='open'`, never promoted) at 03:27:22 and only completing on retry
+at 03:30:12, with generation 3 (the final "nothing more" check) closing out
+at 03:30:13 — the same instant `last_successful_sync_at` landed. So the
+auto-anchor's gate was never actually early; it fired at the true
+completion. The bug was fully isolated to the manual "Fix balance" path
+having no gate at all, which this fix closes — and the transaction-landing
+timeline confirms `sync_desired_generation <> sync_committed_generation`
+would have correctly blocked every one of the user's 12 clicks throughout
+the whole vulnerable window, including the final 22-transaction gap the
+auto-anchor's own gate was already protecting against.
