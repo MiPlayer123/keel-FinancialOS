@@ -69,6 +69,15 @@ const DEDUCTION_KINDS = [
   'rsu_withholding',
   'garnishment',
 ] as const;
+/**
+ * Kinds this v1 form can safely round-trip. A paycheck with a component
+ * outside this set (retirement_401k/hsa/fsa/espp/employer_match -- only
+ * reachable via a direct API/payroll-provider write, never this UI) can't
+ * be edited here: save() only rebuilds a single direct_deposit match and
+ * sums deductions from DEDUCTION_KINDS, so it would silently drop that
+ * component's data and/or fail the backend's net-reconciliation check.
+ */
+const V1_EDITABLE_KINDS: readonly string[] = [...EARNING_KINDS, 'reimbursement', ...DEDUCTION_KINDS, 'direct_deposit'];
 const KIND_LABELS: Record<string, string> = {
   gross_salary: 'Salary / wages',
   bonus: 'Bonus',
@@ -342,6 +351,7 @@ function PaycheckCard({
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const reversed = p.status === 'reversed';
+  const editable = p.components.every((c) => V1_EDITABLE_KINDS.includes(c.kind));
 
   async function transition() {
     if (!householdId || !userId || reason.trim().length === 0) return;
@@ -459,8 +469,11 @@ function PaycheckCard({
               {/* Paychecks are immutable once recorded (correction is
                   reverse + recreate, not an in-place edit) -- so editing
                   only makes sense for an ACTIVE paycheck; a reversed one
-                  has nothing to reverse-and-replace. */}
-              {reversed ? null : (
+                  has nothing to reverse-and-replace. Paychecks with
+                  components outside the v1 form's supported kinds (only
+                  reachable via direct API/payroll-provider writes) also
+                  can't be edited here -- the form can't round-trip them. */}
+              {reversed || !editable ? null : (
                 <Button variant="outline" size="sm" onClick={onEdit}>
                   <Pencil className="size-4" />
                   Edit
@@ -652,7 +665,7 @@ function PaycheckFormDialog({
     }
   }
 
-  const kindOptions = [...EARNING_KINDS, 'reimbursement', ...DEDUCTION_KINDS];
+  const kindOptions = V1_EDITABLE_KINDS.filter((k) => k !== 'direct_deposit');
 
   return (
     <Dialog
