@@ -1,6 +1,8 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import Link from 'next/link';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   BadgeCheck,
   Check,
@@ -17,20 +19,26 @@ import { toast } from 'sonner';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
-import { useKeelQuery } from '@/lib/use-keel-query';
+import { useKeelQuery, keelQueryKey } from '@/lib/use-keel-query';
+import { isUncategorized } from '@/lib/needs-attention';
 import { relativeDueLabel } from '@/lib/relative-date';
 import { resolveSwipeDecision } from '@/lib/swipe';
 import {
   keelCommand,
   newId,
-  keelQuery,
+  categorizeTransaction,
   detectTransfers,
   decideTransfer,
   detectCategorySuggestions,
+  fetchCategories,
+  type CategoryRow,
   type CategorySuggestionRow,
+  type QueryResult,
   type RecurringSeriesRow,
+  type RichTransactionRow,
   type TransferLinkRow,
 } from '@/lib/keel-api';
+import { CategoryPicker } from '@/components/keel/txn-edit-dialog';
 import {
   cadenceLabel,
   categorizationReasonLine,
@@ -39,7 +47,7 @@ import {
 } from '@/lib/recurring-evidence';
 import { groupTransfersByAccountPair } from '@/lib/transfer-grouping';
 import { merchantDisplayName } from '@/lib/merchant-name';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -59,14 +67,31 @@ export default function ReviewPage() {
   );
 }
 
+/** Render cap for the Still-uncategorized list; the ledger link carries the rest. */
+const STILL_UNCATEGORIZED_CAP = 25;
+
 function ReviewBody() {
   const { householdId, userId, ready } = useHousehold();
   const { rows, loading, error, refetch } = useKeelQuery<RecurringSeriesRow>(
     'recurring.list',
     householdId,
   );
+  const removeRecurring = useOptimisticRemove<RecurringSeriesRow>(
+    'recurring.list',
+    householdId,
+    seriesIdOf,
+  );
   const transfers = useTransferSuggestions(householdId);
   const categorizations = useCategorySuggestions(householdId);
+  // F-017 "Still uncategorized": transactions that matched no rule and no
+  // bank category never mint a suggestion, so they'd otherwise never reach
+  // Review. Plain read-model list over the shared transactions.rich cache.
+  const txns = useKeelQuery<RichTransactionRow>('transactions.rich', householdId);
+  const [categories, setCategories] = useState<CategoryRow[]>([]);
+  // Optimistically resolved transactions: hidden from "Still uncategorized"
+  // the moment a direct pick (or an accepted suggestion) succeeds, without
+  // waiting for the transactions.rich refetch to land.
+  const [resolvedTxnIds, setResolvedTxnIds] = useState<Set<string>>(new Set());
   // Bulk approve/dismiss (P0-B follow-up #3): client-side convenience over
   // the SAME audited command as a single decision — one
   // categorization.decide_suggestion call per selected id, never a shortcut
@@ -74,6 +99,34 @@ function ReviewBody() {
   const [catSelecting, setCatSelecting] = useState(false);
   const [catSelected, setCatSelected] = useState<Set<string>>(new Set());
   const [catBulkBusy, setCatBulkBusy] = useState(false);
+
+  useEffect(() => {
+    if (!householdId) return;
+    void fetchCategories(householdId)
+      .then(setCategories)
+      .catch(() => undefined);
+  }, [householdId]);
+
+  const markResolved = useCallback((txnIds: string[]) => {
+    if (txnIds.length === 0) return;
+    setResolvedTxnIds((prev) => {
+      const next = new Set(prev);
+      for (const id of txnIds) next.add(id);
+      return next;
+    });
+  }, []);
+
+  const stillUncategorized = useMemo(() => {
+    const pending = new Set(categorizations.suggested.map((r) => r.canonicalTransactionId));
+    return txns.rows
+      .filter(
+        (t) =>
+          isUncategorized(t) &&
+          !pending.has(t.transactionId) &&
+          !resolvedTxnIds.has(t.transactionId),
+      )
+      .sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate));
+  }, [txns.rows, categorizations.suggested, resolvedTxnIds]);
 
   function toggleCatSelected(id: string) {
     setCatSelected((prev) => {
@@ -86,12 +139,20 @@ function ReviewBody() {
 
   async function bulkDecide(accept: boolean) {
     if (!householdId || !userId || catSelected.size === 0) return;
+    const ids = [...catSelected];
+    // Captured BEFORE optimistic removal — accepted suggestions must also
+    // hide their transaction from "Still uncategorized" below.
+    const txnBySuggestion = new Map(
+      categorizations.suggested.map((r) => [r.suggestionId, r.canonicalTransactionId]),
+    );
     setCatBulkBusy(true);
-    let ok = 0;
-    let failed = 0;
-    for (const suggestionId of catSelected) {
-      try {
-        await keelCommand({
+    // F-003: optimistic removal + parallel decides. Each id is still its own
+    // audited categorization.decide_suggestion command (Law 2) — allSettled
+    // only parallelizes, it never merges decisions.
+    const restore = categorizations.remove(ids);
+    const results = await Promise.allSettled(
+      ids.map((suggestionId) =>
+        keelCommand({
           commandId: newId(),
           command: 'categorization.decide_suggestion',
           // Deterministic per decision, exactly like the single-card action:
@@ -100,26 +161,78 @@ function ReviewBody() {
           actor: { kind: 'user', userId },
           householdId,
           payload: { suggestionId, accept },
-        });
-        ok++;
-      } catch {
-        failed++;
-      }
-    }
+        }),
+      ),
+    );
+    const failed = new Set(ids.filter((_, i) => results[i]?.status === 'rejected'));
+    const ok = ids.length - failed.size;
     setCatBulkBusy(false);
     setCatSelected(new Set());
     setCatSelecting(false);
-    toast[failed > 0 ? 'error' : 'success'](
-      failed > 0
-        ? `${accept ? 'Approved' : 'Dismissed'} ${String(ok)}, ${String(failed)} failed.`
+    // Rollback the failures only — never fake a server success.
+    if (failed.size > 0) restore([...failed]);
+    if (accept) {
+      markResolved(
+        ids
+          .filter((id) => !failed.has(id))
+          .flatMap((id) => {
+            const txnId = txnBySuggestion.get(id);
+            return txnId === undefined ? [] : [txnId];
+          }),
+      );
+    }
+    toast[failed.size > 0 ? 'error' : 'success'](
+      failed.size > 0
+        ? `${accept ? 'Approved' : 'Dismissed'} ${String(ok)}, ${String(failed.size)} failed.`
         : `${accept ? 'Approved' : 'Dismissed'} ${String(ok)} suggestion${ok === 1 ? '' : 's'}.`,
     );
     await categorizations.refetch();
   }
 
+  function categorizeStillUncategorized(
+    txn: RichTransactionRow,
+    categoryLedgerAccountId: string,
+    categoryName?: string,
+  ) {
+    if (!householdId) return;
+    // Optimistic: the row leaves the list now; restored below on failure.
+    markResolved([txn.transactionId]);
+    void (async () => {
+      try {
+        await categorizeTransaction({
+          householdId,
+          transactionId: txn.transactionId,
+          categoryLedgerAccountId,
+        });
+        toast.success(categoryName ? `Filed under ${categoryName}.` : 'Category updated.');
+        await txns.refetch();
+      } catch (err) {
+        setResolvedTxnIds((prev) => {
+          const next = new Set(prev);
+          next.delete(txn.transactionId);
+          return next;
+        });
+        toast.error(err instanceof Error ? err.message : 'Could not update category.');
+      }
+    })();
+  }
+
   const suggested = rows.filter((r) => r.status === 'suggested');
 
-  if (!ready || (loading && transfers.loading && categorizations.loading)) {
+  // F-004: a section has SETTLED only once its list (and, where one exists,
+  // its mount-time detect pass) has finished — OR across loaders, never AND.
+  // Sections with cached rows render immediately; unsettled empty sections
+  // show a skeleton below instead of a false global empty state.
+  const recurringSettled = !loading;
+  const transfersSettled = !transfers.loading;
+  const categorizationsSettled = !categorizations.loading;
+  // Still-uncategorized derives from transactions.rich AND the pending
+  // suggestions list (rows with a pending suggestion are excluded).
+  const stillUncatSettled = !txns.loading && categorizationsSettled;
+  const allSettled =
+    recurringSettled && transfersSettled && categorizationsSettled && stillUncatSettled;
+
+  if (!ready) {
     return (
       <div className="space-y-3">
         {Array.from({ length: 3 }).map((_, i) => (
@@ -129,11 +242,18 @@ function ReviewBody() {
     );
   }
 
-  const nothingRecurring = Boolean(error) || suggested.length === 0;
+  const nothingRecurring = suggested.length === 0;
   const nothingTransfers = transfers.suggested.length === 0;
   const nothingCategorizations = categorizations.suggested.length === 0;
+  const nothingUncategorized = stillUncategorized.length === 0;
 
-  if (error && nothingTransfers && nothingCategorizations) {
+  if (
+    allSettled &&
+    error &&
+    nothingTransfers &&
+    nothingCategorizations &&
+    nothingUncategorized
+  ) {
     return (
       <EmptyState
         icon={<BadgeCheck className="size-6" />}
@@ -143,7 +263,16 @@ function ReviewBody() {
     );
   }
 
-  if (!householdId || (nothingRecurring && nothingTransfers && nothingCategorizations)) {
+  // "All caught up" may render only once EVERY section has settled empty —
+  // never while a slow detect/list pass could still surface items (F-004).
+  if (
+    !householdId ||
+    (allSettled &&
+      nothingRecurring &&
+      nothingTransfers &&
+      nothingCategorizations &&
+      nothingUncategorized)
+  ) {
     return (
       <EmptyState
         icon={<BadgeCheck className="size-6" />}
@@ -155,6 +284,7 @@ function ReviewBody() {
 
   return (
     <div className="space-y-8">
+      {nothingTransfers && !transfersSettled ? <Skeleton className="h-24 w-full" /> : null}
       {transfers.suggested.length > 0 ? (
         <section className="space-y-3">
           <h2 className="text-sm font-medium text-muted-foreground">
@@ -173,6 +303,7 @@ function ReviewBody() {
                   key={first.linkId}
                   links={group}
                   householdId={householdId}
+                  onRemove={() => transfers.remove(group.map((l) => l.linkId))}
                   onDone={() => {
                     void transfers.refetch();
                   }}
@@ -182,6 +313,7 @@ function ReviewBody() {
                   key={first.linkId}
                   link={first}
                   householdId={householdId}
+                  onRemove={() => transfers.remove([first.linkId])}
                   onDone={() => {
                     void transfers.refetch();
                   }}
@@ -192,6 +324,7 @@ function ReviewBody() {
         </section>
       ) : null}
 
+      {nothingRecurring && !recurringSettled ? <Skeleton className="h-24 w-full" /> : null}
       {suggested.length > 0 ? (
         <section className="space-y-3">
           <h2 className="text-sm font-medium text-muted-foreground">
@@ -203,6 +336,7 @@ function ReviewBody() {
               series={series}
               householdId={householdId}
               userId={userId}
+              onRemove={() => removeRecurring([series.seriesId])}
               onDone={() => {
                 void refetch();
               }}
@@ -211,6 +345,9 @@ function ReviewBody() {
         </section>
       ) : null}
 
+      {nothingCategorizations && !categorizationsSettled ? (
+        <Skeleton className="h-24 w-full" />
+      ) : null}
       {categorizations.suggested.length > 0 ? (
         <section className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -297,7 +434,12 @@ function ReviewBody() {
                 onToggle={() => {
                   toggleCatSelected(row.suggestionId);
                 }}
-                onDone={() => {
+                onRemove={() => categorizations.remove([row.suggestionId])}
+                onDone={(accepted) => {
+                  // Accepted → the transaction is categorized server-side;
+                  // keep it out of "Still uncategorized" while the
+                  // transactions.rich refetch is still in flight.
+                  if (accepted) markResolved([row.canonicalTransactionId]);
                   void categorizations.refetch();
                 }}
               />
@@ -305,100 +447,208 @@ function ReviewBody() {
           </LazyMotion>
         </section>
       ) : null}
+
+      {nothingUncategorized && !stillUncatSettled ? <Skeleton className="h-24 w-full" /> : null}
+      {stillUncategorized.length > 0 ? (
+        <section className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-medium text-muted-foreground">
+              Still uncategorized · {stillUncategorized.length}
+            </h2>
+            <Link
+              href="/dashboard/ledger?category=uncategorized"
+              className={buttonVariants({ variant: 'outline', size: 'sm' })}
+            >
+              Open in ledger
+            </Link>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            No rule and no bank category matched these, so there is nothing to approve — pick a
+            category directly. Renames, notes and splits live in the ledger.
+          </p>
+          <Card>
+            <CardContent className="divide-y divide-border p-0">
+              {stillUncategorized.slice(0, STILL_UNCATEGORIZED_CAP).map((t) => (
+                <div
+                  key={t.transactionId}
+                  className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="min-w-0 space-y-0.5">
+                    <p
+                      className="truncate text-sm font-medium"
+                      title={t.originalDescription ?? t.description}
+                    >
+                      {merchantDisplayName(t.description)}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      <Money amountMinor={t.amountMinor} currency={t.currency} /> on{' '}
+                      <span className="font-mono text-xs">{t.effectiveDate}</span>
+                      {' · '}
+                      {t.accountName}
+                    </p>
+                  </div>
+                  <div className="w-full shrink-0 sm:w-56">
+                    <CategoryPicker
+                      row={t}
+                      categories={categories}
+                      wide
+                      onPick={(categoryLedgerAccountId, categoryName) => {
+                        categorizeStillUncategorized(t, categoryLedgerAccountId, categoryName);
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+          {stillUncategorized.length > STILL_UNCATEGORIZED_CAP ? (
+            <p className="text-xs text-muted-foreground">
+              Showing the {STILL_UNCATEGORIZED_CAP} most recent —{' '}
+              <Link
+                href="/dashboard/ledger?category=uncategorized"
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                see all {stillUncategorized.length} in the ledger
+              </Link>
+              .
+            </p>
+          ) : null}
+        </section>
+      ) : null}
     </div>
   );
 }
 
 /**
- * Detect (deterministic, idempotent) then list transfer suggestions.
- * Detection failures degrade to an empty list — the section simply hides
- * until the backend supports it.
+ * Run deterministic detection ONCE on page mount, then refresh the shared
+ * list cache (F-003/F-004). Decisions later invalidate the LIST only — the
+ * detect RPC never re-runs per decision. The returned `detecting` flag holds
+ * the section's loading state until detect + the post-detect list refresh
+ * have settled, so the page can't claim "all caught up" while suggestions
+ * are still landing.
  */
-function useTransferSuggestions(householdId: string | null) {
-  const [rows, setRows] = useState<TransferLinkRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [reload, setReload] = useState(0);
+function useDetectOnMount(
+  query: string,
+  householdId: string | null,
+  detect: (householdId: string) => Promise<number>,
+) {
+  const queryClient = useQueryClient();
+  const [detecting, setDetecting] = useState(true);
 
   useEffect(() => {
     if (!householdId) {
-      setLoading(false);
+      setDetecting(false);
       return;
     }
     let active = true;
+    setDetecting(true);
     void (async () => {
       try {
-        await detectTransfers(householdId).catch(() => 0);
-        const res = await keelQuery<TransferLinkRow>('transfers.list', householdId);
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- flag flips in cleanup
-        if (active) setRows(res.rows);
-      } catch {
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- flag flips in cleanup
-        if (active) setRows([]);
+        // Detection failures degrade to the cached/last list — same contract
+        // as before: the section simply hides, never a broken page.
+        await detect(householdId).catch(() => 0);
+        await queryClient
+          .invalidateQueries({ queryKey: keelQueryKey(query, householdId) })
+          .catch(() => undefined);
       } finally {
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- flag flips in cleanup
-        if (active) setLoading(false);
+        if (active) setDetecting(false);
       }
     })();
     return () => {
       active = false;
     };
-  }, [householdId, reload]);
+  }, [householdId, query, detect, queryClient]);
 
-  return {
-    suggested: rows.filter((r) => r.status === 'suggested'),
-    loading,
-    refetch: () => {
-      setReload((n) => n + 1);
-      return Promise.resolve();
+  return detecting;
+}
+
+/**
+ * Optimistic removal over a shared keel-query list (F-003): drop rows from
+ * the cached QueryResult the moment the user acts; the returned restore puts
+ * back the rows that FAILED (all of them by default) in the server's
+ * original order. This never fakes a server success — callers must restore
+ * on error, and the post-decision invalidation reconciles with server truth.
+ * Because the ReviewBadge reads the SAME cache keys, the nav count moves in
+ * lockstep with every decision (F-004).
+ */
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- Row ties idOf to the cached QueryResult<Row> rows
+function useOptimisticRemove<Row>(
+  query: string,
+  householdId: string | null,
+  idOf: (row: Row) => string,
+) {
+  const queryClient = useQueryClient();
+  return useCallback(
+    (ids: string[]) => {
+      const key = keelQueryKey(query, householdId);
+      // An in-flight refetch (e.g. a previous decision's invalidation) must
+      // not resurrect the row underneath the optimistic update.
+      void queryClient.cancelQueries({ queryKey: key });
+      const prevRows = queryClient.getQueryData<QueryResult<Row>>(key)?.rows ?? [];
+      const drop = new Set(ids);
+      queryClient.setQueryData<QueryResult<Row>>(key, (cur) =>
+        cur ? { ...cur, rows: cur.rows.filter((r) => !drop.has(idOf(r))) } : cur,
+      );
+      return (restoreIds: string[] = ids) => {
+        const keep = new Set(restoreIds);
+        queryClient.setQueryData<QueryResult<Row>>(key, (cur) => {
+          if (!cur) return cur;
+          const present = new Set(cur.rows.map(idOf));
+          return {
+            ...cur,
+            rows: prevRows.filter((r) => present.has(idOf(r)) || keep.has(idOf(r))),
+          };
+        });
+      };
     },
+    [query, householdId, idOf, queryClient],
+  );
+}
+
+const linkIdOf = (r: TransferLinkRow) => r.linkId;
+const suggestionIdOf = (r: CategorySuggestionRow) => r.suggestionId;
+const seriesIdOf = (r: RecurringSeriesRow) => r.seriesId;
+
+/**
+ * Transfer suggestions on the SHARED react-query cache (key
+ * ['keel-query', 'transfers.list', householdId] — the same key the nav
+ * ReviewBadge reads), with detection triggered explicitly on page mount
+ * only. `loading` covers both the list read and the initial detect pass.
+ */
+function useTransferSuggestions(householdId: string | null) {
+  const list = useKeelQuery<TransferLinkRow>('transfers.list', householdId);
+  const detecting = useDetectOnMount('transfers.list', householdId, detectTransfers);
+  const remove = useOptimisticRemove<TransferLinkRow>('transfers.list', householdId, linkIdOf);
+  return {
+    suggested: list.rows.filter((r) => r.status === 'suggested'),
+    loading: list.loading || detecting,
+    remove,
+    refetch: list.refetch,
   };
 }
 
 /**
- * Detect (deterministic, idempotent) then list categorization suggestions.
- * Same degrade contract as useTransferSuggestions: any failure renders as an
- * empty section, never a broken page.
+ * Categorization suggestions — same shared-cache + detect-on-mount contract
+ * as useTransferSuggestions.
  */
 function useCategorySuggestions(householdId: string | null) {
-  const [rows, setRows] = useState<CategorySuggestionRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [reload, setReload] = useState(0);
-
-  useEffect(() => {
-    if (!householdId) {
-      setLoading(false);
-      return;
-    }
-    let active = true;
-    void (async () => {
-      try {
-        await detectCategorySuggestions(householdId).catch(() => 0);
-        const res = await keelQuery<CategorySuggestionRow>(
-          'categorization.suggestions',
-          householdId,
-        );
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- flag flips in cleanup
-        if (active) setRows(res.rows);
-      } catch {
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- flag flips in cleanup
-        if (active) setRows([]);
-      } finally {
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- flag flips in cleanup
-        if (active) setLoading(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [householdId, reload]);
-
+  const list = useKeelQuery<CategorySuggestionRow>('categorization.suggestions', householdId);
+  const detecting = useDetectOnMount(
+    'categorization.suggestions',
+    householdId,
+    detectCategorySuggestions,
+  );
+  const remove = useOptimisticRemove<CategorySuggestionRow>(
+    'categorization.suggestions',
+    householdId,
+    suggestionIdOf,
+  );
   return {
-    suggested: rows.filter((r) => r.status === 'suggested'),
-    loading,
-    refetch: () => {
-      setReload((n) => n + 1);
-      return Promise.resolve();
-    },
+    suggested: list.rows.filter((r) => r.status === 'suggested'),
+    loading: list.loading || detecting,
+    remove,
+    refetch: list.refetch,
   };
 }
 
@@ -436,21 +686,28 @@ function WhyDisclosure({ subject, children }: { subject: string; children: React
 function TransferCard({
   link,
   householdId,
+  onRemove,
   onDone,
 }: {
   link: TransferLinkRow;
   householdId: string;
+  /** Optimistic removal (F-003); returns a restore for the failure path. */
+  onRemove: () => (failedIds?: string[]) => void;
   onDone: () => void;
 }) {
   const [busy, setBusy] = useState<null | 'confirm' | 'reject'>(null);
 
   async function act(confirm: boolean) {
     setBusy(confirm ? 'confirm' : 'reject');
+    // F-003: the card disappears immediately; a failed decide restores it —
+    // the optimistic UI never fakes a server success.
+    const restore = onRemove();
     try {
       await decideTransfer({ householdId, linkId: link.linkId, confirm });
       toast.success(confirm ? 'Marked as a transfer.' : 'Kept as regular transactions.');
       onDone();
     } catch (err) {
+      restore();
       toast.error(err instanceof Error ? err.message : 'Action failed.');
     } finally {
       setBusy(null);
@@ -578,10 +835,13 @@ function TransferCard({
 function RecurringTransferGroupCard({
   links,
   householdId,
+  onRemove,
   onDone,
 }: {
   links: TransferLinkRow[];
   householdId: string;
+  /** Optimistic removal of the whole group (F-003); restore takes the failed ids. */
+  onRemove: () => (failedIds?: string[]) => void;
   onDone: () => void;
 }) {
   const [busy, setBusy] = useState<null | 'confirm' | 'reject'>(null);
@@ -590,20 +850,22 @@ function RecurringTransferGroupCard({
 
   async function actAll(confirm: boolean) {
     setBusy(confirm ? 'confirm' : 'reject');
-    let ok = 0;
-    let failed = 0;
-    for (const link of links) {
-      try {
-        await decideTransfer({ householdId, linkId: link.linkId, confirm });
-        ok++;
-      } catch {
-        failed++;
-      }
-    }
+    // F-003: drop the whole group immediately, decide in parallel
+    // (Promise.allSettled), restore only the failures. Each occurrence still
+    // goes through its own audited keel_decide_transfer call.
+    const restore = onRemove();
+    const results = await Promise.allSettled(
+      links.map((link) => decideTransfer({ householdId, linkId: link.linkId, confirm })),
+    );
+    const failedIds = links
+      .filter((_, i) => results[i]?.status === 'rejected')
+      .map((l) => l.linkId);
+    const ok = links.length - failedIds.length;
     setBusy(null);
-    toast[failed > 0 ? 'error' : 'success'](
-      failed > 0
-        ? `${confirm ? 'Confirmed' : 'Rejected'} ${String(ok)}, ${String(failed)} failed.`
+    if (failedIds.length > 0) restore(failedIds);
+    toast[failedIds.length > 0 ? 'error' : 'success'](
+      failedIds.length > 0
+        ? `${confirm ? 'Confirmed' : 'Rejected'} ${String(ok)}, ${String(failedIds.length)} failed.`
         : `${confirm ? 'Confirmed' : 'Rejected'} ${String(ok)} transfers.`,
     );
     onDone();
@@ -679,6 +941,7 @@ function CategorizationCard({
   selecting,
   selected,
   onToggle,
+  onRemove,
   onDone,
 }: {
   row: CategorySuggestionRow;
@@ -690,7 +953,10 @@ function CategorizationCard({
   selecting?: boolean;
   selected?: boolean;
   onToggle?: () => void;
-  onDone: () => void;
+  /** Optimistic removal (F-003); returns a restore for the failure path. */
+  onRemove: () => (failedIds?: string[]) => void;
+  /** Called on server success only; `accepted` distinguishes accept/dismiss. */
+  onDone: (accepted: boolean) => void;
 }) {
   const [busy, setBusy] = useState<null | 'accept' | 'dismiss'>(null);
   // Raw bank descriptions (not detector fingerprints) — pass through as-is;
@@ -718,6 +984,9 @@ function CategorizationCard({
   async function act(accept: boolean) {
     if (!userId) return;
     setBusy(accept ? 'accept' : 'dismiss');
+    // F-003: the card disappears immediately; a failed decide restores it —
+    // the optimistic UI never fakes a server success.
+    const restore = onRemove();
     try {
       await keelCommand({
         commandId: newId(),
@@ -729,8 +998,9 @@ function CategorizationCard({
         payload: { suggestionId: row.suggestionId, accept },
       });
       toast.success(accept ? `Filed under ${row.suggestedCategoryName}.` : 'Suggestion dismissed.');
-      onDone();
+      onDone(accept);
     } catch (err) {
+      restore();
       toast.error(err instanceof Error ? err.message : 'Action failed.');
     } finally {
       setBusy(null);
@@ -894,11 +1164,14 @@ function SuggestionCard({
   series,
   householdId,
   userId,
+  onRemove,
   onDone,
 }: {
   series: RecurringSeriesRow;
   householdId: string;
   userId: string | null;
+  /** Optimistic removal (F-003); returns a restore for the failure path. */
+  onRemove: () => (failedIds?: string[]) => void;
   onDone: () => void;
 }) {
   const [busy, setBusy] = useState<null | 'confirm' | 'reject'>(null);
@@ -918,6 +1191,9 @@ function SuggestionCard({
     const kind = command === 'recurring.confirm' ? 'confirm' : 'reject';
     setBusy(kind);
     const effectiveDate = today();
+    // F-003: the card disappears immediately; a failed command restores it —
+    // the optimistic UI never fakes a server success.
+    const restore = onRemove();
     try {
       // Payload is exactly {seriesId, effectiveDate(, horizonDays)} — the
       // contracts schemas are .strict(); the candidateVersionHash we used to
@@ -937,6 +1213,7 @@ function SuggestionCard({
       toast.success(kind === 'confirm' ? 'Recurring series confirmed.' : 'Suggestion dismissed.');
       onDone();
     } catch (err) {
+      restore();
       toast.error(err instanceof Error ? err.message : 'Action failed.');
     } finally {
       setBusy(null);
