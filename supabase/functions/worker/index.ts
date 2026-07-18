@@ -47,6 +47,7 @@ import {
   completeSyncAttempt,
   SyncCompletionError,
 } from './sync-completion.ts';
+import { processReceiptExtractJob } from './receipt-extract.ts';
 
 const MAX_ATTEMPTS = 5;
 const VISIBILITY_TIMEOUT_S = 8;
@@ -1267,6 +1268,9 @@ export default {
         outcome = await processSyncNotification(admin, msg);
       } else if (msg.message.jobType === 'recurring_detection') {
         outcome = await processRecurringDetection(admin, msg);
+      } else if (msg.message.jobType === 'receipt_extract') {
+        // WS-J / F-030: receipt extraction (AI class B) + deterministic match.
+        outcome = await processReceiptExtractJob(admin, msg.message.refs);
       } else {
         outcome = { ok: false, detail: `unknown jobType ${msg.message.jobType}` };
       }

@@ -51,6 +51,8 @@ describe('action vocabulary', () => {
       'documents.confirm_upload',
       'documents.detach',
       'documents.delete',
+      'receipts.decide_match',
+      'receipts.detach_match',
       'ledger.trial_balance',
       'transactions.list',
       'recurring.list',
@@ -61,6 +63,7 @@ describe('action vocabulary', () => {
       'statements.list',
       'statements.cadence',
       'documents.list_for_target',
+      'receipts.inbox',
       'audit.read',
       'admin.export_all',
     ]);
