@@ -18,6 +18,7 @@ import {
   Settings,
   Plus,
   Tags,
+  TrendingUp,
 } from 'lucide-react';
 
 import { useHousehold } from '@/components/keel/household-context';
@@ -35,7 +36,8 @@ import {
 const PAGES = [
   { label: 'Home', href: '/dashboard', icon: LayoutDashboard },
   { label: 'Accounts', href: '/dashboard/accounts', icon: Wallet },
-  { label: 'Ledger', href: '/dashboard/ledger', icon: ReceiptText },
+  { label: 'Transactions', href: '/dashboard/ledger', icon: ReceiptText },
+  { label: 'Investments', href: '/dashboard/investments', icon: TrendingUp },
   { label: 'Recurring', href: '/dashboard/recurring', icon: Repeat },
   { label: 'Budgets', href: '/dashboard/budgets', icon: PiggyBank },
   { label: 'Goals', href: '/dashboard/goals', icon: Target },

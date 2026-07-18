@@ -443,6 +443,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   function sidebarInner(isCollapsed: boolean, showCollapseToggle: boolean) {
+    // The mobile drawer is the only caller with showCollapseToggle=false; on
+    // desktop the <aside> (h-dvh overflow-y-auto) is the scroll region, but the
+    // Sheet popup is a plain flex column, so the nav list must scroll itself or
+    // its lower items sit past the viewport unreachable (X-007).
+    const isMobileDrawer = !showCollapseToggle;
     return (
       <div className="flex h-full flex-col">
         <div
@@ -468,7 +473,18 @@ export function AppShell({ children }: { children: ReactNode }) {
           ) : null}
         </div>
 
-        <div className={cn('flex-1', isCollapsed ? 'px-2' : 'px-3')}>
+        <div
+          className={cn(
+            'flex-1',
+            isCollapsed ? 'px-2' : 'px-3',
+            // Constrain + scroll the nav region inside the mobile drawer so
+            // every item is reachable; overscroll-contain keeps the gesture
+            // from chaining to the page, and the safe-area padding clears the
+            // bottom tab bar. Desktop is untouched (the <aside> still scrolls).
+            isMobileDrawer &&
+              'min-h-0 overflow-y-auto overscroll-contain pb-[calc(1rem+env(safe-area-inset-bottom))]',
+          )}
+        >
           <NavLinks
             collapsed={isCollapsed}
             onNavigate={() => {
