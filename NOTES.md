@@ -4425,3 +4425,14 @@ applies at merge.
   @supabase/server module resolution (deploy-time only) — changes are
   string-map + guard additions matching existing patterns; the web build's
   contracts/authz typecheck covers the shared surface.
+
+### X-003 correction (post-review self-catch)
+- CRITICAL: the LIVE keel_cash_flow is the one redefined by the transfers
+  migration (20260713020000, create-or-replace), which ALREADY excludes
+  confirmed transfers (formulaVersion cash-flow-v2-transfer-excluded). My first
+  draft of 20260718160000 rebuilt keel_cash_flow from the OLDER dashboard_readmodel
+  body and would have REGRESSED the transfer exclusion. Fixed: keel_cash_flow now
+  keeps the transfer-exclusion filter AND adds the settlement exclusion
+  (formulaVersion cash-flow-v3-transfer-and-settlement-excluded). Monthly variant
+  was only ever defined in dashboard_trends (already had transfer exclusion) — my
+  recreation preserved it. pgTAP 028 formula-version assertion updated.

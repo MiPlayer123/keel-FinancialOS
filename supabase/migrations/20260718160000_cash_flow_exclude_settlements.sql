@@ -56,6 +56,15 @@ begin
       where b.household_id = p_household_id
         and b.effective_date between p_from and p_to
         and la.kind in ('income', 'expense')
+        -- Preserve the transfer exclusion the live version already applies
+        -- (20260713020000 redefined keel_cash_flow with this filter).
+        and not exists (
+          select 1 from public.transfer_links tl
+          where tl.household_id = p_household_id
+            and tl.status = 'confirmed'
+            and (tl.txn_out = b.canonical_transaction_id
+                 or tl.txn_in = b.canonical_transaction_id)
+        )
         -- X-003: a settled reimbursement deposit is a settlement, not income.
         and not public.keel_is_non_income_settlement(b.household_id, b.canonical_transaction_id)
       group by p.currency
@@ -64,7 +73,7 @@ begin
   return jsonb_build_object(
     'scope', jsonb_build_object('householdId', p_household_id),
     'asOf', to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
-    'formulaVersion', 'cash-flow-v2-settlement-excluded',
+    'formulaVersion', 'cash-flow-v3-transfer-and-settlement-excluded',
     'rows', v_rows
   );
 end;
