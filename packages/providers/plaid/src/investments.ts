@@ -1,3 +1,5 @@
+import { plaidAmountToKeelMinor } from './sign.js';
+
 /** One current position mapped from Plaid's /investments/holdings/get
  *  (holdings + securities arrays joined by security_id). Descriptive only
  *  — this package never touches the ledger; the worker layer decides what
@@ -208,14 +210,31 @@ export const mapInvestmentsTransactionsToKeel = (body: unknown): MappedPlaidInve
       continue;
     }
 
-    const amount = value['amount'];
-    if (typeof amount !== 'number' || !Number.isFinite(amount)) {
+    // Lossless money (Law 4): the worker feeds this mapper a response parsed
+    // with parsePlaidJsonPreservingAmountLexemes, so `amount` is an exact
+    // decimal STRING lexeme (never a JS float). A raw JS number is still
+    // accepted (unit tests / any non-lossless caller) by rendering it to its
+    // exact 2-decimal USD lexeme first. plaidAmountToKeelMinor negates Plaid's
+    // cash-out-positive sign, yielding the account-balance effect in BigInt
+    // minor units — the same conversion /transactions/sync uses.
+    const rawAmount = value['amount'];
+    let amountLexeme: string;
+    if (typeof rawAmount === 'string') {
+      amountLexeme = rawAmount;
+    } else if (typeof rawAmount === 'number' && Number.isFinite(rawAmount)) {
+      amountLexeme = rawAmount.toFixed(2);
+    } else {
       result.skipped.push({ providerTransactionId, reason: 'invalid_amount' });
       continue;
     }
-    // Account-balance effect = negation of Plaid's cash-out-positive amount.
-    const accountEffect = Math.round(-amount * 100);
-    if (accountEffect === 0) {
+    let accountEffect: bigint;
+    try {
+      accountEffect = plaidAmountToKeelMinor(amountLexeme, 'USD');
+    } catch {
+      result.skipped.push({ providerTransactionId, reason: 'invalid_amount' });
+      continue;
+    }
+    if (accountEffect === 0n) {
       result.skipped.push({ providerTransactionId, reason: 'zero_amount' });
       continue;
     }
@@ -233,6 +252,8 @@ export const mapInvestmentsTransactionsToKeel = (body: unknown): MappedPlaidInve
       providerTransactionId,
       amountMinor: accountEffect.toString(),
       currency: 'USD',
+      // (amountMinor is a canonical integer string; the worker passes it
+      // straight to the RPC bigint param — never through Number()).
       date: stringField(value, 'date'),
       description,
       flow: classifyFlow(type, subtype),

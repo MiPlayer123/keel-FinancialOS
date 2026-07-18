@@ -274,6 +274,34 @@ describe('mapInvestmentsTransactionsToKeel', () => {
     expect(result.transactions[0]?.description).toBe('Vanguard Total Stock');
   });
 
+  it('accepts a lossless string amount lexeme (Law 4: no float on the money path)', () => {
+    // The worker feeds this mapper a response parsed with
+    // parsePlaidJsonPreservingAmountLexemes, so `amount` is a decimal STRING.
+    const result = mapInvestmentsTransactionsToKeel({
+      investment_transactions: [invTxn('sx', { amount: '-12.50' })],
+      securities: [],
+    });
+    expect(result.transactions[0]?.amountMinor).toBe('1250');
+  });
+
+  it('converts a lossless string buy amount to a negative account effect', () => {
+    const result = mapInvestmentsTransactionsToKeel({
+      investment_transactions: [
+        invTxn('sy', { type: 'buy', subtype: 'buy', amount: '500.00', name: 'BUY VTI' }),
+      ],
+      securities: [],
+    });
+    expect(result.transactions[0]?.amountMinor).toBe('-50000');
+  });
+
+  it('skips a non-USD-decimal string amount as invalid rather than guessing', () => {
+    const result = mapInvestmentsTransactionsToKeel({
+      investment_transactions: [invTxn('sz', { amount: '12.345' })],
+      securities: [],
+    });
+    expect(result.skipped).toEqual([{ providerTransactionId: 'sz', reason: 'invalid_amount' }]);
+  });
+
   it('rejects a response missing the investment_transactions array', () => {
     expect(() => mapInvestmentsTransactionsToKeel({})).toThrow();
   });

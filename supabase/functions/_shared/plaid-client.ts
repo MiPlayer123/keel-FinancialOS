@@ -8,6 +8,11 @@ import {
   reserveProviderCall,
   type ProviderCallKind,
 } from './plaid-meter.ts';
+// Lossless money boundary (Law 4): investment transactions post to the ledger,
+// so their `amount` must never touch a JS float. Parsing the raw response text
+// through this rewriter turns every `amount` token into a string lexeme before
+// JSON.parse ever sees it — the SAME discipline /transactions/sync uses.
+import { parsePlaidJsonPreservingAmountLexemes } from './vendor/keel-domain.mjs';
 
 export interface PlaidErrorFields {
   error_code: string | null;
@@ -121,7 +126,15 @@ export const createPlaidClient = (
     kind: ProviderCallKind,
     path: string,
     requestBody: Record<string, unknown>,
+    // When true, parse the response WITHOUT letting `amount` fields become JS
+    // numbers (lossless BigInt discipline). Used by /investments/transactions
+    // because those rows post to the ledger.
+    preserveAmountLexemes = false,
   ): Promise<Record<string, unknown>> => {
+    const parseBody = (text: string): Record<string, unknown> =>
+      preserveAmountLexemes
+        ? asRecord(parsePlaidJsonPreservingAmountLexemes(text))
+        : asRecord(JSON.parse(text) as unknown);
     const fetchDenied = Deno.env.get('KEEL_PLAID_FETCH_DENY') === 'true';
     let { data: injected, error: injectionError } = await admin.rpc(
       'keel_consume_plaid_test_response',
@@ -143,7 +156,7 @@ export const createPlaidClient = (
       let body: Record<string, unknown>;
       let result: Record<string, unknown>;
       try {
-        body = asRecord(JSON.parse(injected) as unknown);
+        body = parseBody(injected);
         if (kind === 'item_public_token_exchange') {
           result = {
             access_token: `access-sandbox-${scopeKey}`,
@@ -225,7 +238,9 @@ export const createPlaidClient = (
       );
       let body: Record<string, unknown>;
       try {
-        body = asRecord(await response.json());
+        // Read text (not .json()) so the lossless amount-lexeme parse can run
+        // when requested — money never rides a JS float to the ledger.
+        body = parseBody(await response.text());
       } catch {
         throw new PlaidClientError({ error_code: null, error_type: null, request_id: null });
       }
@@ -296,6 +311,7 @@ export const createPlaidClient = (
         'investments_transactions_get',
         '/investments/transactions/get',
         requestBody,
+        true, // preserve amount lexemes — these rows post to the ledger.
       ),
 
     itemRemove: async (scopeKey, requestBody) => {

@@ -874,8 +874,12 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
 
   const results: Array<{ connectionId: string; accounts: number; error?: string }> = [];
   const holdingsResults: Array<{ connectionId: string; holdings: number; error?: string }> = [];
-  const investmentTxnResults: Array<{ connectionId: string; ingested: number; error?: string }> =
-    [];
+  const investmentTxnResults: Array<{
+    connectionId: string;
+    ingested: number;
+    error?: string;
+    partial?: boolean;
+  }> = [];
   for (const c of (conns ?? []) as Array<{ id: string; household_id: string }>) {
     try {
       const { data: envData } = await admin.rpc('keel_get_connection_credential_envelope', {
@@ -990,32 +994,43 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
         try {
           const holdingsBody = await plaid.investmentsHoldingsGet(c.id, { access_token: token });
           const mapped = mapHoldingsGetToKeel(holdingsBody);
+          // supabase .rpc() resolves { data, error } and does NOT throw on a DB
+          // error, so EVERY new RPC's `error` must be inspected — otherwise a
+          // failed clear/snapshot is silently reported as a successful sync.
           const { data: synced, error: syncErr } = await admin.rpc('keel_worker_sync_holdings', {
             p_household_id: c.household_id,
             p_connection_id: c.id,
             p_holdings: mapped.holdings,
           });
           if (syncErr) throw new Error(syncErr.message ?? 'holdings sync failed');
-          await admin.rpc('keel_worker_clear_holdings_error', {
+          const { error: clearErr } = await admin.rpc('keel_worker_clear_holdings_error', {
             p_household_id: c.household_id,
             p_connection_id: c.id,
           });
-          await admin.rpc('keel_worker_snapshot_holdings', {
+          if (clearErr) throw new Error(clearErr.message ?? 'holdings clear failed');
+          const { error: snapErr } = await admin.rpc('keel_worker_snapshot_holdings', {
             p_household_id: c.household_id,
             p_connection_id: c.id,
           });
+          if (snapErr) throw new Error(snapErr.message ?? 'holdings snapshot failed');
           holdingsResults.push({ connectionId: c.id, holdings: (synced as number | null) ?? 0 });
         } catch (he) {
           const errorCode =
             he instanceof PlaidClientError ? (he.errorCode ?? 'provider_error') : 'provider_error';
           const errorMessage = he instanceof Error ? he.message : 'error';
-          await admin.rpc('keel_worker_record_holdings_error', {
+          const { error: recordErr } = await admin.rpc('keel_worker_record_holdings_error', {
             p_household_id: c.household_id,
             p_connection_id: c.id,
             p_error_code: errorCode,
             p_error_message: errorMessage,
           });
-          holdingsResults.push({ connectionId: c.id, holdings: 0, error: errorMessage });
+          holdingsResults.push({
+            connectionId: c.id,
+            holdings: 0,
+            error: recordErr
+              ? `${errorMessage} (and failed to persist: ${recordErr.message ?? 'record error failed'})`
+              : errorMessage,
+          });
         }
 
         // (F-013) Investment transactions: /investments/transactions/get is
@@ -1025,25 +1040,39 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
         // try/catch: an investments-transactions failure must not fail the
         // balance refresh either.
         try {
-          const { data: windowStart } = await admin.rpc('keel_worker_investment_sync_window', {
-            p_household_id: c.household_id,
-            p_connection_id: c.id,
-            p_overlap_days: 14,
-          });
-          const startDate = typeof windowStart === 'string' ? windowStart : null;
           const endDate = new Date().toISOString().slice(0, 10);
-          if (startDate) {
-            let offset = 0;
+          // Resolve (or resume) the frozen window + starting offset. The proc
+          // returns the SAME window while a prior invocation's pagination is
+          // still in progress, so a >page-cap window can never lose rows.
+          const { data: windowData, error: windowErr } = await admin.rpc(
+            'keel_worker_investment_sync_window',
+            {
+              p_household_id: c.household_id,
+              p_connection_id: c.id,
+              p_end: endDate,
+              p_overlap_days: 14,
+            },
+          );
+          if (windowErr) throw new Error(windowErr.message ?? 'investment window failed');
+          const win = windowData as { from?: string; to?: string; offset?: number } | null;
+          const startDate = win && typeof win.from === 'string' ? win.from : null;
+          const windowTo = win && typeof win.to === 'string' ? win.to : null;
+          if (startDate && windowTo) {
+            let offset = typeof win?.offset === 'number' && win.offset >= 0 ? win.offset : 0;
             let ingested = 0;
+            let total = 0;
+            let anyRowFailed = false;
+            let pagesPulled = 0;
             // Bound the pages per invocation so one connection can't monopolize
-            // the cycle; the next 3-min cron continues from the advanced window.
+            // the cycle; the next 3-min cron RESUMES from the saved offset.
             for (let page = 0; page < MAX_INVESTMENT_TXN_PAGES; page += 1) {
               const invBody = await plaid.investmentsTransactionsGet(c.id, {
                 access_token: token,
                 start_date: startDate,
-                end_date: endDate,
+                end_date: windowTo,
                 options: { count: INVESTMENT_TXN_PAGE_SIZE, offset },
               });
+              pagesPulled += 1;
               const mappedTxns = mapInvestmentsTransactionsToKeel(invBody);
               for (const t of mappedTxns.transactions) {
                 const { error: ingestErr } = await admin.rpc('keel_worker_ingest_investment_txn', {
@@ -1051,29 +1080,74 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
                   p_connection_id: c.id,
                   p_account_external_ref: t.accountExternalRef,
                   p_provider_transaction_id: t.providerTransactionId,
-                  p_amount_minor: Number(t.amountMinor),
+                  // Lossless money: amountMinor is a canonical integer STRING;
+                  // pass it straight to the bigint RPC param (never Number()).
+                  p_amount_minor: t.amountMinor,
                   p_currency: t.currency,
                   p_effective_date: t.date,
                   p_description: t.description,
                   p_flow: t.flow,
                 });
-                if (!ingestErr) ingested += 1;
+                // Finding 3: any ingest error fails this window — do NOT advance
+                // the checkpoint. Idempotency makes the whole window safe to
+                // retry next cycle.
+                if (ingestErr) anyRowFailed = true;
+                else ingested += 1;
               }
-              const total =
+              // Paginate on the Plaid response's AUTHORITATIVE total, never on
+              // the mapped/filtered row count (a fully-skipped page — all rows
+              // cancelled / non-USD / zero — legitimately maps to zero rows yet
+              // offset < total).
+              total =
                 typeof (invBody as { total_investment_transactions?: unknown })
                   .total_investment_transactions === 'number'
                   ? (invBody as { total_investment_transactions: number })
                       .total_investment_transactions
                   : 0;
               offset += INVESTMENT_TXN_PAGE_SIZE;
-              if (offset >= total || mappedTxns.transactions.length === 0) break;
+              if (offset >= total) break;
             }
-            await admin.rpc('keel_worker_investment_sync_advance', {
-              p_household_id: c.household_id,
-              p_connection_id: c.id,
-              p_pulled_through: endDate,
+
+            const windowFullyConsumed = offset >= total;
+            if (anyRowFailed) {
+              // A row failed: leave the frozen window + current offset intact so
+              // the next cycle retries this window from where it stalled. Do not
+              // advance the date checkpoint.
+              await admin.rpc('keel_worker_investment_sync_continue', {
+                p_household_id: c.household_id,
+                p_connection_id: c.id,
+                p_window_from: startDate,
+                p_window_to: windowTo,
+                p_next_offset: offset,
+              });
+            } else if (windowFullyConsumed) {
+              // Whole window paginated cleanly: advance the date checkpoint and
+              // clear the frozen window.
+              await admin.rpc('keel_worker_investment_sync_advance', {
+                p_household_id: c.household_id,
+                p_connection_id: c.id,
+                p_window_from: startDate,
+                p_window_to: windowTo,
+              });
+            } else {
+              // Hit the page cap mid-window: persist the resume offset; the date
+              // checkpoint stays put until the window is fully consumed.
+              await admin.rpc('keel_worker_investment_sync_continue', {
+                p_household_id: c.household_id,
+                p_connection_id: c.id,
+                p_window_from: startDate,
+                p_window_to: windowTo,
+                p_next_offset: offset,
+              });
+            }
+            investmentTxnResults.push({
+              connectionId: c.id,
+              ingested,
+              ...(anyRowFailed ? { error: 'one or more rows failed to ingest' } : {}),
+              ...(!windowFullyConsumed && !anyRowFailed && pagesPulled > 0
+                ? { partial: true }
+                : {}),
             });
-            investmentTxnResults.push({ connectionId: c.id, ingested });
           }
         } catch (te) {
           investmentTxnResults.push({
