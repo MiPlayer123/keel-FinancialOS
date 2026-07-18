@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { ArrowLeftRight, Check, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -107,9 +107,14 @@ export function TransferCounterpartyFlow({
 }) {
   const [counterpartyId, setCounterpartyId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // P1-4: one idempotency nonce per book attempt. A retry of the SAME click
+  // replays; a book→undo→re-book is a fresh attempt (regenerated on success).
+  const bookAttemptKey = useRef(crypto.randomUUID());
 
   // Eligible counterparties: any live account in the same currency that isn't
-  // the source's own account. Manual and connected both qualify (F-012).
+  // the source's own account. Manual and connected both qualify — but the
+  // action offered differs (P0-2): a CONNECTED account can only be MATCHED
+  // (its side arrives on the bank feed); only a MANUAL account may be booked.
   const eligible = useMemo(
     () =>
       accounts.filter(
@@ -126,8 +131,15 @@ export function TransferCounterpartyFlow({
   const counterparty = accounts.find((a) => a.id === counterpartyId) ?? null;
   const accountItems = Object.fromEntries(eligible.map((a) => [a.id, a.name]));
 
+  // P0-2: booking synthesizes a leg — NEVER do that onto a connected account,
+  // the bank feed already delivers that side (double-posting the money). A
+  // connected counterparty is actionable ONLY when a real opposite leg already
+  // matched; otherwise the user leaves it unlinked until the next sync.
+  const counterpartyConnected = counterparty?.connectionId != null;
+  const canProceed = Boolean(counterpartyId) && (match !== null || !counterpartyConnected);
+
   async function confirm() {
-    if (!householdId || !counterpartyId) return;
+    if (!householdId || !counterpartyId || !canProceed) return;
     setBusy(true);
     try {
       if (match) {
@@ -138,11 +150,15 @@ export function TransferCounterpartyFlow({
         });
         toast.success('Linked as a transfer — excluded from income and spending.');
       } else {
+        // Reached only for a MANUAL counterparty (canProceed gate above).
         await bookTransferCounterparty({
           householdId,
           sourceTxnId: row.transactionId,
           counterpartyAccountId: counterpartyId,
+          attemptKey: bookAttemptKey.current,
         });
+        // Fresh nonce so a later book→undo→re-book isn't a stale replay.
+        bookAttemptKey.current = crypto.randomUUID();
         toast.success(
           `Booked the other side on ${counterparty?.name ?? 'the account'} — balances move, nothing double-counts.`,
         );
@@ -216,6 +232,15 @@ export function TransferCounterpartyFlow({
               Linking these two and confirming — both are excluded from cash flow.
             </p>
           </div>
+        ) : counterpartyConnected ? (
+          // P0-2: no match on a CONNECTED account — do NOT book (the bank feed
+          // will deliver the other side). Tell the user it'll arrive on sync;
+          // they leave it unlinked for now.
+          <p className="text-xs text-muted-foreground">
+            No matching transaction on {maskAccountLabel(counterparty.name, null)} yet.
+            Since that account syncs with your bank, the other side of this transfer will
+            arrive with the next sync — link them then. Nothing to book here.
+          </p>
         ) : (
           <p className="text-xs text-muted-foreground">
             No matching transaction on {maskAccountLabel(counterparty?.name ?? '', null)} yet —
@@ -233,7 +258,7 @@ export function TransferCounterpartyFlow({
         <Button
           type="button"
           size="sm"
-          disabled={busy || !counterpartyId}
+          disabled={busy || !canProceed}
           onClick={() => {
             void confirm();
           }}

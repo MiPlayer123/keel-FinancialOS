@@ -91,6 +91,16 @@ import { Textarea } from '@/components/ui/textarea';
 // with it too); re-exported here so existing consumers keep their import path.
 export { isUncategorized } from '@/lib/needs-attention';
 
+/**
+ * A category is a "Transfers" category if it carries the seeded pfc_key
+ * (rename-proof) or is literally named Transfers (pre-key fallback). Shared so
+ * both the compact row picker and the detail picker route a Transfers pick
+ * into the counterparty flow instead of writing a one-sided tag (F-012, P1-6).
+ */
+function isTransferCategoryRow(c: Pick<CategoryRow, 'name' | 'pfcKey'>): boolean {
+  return c.pfcKey === 'transfers' || c.name.trim().toLowerCase() === 'transfers';
+}
+
 export type ListCallbacks = {
   onRecategorize: (txnId: string, categoryId: string) => void;
   onEdit: (row: RichTransactionRow) => void;
@@ -250,6 +260,12 @@ export function TxnList({
               row={t}
               categories={categories}
               auto={isAutoCategorized(t)}
+              // P1-6: the compact row picker must NOT write a one-sided
+              // "Transfers" tag. Picking Transfer here opens the detail Sheet,
+              // where the counterparty flow (match / book) runs.
+              onTransferPick={() => {
+                onEdit(t);
+              }}
               onPick={(catId) => {
                 onRecategorize(t.transactionId, catId);
               }}
@@ -322,6 +338,7 @@ export function CategoryPicker({
   row,
   categories,
   onPick,
+  onTransferPick,
   wide,
   createEntityId,
   auto,
@@ -329,6 +346,17 @@ export function CategoryPicker({
   row: RichTransactionRow;
   categories: CategoryRow[];
   onPick: (categoryLedgerAccountId: string, categoryName?: string) => void;
+  /**
+   * F-012 / P1-6 / P1-7: picking "Transfers" is never a one-sided category
+   * write — it opens the counterparty flow. When provided, this is called
+   * instead of onPick for a Transfers pick, and the "Transfer" affordance is
+   * offered as a single DIRECTION-NEUTRAL option (outside the income/expense
+   * kind filter, so an inflow row can reach it too — P1-7). Transfer
+   * categories are removed from the ordinary kind groups so a silent one-sided
+   * tag is impossible. When omitted (a caller with no flow host), Transfers
+   * simply doesn't appear — the pick can only happen through the detail Sheet.
+   */
+  onTransferPick?: () => void;
   /** Full-width dialog variant; default is the compact ledger-row trigger. */
   wide?: boolean;
   /**
@@ -362,10 +390,27 @@ export function CategoryPicker({
   // name resolvable) immediately, before the parent refetches categories.
   const [created, setCreated] = useState<CategoryRow[]>([]);
 
-  const merged = useMemo(() => {
+  const allMerged = useMemo(() => {
     const known = new Set(categories.map((c) => c.ledgerAccountId));
     return [...categories, ...created.filter((c) => !known.has(c.ledgerAccountId))];
   }, [categories, created]);
+
+  // A "Transfer" category exists on the taxonomy (any entity/kind). Used to
+  // decide whether to show the direction-neutral Transfer affordance (P1-7).
+  const hasTransferCategory = useMemo(
+    () => allMerged.some((c) => isTransferCategoryRow(c)),
+    [allMerged],
+  );
+
+  // Transfers are handled by the counterparty flow, never as a plain category
+  // pick — drop them from the ordinary groups in EVERY picker so a one-sided
+  // tag is impossible anywhere (P1-6, incl. the Review page). Callers that can
+  // host the flow pass onTransferPick and get the direction-neutral "Transfer"
+  // affordance below; callers that can't simply don't surface Transfers.
+  const merged = useMemo(
+    () => allMerged.filter((c) => !isTransferCategoryRow(c)),
+    [allMerged],
+  );
 
   // Only offer categories matching the transaction's direction (income/expense).
   const options = useMemo(
@@ -543,8 +588,28 @@ export function CategoryPicker({
             autoFocus
           />
           <CommandList>
-            {groups.length === 0 && !canCreate ? (
+            {groups.length === 0 && !canCreate && !(onTransferPick && hasTransferCategory) ? (
               <CommandEmpty>No matching category.</CommandEmpty>
+            ) : null}
+            {/* P1-6/P1-7: direction-neutral Transfer affordance. Available to
+                inflow AND outflow rows (outside the kind filter). Picking it
+                opens the counterparty flow — the one-sided overlay is never
+                written. Filtered by the query like a real option would be. */}
+            {onTransferPick &&
+            hasTransferCategory &&
+            (trimmed.length === 0 || 'transfer'.includes(trimmed.toLowerCase())) ? (
+              <CommandGroup heading="Transfer">
+                <CommandItem
+                  value="transfer:flow"
+                  onSelect={() => {
+                    setOpen(false);
+                    onTransferPick();
+                  }}
+                >
+                  <ArrowLeftRight className="size-4" />
+                  <span className="truncate">Transfer between accounts…</span>
+                </CommandItem>
+              </CommandGroup>
             ) : null}
             {trimmed.length === 0 && recentOptions.length > 0 ? (
               <CommandGroup heading="Recent">
@@ -882,14 +947,6 @@ function TxnEditForm({
     } finally {
       setSaving(false);
     }
-  }
-
-  // A picked category is a "Transfers" category if it carries the seeded
-  // pfc_key (rename-proof) or is literally named Transfers (pre-key fallback).
-  function isTransferCategory(categoryId: string): boolean {
-    const c = categories.find((x) => x.ledgerAccountId === categoryId);
-    if (!c) return false;
-    return c.pfcKey === 'transfers' || c.name.trim().toLowerCase() === 'transfers';
   }
 
   async function undoTransferLink() {
@@ -1282,14 +1339,13 @@ function TxnEditForm({
                   // Once picked in THIS session the badge would be stale —
                   // saving always writes source='user' regardless of pick.
                   auto={!picked && isAutoCategorized(row)}
+                  // F-012 / P1-7: picking "Transfers" opens the counterparty
+                  // step (direction-neutral, so an inflow row reaches it too)
+                  // instead of writing a one-sided classification tag.
+                  onTransferPick={() => {
+                    setTransferFlow(true);
+                  }}
                   onPick={(catId, catName) => {
-                    // Picking "Transfers" is not a plain recategorize: intercept
-                    // with the counterparty step (F-012). The one-sided overlay
-                    // is never written.
-                    if (isTransferCategory(catId)) {
-                      setTransferFlow(true);
-                      return;
-                    }
                     setPicked({
                       id: catId,
                       name:

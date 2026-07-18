@@ -837,11 +837,18 @@ export async function bookTransferCounterparty(input: {
   householdId: string;
   sourceTxnId: string;
   counterpartyAccountId: string;
+  /**
+   * Per-attempt idempotency nonce (P1-4). A retry of the SAME click replays to
+   * the same booked leg; a book→undo→re-book uses a FRESH key and is a new
+   * attempt, so undo no longer wedges re-booking.
+   */
+  attemptKey: string;
 }): Promise<{ effects?: { linkId?: string; bookedTxnId?: string } }> {
   return invoke('api/transfers/book', {
     householdId: input.householdId,
     sourceTxnId: input.sourceTxnId,
     counterpartyAccountId: input.counterpartyAccountId,
+    attemptKey: input.attemptKey,
   });
 }
 

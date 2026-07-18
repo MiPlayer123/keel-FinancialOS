@@ -1899,7 +1899,18 @@ export default {
       const householdId = HouseholdIdSchema.safeParse(input['householdId']);
       const sourceTxnId = CanonicalTransactionIdSchema.safeParse(input['sourceTxnId']);
       const counterpartyAccountId = AccountIdSchema.safeParse(input['counterpartyAccountId']);
-      if (!householdId.success || !sourceTxnId.success || !counterpartyAccountId.success) {
+      // P1-4: per-attempt idempotency nonce (like the manual-transaction
+      // attemptKey). A retry of the SAME click dedupes; a book→undo→re-book is
+      // a fresh attempt, no longer wedged by a permanent stale key.
+      const attemptKey = input['attemptKey'];
+      if (
+        !householdId.success ||
+        !sourceTxnId.success ||
+        !counterpartyAccountId.success ||
+        typeof attemptKey !== 'string' ||
+        attemptKey.trim().length < 1 ||
+        attemptKey.length > 100
+      ) {
         return json(400, {
           code: 'invalid_command',
           message: 'Transfer book request failed validation.',
@@ -1912,6 +1923,7 @@ export default {
           p_household_id: householdId.data,
           p_source_txn_id: sourceTxnId.data,
           p_counterparty_account_id: counterpartyAccountId.data,
+          p_attempt_key: attemptKey,
         },
       );
       if (bookError) return mapDbError(bookError);
