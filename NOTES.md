@@ -3652,3 +3652,51 @@ the same naming convention as the one that was actually vulnerable.
 A dedicated pass auditing every SECURITY DEFINER function's grants against
 its actual internal auth checks would be worth doing separately; flagging
 here rather than expanding this PR further.
+
+## Follow-up #7: a real but bounded, self-recovering residual gap -- deferred
+
+Eighth review round found one more real issue in the 15-minute
+continuation-staleness escape hatch (follow-up #2), narrower than
+follow-ups #4/#5: if a continuation has been genuinely stuck for over 15
+minutes (worker outage, queue backlog) AND its `sync_notification` job is
+STILL sitting in the `sync_events` pgmq queue (not abandoned, just
+delayed) AND a user uses the staleness escape hatch to reanchor during
+that window, the reanchor computes a "corrected" balance against
+whatever's currently posted -- then, if that stale queued job eventually
+gets picked up and processed, it resumes from the old cursor and posts
+the remaining transactions, silently invalidating the just-computed
+opening balance a second time. Neither follow-up #4's row lock (only
+fences transitions starting *during* the reanchor transaction) nor
+follow-up #5's lease check (only catches a lease *already held right now*)
+sees this, because nothing in the database can currently distinguish "this
+continuation is truly abandoned" from "this continuation is delayed but
+still queued" -- that distinction only exists in pgmq's queue state, which
+`keel_cmd_reanchor_balance` has no way to inspect or act on.
+
+Traced what a correct fix would actually require before deciding whether
+to attempt it: `keel_enqueue` (20260710210400_events_audit_queues.sql:69-72)
+is a thin `select pgmq.send(...)` wrapper: the message ID `pgmq.send`
+returns is never captured or persisted anywhere (the TS caller in
+`sync-completion.ts` doesn't store it). So genuinely canceling a specific
+stale continuation's queued message -- the fix the reviewer suggested --
+isn't a small change; it needs new bookkeeping (persist the pgmq message
+ID at enqueue time, likely a new column) plus a new cancellation path
+(`pgmq.delete`/`pgmq.archive` keyed off that ID) plus its own test
+coverage. That's meaningfully more scope than a follow-up fix within an
+already-long single-session PR chain.
+
+Assessed the actual severity before deciding to defer rather than rush a
+new pgmq-touching mechanism: this is NOT a repeat of the original silent-
+permanent-corruption bug. The delayed continuation's eventual completion
+still runs `keel_worker_complete_attempt` normally, correctly settling
+`sync_committed_generation`/`last_successful_sync_at`/clearing
+`sync_continuation_pending` -- so the very next "Fix balance" click after
+that (whether the user notices unprompted, or is told to check again)
+recomputes against the now-genuinely-complete ledger and lands on the
+correct number. The gap is a possible *second* wrong-then-self-correcting
+balance in a narrow window (continuation stuck >15min AND later actually
+delivered AND reanchored via the staleness hatch in between), not a
+permanent, undetectable corruption. Deferred with this reasoning
+documented rather than expanding pgmq-touching scope this late in an
+already extensively-verified PR chain; flagged here for whoever next
+touches this continuation-tracking system.
