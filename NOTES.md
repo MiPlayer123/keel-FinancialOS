@@ -4,6 +4,90 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-18 — WS-E review fixes (transfer book/undo/near-miss adversarial round)
+
+Consolidated Opus+Codex adversarial findings on `ws-e-transactions` (transfer
+counterparty flow). Migrations 20260718130000 / 131000 were UNAPPLIED — edited
+in place. No DB writes; a throwaway PG17 cluster on port 54329
+(`/tmp/keel_scratch_wse`, stubbed helpers since pgmq/pgTAP aren't installable
+here) validated function syntax (`check_function_bodies=on`) and each new guard
+functionally; the live project was touched READ-ONLY only.
+
+- **P0-1 read-only roles could move the ledger.** All three procs
+  (`keel_book_transfer_counterparty`, `keel_link_and_confirm_transfer`,
+  `keel_undo_transfer`) checked household membership only. Replaced with
+  `keel_assert_member_write` (rejects viewer/professional; command_procs.sql:63).
+  `v_uid` now derives from `keel_actor_from_jwt`. Edge routes need no parallel
+  change — the DB is the authority and the assert raises P0005.
+- **P0-2 booking onto a connected account double-posts.** The book path accepted
+  any same-household account; a synthetic leg on a Plaid account duplicates what
+  the feed delivers. Server: `keel_book_transfer_counterparty` now requires
+  `accounts.connection_id IS NULL` (typed P0009 otherwise). UI
+  (transfer-counterparty-flow.tsx): a connected counterparty offers ONLY the
+  match path; with no match it tells the user the other side arrives on the next
+  sync and offers to leave it unlinked — the Book button is disabled
+  (`canProceed`).
+- **P0-3 concurrency race → one txn in two active links.** Added partial unique
+  indexes `transfer_links_active_out_once` / `_active_in_once` on
+  `(txn_out|txn_in) where status in ('suggested','confirmed')`. link/confirm +
+  book catch `unique_violation` → KEEL_INVALID_COMMAND. **Live READ-ONLY safety
+  check: zero existing rows violate either index (22 confirmed links, none
+  double-sided).** Verified on scratch: a second active link on the same txn_out
+  raises unique_violation; the detector's `on conflict (txn_out,txn_in)` inserts
+  still work because its `linked` CTE excludes already-active txns.
+- **P1-4 undo wedged re-booking.** The idempotency key was permanently
+  `transfer.book:<src>`. Rebound to a client per-attempt nonce
+  (`transfer.book:<src>:<attemptKey>`, like the manual-txn attemptKey). Traced
+  UI (TransferCounterpartyFlow `bookAttemptKey` ref, regenerated on success) →
+  api route (`/transfers/book` validates `attemptKey`) → proc (`p_attempt_key`,
+  4th arg; signature changed, but the fn was unapplied so create-or-replace is
+  clean; all grant lines updated to the 4-arg sig). Double-booking still blocked
+  by the "already part of an active transfer" check + P0-3 indexes. Verified
+  rebook-after-undo with a fresh nonce succeeds on scratch.
+- **P1-5 voiding a booked/manual transfer leg left a dangling confirmed link.**
+  Recreated `keel_cmd_manual_void` (SAME signature → create-or-replace) inside
+  130000 with an added guard: reject the void when the txn is in an active
+  (suggested|confirmed) transfer link (P0009, "undo the transfer first"). UI:
+  the Void button is already gated to `source==='manual'` and the transfer
+  block hides the picker; booked legs are surfaced with Undo, not Void.
+- **P1-6 inline/compact picker bypassed the flow.** The row-level + Review-page
+  `CategoryPicker` wrote a one-sided Transfers tag. Transfer categories are now
+  filtered out of EVERY plain picker; a direction-neutral "Transfer…" affordance
+  routes into the counterparty flow via a new `onTransferPick` prop (compact row
+  opens the detail Sheet; detail picker opens the transfer step). A silent
+  one-sided tag is now impossible anywhere.
+- **P1-7 income-side rows couldn't reach Transfers.** The affordance is now
+  OUTSIDE the income/expense kind filter, so an inflow row reaches it. Verified
+  an inflow source books a NEGATIVE counterparty leg (pgTAP case added; scratch
+  confirmed a +$150 inflow books a -$150 leg oriented as txn_in).
+- **P2-8 BIGINT-min negation/abs overflow.** Guarded in the book proc
+  (`v_src.amount_minor = -9223372036854775808` → KEEL_INVALID_MONEY) and in the
+  near-miss detector (excluded from both `cash` CTEs before any `-x`/`abs`).
+- **P2-9 pgTAP gaps.** 024 extended: 99/100-boundary inclusive (diff==cap
+  suggested) + one-over exclusive; rejected-pair persistence. 025 extended:
+  viewer + professional rejection (book/undo/link-confirm); non-member;
+  null-JWT fail-closed; connected-account book rejection; empty-nonce rejection;
+  rebook-after-undo with fresh nonce; second-undo leaves one reversal;
+  matched-pair undo leaves bank postings byte-identical; void-blocked-while-
+  linked; inflow-direction booking. Added a manual Cash-Jar fixture (both seeded
+  accounts are connected, so the book path needed a manual target).
+- **P2-10 locked-period typed precheck.** Book proc now mirrors
+  `keel_cmd_manual_transaction`'s KEEL_PERIOD_LOCKED precheck against the booked
+  leg's effective_date (undo reversal reuses the original leg's date, still
+  guarded by the posting trigger backstop).
+
+Contract amendment (stabilized-not-frozen): `keel_book_transfer_counterparty`
+gains a required `p_attempt_key text` 4th arg (P1-4). Both migrations remain in
+the 20260718130000–131000 range and UNAPPLIED — they go to the live project via
+the normal psql path at deploy time.
+
+Build/test: `apps/web pnpm build` green; `pnpm vitest run` 811/811; deno
+`_shared`/`worker` tests 14/59-steps green. `deno check` of the api function
+fails only on the pre-existing npm-resolution quirk (unrelated to this change;
+the esbuild vendor bundle builds fine).
+
+---
+
 ## 2026-07-10 — Session 1 (Stage 1A kickoff)
 
 ### Decisions

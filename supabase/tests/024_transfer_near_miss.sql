@@ -76,7 +76,24 @@ values
    'posted', 'sync', 'Exact in', '2026-07-14', 'pgtap:nm:s5inexact'),
   ('d4000000-0000-4000-8000-00000000000b', '00000000-0000-4000-8000-00000000a001',
    '00000000-0000-4000-8000-00000000a101', '00000000-0000-4000-8000-00000000a402',
-   'posted', 'sync', 'Near-miss in (loses)', '2026-07-15', 'pgtap:nm:s5innear');
+   'posted', 'sync', 'Near-miss in (loses)', '2026-07-15', 'pgtap:nm:s5innear'),
+-- S6 BOUNDARY at the $1.00 cap: -$200.00 out / +$199.00 in, 1 day. diff 100,
+-- tol=least(100, floor(20000/100)=200)=100 -> 100 <= 100 -> SUGGESTED (the
+-- boundary is INCLUSIVE, WS-E P2-9 99/100-boundary case).
+  ('d4000000-0000-4000-8000-00000000000c', '00000000-0000-4000-8000-00000000a001',
+   '00000000-0000-4000-8000-00000000a101', '00000000-0000-4000-8000-00000000a401',
+   'posted', 'sync', 'Boundary out', '2026-07-18', 'pgtap:nm:s6out'),
+  ('d4000000-0000-4000-8000-00000000000d', '00000000-0000-4000-8000-00000000a001',
+   '00000000-0000-4000-8000-00000000a101', '00000000-0000-4000-8000-00000000a402',
+   'posted', 'sync', 'Boundary in (net $1 fee)', '2026-07-19', 'pgtap:nm:s6in'),
+-- S7 JUST OVER the cap: -$300.00 out / +$298.99 in, 1 day. diff 101,
+-- tol=least(100, floor(30000/100)=300)=100 -> 101 > 100 -> NOT suggested.
+  ('d4000000-0000-4000-8000-00000000000e', '00000000-0000-4000-8000-00000000a001',
+   '00000000-0000-4000-8000-00000000a101', '00000000-0000-4000-8000-00000000a401',
+   'posted', 'sync', 'Over-cap out', '2026-07-21', 'pgtap:nm:s7out'),
+  ('d4000000-0000-4000-8000-00000000000f', '00000000-0000-4000-8000-00000000a001',
+   '00000000-0000-4000-8000-00000000a101', '00000000-0000-4000-8000-00000000a402',
+   'posted', 'sync', 'Over-cap in', '2026-07-22', 'pgtap:nm:s7in');
 
 insert into public.journal_batches
   (id, household_id, canonical_transaction_id, description, effective_date, command_id)
@@ -102,7 +119,15 @@ values
   ('d4000000-0000-4000-8000-0000000000ba', '00000000-0000-4000-8000-00000000a001',
    'd4000000-0000-4000-8000-00000000000a', 'S5 in exact', '2026-07-14', 'd4000000-0000-4000-8000-0000000000ea'),
   ('d4000000-0000-4000-8000-0000000000bb', '00000000-0000-4000-8000-00000000a001',
-   'd4000000-0000-4000-8000-00000000000b', 'S5 in near', '2026-07-15', 'd4000000-0000-4000-8000-0000000000eb');
+   'd4000000-0000-4000-8000-00000000000b', 'S5 in near', '2026-07-15', 'd4000000-0000-4000-8000-0000000000eb'),
+  ('d4000000-0000-4000-8000-0000000000bc', '00000000-0000-4000-8000-00000000a001',
+   'd4000000-0000-4000-8000-00000000000c', 'S6 out', '2026-07-18', 'd4000000-0000-4000-8000-0000000000ec'),
+  ('d4000000-0000-4000-8000-0000000000bd', '00000000-0000-4000-8000-00000000a001',
+   'd4000000-0000-4000-8000-00000000000d', 'S6 in', '2026-07-19', 'd4000000-0000-4000-8000-0000000000ed'),
+  ('d4000000-0000-4000-8000-0000000000be', '00000000-0000-4000-8000-00000000a001',
+   'd4000000-0000-4000-8000-00000000000e', 'S7 out', '2026-07-21', 'd4000000-0000-4000-8000-0000000000ee'),
+  ('d4000000-0000-4000-8000-0000000000bf', '00000000-0000-4000-8000-00000000a001',
+   'd4000000-0000-4000-8000-00000000000f', 'S7 in', '2026-07-22', 'd4000000-0000-4000-8000-0000000000ef');
 
 -- Cash leg on a301 (checking, outflows) or a302 (card, inflows); balanced
 -- offset on a317 (expense) / a318 (income). Σ per batch = 0.
@@ -155,14 +180,32 @@ insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amo
   ('d4000000-0000-4000-8000-0000000000bb', '00000000-0000-4000-8000-00000000a302',
    '00000000-0000-4000-8000-00000000a101',  5950, 'USD'),
   ('d4000000-0000-4000-8000-0000000000bb', '00000000-0000-4000-8000-00000000a318',
-   '00000000-0000-4000-8000-00000000a101', -5950, 'USD');
+   '00000000-0000-4000-8000-00000000a101', -5950, 'USD'),
+  -- S6 boundary: -20000 / +19900 (diff 100 == cap 100 -> SUGGESTED)
+  ('d4000000-0000-4000-8000-0000000000bc', '00000000-0000-4000-8000-00000000a301',
+   '00000000-0000-4000-8000-00000000a101', -20000, 'USD'),
+  ('d4000000-0000-4000-8000-0000000000bc', '00000000-0000-4000-8000-00000000a317',
+   '00000000-0000-4000-8000-00000000a101',  20000, 'USD'),
+  ('d4000000-0000-4000-8000-0000000000bd', '00000000-0000-4000-8000-00000000a302',
+   '00000000-0000-4000-8000-00000000a101',  19900, 'USD'),
+  ('d4000000-0000-4000-8000-0000000000bd', '00000000-0000-4000-8000-00000000a318',
+   '00000000-0000-4000-8000-00000000a101', -19900, 'USD'),
+  -- S7 over-cap: -30000 / +29899 (diff 101 > cap 100 -> NOT suggested)
+  ('d4000000-0000-4000-8000-0000000000be', '00000000-0000-4000-8000-00000000a301',
+   '00000000-0000-4000-8000-00000000a101', -30000, 'USD'),
+  ('d4000000-0000-4000-8000-0000000000be', '00000000-0000-4000-8000-00000000a317',
+   '00000000-0000-4000-8000-00000000a101',  30000, 'USD'),
+  ('d4000000-0000-4000-8000-0000000000bf', '00000000-0000-4000-8000-00000000a302',
+   '00000000-0000-4000-8000-00000000a101',  29899, 'USD'),
+  ('d4000000-0000-4000-8000-0000000000bf', '00000000-0000-4000-8000-00000000a318',
+   '00000000-0000-4000-8000-00000000a101', -29899, 'USD');
 
 -- ---------------------------------------------------------------------------
 -- Detection: service path (auth.uid() null -> membership guard skipped).
 -- Tier 1 finds 2 exact pairs (S1, S5-exact); tier 2 finds 1 near-miss (S4).
 -- ---------------------------------------------------------------------------
 select is(public.keel_detect_transfers('00000000-0000-4000-8000-00000000a001'),
-  3, 'detector returns total across both tiers (2 exact + 1 near-miss)');
+  4, 'detector returns total across both tiers (2 exact + 2 near-miss incl. boundary)');
 
 -- (1) Tier 1 unchanged: the exact S1 pair is suggested.
 select is(
@@ -214,18 +257,54 @@ select is(
            or txn_out = 'd4000000-0000-4000-8000-00000000000b')),
   0, 'S5: the near-miss inflow is NOT paired (its only outflow was consumed by tier 1)');
 
--- Exactly the three expected links exist for alpha, nothing spurious.
+-- (6) WS-E P2-9 boundary INCLUSIVE: S6 diff 100 == cap 100 -> suggested.
+select is(
+  (select count(*)::int from public.transfer_links
+    where household_id = '00000000-0000-4000-8000-00000000a001'
+      and txn_out = 'd4000000-0000-4000-8000-00000000000c'
+      and txn_in  = 'd4000000-0000-4000-8000-00000000000d'
+      and status  = 'suggested'),
+  1, 'S6 ($200/$199, diff $1.00 == the $1.00 cap) IS suggested (boundary inclusive)');
+
+-- (7) WS-E P2-9 boundary EXCLUSIVE by one minor unit: S7 diff 101 > cap 100.
+select is(
+  (select count(*)::int from public.transfer_links
+    where household_id = '00000000-0000-4000-8000-00000000a001'
+      and txn_out = 'd4000000-0000-4000-8000-00000000000e'
+      and txn_in  = 'd4000000-0000-4000-8000-00000000000f'),
+  0, 'S7 ($300/$298.99, diff $1.01 > cap) is NOT suggested (one minor unit over)');
+
+-- Exactly the four expected links exist for alpha, nothing spurious.
 select is(
   (select count(*)::int from public.transfer_links
     where household_id = '00000000-0000-4000-8000-00000000a001'),
-  3, 'exactly three links total: two exact + one near-miss, no spurious pairs');
+  4, 'exactly four links total: two exact + two near-miss, no spurious pairs');
 
--- (6) Determinism / idempotency: a second pass creates no duplicates.
+-- (8) Determinism / idempotency: a second pass creates no duplicates.
 select is(public.keel_detect_transfers('00000000-0000-4000-8000-00000000a001'),
   0, 'a second detection pass inserts nothing (idempotent)');
 select is(
   (select count(*)::int from public.transfer_links
     where household_id = '00000000-0000-4000-8000-00000000a001'),
-  3, 'link count is stable across re-detection (deterministic replay)');
+  4, 'link count is stable across re-detection (deterministic replay)');
+
+-- (9) WS-E P2-9 REJECTED-pair persistence: reject the S6 near-miss pair, then
+-- re-detect. The rejected pair must NOT be re-suggested (the detector's
+-- rejected-pair guard), and no other spurious pair takes its place.
+update public.transfer_links
+   set status = 'rejected',
+       decided_by = '00000000-0000-4000-8000-000000000001',
+       decided_at = now()
+ where household_id = '00000000-0000-4000-8000-00000000a001'
+   and txn_out = 'd4000000-0000-4000-8000-00000000000c'
+   and txn_in  = 'd4000000-0000-4000-8000-00000000000d';
+select is(public.keel_detect_transfers('00000000-0000-4000-8000-00000000a001'),
+  0, 'a rejected near-miss pair is NOT re-suggested on the next pass (P2-9)');
+select is(
+  (select status::text from public.transfer_links
+    where household_id = '00000000-0000-4000-8000-00000000a001'
+      and txn_out = 'd4000000-0000-4000-8000-00000000000c'
+      and txn_in  = 'd4000000-0000-4000-8000-00000000000d'),
+  'rejected', 'the rejected pair persists as rejected (not flipped back to suggested)');
 
 select * from finish();rollback;
