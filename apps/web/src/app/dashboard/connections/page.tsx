@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Link2, RefreshCw, Pencil, Check, X, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -46,6 +47,7 @@ export default function ConnectionsPage() {
 
 function ConnectionsBody() {
   const { householdId, userId, ready } = useHousehold();
+  const queryClient = useQueryClient();
   const [rows, setRows] = useState<ConnectionRow[] | null>(null);
   const [matches, setMatches] = useState<ReconnectMatchRow[]>([]);
   const [dedupingId, setDedupingId] = useState<string | null>(null);
@@ -75,6 +77,23 @@ function ConnectionsBody() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const anyConnectionSyncing = rows?.some((connection) => connection.isSyncing) ?? false;
+  useEffect(() => {
+    if (!householdId || !anyConnectionSyncing) return;
+    let active = true;
+    const interval = setInterval(() => {
+      void fetchConnections(householdId)
+        .then((connections) => {
+          if (active) setRows(connections);
+        })
+        .catch(() => {});
+    }, 7_500);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [householdId, anyConnectionSyncing]);
 
   async function dedupe(match: ReconnectMatchRow) {
     if (!householdId || !userId) return;
@@ -107,17 +126,26 @@ function ConnectionsBody() {
     try {
       await disconnectConnection({ householdId, connectionId });
       toast.success('Disconnected.');
-      await load();
+      await Promise.all([load(), queryClient.invalidateQueries({ queryKey: ['keel-query'] })]);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not disconnect.');
     }
   }
 
-  async function sync(connectionId: string) {
+  async function sync(connection: ConnectionRow) {
     if (!householdId) return;
-    setSyncingId(connectionId);
+    if (connection.isSyncing) {
+      toast.info('Sync already in progress');
+      return;
+    }
+    setSyncingId(connection.id);
     try {
-      await syncConnection({ householdId, connectionId });
+      await syncConnection({ householdId, connectionId: connection.id });
+      setRows(
+        (current) =>
+          current?.map((row) => (row.id === connection.id ? { ...row, isSyncing: true } : row)) ??
+          current,
+      );
       toast.success('Syncing — new transactions will appear shortly.');
       // Give the worker a moment, then refresh the row's sync time.
       setTimeout(() => {
@@ -135,7 +163,7 @@ function ConnectionsBody() {
     try {
       await renameConnection({ householdId, connectionId, displayName: editName });
       setEditingId(null);
-      await load();
+      await Promise.all([load(), queryClient.invalidateQueries({ queryKey: ['keel-query'] })]);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not rename.');
     }
@@ -275,10 +303,19 @@ function ConnectionsBody() {
                     </button>
                   )}
                   <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <RefreshCw className="size-3" />
-                    {c.lastSuccessfulSyncAt
-                      ? `Synced ${new Date(c.lastSuccessfulSyncAt).toLocaleString()}`
-                      : 'Not synced yet'}
+                    {c.isSyncing ? (
+                      <>
+                        <Loader2 className="size-3 animate-spin" />
+                        {c.lastSuccessfulSyncAt ? 'Syncing…' : 'Initial sync in progress…'}
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="size-3" />
+                        {c.lastSuccessfulSyncAt
+                          ? `Synced ${new Date(c.lastSuccessfulSyncAt).toLocaleString()}`
+                          : 'Not synced yet'}
+                      </>
+                    )}
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-3">
@@ -290,17 +327,17 @@ function ConnectionsBody() {
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={syncingId === c.id}
+                        disabled={c.isSyncing || syncingId === c.id}
                         onClick={() => {
-                          void sync(c.id);
+                          void sync(c);
                         }}
                       >
-                        {syncingId === c.id ? (
+                        {c.isSyncing || syncingId === c.id ? (
                           <Loader2 className="size-4 animate-spin" />
                         ) : (
                           <RefreshCw className="size-4" />
                         )}
-                        Sync now
+                        {c.isSyncing ? 'Syncing…' : syncingId === c.id ? 'Starting…' : 'Sync now'}
                       </Button>
                       <DisconnectDialog
                         label={c.displayName ?? c.institutionId ?? c.provider}

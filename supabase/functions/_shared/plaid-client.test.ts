@@ -1,5 +1,6 @@
 import {
   createPlaidClient,
+  PlaidClientError,
   ProviderBudgetExhaustedError,
 } from './plaid-client.ts';
 
@@ -15,6 +16,38 @@ const assertEquals = (actual: unknown, expected: unknown): void => {
   const right = JSON.stringify(expected);
   if (left !== right) throw new Error(`${left} !== ${right}`);
 };
+
+Deno.test('Plaid client preserves diagnostic rate-limit error codes', () => {
+  const limitCodes = [
+    'ACCOUNTS_LIMIT',
+    'ACCOUNTS_BALANCE_GET_LIMIT',
+    'ADDITION_LIMIT',
+    'AUTH_LIMIT',
+    'BALANCE_LIMIT',
+    'CREDITS_EXHAUSTED',
+    'IDENTITY_LIMIT',
+    'INSTITUTIONS_GET_LIMIT',
+    'INSTITUTIONS_GET_BY_ID_LIMIT',
+    'INSTITUTION_RATE_LIMIT',
+    'INVESTMENT_HOLDINGS_GET_LIMIT',
+    'INVESTMENT_TRANSACTIONS_LIMIT',
+    'ITEM_GET_LIMIT',
+    'RATE_LIMIT',
+    'TRANSACTIONS_LIMIT',
+    'TRANSACTIONS_REFRESH_LIMIT',
+    'TRANSACTIONS_SYNC_LIMIT',
+    'TRIAL_CONNECTION_LIMIT',
+  ];
+
+  for (const errorCode of limitCodes) {
+    const error = new PlaidClientError({
+      error_code: errorCode,
+      error_type: 'RATE_LIMIT_EXCEEDED',
+      request_id: null,
+    });
+    assertEquals(error.errorCode, errorCode);
+  }
+});
 
 Deno.test('C6 Plaid client meters and reserves at the network boundary', async (test) => {
   await test.step('construction rejects every env outside sandbox|production', () => {

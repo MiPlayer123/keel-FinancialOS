@@ -68,24 +68,46 @@ function SyncStatus({
 }) {
   const [busy, setBusy] = useState(false);
 
-  const synced = connections
-    .filter((c) => c.lastSuccessfulSyncAt !== null)
-    .sort((a, b) => (b.lastSuccessfulSyncAt ?? '').localeCompare(a.lastSuccessfulSyncAt ?? ''));
-  const lastSync = synced[0]?.lastSuccessfulSyncAt ?? null;
-  const connectionId = connections[0]?.id ?? null;
+  const syncableConnections = connections.filter(
+    (connection) => connection.status !== 'disconnected',
+  );
+  const syncTimestamps = syncableConnections.flatMap((connection) =>
+    connection.lastSuccessfulSyncAt ? [connection.lastSuccessfulSyncAt] : [],
+  );
+  // Oldest successful sync among connections that HAVE synced — a connection
+  // still awaiting its first sync shouldn't hide real freshness info.
+  const lastSync = syncTimestamps.sort((a, b) => a.localeCompare(b))[0] ?? null;
+  const firstSyncPending = syncTimestamps.length < syncableConnections.length;
 
-  if (!connectionId) return null;
+  if (syncableConnections.length === 0) return null;
 
   const ago = lastSync ? agoLabel(lastSync) : null;
 
   async function syncNow() {
-    if (!connectionId) return;
     setBusy(true);
     try {
-      await syncConnection({ householdId, connectionId });
-      toast.success('Sync started — new transactions land within a minute or two.');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Sync failed to start.');
+      // allSettled: one connection failing to kick off must not abort or
+      // misreport the ones that did start (review P2-1).
+      const results = await Promise.allSettled(
+        syncableConnections.map((connection) =>
+          syncConnection({ householdId, connectionId: connection.id }),
+        ),
+      );
+      const fulfilled = results.filter((r) => r.status === 'fulfilled').length;
+      if (fulfilled === results.length) {
+        toast.success('Sync started — new transactions land within a minute or two.');
+      } else if (fulfilled > 0) {
+        toast.warning(
+          `Synced ${String(fulfilled)} of ${String(results.length)} connections — retry for the rest.`,
+        );
+      } else {
+        const firstRejection: unknown = results.find(
+          (r): r is PromiseRejectedResult => r.status === 'rejected',
+        )?.reason;
+        toast.error(
+          firstRejection instanceof Error ? firstRejection.message : 'Sync failed to start.',
+        );
+      }
     } finally {
       setBusy(false);
     }
@@ -93,7 +115,9 @@ function SyncStatus({
 
   return (
     <span className="flex items-center gap-2 text-xs text-muted-foreground">
-      {ago ? `Updated ${ago}` : 'Syncs automatically'}
+      {ago
+        ? `Updated ${ago}${firstSyncPending ? ' · first sync pending' : ''}`
+        : 'Syncs automatically'}
       <Button
         variant="ghost"
         size="sm"
