@@ -3600,3 +3600,55 @@ whole computation. This is a lot of layered defense for one function —
 worth noting for whoever next touches `keel_cmd_reanchor_balance` that
 each layer exists because a specific, real, verified race was found
 through it, not speculative hardening.
+
+## Follow-up #6: a real, live, pre-existing security hole (not caused by PR #60, but exposed by it)
+
+Seventh review round on PR #60 caught the most severe finding of the
+night, and it's not about `keel_cmd_reanchor_balance` at all:
+`keel_apply_account_balance` (SECURITY DEFINER, owned by `keel_worker`,
+no `keel_assert_member_write` or any auth check inside it -- by design,
+meant to be called ONLY by the trusted worker context) had EXECUTE
+granted to `PUBLIC`, `anon`, AND `authenticated`. Confirmed live via
+`information_schema.routine_privileges` before touching anything: any
+caller with the publishable key, or any logged-in user, could RPC this
+function directly with an arbitrary `p_household_id`/`p_account_id` and
+write a fake `balance_snapshots` row and/or book a fake opening-balance
+journal entry for **any household's account** -- a cross-tenant
+financial-integrity hole, not just a permissions gap.
+
+Root cause: `20260712190000_account_balances.sql`'s original `grant
+execute ... to service_role` was never paired with the `revoke all ...
+from public, anon, authenticated` this codebase uses everywhere else for
+worker-only SECURITY DEFINER functions (e.g. `keel_worker_complete_attempt`).
+PostgreSQL grants EXECUTE to PUBLIC by default on function creation; an
+*additional* grant to `service_role` doesn't remove that default. Every
+later touch of this function (`credit_limit.sql`'s 7-arg version,
+`account_mask.sql`'s 8-arg version) inherited the same gap, since none of
+them added the missing revoke either. This has been live and exploitable
+since `account_mask.sql` shipped (2026-07-17), well before tonight --
+follow-up #3's drop of the orphaned 7-arg overload didn't create this
+vulnerability, but it did make the vulnerable 8-arg version the sole
+remaining implementation, so fixed it as part of this PR rather than
+leaving it for a separate one.
+
+Fixed with `revoke all ... from public, anon, authenticated; grant
+execute ... to service_role;` on the current 8-arg signature, matching
+this codebase's established pattern elsewhere. Verified immediately via
+the same `information_schema.routine_privileges` query: only `postgres`
+and `service_role` remain.
+
+Given the severity, spot-checked (not a full audit) every other
+`keel_worker_%`/`keel_apply_%` SECURITY DEFINER function for the same
+class of gap (`PUBLIC`/`anon`/`authenticated` execute with no internal
+auth check). One more hit: `keel_apply_rules` grants `authenticated` --
+but it has its own real auth check (`if auth.uid() is not null and not
+exists(select 1 from household_memberships where ...) then raise
+KEEL_NOT_FOUND`), deliberately allowing NULL-`auth.uid()` system/cron
+callers through while still rejecting an authenticated user outside the
+target household. Confirmed safe as designed, not touched.
+
+This spot-check was NOT exhaustive -- it only covered functions matching
+the same naming convention as the one that was actually vulnerable.
+A dedicated pass auditing every SECURITY DEFINER function's grants against
+its actual internal auth checks would be worth doing separately; flagging
+here rather than expanding this PR further.
