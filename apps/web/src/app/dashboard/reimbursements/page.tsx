@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeftRight, Plus, Loader2, ChevronRight, Undo2 } from 'lucide-react';
+import { ArrowLeftRight, Plus, Loader2, ChevronRight, Undo2, Sparkles, Info } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
@@ -11,7 +11,7 @@ import { useKeelQuery } from '@/lib/use-keel-query';
 import { fetchEntities, keelCommand, newId, type RichTransactionRow } from '@/lib/keel-api';
 import { TxnPicker } from '@/components/keel/txn-picker';
 import { AttachmentsSection } from '@/components/keel/attachments-section';
-import { parseSignedDollars } from '@/lib/hash';
+import { parseSignedDollars, minorToDollars } from '@/lib/hash';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -77,6 +77,10 @@ function ReimbursementsBody() {
   const [creating, setCreating] = useState(false);
   const [openDetail, setOpenDetail] = useState<string | null>(null);
   const [settling, setSettling] = useState<ClaimRow | null>(null);
+  // When a suggested exact-amount inflow launches the settle flow, pre-fill it.
+  const [settlePrefill, setSettlePrefill] = useState<{ txnId: string; amountMinor: string } | null>(
+    null,
+  );
   // Reimbursement claims have no entity_id of their own; same
   // first-entity fallback as paychecks (personal households have exactly one).
   const [entityId, setEntityId] = useState<string | null>(null);
@@ -96,6 +100,41 @@ function ReimbursementsBody() {
     () => new Map(txns.rows.map((t) => [t.transactionId, t])),
     [txns.rows],
   );
+
+  // Suggest-approve (class B): an inflow whose amount exactly equals an open
+  // claim's remaining balance is very likely that claim's repayment. Surface a
+  // pre-filled settle action here — never auto-post. Inflows already consumed
+  // by any active settlement are ineligible so we never double-suggest.
+  // Computed above the early returns so hook order stays stable.
+  const suggestions = useMemo(() => {
+    const activeClaims = rows.filter((c) => c.status !== 'reversed');
+    const settledTxnIds = new Set(
+      activeClaims.flatMap((c) =>
+        c.settlements.filter((s) => s.status === 'active').map((s) => s.transactionId),
+      ),
+    );
+    const out: { claim: ClaimRow; txn: RichTransactionRow }[] = [];
+    const claimed = new Set<string>();
+    for (const c of activeClaims) {
+      if (c.status !== 'open') continue;
+      const remaining = BigInt(c.remainingMinor);
+      if (remaining <= 0n) continue;
+      const match = txns.rows.find(
+        (t) =>
+          t.currency === c.currency &&
+          !t.amountMinor.startsWith('-') &&
+          t.amountMinor !== '0' &&
+          BigInt(t.amountMinor) === remaining &&
+          !settledTxnIds.has(t.transactionId) &&
+          !claimed.has(t.transactionId),
+      );
+      if (match) {
+        claimed.add(match.transactionId);
+        out.push({ claim: c, txn: match });
+      }
+    }
+    return out;
+  }, [rows, txns.rows]);
 
   if (!ready || loading) {
     return (
@@ -137,14 +176,57 @@ function ReimbursementsBody() {
         </Button>
       </div>
 
+      {suggestions.length > 0 ? (
+        <div className="space-y-2 rounded-lg border border-border bg-secondary/30 p-3">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <Sparkles className="size-4 text-muted-foreground" />
+            Likely repayments
+          </div>
+          <p className="text-xs text-muted-foreground">
+            These deposits match an open claim to the cent. Review and settle — nothing is
+            recorded until you confirm.
+          </p>
+          {suggestions.map(({ claim: c, txn }) => (
+            <div
+              key={`${c.claimId}:${txn.transactionId}`}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2"
+            >
+              <div className="min-w-0 text-sm">
+                <span className="font-medium">{c.counterpartyName}</span>
+                <span className="text-muted-foreground"> · {txn.description}</span>{' '}
+                <Money amountMinor={txn.amountMinor} currency={txn.currency} />
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setSettlePrefill({ txnId: txn.transactionId, amountMinor: c.remainingMinor });
+                  setSettling(c);
+                }}
+              >
+                Record repayment
+              </Button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       {active.length === 0 ? (
         <EmptyState
           icon={<ArrowLeftRight className="size-6" />}
-          title="No open claims"
-          description="Create a claim from any expense — a shared dinner, a work cost, an expected refund."
+          title="No open claims yet"
+          description="A reimbursement isn't income — it's money coming back for an expense you already paid. Create a claim from any expense (a shared dinner, a work cost, an expected refund) and when the money lands, settle the claim so it never inflates your income."
         />
       ) : (
         <div className="space-y-2">
+          <div className="flex items-start gap-2 rounded-md border border-border bg-secondary/20 px-3 py-2 text-xs text-muted-foreground">
+            <Info className="mt-0.5 size-3.5 shrink-0" />
+            <span>
+              A claim tracks money owed against the original expense. When the repayment
+              deposit arrives, &ldquo;record money received&rdquo; settles the claim — it
+              reduces what&rsquo;s owed and is deliberately kept out of your income totals.
+            </span>
+          </div>
           {active.map((c) => (
             <ClaimCard
               key={c.claimId}
@@ -183,14 +265,17 @@ function ReimbursementsBody() {
       />
       <SettleDialog
         claim={settling}
+        prefill={settlePrefill}
         txns={txns.rows}
         householdId={householdId}
         userId={userId}
         onClose={() => {
           setSettling(null);
+          setSettlePrefill(null);
         }}
         onSettled={() => {
           setSettling(null);
+          setSettlePrefill(null);
           void refetch();
         }}
       />
@@ -568,6 +653,7 @@ function CreateClaimDialog({
 
 function SettleDialog({
   claim,
+  prefill,
   txns,
   householdId,
   userId,
@@ -575,6 +661,7 @@ function SettleDialog({
   onSettled,
 }: {
   claim: ClaimRow | null;
+  prefill: { txnId: string; amountMinor: string } | null;
   txns: RichTransactionRow[];
   householdId: string | null;
   userId: string | null;
@@ -586,12 +673,15 @@ function SettleDialog({
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
 
-  // Never carry claim A's draft into claim B's dialog.
+  // Never carry claim A's draft into claim B's dialog. When a suggestion
+  // launched the dialog, seed the matched deposit + amount for one-click confirm.
+  const prefillTxnId = prefill?.txnId ?? null;
+  const prefillAmountMinor = prefill?.amountMinor ?? null;
   useEffect(() => {
-    setTxnId(null);
-    setAmount('');
+    setTxnId(prefillTxnId);
+    setAmount(prefillAmountMinor ? minorToDollars(prefillAmountMinor) : '');
     setNote('');
-  }, [claim?.claimId]);
+  }, [claim?.claimId, prefillTxnId, prefillAmountMinor]);
 
   async function settle() {
     if (!householdId || !userId || !claim || !txnId) return;

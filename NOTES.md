@@ -4309,3 +4309,57 @@ it; gitignored, not a WS-H regression).
 --single-transaction); run `supabase test db` (incl. new 028); deploy the `api`
 edge function (QUERY_TO_PROC additions); Vercel auto-deploys web on merge to
 main (dep + lockfile already committed).
+---
+
+## WS-I (F-025/F-026/F-028/F-029/X-003) — money features (2026-07-18)
+
+Worktree: keel-wt/ws-i, branch ws-i-money-features. Migrations authored as
+FILES ONLY (timestamps 20260718160000–169999); NEVER applied. Orchestrator
+applies at merge.
+
+### X-003 / F-026 income bug (fix first)
+- Root cause: `keel_is_non_income_settlement(household,txn)` exists but is
+  never called by any read model. `keel_cash_flow` (20260712160000) and
+  `keel_cash_flow_monthly` (20260713030000) both sum `la.kind='income'`
+  postings; a settled reimbursement deposit posts to an income ledger
+  account (worker default = Uncategorized Income) so it wrongly counts as
+  income.
+- Fix (20260718160000): drop+recreate BOTH read models (changed-body
+  create-or-replace is fine — signatures unchanged, but I DROP first to be
+  explicit and safe re the "changed body" rule; signatures identical so no
+  overload risk). Add `and not public.keel_is_non_income_settlement(
+  b.household_id, b.canonical_transaction_id)` to the income/expense posting
+  filter. This excludes the whole deposit txn's postings; since the deposit
+  posts only income+asset, and asset isn't in ('income','expense'), only the
+  income leg is filtered — exactly the desired exclusion. Formula version
+  bumped so reproducibility is honest.
+- Scope note: `keel_cash_flow` did NOT previously exclude transfers (only the
+  monthly variant did). I add ONLY the reimbursement exclusion to cash_flow
+  to stay in-scope; the transfer-exclusion asymmetry is pre-existing and left
+  for the read-path owner. Documented, not silently changed.
+- pgTAP 028: settled reimbursement deposit excluded from cash_flow income.
+
+### F-025 paycheck templates + detection (web-only, no migration)
+- Chose "compute on the fly" over populating the dead `paycheck_templates`
+  table: the brief explicitly allows either, and computing from the already-
+  fetched paychecks.list avoids a new write path/proc/idempotency surface for
+  zero user-visible benefit. paycheck_templates stays dead (documented).
+- Template = non-deposit component lines of an employer's most recent ACTIVE
+  paycheck (rows are pay_date desc), keyed by lowercased employer name.
+- Detected-income card: when a recurring inflow's counterparty matches a
+  known employer template, show "Record with your usual breakdown" (primary)
+  + "Start blank" (the old prefill). The breakdown is SCALED to the detected
+  deposit via scaleTemplate() — exact integer arithmetic (round-half-up on a
+  rational), rounding drift pinned to the largest earning line so the server
+  equation reconciles. NOT an LLM (Law 1 safe). Suggest→approve: it only
+  prefills the form; keel_paycheck_create re-checks the math on save (class B).
+- No migration; no new proc. Falls back to template-as-is if scaling can't
+  reconcile, and to blank if no template.
+
+### F-026 reimbursement UX (web-only)
+- Explainer callout above the claim list + richer empty-state (reimbursement
+  != income). Suggest-approve auto-match: an inflow whose amount == an open
+  claim's remaining (same currency, not already consumed by an active
+  settlement, one txn per suggestion) surfaces a "Record repayment" that opens
+  the settle dialog PRE-FILLED (new `prefill` prop on SettleDialog). Never
+  auto-posts. Surfaced on the reimbursements page, not the shared Review page.
