@@ -4143,3 +4143,56 @@ passes; changing its `auth.uid() is null` service-path check risked regressing
 - `deno test _shared + worker` → 14 passed, 0 failed. `node
   scripts/build-functions.mjs` → exit 0.
 - No migration applied to remote; no deploy; no push (worktree only).
+## 2026-07-18 — WS-G: default subcategories, reports rollup, entity grouping (F-016/F-023/F-039)
+
+**How the category seed mechanism actually works (studied before extending):**
+categories enter a household PER ENTITY, not per household.
+`keel_seed_entity_categories(entity_id, household_id)` (20260712200000,
+rewritten 20260713090000) runs from the `entities` AFTER-INSERT trigger
+`keel_seed_entity_default_categories` for every new entity (the three fixture
+entities a101/a102/b101 are explicitly skipped so their deterministic ids and
+category sets survive for pgTAP/integration suites), and the original
+migrations backfilled pre-existing entities with an explicit loop. Idempotency
+is dedupe-by-`pfc_key` with NO `archived_at` filter — a renamed system
+category is not re-inserted under its canonical name and an archived one is
+not resurrected. 20260718140000 therefore does both halves: extends the seed
+proc (53 subcategories with their own stable pfc_keys, parented by looking the
+parent up BY ITS pfc_key) and re-runs it for every existing non-fixture entity.
+Verified against live before authoring: 1 entity, 19 live categories, all 19
+pfc_key-stamped, 0 existing subcategories — the backfill attaches cleanly.
+
+**Decisions / deviations:**
+- Sub seed adds a live case-insensitive NAME guard on top of the pfc_key
+  dedupe (the parent seed doesn't need one; subs do, because a user may have
+  already created e.g. "Groceries" and `ledger_accounts_category_name_ci`
+  would abort the whole backfill). Collision = skip, user's category wins.
+- No subs under the Uncategorized landing pads, Transfers, Other, Other
+  Income — catch-alls, not taxonomies. Missing/archived/renested parent =
+  that parent's subs are skipped, never forced.
+- Reports matrix rollup is CLIENT-side and purely derived: `buildMatrix`
+  stays leaf-grain (single source of numbers); `rollupMatrix` groups leaves
+  under live parents from categories.list. Archived categories (absent from
+  categories.list) render as standalone top-level rows — their history never
+  disappears. Parent's own non-sub activity shows as a "<name> (general)"
+  child line so visible children always sum to the parent row.
+- Month-vs-month comparison card moved to the same parent grain as the
+  matrix default (leaf grain would fragment "biggest movers" once the seeded
+  tree lands).
+- Top Payees (F-039): payee = trimmed transaction description (no merchant
+  table exists yet); money-out only, dominant currency, transfers & debt
+  payments excluded; refunds deliberately don't offset (ranks where money
+  goes, not net position). Client-side from the already-fetched rich rows —
+  no new server query, per the workstream brief.
+- F-023: retirement is an ACCOUNT CLASS (subtype keyword match,
+  `looksLikeRetirementAccount`, strict subset of the investment keywords —
+  taxable brokerage/HSA/529 are NOT retirement), grouped under its owning
+  entity — no fake Retirement entity (Mikul 2026-07-18). Multi-entity layout
+  only renders when entities.list returns >1; single-entity households (the
+  live household today — verified read-only) hit the exact pre-slice code
+  path, and an entities fetch failure degrades to it.
+- F-018 (auto-categorization quality) is expected to improve via the seeded
+  subs + existing PFC mapping; harness measurement (≥85% bar) not run here —
+  the fixture harness is a separate suite. Flagged for the orchestrator.
+- Migrations authored as FILES ONLY (20260718140000) — not applied anywhere.
+  pgTAP 024 covers seed placement, idempotent double-apply, archived-sub
+  non-resurrection, user-name collision, one-level constraint, scope gate.
