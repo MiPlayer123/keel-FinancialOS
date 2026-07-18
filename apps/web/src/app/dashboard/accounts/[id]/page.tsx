@@ -3,7 +3,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Loader2, Pencil, Plus, ReceiptText, Scale, Wand2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  Building2,
+  Ellipsis,
+  Loader2,
+  Pencil,
+  Plus,
+  ReceiptText,
+  Scale,
+  Wand2,
+} from 'lucide-react';
 
 import { EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
@@ -53,9 +63,102 @@ import { BalanceTrendChart, CategoryBarList } from '@/components/keel/charts';
 import { spendingMix } from '@/lib/spending';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 
 const EMPTY_SELECTION = new Set<string>();
+const BALANCE_RANGE_STORAGE_KEY = 'keel-account-balance-range';
+const BALANCE_RANGE_OPTIONS = [
+  { key: '30d', label: '30d' },
+  { key: '90d', label: '90d' },
+  { key: 'ytd', label: 'YTD' },
+  { key: '1y', label: '1y' },
+  { key: 'custom', label: 'Custom' },
+] as const;
+
+type BalanceRangeKey = (typeof BALANCE_RANGE_OPTIONS)[number]['key'];
+type BalanceRangePreference = {
+  key: BalanceRangeKey;
+  customFrom: string;
+  customTo: string;
+};
+
+function isoDay(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function isIsoDay(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && isoDay(parsed) === value;
+}
+
+function defaultBalanceRangePreference(now: Date): BalanceRangePreference {
+  const from = new Date(now);
+  from.setUTCDate(from.getUTCDate() - 90);
+  return { key: '90d', customFrom: isoDay(from), customTo: isoDay(now) };
+}
+
+function parseBalanceRangePreference(
+  stored: string | null,
+  now: Date,
+): BalanceRangePreference {
+  const fallback = defaultBalanceRangePreference(now);
+  if (!stored) return fallback;
+  try {
+    const parsed = JSON.parse(stored) as Partial<BalanceRangePreference>;
+    const key = BALANCE_RANGE_OPTIONS.some((option) => option.key === parsed.key)
+      ? parsed.key
+      : null;
+    if (!key) return fallback;
+    if (
+      !isIsoDay(parsed.customFrom) ||
+      !isIsoDay(parsed.customTo) ||
+      parsed.customFrom > parsed.customTo ||
+      parsed.customTo > isoDay(now)
+    ) {
+      return { ...fallback, key };
+    }
+    return { key, customFrom: parsed.customFrom, customTo: parsed.customTo };
+  } catch {
+    return fallback;
+  }
+}
+
+function resolveBalanceRange(
+  preference: BalanceRangePreference,
+  now: Date,
+): { from: string; to: string; label: string } {
+  const to = isoDay(now);
+  const from = new Date(now);
+  switch (preference.key) {
+    case '30d':
+      from.setUTCDate(from.getUTCDate() - 30);
+      return { from: isoDay(from), to, label: 'last 30 days' };
+    case '90d':
+      from.setUTCDate(from.getUTCDate() - 90);
+      return { from: isoDay(from), to, label: 'last 90 days' };
+    case 'ytd':
+      return {
+        from: isoDay(new Date(Date.UTC(now.getUTCFullYear(), 0, 1))),
+        to,
+        label: 'year to date',
+      };
+    case '1y':
+      from.setUTCFullYear(from.getUTCFullYear() - 1);
+      return { from: isoDay(from), to, label: 'last year' };
+    case 'custom':
+      return { from: preference.customFrom, to: preference.customTo, label: 'custom range' };
+  }
+}
 
 export default function AccountDetailPage() {
   const params = useParams<{ id: string }>();
@@ -66,8 +169,19 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
   const { householdId, userId, ready } = useHousehold();
   const balances = useKeelQuery<TrialBalanceRow>('ledger.trial_balance', householdId);
   const txns = useKeelQuery<RichTransactionRow>('transactions.rich', householdId);
+  const [balanceRangeAnchor] = useState(() => new Date());
+  const [balanceRangePreference, setBalanceRangePreference] = useState(() =>
+    defaultBalanceRangePreference(balanceRangeAnchor),
+  );
+  const [balanceRangeReady, setBalanceRangeReady] = useState(false);
+  const balanceRange = useMemo(
+    () => resolveBalanceRange(balanceRangePreference, balanceRangeAnchor),
+    [balanceRangeAnchor, balanceRangePreference],
+  );
   const trend = useKeelQuerySilent<DailyBalanceRow>('accounts.balance_daily', householdId, {
     accountId,
+    from: balanceRange.from,
+    to: balanceRange.to,
   });
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
   const [kinds, setKinds] = useState<Map<string, string> | null>(null);
@@ -90,6 +204,24 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
   const [settingBalance, setSettingBalance] = useState(false);
   const [fixingBalance, setFixingBalance] = useState(false);
   const router = useRouter();
+
+  useEffect(() => {
+    setBalanceRangePreference(
+      parseBalanceRangePreference(
+        window.localStorage.getItem(BALANCE_RANGE_STORAGE_KEY),
+        balanceRangeAnchor,
+      ),
+    );
+    setBalanceRangeReady(true);
+  }, [balanceRangeAnchor]);
+
+  useEffect(() => {
+    if (!balanceRangeReady) return;
+    window.localStorage.setItem(
+      BALANCE_RANGE_STORAGE_KEY,
+      JSON.stringify(balanceRangePreference),
+    );
+  }, [balanceRangePreference, balanceRangeReady]);
 
   useEffect(() => {
     if (!householdId) {
@@ -299,161 +431,179 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <div className="flex items-center gap-1.5">
-            <h1 className="text-2xl font-semibold tracking-tight">{account.name}</h1>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Rename account"
+          <h1 className="text-2xl font-semibold tracking-tight">
+            <button
+              type="button"
+              aria-label={`Rename ${account.name}`}
               title="Rename account"
-              className="text-muted-foreground/60 hover:text-foreground"
+              className="max-w-full rounded-sm text-left break-words hover:underline hover:decoration-muted-foreground/50 hover:underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               onClick={() => {
                 setRenaming(true);
               }}
             >
-              <Pencil className="size-3.5" />
-            </Button>
-          </div>
+              {account.name}
+            </button>
+          </h1>
           <p className="flex flex-wrap items-center gap-1 text-sm text-muted-foreground">
             <span className="capitalize">
               {kind} · {account.subtype.replaceAll('_', ' ')}
             </span>
-            {syncLabel ? <> · Updated {syncLabel}</> : null}
-            {entityName ? (
-              <>
-                {' '}
-                · {entityName}
+            {entityName ? <> · {entityName}</> : null}
+          </p>
+          {connection?.status === 'reauth_required' ? <ReauthLink className="mt-1.5" /> : null}
+        </div>
+        <div className="flex items-start justify-between gap-2 sm:justify-end">
+          <div className="text-left sm:text-right">
+            <p className="text-sm text-muted-foreground">Balance</p>
+            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 sm:justify-end">
+              <Money
+                amountMinor={balanceMinor}
+                currency={account.currency}
+                className="text-2xl font-semibold"
+                muteZero={false}
+              />
+              {isSyncing ? (
+                <span className="text-xs text-muted-foreground">Syncing…</span>
+              ) : syncLabel ? (
+                <span className="text-xs text-muted-foreground">Updated {syncLabel}</span>
+              ) : null}
+            </div>
+            {provider?.availableMinor ? (
+              <p className="text-xs text-muted-foreground">
+                <Money
+                  amountMinor={provider.availableMinor}
+                  currency={account.currency}
+                  className="text-xs"
+                />{' '}
+                available at the bank
+              </p>
+            ) : null}
+            {/* C9: shown ONLY when the institution reports a limit; neutral
+                tokens — utilization is status, not negative money (Law 8). */}
+            {utilization !== null && provider?.limitMinor ? (
+              <p className="text-xs text-muted-foreground">
+                {utilization}% of{' '}
+                <Money
+                  amountMinor={provider.limitMinor}
+                  currency={account.currency}
+                  className="text-xs"
+                />{' '}
+                limit used
+              </p>
+            ) : null}
+            <EarmarkLine
+              goals={goals}
+              accountId={accountId}
+              balanceMinor={balanceMinor}
+              currency={account.currency}
+            />
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
                 <Button
+                  type="button"
                   variant="ghost"
-                  size="icon-sm"
-                  aria-label="Change entity"
-                  title="Change entity"
-                  className="size-5 text-muted-foreground/60 hover:text-foreground"
+                  size="icon"
+                  aria-label="Account actions"
+                  title="Account actions"
+                >
+                  <Ellipsis />
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="end" className="min-w-52">
+              <DropdownMenuGroup>
+                <DropdownMenuItem
+                  onClick={() => {
+                    setRenaming(true);
+                  }}
+                >
+                  <Pencil />
+                  Rename account
+                </DropdownMenuItem>
+                <DropdownMenuItem
                   onClick={() => {
                     setReassigning(true);
                   }}
                 >
-                  <Pencil className="size-3" />
-                </Button>
-              </>
-            ) : null}
-          </p>
-          {connection?.status === 'reauth_required' ? <ReauthLink className="mt-1.5" /> : null}
-        </div>
-        <div className="text-left sm:text-right">
-          <p className="text-sm text-muted-foreground">Balance</p>
-          <Money
-            amountMinor={balanceMinor}
-            currency={account.currency}
-            className="text-2xl font-semibold"
-            muteZero={false}
-          />
-          {provider?.availableMinor ? (
-            <p className="text-xs text-muted-foreground">
-              <Money
-                amountMinor={provider.availableMinor}
-                currency={account.currency}
-                className="text-xs"
-              />{' '}
-              available at the bank
-            </p>
-          ) : null}
-          {/* C9: shown ONLY when the institution reports a limit; neutral
-              tokens — utilization is status, not negative money (Law 8). */}
-          {utilization !== null && provider?.limitMinor ? (
-            <p className="text-xs text-muted-foreground">
-              {utilization}% of{' '}
-              <Money
-                amountMinor={provider.limitMinor}
-                currency={account.currency}
-                className="text-xs"
-              />{' '}
-              limit used
-            </p>
-          ) : null}
-          <EarmarkLine
-            goals={goals}
-            accountId={accountId}
-            balanceMinor={balanceMinor}
-            currency={account.currency}
-          />
-          <div className="mt-1 flex flex-col items-start gap-0.5 sm:items-end">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 text-xs text-muted-foreground"
-              onClick={() => {
-                setSettingBalance(true);
-              }}
-            >
-              <Scale className="size-3.5" />
-              Set opening balance
-            </Button>
-            {/* Fix balance / re-anchor: only meaningful once the bank has
-                reported a balance (a synced, connected account). Re-reads
-                provider truth and re-books the opening anchor so a balance that
-                drifted high/low from a shallow or early-anchored sync ties back
-                to the bank — audited + reversible, no relinking. */}
-            {provider ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={fixingBalance || isSyncing}
-                title={
-                  isSyncing
-                    ? 'Still syncing — the balance will settle once the initial sync finishes'
-                    : undefined
-                }
-                className="h-7 text-xs text-muted-foreground"
-                onClick={() => {
-                  if (!householdId || !userId) return;
-                  setFixingBalance(true);
-                  void reanchorAccountBalance({ householdId, userId, accountId })
-                    .then(() => {
-                      toast.success('Balance re-anchored to the bank.');
-                      void balances.refetch();
-                      void txns.refetch();
-                    })
-                    .catch((err: unknown) => {
-                      toast.error(
-                        err instanceof Error ? err.message : 'Could not re-anchor the balance.',
-                      );
-                    })
-                    .finally(() => {
-                      setFixingBalance(false);
-                    });
-                }}
-              >
-                {fixingBalance || isSyncing ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <Wand2 className="size-3.5" />
-                )}
-                {isSyncing ? 'Syncing…' : 'Fix balance'}
-              </Button>
-            ) : null}
-          </div>
-          <SetOpeningBalanceDialog
-            open={settingBalance}
-            householdId={householdId}
-            userId={userId}
-            accountId={accountId}
-            accountName={account.name}
-            accountKind={kind}
-            currency={account.currency}
-            onClose={() => {
-              setSettingBalance(false);
-            }}
-            onSaved={() => {
-              setSettingBalance(false);
-              void balances.refetch();
-              void txns.refetch();
-            }}
-          />
+                  <Building2 />
+                  Reassign entity
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuGroup>
+                <DropdownMenuItem
+                  onClick={() => {
+                    setSettingBalance(true);
+                  }}
+                >
+                  <Scale />
+                  Set opening balance
+                </DropdownMenuItem>
+                {/* Fix balance / re-anchor: only meaningful once the bank has
+                    reported a balance. The sync guard is a deliberate data-
+                    integrity boundary and must remain visible and disabled. */}
+                {provider ? (
+                  <DropdownMenuItem
+                    disabled={fixingBalance || isSyncing}
+                    title={
+                      isSyncing
+                        ? 'Still syncing — the balance will settle once the initial sync finishes'
+                        : undefined
+                    }
+                    onClick={() => {
+                      if (!householdId || !userId) return;
+                      setFixingBalance(true);
+                      void reanchorAccountBalance({ householdId, userId, accountId })
+                        .then(() => {
+                          toast.success('Balance re-anchored to the bank.');
+                          void balances.refetch();
+                          void txns.refetch();
+                        })
+                        .catch((err: unknown) => {
+                          toast.error(
+                            err instanceof Error
+                              ? err.message
+                              : 'Could not re-anchor the balance.',
+                          );
+                        })
+                        .finally(() => {
+                          setFixingBalance(false);
+                        });
+                    }}
+                  >
+                    {fixingBalance || isSyncing ? (
+                      <Loader2 className="animate-spin" />
+                    ) : (
+                      <Wand2 />
+                    )}
+                    {isSyncing ? 'Syncing…' : 'Fix balance'}
+                  </DropdownMenuItem>
+                ) : null}
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
+
+      <SetOpeningBalanceDialog
+        open={settingBalance}
+        householdId={householdId}
+        userId={userId}
+        accountId={accountId}
+        accountName={account.name}
+        accountKind={kind}
+        currency={account.currency}
+        onClose={() => {
+          setSettingBalance(false);
+        }}
+        onSaved={() => {
+          setSettingBalance(false);
+          void balances.refetch();
+          void txns.refetch();
+        }}
+      />
 
       <RenameAccountDialog
         open={renaming}
@@ -486,34 +636,98 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
         }}
       />
 
-      {(trend !== null && trend.length > 1) || spending.length > 0 ? (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          {trend !== null && trend.length > 1 ? (
-            <Card className={spending.length > 0 ? 'lg:col-span-2' : 'lg:col-span-3'}>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  Balance · last 90 days
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <BalanceTrendChart points={trend} />
-              </CardContent>
-            </Card>
-          ) : null}
-          {spending.length > 0 ? (
-            <Card className={trend !== null && trend.length > 1 ? '' : 'lg:col-span-3'}>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  Spending mix · last 30 days
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <CategoryBarList items={spending} />
-              </CardContent>
-            </Card>
-          ) : null}
-        </div>
-      ) : null}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <Card className={spending.length > 0 ? 'lg:col-span-2' : 'lg:col-span-3'}>
+          <CardHeader className="gap-3 pb-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Balance · {balanceRange.label}
+              </CardTitle>
+              <div className="flex flex-wrap gap-1" role="group" aria-label="Balance chart range">
+                {BALANCE_RANGE_OPTIONS.map((option) => (
+                  <Button
+                    key={option.key}
+                    type="button"
+                    variant={balanceRangePreference.key === option.key ? 'secondary' : 'ghost'}
+                    size="xs"
+                    aria-pressed={balanceRangePreference.key === option.key}
+                    onClick={() => {
+                      setBalanceRangePreference((current) => ({
+                        ...current,
+                        key: option.key,
+                      }));
+                    }}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+            {balanceRangePreference.key === 'custom' ? (
+              <div className="grid grid-cols-2 gap-2 sm:max-w-sm">
+                <label className="flex min-w-0 flex-col gap-1 text-xs text-muted-foreground">
+                  From
+                  <Input
+                    type="date"
+                    value={balanceRangePreference.customFrom}
+                    max={balanceRangePreference.customTo}
+                    onChange={(event) => {
+                      const nextFrom = event.target.value;
+                      if (!isIsoDay(nextFrom)) return;
+                      setBalanceRangePreference((current) => ({
+                        key: 'custom',
+                        customFrom: nextFrom,
+                        customTo: nextFrom > current.customTo ? nextFrom : current.customTo,
+                      }));
+                    }}
+                  />
+                </label>
+                <label className="flex min-w-0 flex-col gap-1 text-xs text-muted-foreground">
+                  To
+                  <Input
+                    type="date"
+                    value={balanceRangePreference.customTo}
+                    min={balanceRangePreference.customFrom}
+                    max={isoDay(balanceRangeAnchor)}
+                    onChange={(event) => {
+                      const nextTo = event.target.value;
+                      if (!isIsoDay(nextTo) || nextTo > isoDay(balanceRangeAnchor)) return;
+                      setBalanceRangePreference((current) => ({
+                        key: 'custom',
+                        customFrom: nextTo < current.customFrom ? nextTo : current.customFrom,
+                        customTo: nextTo,
+                      }));
+                    }}
+                  />
+                </label>
+              </div>
+            ) : null}
+          </CardHeader>
+          <CardContent>
+            {trend === null ? (
+              <Skeleton className="h-64 w-full" />
+            ) : trend.length > 1 ? (
+              <BalanceTrendChart points={trend} />
+            ) : (
+              <div className="flex h-64 items-center justify-center text-sm text-muted-foreground">
+                Not enough balance history for this range.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+        {spending.length > 0 ? (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Spending mix · last 30 days
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <CategoryBarList items={spending} />
+            </CardContent>
+          </Card>
+        ) : null}
+      </div>
 
       {looksLikeInvestmentAccount(account.subtype) ? (
         <HoldingsCard householdId={householdId} accountId={accountId} currency={account.currency} />
