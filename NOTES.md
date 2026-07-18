@@ -3858,3 +3858,35 @@ gates green: `pnpm vitest run` (820), deno function tests (13/59 steps),
   existed on the table but was in none — the 008 completeness assertion was
   failing). Also added the three new `investment_sync_state` columns to export
   DTO/manifest/allowlist.
+
+## 2026-07-18 — pgTAP debt cleared before WS-C merge (008 + 023, pre-existing)
+
+- **008 export classification** — five public tables were classified neither
+  INCLUDE nor EXCLUDE (assertion 5), and `accounts.mask` was in neither column
+  list (assertion 13). Verified via `pg_get_functiondef` on the export chain
+  that none of them were exported.
+  - `documents` / `document_versions` / `document_attachments` (attach-only
+    receipts substrate, 20260717234500) and `household_notes` /
+    `household_tasks` (20260718000000) shipped WITHOUT export wiring — a Law 6
+    gap. Building their export layer is out of scope for this cleanup, so they
+    are honestly EXCLUDED (pgTAP fixture + `packages/exports` manifest, reason
+    strings marked "export layer pending"). keel_export has no SELECT grant on
+    any of the five, so 008 assertion 4 proves they truly aren't exported.
+    **Deviation vs Law 6, deliberate + tracked: flip to INCLUDE when their
+    export layer ships.**
+  - `accounts.mask` (20260717220000) — closed properly instead: non-sensitive
+    provider last-4 display metadata, added to the accounts DTO via an override
+    in the branch-owned 20260718123000 export layer + 008 allowlist + manifest
+    (same pattern as F9/security_type).
+- **023 reconnect dedupe (shipped with PR #58)** — died at the guard-flip
+  `update public.connections set status='active'` with `permission denied`.
+  Root cause: TEST-HARNESS ONLY, not a production grant gap. The raw fixture
+  UPDATE ran while `set local role authenticated` was active, and
+  `authenticated` has (correctly) no UPDATE grant on connections — locally AND
+  on the live project. The SECURITY DEFINER owner `keel_api` has every
+  privilege its proc body needs (SELECT on connections/accounts, column UPDATE
+  on canonical_transactions.status/voided_at, INSERT on
+  journal_batches/postings/revisions) — verified on both local stack and live
+  cloud (read-only). Fix: `reset role` around the two pgTAP-only status flips,
+  then re-assume `authenticated`; assertions unchanged. No production
+  migration needed.

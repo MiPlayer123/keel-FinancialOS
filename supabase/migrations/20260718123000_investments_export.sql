@@ -10,6 +10,10 @@
 --     yesterday's holdings work; folded in here so the register export is
 --     complete).
 --   * adds `holdings_snapshots` (part 1) and `investment_sync_state` (part 2).
+--   * re-emits `accounts` WITH `mask` (20260717220000) — a pre-existing Law 6
+--     gap: the column shipped without export wiring, so the base accounts DTO
+--     silently dropped it. mask is non-sensitive display metadata (provider
+--     last-4 suffix), so it is exported rather than omitted.
 --
 -- Follows the established chain idiom: rename the current outermost export to a
 -- pre_investments layer, then create a new keel_export_household that calls it
@@ -47,9 +51,34 @@ as $$
 declare
   v_base jsonb;
   v_connections jsonb;
+  v_accounts jsonb;
   v_tables jsonb;
 begin
   v_base := public.keel_export_household_pre_investments(p_household_id, p_as_of);
+
+  -- Override accounts to include mask (shipped 20260717220000 without export
+  -- wiring; non-sensitive provider-reported last-4 display suffix).
+  select coalesce(jsonb_agg(row.dto order by row.id), '[]'::jsonb)
+    into v_accounts
+    from (
+      select a.id,
+        jsonb_build_object(
+          'id', a.id,
+          'household_id', a.household_id,
+          'entity_id', a.entity_id,
+          'connection_id', a.connection_id,
+          'ledger_account_id', a.ledger_account_id,
+          'name', a.name,
+          'subtype', a.subtype,
+          'currency', a.currency::text,
+          'external_ref', a.external_ref,
+          'mask', a.mask,
+          'created_at', to_char(a.created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+          'archived_at', case when a.archived_at is null then null else to_char(a.archived_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') end
+        ) as dto
+      from public.accounts a
+      where a.household_id = p_household_id
+    ) row;
 
   -- Override connections to include the new holdings_* error columns.
   select coalesce(jsonb_agg(row.dto order by row.id), '[]'::jsonb)
@@ -136,6 +165,7 @@ begin
   ) into v_tables;
 
   v_base := jsonb_set(v_base, '{tables,connections}', v_connections);
+  v_base := jsonb_set(v_base, '{tables,accounts}', v_accounts);
   return jsonb_set(v_base, '{tables}', (v_base->'tables') || v_tables);
 end;
 $$;
