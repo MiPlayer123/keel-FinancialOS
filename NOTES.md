@@ -3512,3 +3512,54 @@ and `008_export.sql`'s two assertions that were actually in scope). Full
 verification loop repeated once more end to end: `pnpm build` clean,
 `pnpm test` 811 passing, both verifiers clean, all migrations reapplied
 live and confirmed via `pg_proc`.
+
+## Follow-up #4: a genuine TOCTOU race in the guard itself
+
+A fourth review round found something deeper than the prior three: the
+sync-in-progress guard reads `sync_desired_generation` /
+`sync_committed_generation` / `sync_continuation_pending` with a plain,
+unlocked `SELECT`, once, near the top of `keel_cmd_reanchor_balance` — but
+the actual `Σ(journal_postings)` computation this whole guard exists to
+protect happens much later, after the currency check, two period-lock
+checks, and the reversal loop. Both `keel_worker_bump_generation` and
+`keel_worker_acquire_sync_lease` (confirmed by reading them directly, not
+just trusting the finding) commit their state via a plain `UPDATE` on the
+same `connections` row. So a sync that starts in the gap between the
+guard's read and the final `SUM` — passing the guard cleanly at the
+instant it's checked — could still post new transactions before the `SUM`
+runs, reproducing the exact race this whole PR exists to close, just
+through a narrower window than the original bug.
+
+Fixed by adding `FOR NO KEY UPDATE` to the guard's `SELECT` on
+`connections`, holding that row lock for the rest of the transaction.
+Since both `keel_worker_bump_generation` and `keel_worker_acquire_sync_lease`
+use plain `UPDATE`s on the same row, they'll block behind this lock until
+the reanchor transaction commits or rolls back — no concurrent sync can
+transition generation/lease state (and therefore can't start posting) for
+the remainder of the function's execution. Used `FOR NO KEY UPDATE` rather
+than the stronger `FOR UPDATE`, matching the convention `keel_worker_complete_attempt`
+already uses elsewhere in this codebase, so unrelated FK-referencing
+inserts against the row aren't blocked unnecessarily.
+
+Before applying, checked (given follow-up #2's lesson about not assuming
+grants) whether `keel_api` — the owner of `keel_cmd_reanchor_balance` —
+actually has UPDATE privilege on `connections`, since `FOR NO KEY UPDATE`
+requires it even without modifying any column and this function had never
+touched `connections` before. Confirmed live via
+`information_schema.column_privileges`: `keel_api` already has UPDATE on
+`status`/`sync_desired_generation`/`sync_lease_owner`/`sync_leased_until`
+(from other commands), which is sufficient — Postgres only requires
+UPDATE on at least one column of a row to lock it. Applied, then verified
+end to end: a real reanchor call still succeeds and produces the correct
+result, and `015_reanchor_balance.sql`'s full pgTAP suite (deferral while
+unsynced, anchor after first sync, both-legs marker, no-double-anchor
+idempotency) passes clean with the lock in place — no regression.
+
+Did not attempt to empirically reproduce the concurrent-blocking behavior
+itself (e.g., two simultaneous sessions racing against each other) — `FOR
+NO KEY UPDATE` blocking a conflicting `UPDATE` on the same row until the
+locking transaction ends is foundational, well-documented PostgreSQL MVCC
+behavior, not a project-specific fact that needed discovery the way the
+`keel_worker` grant did. What needed verifying here was narrower and
+project-specific — does the owning role have enough privilege to take the
+lock at all — and that was checked directly rather than assumed.
