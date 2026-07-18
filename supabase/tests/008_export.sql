@@ -86,9 +86,9 @@ insert into expected_export_tables(table_name,allowed_columns,omitted_columns)va
 ('close_checklists',array['household_id','id','session_id','checklist_version','checks','created_at'],'{}'),
 ('reconciliation_status_events',array['household_id','id','session_id','transition','reason','actor','command_id','created_at'],'{}');
 insert into expected_export_tables(table_name,allowed_columns,omitted_columns) values
- ('holdings',array['id','household_id','account_id','as_of','symbol','name','qty','price_minor','value_minor','cost_basis_minor','currency','source','created_at','updated_at'],'{}'),
+ ('holdings',array['id','household_id','account_id','as_of','symbol','name','qty','price_minor','value_minor','cost_basis_minor','currency','source','security_type','created_at','updated_at'],'{}'),
  ('holdings_snapshots',array['id','household_id','account_id','snapshot_date','symbol','name','qty','price_minor','value_minor','cost_basis_minor','currency','source','created_at'],'{}'),
- ('investment_sync_state',array['connection_id','household_id','last_pulled_through','last_synced_at','created_at','updated_at'],'{}');
+ ('investment_sync_state',array['connection_id','household_id','last_pulled_through','window_from','window_to','continuation_offset','last_synced_at','created_at','updated_at'],'{}');
 
 create temporary table excluded_export_tables(table_name text primary key) on commit drop;
 insert into excluded_export_tables(table_name) values

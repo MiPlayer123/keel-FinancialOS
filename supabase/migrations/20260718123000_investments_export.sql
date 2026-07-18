@@ -98,6 +98,7 @@ begin
         'cost_basis_minor', h.cost_basis_minor::text,
         'currency', h.currency,
         'source', h.source,
+        'security_type', h.security_type,
         'created_at', to_char(h.created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
         'updated_at', to_char(h.updated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
       ) order by h.id)
@@ -124,6 +125,9 @@ begin
         'connection_id', st.connection_id,
         'household_id', st.household_id,
         'last_pulled_through', case when st.last_pulled_through is null then null else to_char(st.last_pulled_through, 'YYYY-MM-DD') end,
+        'window_from', case when st.window_from is null then null else to_char(st.window_from, 'YYYY-MM-DD') end,
+        'window_to', case when st.window_to is null then null else to_char(st.window_to, 'YYYY-MM-DD') end,
+        'continuation_offset', st.continuation_offset,
         'last_synced_at', case when st.last_synced_at is null then null else to_char(st.last_synced_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') end,
         'created_at', to_char(st.created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
         'updated_at', to_char(st.updated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
