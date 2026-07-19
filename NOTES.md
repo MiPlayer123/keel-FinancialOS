@@ -4,6 +4,68 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-19 — SLICE 6 (statement-ingestion-v2): discriminated confirm-upload + atomic ingest-begin + drafts route + outbox export [A3/A4/A12]
+
+Ships the PRODUCER side that Slices 3–5 left open: confirm-upload now creates the
+draft + writes the outbox row + enqueues the extract job for a statement ingest.
+Cites Laws 5 (ingested bytes never trigger writes/fetches — source_hash is
+server-bound), 7 (one authz path — the drafts route reuses the account-scoped
+`keel_recurring_account_access` gate), 9 (idempotent economics — replay no-ops),
+12 (no secrets — the signed draft read URLs are download-only, never inline).
+
+- **Discriminated attach-vs-ingest [A3]** — `ConfirmDocumentUploadPayloadSchema`
+  (packages/contracts) is now a `discriminatedUnion('mode', [attach, ingest])`.
+  `attach` requires target-or-none (unchanged; the AttachmentsSection path, which
+  now sends `mode:'attach'` explicitly — it can never spawn a draft) and forbids
+  `accountId`. `ingest` (`UploadStatementPayloadSchema`) requires `accountId`,
+  statements-only, and forbids any target. confirm-upload (api/index.ts) branches
+  on `mode`; absent `mode` == `attach` (legacy receipt/attach callers). Server
+  rejects ingest-without-account and attach-with-account.
+- **Atomic ingest-begin [A4/A12]** — new migration
+  `20260720220000_statement_ingest_begin.sql` adds SECURITY DEFINER
+  `keel_statement_ingest_begin` (owned by keel_api). In ONE transaction it mints
+  the document + immutable version, registers `document_hashes` (household_id,
+  content_sha256) with a concurrency-safe `insert … on conflict do nothing
+  returning`, and — for a fresh content — creates the `statement_drafts` row
+  (status pending) AND the `statement_outbox` row. A committed draft therefore
+  ALWAYS has a committed delivery record; the edge then best-effort enqueues the
+  `statement_extract` job + kicks `keel_cron_drain_sync`, and the Slice-5 sweeper
+  re-drives anything dropped. Tenant re-upload → `duplicate:true` with the prior
+  draft BEFORE any second draft/outbox row. `source_hash` is bound from the
+  SERVER `content_sha256` — the proc has NO source_hash parameter at all [A4].
+  Replay of the same (document_id + content) returns the existing draft (Law 9).
+  **Account-write check is by parameter, not JWT:** the proc is called by the
+  service-role admin client (no `request.jwt.claim.sub`), so it verifies write
+  access against `p_created_by` (owner/partner + account_owner, or edit
+  resource_permission) directly rather than via the JWT-reading
+  `keel_recurring_account_access` — same actor-by-parameter pattern as
+  `keel_documents_confirm_upload`.
+- **Bespoke `/statements/drafts` route** — mirrors `/receipts/inbox`: viewer
+  authz, ACCOUNT-scope filtered inside `keel_list_statement_drafts` (rewrapped to
+  surface storageBucket/storagePath/mimeType), signs 5-min read URLs with
+  `download:true` (Content-Disposition: attachment, never inline — Law 5/§9).
+- **Outbox export wire-in [A11/Law 6]** — Slice 5 deferred `statement_outbox`'s
+  export layer to here. Moved it EXCLUDE→INCLUDE in packages/exports/manifest.ts,
+  granted keel_export + RLS + rewrapped `keel_export_household` in the migration,
+  and updated the consistent counts: manifest.test INCLUDE 84→85 / EXCLUDE-public
+  17→16; formats.property files 84→85; 008_export.sql expected 78→79 (+
+  statement_outbox row, removed from excluded_export_tables).
+
+Tests (all green): 9 contract cases (discriminated attach/ingest, both
+directions); 3 export cases for statement_outbox (INCLUDE/CSV/round-trip) + count
+updates; 21 pgTAP assertions in `tests/pgtap/statement_ingest_begin.sql` (fresh
+ingest → atomic draft+outbox; source_hash server-bound; re-upload dedupe no 2nd
+draft [A4]; replay idempotent; cross-household + non-writable-account refused
+[A10]; tenant-scoped dedupe) via `scripts/run-statement-ingest-begin-pgtap.sh`;
+worker suite (12) still green (dispatch branch + sweeper re-enqueue prove
+enqueue→pickup and the fallback). `node scripts/build-functions.mjs` + `cd
+apps/web && pnpm build` both clean.
+
+Deviation: none. Deploy order per §8 holds — the worker (Slice 5) already
+understands `statement_extract`, so publishing the job here is safe.
+
+---
+
 ## 2026-07-19 — SLICE 5 (statement-ingestion-v2): worker job + dispatch + transactional outbox + sweeper [A12]
 
 Ships the CONSUMER side of statement ingestion (worker) plus the durable-delivery
@@ -5896,3 +5958,36 @@ Same-entity write guards unchanged (keel_categorize_transaction line 458 /
 keel_set_transaction_splits line 177) — scoping the UI makes the picked category
 provably same-entity, strictly safer. Tests: 28 in category-picker.test.ts (376
 web total green); apps/web pnpm build (ESLint gate) green.
+## 2026-07-19 — cash-flow v6: overlay-classified income/expense (Law 9 single source of truth)
+- Migration 20260720220000_cash_flow_overlay_classified.sql. keel_cash_flow ->
+  'cash-flow-v6-overlay-classified'; keel_cash_flow_monthly ->
+  'cash-flow-monthly-v5-overlay-classified'.
+- WHY: v5 classified each txn by its OFFSET posting's raw ledger-account kind
+  (income/expense), while keel_budget_month classifies by the EFFECTIVE overlay
+  category. A reimbursement payback the user tagged INTO a spend category netted
+  correctly in budget but still counted as gross INCOME in cash-flow — gross
+  income AND gross spend both inflated, net correct. v6 reuses budget's exact
+  overlay resolution (overlay kind when single-offset & overlay exists, else the
+  per-split offset kind), so cash-flow and budget share ONE classification
+  compiler (Law 9). Signed so a bank-inflow overlaid to expense contributes
+  NEGATIVE outflow (reduces that spend); a bank-outflow overlaid to income
+  reduces inflow.
+- Exclusions (confirmed-transfer legs, keel_is_non_income_settlement,
+  keel_txn_is_transfer_category) kept FIRST and byte-identical to v5.
+- Split-aware (offn>1 -> per-split offset kind, no overlay collapse), BIGINT, no
+  floats. Generated from live defs (pg_get_functiondef) to avoid drift.
+- Live validation (household a1ba3759-b7a7-4880-93e2-49eb6f91636c), READ-ONLY:
+  * NET invariant: all-history net5 = net6 = 7,835,485 (diff 0); 2026 YTD net
+    3,435,624 unchanged.
+  * 2026 YTD gross: inflow 6,043,183 -> 3,671,574; outflow 2,607,559 -> 235,950
+    (both -2,371,609, the in-window paybacks).
+  * The 789 income-posting->expense-overlay txns ($178,767.79) confirmed exactly;
+    735 ($82,743.76) survive exclusions and now reduce outflow; the 11 reverse
+    txns (-$2,678.66, expense-posting->income-overlay) now reduce inflow.
+  * Genuine income (effective-income, no payback) preserved: $36,715.74 = v6
+    inflow. Monthly variant sums to the same annual totals.
+- Ownership/grants re-asserted exactly as 20260719020000/20260720140000
+  (keel_api owns keel_cash_flow; postgres owns keel_cash_flow_monthly). No
+  schema/DTO change (Law 6 export unaffected). keel_cash_flow_forecast is
+  balance/recurring-projection based, NOT a posting income/expense split — left
+  untouched.

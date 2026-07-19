@@ -94,6 +94,11 @@ export const INCLUDE = [
   include({schema:'public',table:'statement_extraction_holdings',columns:['id','household_id','extraction_id','symbol','cusip','isin','name','qty','price_minor','value_minor','cost_basis_minor','currency','src_page','src_bbox','ofx_path','field_confidence','null_reason','created_at'],sortKey:['household_id','id'],timestampColumns:['created_at'],bigintColumns:['price_minor','value_minor','cost_basis_minor']}),
   include({schema:'public',table:'document_hashes',columns:['household_id','content_sha256','first_document_id','first_version_id','byte_size','created_at'],sortKey:['household_id','content_sha256'],timestampColumns:['created_at'],bigintColumns:['byte_size']}),
   include({schema:'public',table:'statement_drafts',columns:['id','household_id','document_version_id','account_id','source_hash','status','extraction_id','statement_id','decided_by','decided_at','created_at'],sortKey:['id'],timestampColumns:['decided_at','created_at'],bigintColumns:[]}),
+  // SLICE 6 (statement-ingestion-v2.md §5/§8/§12). Transactional outbox — the
+  // internal statement_extract delivery ledger. Its table + sweeper shipped in
+  // Slice 5 with export DEFERRED to here (where the confirm-upload writer lands);
+  // this is the export layer. No secrets: tenant scope + delivery bookkeeping.
+  include({schema:'public',table:'statement_outbox',columns:['id','household_id','document_version_id','account_id','status','enqueue_count','last_enqueued_at','delivered_at','created_at'],sortKey:['id'],timestampColumns:['last_enqueued_at','delivered_at','created_at'],bigintColumns:[]}),
   include({ schema: 'public', table: 'holdings', columns: ['id', 'household_id', 'account_id', 'as_of', 'symbol', 'name', 'qty', 'price_minor', 'value_minor', 'cost_basis_minor', 'currency', 'source', 'security_type', 'created_at', 'updated_at'], sortKey: ['id'], timestampColumns: ['created_at', 'updated_at'], bigintColumns: ['price_minor', 'value_minor', 'cost_basis_minor'] }),
   include({ schema: 'public', table: 'holdings_snapshots', columns: ['id', 'household_id', 'account_id', 'snapshot_date', 'symbol', 'name', 'qty', 'price_minor', 'value_minor', 'cost_basis_minor', 'currency', 'source', 'created_at'], sortKey: ['id'], timestampColumns: ['created_at'], bigintColumns: ['price_minor', 'value_minor', 'cost_basis_minor'] }),
   include({ schema: 'public', table: 'investment_sync_state', columns: ['connection_id', 'household_id', 'last_pulled_through', 'window_from', 'window_to', 'continuation_offset', 'last_synced_at', 'created_at', 'updated_at'], sortKey: ['connection_id'], timestampColumns: ['last_synced_at', 'created_at', 'updated_at'], bigintColumns: [] }),
@@ -136,7 +141,6 @@ export const EXCLUDE = [
   { schema: 'public', table: 'recurring_detection_claims', reason: 'Transient idempotent cron enqueue claims, not recurring financial history.' },
   { schema: 'public', table: 'household_notes', reason: 'Export layer pending — notes shipped 2026-07-18 without export wiring (Law 6 gap tracked in NOTES.md); flip to INCLUDE when the layer ships.' },
   { schema: 'public', table: 'household_tasks', reason: 'Export layer pending — tasks shipped 2026-07-18 without export wiring (Law 6 gap tracked in NOTES.md); flip to INCLUDE when the layer ships.' },
-  { schema: 'public', table: 'statement_outbox', reason: 'Export layer pending — internal delivery ledger; wire in Slice 6 (confirm-upload writer + INCLUDE entry + keel_export grant together); flip to INCLUDE when the layer ships.' },
   { schema: 'auth', table: 'users', reason: 'Auth identities and secrets are excluded; household membership user_id mappings remain portable.' },
 ] as const satisfies readonly ExcludedTableDefinition[];
 

@@ -2430,6 +2430,10 @@ export async function uploadDocument(input: {
   const confirmed = await invoke<{ effects: { documentId: string; attachmentId: string } }>(
     'api/documents/confirm-upload',
     {
+      // Explicit attach mode [A3]: this flow attaches to an existing target and
+      // must NEVER create a statement-ingest draft. Sending mode:'attach' makes
+      // the server reject any accountId and require the target pair.
+      mode: 'attach',
       householdId,
       entityId,
       documentId: upload.documentId,
