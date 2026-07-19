@@ -4,6 +4,55 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-19 — fix(plaid): Fidelity investments never consented (ADDITIONAL_CONSENT_REQUIRED)
+
+Root cause (confirmed via Plaid dashboard Activity log): `/investments/holdings/get`
+and `/investments/transactions/get` on the Fidelity Production item returned HTTP 400
+`ADDITIONAL_CONSENT_REQUIRED` ("client does not have user consent to access the
+PRODUCT_INVESTMENTS product"). The deployed Link flow requested `products=[transactions]`
+only, so the item never consented to Investments. This also explains the missing
+brokerage/LLC cash flows: those arrive via `/investments/transactions/get`, not
+`/transactions/sync`.
+
+Where the deployed value comes from: the api function reads `PLAID_PRODUCTS` at
+runtime via `Deno.env.get` (api/index.ts ~L556). `Deno.env` in deployed Edge
+Functions is populated from PROJECT SECRETS (`supabase secrets set`), not the
+bundled `supabase/functions/.env` (that file is for local `supabase serve` only).
+`supabase secrets list` confirmed `PLAID_PRODUCTS` was a deployed secret set to
+`transactions`. (Note: `secrets list` prints SHA-256 digests of values, not the
+plaintext — no secret exposed.)
+
+Fix:
+- `supabase secrets set PLAID_PRODUCTS=transactions,investments --project-ref
+  yrbteeownwjhcushwaga` (non-sensitive product list; safe to set). Runtime read =>
+  effective on next invocation, no redeploy needed.
+- Updated `supabase/functions/.env` (local, gitignored) and `.env.example` to
+  `transactions,investments` with an explanatory comment (keep-in-sync note).
+- No api/index.ts change: the code default is already `transactions,investments`
+  (L579). `additional_consented_products` deliberately NOT added — investments is
+  already in `products`, so it's requested/consented at Link time for OAuth
+  institutions (Fidelity); listing it in both would be redundant.
+
+Trial-plan entitlement risk (critical) — VERIFIED before relying on it: ran a
+throwaway Deno smoke script (reads PRODUCTION creds from local gitignored `.env`,
+never prints any secret/token) calling `production.plaid.com/link/token/create`
+with `products=[transactions,investments]`. Result: HTTP 200 with a valid
+link_token => Investments IS entitled in Production on the current trial plan.
+Connect flow is safe; no revert needed; NOT a ⚑ blocker. Script deleted after use.
+(The original error was CONSENT, not entitlement — as expected, entitlement was
+present.)
+
+Reconnect path for the already-linked Fidelity item (server cannot retro-add
+consent): Option A (disconnect + fresh reconnect) chosen — already supported by
+the connections UI (`disconnectConnection` + `PlaidLinkButton`, with
+reconnect-match dedupe so accounts merge instead of duplicating). Option B (Link
+update mode with existing access_token) would need new code and is unnecessary.
+
+Post-reconnect verification SQL (holdings_last_success_at non-null; holdings rows
+> 0; inv:% canonical txns > 0) is in PR #<this>.
+
+---
+
 ## 2026-07-19 — fix(connections): two connect-flow bugs (disconnected shows "syncing"; per-connection entity is wrong for multi-entity connections)
 
 Triggered by the user disconnecting + reconnecting Fidelity.
