@@ -2592,3 +2592,240 @@ export async function detachReceiptMatch(input: {
     payload: { matchId: input.matchId },
   });
 }
+
+// ---------------------------------------------------------------------------
+// SLICE 7 (statement-ingestion-v2.md §10 UI slice 1): statement upload (ingest
+// mode → quarantine → draft) + drafts inbox + token-bound draft approval.
+// ---------------------------------------------------------------------------
+
+/** Accepted statement file types for the upload dialog (client pre-filter; the
+ *  server re-sniffs the bytes and rejects anything that doesn't match). */
+export const STATEMENT_UPLOAD_ACCEPT = '.pdf,.csv,.ofx,.qfx';
+
+/** Best-effort MIME for a picked statement file. Browsers frequently report an
+ *  empty type for .ofx/.qfx/.csv; the server sniffs magic bytes regardless, so
+ *  we fall back to octet-stream (allowlisted) rather than block the upload. */
+function statementMimeFor(file: File): string {
+  if (file.type) return file.type;
+  const name = file.name.toLowerCase();
+  if (name.endsWith('.pdf')) return 'application/pdf';
+  if (name.endsWith('.csv')) return 'text/csv';
+  if (name.endsWith('.ofx') || name.endsWith('.qfx')) return 'application/x-ofx';
+  return 'application/octet-stream';
+}
+
+/**
+ * Upload a bank/card/investment statement in INGEST mode [A3]: mint a signed
+ * upload URL (quarantine bucket), PUT the bytes straight to Storage, then
+ * confirm-upload with mode:'ingest' + the REQUIRED account. The server sniffs,
+ * promotes, mints a draft + outbox row, and enqueues extraction. A re-upload of
+ * the same bytes for this account returns `{ duplicate: true, draftId }` — the
+ * UI links to the existing draft instead of erroring.
+ */
+export async function uploadStatement(input: {
+  householdId: string;
+  entityId: string;
+  accountId: string;
+  file: File;
+}): Promise<{ duplicate: boolean; draftId: string | null; documentVersionId: string | null }> {
+  const { householdId, entityId, accountId, file } = input;
+  const mimeType = statementMimeFor(file);
+  const upload = await invoke<{
+    documentId: string;
+    storageBucket: string;
+    storagePath: string;
+    uploadUrl: string;
+    token: string;
+  }>('api/documents/upload-url', {
+    householdId,
+    entityId,
+    kind: 'statement',
+    originalFilename: file.name,
+    mimeType,
+  });
+
+  const { error: uploadError } = await getSupabaseBrowserClient()
+    .storage.from(upload.storageBucket)
+    .uploadToSignedUrl(upload.storagePath, upload.token, file);
+  if (uploadError) throw uploadError;
+
+  const confirmed = await invoke<{
+    duplicate?: boolean;
+    draftId?: string | null;
+    documentVersionId?: string | null;
+  }>('api/documents/confirm-upload', {
+    mode: 'ingest',
+    householdId,
+    entityId,
+    accountId,
+    documentId: upload.documentId,
+    kind: 'statement',
+    storageBucket: upload.storageBucket,
+    storagePath: upload.storagePath,
+    originalFilename: file.name,
+  });
+  return {
+    duplicate: confirmed.duplicate === true,
+    draftId: confirmed.draftId ?? null,
+    documentVersionId: confirmed.documentVersionId ?? null,
+  };
+}
+
+export type StatementDraftExtractionView = {
+  extractionId: string;
+  kindHint: 'bank' | 'card' | 'investment' | 'unknown' | null;
+  status: 'pending' | 'extracted' | 'failed';
+  periodStart: string | null;
+  periodEnd: string | null;
+  openingMinor: string | null;
+  endingMinor: string | null;
+  currency: string | null;
+  extractor: string | null;
+  extractorVersion: string | null;
+  confidence: number | null;
+  errorCode: string | null;
+  lineCount: number;
+  holdingCount: number;
+} | null;
+
+export type StatementDraftRow = {
+  draftId: string;
+  documentVersionId: string;
+  accountId: string;
+  accountName: string;
+  accountSubtype: string;
+  accountCurrency: string;
+  sourceHash: string;
+  status: 'pending' | 'extracted' | 'failed' | 'approved' | 'dismissed';
+  statementId: string | null;
+  createdAt: string;
+  originalFilename: string;
+  extraction: StatementDraftExtractionView;
+  /** Ledger balance at the extracted period end (same formula as close). */
+  ledgerEndingMinor: string | null;
+  /** ledger(period_end) − extracted ending. Red only when negative money. */
+  discrepancyMinor: string | null;
+  /** Short-lived signed read URL (5 min, forced download). */
+  url: string | null;
+};
+
+export async function fetchStatementDrafts(householdId: string): Promise<StatementDraftRow[]> {
+  const res = await invoke<{ rows: StatementDraftRow[] }>('api/statements/drafts', { householdId });
+  return res.rows;
+}
+
+export type StatementDraftExtractionLine = {
+  lineNo: number;
+  date: string | null;
+  amountMinor: string;
+  description: string | null;
+  currency: string | null;
+};
+
+export type StatementDraftHolding = {
+  symbol: string | null;
+  cusip: string | null;
+  isin: string | null;
+  name: string | null;
+  qty: string | null;
+  priceMinor: string | null;
+  valueMinor: string | null;
+  costBasisMinor: string | null;
+  currency: string | null;
+};
+
+export type StatementDraftDetail = {
+  draftId: string;
+  accountId: string;
+  status: string;
+  extraction: {
+    extractionId: string;
+    kindHint: 'bank' | 'card' | 'investment' | 'unknown' | null;
+    status: 'pending' | 'extracted' | 'failed';
+    periodStart: string | null;
+    periodEnd: string | null;
+    openingMinor: string | null;
+    endingMinor: string | null;
+    currency: string | null;
+    confidence: number | null;
+  } | null;
+  lines: StatementDraftExtractionLine[];
+  holdings: StatementDraftHolding[];
+};
+
+/** The extraction detail (lines + holdings) for ONE draft — prefills review. */
+export async function fetchStatementDraftDetail(
+  householdId: string,
+  draftId: string,
+): Promise<StatementDraftDetail> {
+  return invoke<StatementDraftDetail>('api/statements/draft-detail', { householdId, draftId });
+}
+
+/**
+ * Issue an approval token bound to the EXACT normalized statement body (Law 11).
+ * Bespoke route → keel_cmd_statements_issue_draft_approval, which reconstructs
+ * the SAME server-normalized v_payload the approve command will redeem (forcing
+ * the draft account + server source_hash + balanceCheck) and hashes it. The
+ * `statement` object passed here MUST be the same one passed to
+ * approveStatementDraft — see runIssueThenApprove (statement-approve.ts).
+ */
+export async function issueStatementDraftApproval(input: {
+  householdId: string;
+  draftId: string;
+  balanceCheck: 'strict' | 'anchor';
+  statement: import('@/lib/statement-approve').StatementBody;
+}): Promise<{ tokenId: string; payloadSha256: string; expiresAt: string }> {
+  return invoke<{ tokenId: string; payloadSha256: string; expiresAt: string }>(
+    'api/statements/issue-draft-approval',
+    {
+      householdId: input.householdId,
+      draftId: input.draftId,
+      balanceCheck: input.balanceCheck,
+      statement: input.statement,
+    },
+  );
+}
+
+/**
+ * Approve a statement draft with a redeemed approval token (Class B, Law 11).
+ * The server redeems the token against the SAME server-normalized body and
+ * materializes it in one transaction — the exact bytes approved are written.
+ */
+export async function approveStatementDraft(input: {
+  householdId: string;
+  userId: string;
+  draftId: string;
+  approvalTokenId: string;
+  balanceCheck: 'strict' | 'anchor';
+  statement: import('@/lib/statement-approve').StatementBody;
+}): Promise<CommandResult> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'statements.approve_draft',
+    economicEventKey: `statements.approve_draft:${input.draftId}:${input.approvalTokenId}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: {
+      draftId: input.draftId,
+      approvalTokenId: input.approvalTokenId,
+      balanceCheck: input.balanceCheck,
+      statement: input.statement,
+    },
+  });
+}
+
+/** Dismiss a statement draft (reversible-to-terminal; never a hard delete). */
+export async function dismissStatementDraft(input: {
+  householdId: string;
+  userId: string;
+  draftId: string;
+}): Promise<CommandResult> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'statements.dismiss_draft',
+    economicEventKey: `statements.dismiss_draft:${input.draftId}:${newId()}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: { draftId: input.draftId },
+  });
+}
