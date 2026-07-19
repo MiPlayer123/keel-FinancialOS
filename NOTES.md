@@ -5432,3 +5432,52 @@ orchestrator applies after review). Branch feat/investments-subtype-canon-cash-u
 - NOT deployed: migration (orchestrator), edge functions (worker calls the 4-arg proc —
   deploy AFTER the migration: node scripts/build-functions.mjs && supabase functions
   deploy api worker).
+
+## Budgeting v2 (SLICES B1/B2/B3) — 2026-07-19
+Direction: docs/harness/plans/budgeting-v2-research.md. Model: "planned total + opt-in
+category targets + residual 'Everything else'." Percents at CATEGORY level are percent-of-
+TOTAL (stable within a month); the TOTAL can be a fixed amount OR percent of expected income.
+Standing effective-dated targets, not per-month copies. leftToBudget = total − Σ resolved.
+
+- B1 (UI-only, ships on budget-v3 backend, no migration): budgets page shows ONLY budgeted
+  categories + a collapsed read-only "Everything else" (Σ spend of unbudgeted non-movement
+  cats) + an Add-category picker. Kills "shows everything" (founder had 134 expense cats
+  rendered). Set-budget-of-null removes a row back to the residual.
+- B2 (backend, migration 20260720170000_budgeting_v2_plan.sql — timestamp after the prior
+  tip 20260720160000): budget_targets (category NULL = plan-total row; effective_month/
+  end_month; target_kind amount|percent_of_total; total_basis amount|percent_of_income;
+  amount_minor BIGINT; percent_bp INT 0..10000; rollover; currency) with row-shape +
+  value-shape + month-order CHECKs and partial-unique "one live row per (hh,cat-or-total,
+  month)". budget_expected_income effective-dated. Commands set_total/set_target/
+  remove_target(SOFT end-date; tombstone end_month=effective_month for same-month removal —
+  NEVER DELETE, soft-delete directive)/set_expected_income, full envelope ritual (keel_api-
+  owned, actor-from-jwt, idempotency, keel_finish_command, ownership guard). Read model
+  keel_budget_month, formulaVersion 'budget-v4-plan': INTEGER-only resolution mirroring
+  packages/ledger/src/budget.ts EXACTLY (floor base×bp/10000; total = amount, or floor(income
+  ×bp/10000), or implicit Σ amount targets with no explicit total); spent via the UNCHANGED
+  pinned v3 split-aware formula; carry vs RESOLVED targets across months. Backfill v1 budgets
+  -> amount targets (idempotent). Export chain extended. Contracts (4 cmd ids + zod
+  discriminated-union payloads, minor STRINGS + int bps), authz (partner floor + budgets.month
+  viewer), api COMMAND_TO_PROC/QUERY_TO_PROC wired.
+- B3 (UI on v4): BudgetPlanHeader (editable total dollar-or-%-of-income + income; Left-to-
+  budget with Over badge, negative=red money — Law 8), BudgetCategoryRow ($ ⇄ % of total
+  toggle + live floor preview via shared lib/budget-percent.ts), RebalanceBudgetsDialog
+  rewired to fit the plan total via set_target.
+- Amendment logged: budget_targets month-order CHECK relaxed to `end_month >= effective_month`
+  (= is a tombstone covering zero live months) so same-month removals stay soft-delete without
+  a DELETE. Deviation justified by the 2026-07-17 soft-delete directive.
+- Verified against scratch Postgres 17 (scaffold + migration clean): v3-equivalence (amount
+  targets resolve to declared, leftToBudget 0), percent-of-total (25% of 300000 = 75000),
+  percent-of-income floor (999999×5000bp = 499999), effective-dating one-live-row, soft
+  remove -> residual, cross-month rollover carry (carry 4000, available 14000), idempotent
+  replay, value-shape CHECK rejection, empty-HH degrade, backfill idempotency+equivalence.
+  packages/ledger budget property tests (17; 100% coverage gate met) + contracts (exclusivity)
+  + authz (action snapshot) + web budget-percent (round-trip/floor) green. apps/web pnpm build
+  (ESLint gate) green on all three branches.
+- Dry-run (read-only) of the v4 read model vs the founder "Personal" HH for 2026-07 (zero
+  targets today): total_basis=implicit_sum, total=0, leftToBudget=0, everythingElse=105156
+  ($1,051.56) across 7 unbudgeted cats — graceful degrade, no 134-cat wall.
+- NOT deployed: migration (orchestrator applies after review) + edge functions (rebuild vendor
+  bundle + redeploy api AFTER the migration: node scripts/build-functions.mjs && supabase
+  functions deploy api worker). v1 budgets table + budget-v3 read model LEFT INTACT until a
+  later cutover slice.
