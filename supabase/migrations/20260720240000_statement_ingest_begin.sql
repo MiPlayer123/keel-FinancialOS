@@ -244,9 +244,14 @@ $$;
 revoke all on function public.keel_statement_ingest_begin(
   uuid, uuid, uuid, uuid, text, text, text, text, bigint, text, uuid
 ) from public, anon;
+-- keel_api needs CREATE on schema public to own a function there (revoked on
+-- live — local-vs-live grant drift); grant-alter-revoke exactly as the export
+-- section below and sibling migrations do.
+grant create on schema public to keel_api;
 alter function public.keel_statement_ingest_begin(
   uuid, uuid, uuid, uuid, text, text, text, text, bigint, text, uuid
 ) owner to keel_api;
+revoke create on schema public from keel_api;
 grant execute on function public.keel_statement_ingest_begin(
   uuid, uuid, uuid, uuid, text, text, text, text, bigint, text, uuid
 ) to service_role, authenticated;
