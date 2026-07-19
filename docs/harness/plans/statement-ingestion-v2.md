@@ -29,6 +29,10 @@
 
 Tests (frozen first): issue→redeem happy; tamper rejected; replay rejected P0007; expiry; wrong-actor; wrong-scope; wrong proposal_version. Contract: ApprovalTokenSchema round-trips.
 
+**Slice 0 SHIPPED (PR #102, applied to live 2026-07-19).** Review = SHIP. Byte-identical `keel_statement_create` refactor independently verified. Two advisories to carry forward:
+- **[GATE — advisory A] redeem↔command payload binding is caller-enforced, NOT primitive-enforced.** `keel_approval_token_redeem` verifies `hash(normalized_payload)==payload_sha256` but does not RETURN the payload. So the "exact bytes approved = exact bytes executed" guarantee holds ONLY IF the calling command (`keel_cmd_statements_approve_draft`, Slice 3; and the paycheck apply command) binds a SINGLE local `v_payload` and passes it to BOTH `keel_approval_token_redeem(...)` AND `keel_statement_validate_and_materialize(...)` inside one transaction. **This is a HARD GATE on every slice that wires a token-bound command**: its pgTAP must assert a redeem-payload-A / execute-payload-B attempt is impossible by construction.
+- **[advisory B]** the exporter `ALL_PUBLIC_TABLES` completeness guard is a hardcoded count, not a live-schema diff (pre-existing [A11] limitation). Eventually add a real `information_schema.tables` diff guard.
+
 ## 1. Capability boundary — typed IO port — [A1]
 `StatementJobIO` is the ONLY object touching Supabase/fetch/Storage/rpc: `resolveVersion` (one household-verified `.from` read), `download` (one Storage read), `extractPdf` (one fixed extractor endpoint), `persist` (exactly `keel_worker_persist_statement_extraction`). Parsers (`packages/documents/src/statement/*`) and extraction core receive **only Uint8Array bytes / typed data**. `worker/statement-extract.ts` composes resolve→download→route→parse→persist; no `.rpc` beyond persist.
 **CI static check** `scripts/check-capability-boundary.mjs` (wired into build/CI): fail if any parser/core file references `supabase|createClient|\.rpc\(|\.from\(|\.storage|fetch\(|@supabase`. Golden-negative test asserts it fires on a planted violation.
