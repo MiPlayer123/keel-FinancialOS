@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { Banknote, Plus, Loader2, ChevronRight, Pencil, Trash2, Undo2, Sparkles } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Banknote, Plus, Loader2, ChevronRight, Pencil, Trash2, Undo2, Sparkles, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
@@ -10,8 +10,13 @@ import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery } from '@/lib/use-keel-query';
 import {
   fetchEntities,
+  fetchRecurringClassification,
+  fetchDetectedPaycheckDismissals,
+  dismissDetectedPaycheck,
   keelCommand,
   newId,
+  type RecurringClassificationRow,
+  type DetectedPaycheckDismissal,
   type RecurringSeriesRow,
   type RichTransactionRow,
 } from '@/lib/keel-api';
@@ -206,6 +211,20 @@ function PaychecksBody() {
   // SOME entity, so the household's first (personal households only ever
   // have one) stands in — same fallback pattern as the Plaid connect flow.
   const [entityId, setEntityId] = useState<string | null>(null);
+  // Classification (paycheck vs plain income) + declined occurrences. The
+  // "detected paychecks" section shows ONLY payroll (bucket==='paycheck'),
+  // never all inflows — dividends/interest never appear here.
+  const [classification, setClassification] = useState<RecurringClassificationRow[]>([]);
+  const [dismissals, setDismissals] = useState<DetectedPaycheckDismissal[]>([]);
+
+  const reloadDismissals = useCallback(() => {
+    if (!householdId) return;
+    void fetchDetectedPaycheckDismissals(householdId)
+      .then(setDismissals)
+      .catch(() => {
+        setDismissals([]);
+      });
+  }, [householdId]);
 
   useEffect(() => {
     if (!householdId) return;
@@ -216,17 +235,54 @@ function PaychecksBody() {
       .catch(() => {
         setEntityId(null);
       });
-  }, [householdId]);
+    void fetchRecurringClassification(householdId)
+      .then(setClassification)
+      .catch(() => {
+        setClassification([]);
+      });
+    reloadDismissals();
+  }, [householdId, reloadDismissals]);
 
-  // Detected income = recurring INFLOW series (the detector already found
-  // the payday cadence); recording stays explicit (suggest→approve).
+  const bucketBySeries = useMemo(
+    () => new Map(classification.map((c) => [c.seriesId, c.bucket])),
+    [classification],
+  );
+  // A dismissal is keyed by (employerKey = lower(trim(counterpartyKey)),
+  // occurrenceDate). Build a set for O(1) exclusion of declined occurrences.
+  const dismissedKeys = useMemo(
+    () => new Set(dismissals.map((d) => `${d.employerKey}|${d.occurrenceDate}`)),
+    [dismissals],
+  );
+
+  // Detected PAYCHECKS = recurring INFLOW series the deterministic classifier
+  // marked 'paycheck' (payroll/wages only — dividends/interest are plain
+  // 'income' and are NOT shown here). Recording stays explicit (suggest→approve).
   const detectedIncome = useMemo(
     () =>
       recurring.rows.filter(
-        (r) => r.sign === 'inflow' && (r.status === 'confirmed' || r.status === 'suggested'),
+        (r) =>
+          r.sign === 'inflow' &&
+          (r.status === 'confirmed' || r.status === 'suggested') &&
+          bucketBySeries.get(r.seriesId) === 'paycheck',
       ),
-    [recurring.rows],
+    [recurring.rows, bucketBySeries],
   );
+
+  // The occurrence each detected-paycheck card surfaces (next upcoming, else the
+  // latest). Hide a card whose surfaced occurrence has been DECLINED — but keep
+  // the series if it has a different, non-declined occurrence to offer.
+  const detectedPaychecks = useMemo(() => {
+    const todayIso = new Date().toISOString().slice(0, 10);
+    return detectedIncome.filter((series) => {
+      const upcoming = series.occurrences
+        .filter((o) => o.status === 'expected')
+        .sort((a, b) => a.expectedDate.localeCompare(b.expectedDate));
+      const shown = upcoming.find((o) => o.expectedDate >= todayIso) ?? upcoming[0];
+      if (!shown) return true; // no dated occurrence to decline; still show it
+      const employerKey = series.counterpartyKey.trim().toLowerCase();
+      return !dismissedKeys.has(`${employerKey}|${shown.expectedDate}`);
+    });
+  }, [detectedIncome, dismissedKeys]);
 
   // F-025: derive a per-employer template from that employer's most recent
   // ACTIVE paycheck (rows are pay_date-desc), keyed by lowercased name so a
@@ -291,14 +347,14 @@ function PaychecksBody() {
         </Button>
       </div>
 
-      {detectedIncome.length > 0 ? (
+      {detectedPaychecks.length > 0 ? (
         <section className="space-y-2">
           <h2 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
             <Sparkles className="size-4" />
-            Detected income
+            Detected paychecks
           </h2>
           <div className="space-y-2">
-            {detectedIncome.map((series) => {
+            {detectedPaychecks.map((series) => {
               const todayIso = new Date().toISOString().slice(0, 10);
               const upcoming = series.occurrences
                 .filter((o) => o.status === 'expected')
@@ -306,6 +362,9 @@ function PaychecksBody() {
               const next = upcoming.find((o) => o.expectedDate >= todayIso);
               const amount = next ?? upcoming[0];
               const template = templatesByEmployer.get(series.counterpartyKey.trim().toLowerCase());
+              // The occurrence this card surfaces. Declining hides THIS one; the
+              // employer + latest detected deposit stay for the next paycheck.
+              const occurrenceDate = amount?.expectedDate ?? null;
               return (
                 <div
                   key={series.seriesId}
@@ -386,6 +445,19 @@ function PaychecksBody() {
                     >
                       {template ? 'Start blank' : 'Record this paycheck'}
                     </Button>
+                    <DeclineDetectedButton
+                      disabled={!householdId || !userId || occurrenceDate === null}
+                      onDecline={async () => {
+                        if (!householdId || !userId || occurrenceDate === null) return;
+                        await dismissDetectedPaycheck({
+                          householdId,
+                          userId,
+                          seriesId: series.seriesId,
+                          occurrenceDate,
+                        });
+                        reloadDismissals();
+                      }}
+                    />
                   </div>
                 </div>
               );
@@ -444,6 +516,45 @@ function PaychecksBody() {
         }}
       />
     </div>
+  );
+}
+
+/**
+ * Decline a detected paycheck occurrence: hides it from this section while
+ * KEEPING the employer + latest detected deposit as the prefill template (the
+ * command persists a soft-state dismissal; it never mutes the series). Class-B
+ * suggest→approve — the user is approving "not this one".
+ */
+function DeclineDetectedButton({
+  disabled,
+  onDecline,
+}: {
+  disabled: boolean;
+  onDecline: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      disabled={disabled || busy}
+      onClick={() => {
+        setBusy(true);
+        void onDecline()
+          .then(() => {
+            toast.success("Hidden. We'll still prefill from the latest deposit next time.");
+          })
+          .catch((err: unknown) => {
+            toast.error(err instanceof Error ? err.message : 'Could not decline.');
+          })
+          .finally(() => {
+            setBusy(false);
+          });
+      }}
+    >
+      {busy ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
+      Decline
+    </Button>
   );
 }
 

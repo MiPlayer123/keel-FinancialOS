@@ -32,6 +32,7 @@ describe('action vocabulary', () => {
       'paychecks.edit',
       'paychecks.reverse',
       'paychecks.restore',
+      'paychecks.dismiss_detected',
       'reimbursements.create_claim',
       'reimbursements.settle',
       'reimbursements.reverse_settlement',
@@ -59,6 +60,7 @@ describe('action vocabulary', () => {
       'recurring.classification',
       'recurring.schedule_links',
       'paychecks.list',
+      'paychecks.detected_dismissals',
       'reimbursements.list',
       'statements.list',
       'statements.cadence',
@@ -74,7 +76,9 @@ describe('action vocabulary', () => {
     expect(ACTION_MINIMUM_ROLES['paychecks.edit']).toBe('partner');
     expect(ACTION_MINIMUM_ROLES['paychecks.reverse']).toBe('partner');
     expect(ACTION_MINIMUM_ROLES['paychecks.restore']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['paychecks.dismiss_detected']).toBe('partner');
     expect(ACTION_MINIMUM_ROLES['paychecks.list']).toBe('viewer');
+    expect(ACTION_MINIMUM_ROLES['paychecks.detected_dismissals']).toBe('viewer');
   });
 
   it('requires partner for reimbursement mutations and viewer for reads',()=>{

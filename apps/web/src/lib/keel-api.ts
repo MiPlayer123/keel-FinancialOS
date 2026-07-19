@@ -1510,7 +1510,17 @@ export type RecurringSeriesRow = {
 // ---- F-028 recurring classification + manual-schedule linking --------------
 // 'excluded' = a detected series that is NOT a subscription/bill/income and must
 // not be offered as recurring (personal P2P transfers). C, docs/RECURRING-RESEARCH.md.
-export type RecurringBucket = 'income' | 'subscription' | 'utility' | 'bill' | 'excluded';
+// 'paycheck' = a PAYROLL/WAGES inflow (deterministic classifier, 20260719090000):
+// shown on the Recurring page marked as a paycheck AND the only inflow class the
+// Paychecks page's "detected paychecks" section surfaces. Non-payroll inflows
+// (dividends, interest, other) stay 'income'.
+export type RecurringBucket =
+  | 'income'
+  | 'paycheck'
+  | 'subscription'
+  | 'utility'
+  | 'bill'
+  | 'excluded';
 export type RecurringClassificationRow = {
   seriesId: string;
   bucket: RecurringBucket;
@@ -1565,6 +1575,43 @@ export async function unlinkRecurringSchedule(input: {
     actor: { kind: 'user', userId: input.userId },
     householdId: input.householdId,
     payload: { linkId: input.linkId },
+  });
+}
+
+// ---- Declined detected paychecks (20260719090000) --------------------------
+// A dismissal hides ONE detected-paycheck occurrence (employer + date) from the
+// Paychecks page while keeping the employer + latest detected deposit as the
+// prefill template. Keyed by employerKey = lower(trim(counterpartyKey)).
+export type DetectedPaycheckDismissal = {
+  dismissalId: string;
+  seriesId: string;
+  employerKey: string;
+  occurrenceDate: string;
+};
+
+export async function fetchDetectedPaycheckDismissals(
+  householdId: string,
+): Promise<DetectedPaycheckDismissal[]> {
+  const res = await keelQuery<DetectedPaycheckDismissal>(
+    'paychecks.detected_dismissals',
+    householdId,
+  );
+  return res.rows;
+}
+
+export async function dismissDetectedPaycheck(input: {
+  householdId: string;
+  userId: string;
+  seriesId: string;
+  occurrenceDate: string;
+}): Promise<unknown> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'paychecks.dismiss_detected',
+    economicEventKey: `paychecks.dismiss_detected:${input.seriesId}:${input.occurrenceDate}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: { seriesId: input.seriesId, occurrenceDate: input.occurrenceDate },
   });
 }
 
