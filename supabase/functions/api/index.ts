@@ -2243,8 +2243,17 @@ export default {
       const originalFilename = input['originalFilename'];
       const targetType = input['targetType'];
       const targetId = input['targetId'];
+      // Discriminated attach-vs-ingest [A3]. Absent `mode` == 'attach' for
+      // backward compatibility (legacy AttachmentsSection callers). `ingest` is
+      // the new statement path: an account is REQUIRED and NO target/attachment
+      // is created — it mints a draft instead. An attach can never carry an
+      // accountId and an ingest can never carry a target, by construction.
+      const mode: 'attach' | 'ingest' = input['mode'] === 'ingest' ? 'ingest' : 'attach';
       const targetTypeParsed =
         targetType === undefined ? undefined : DocumentTargetTypeSchema.safeParse(targetType);
+      const accountIdParsed =
+        input['accountId'] === undefined ? undefined : AccountIdSchema.safeParse(input['accountId']);
+      // Shared shape checks (both modes).
       if (
         !householdId.success ||
         !entityId.success ||
@@ -2263,15 +2272,46 @@ export default {
           !storagePath.startsWith(`${householdId.data}/${documentId.data}/`)) ||
         typeof originalFilename !== 'string' ||
         originalFilename.length === 0 ||
-        originalFilename.length > 255 ||
-        (targetType !== undefined && (!targetTypeParsed?.success || typeof targetId !== 'string')) ||
-        (targetType === undefined && targetId !== undefined)
+        originalFilename.length > 255
       ) {
         return json(400, {
           code: 'invalid_command',
           message: 'Confirm-upload request failed validation.',
           details: {},
         });
+      }
+      if (mode === 'ingest') {
+        // Ingest [A3]: statements only, an account is REQUIRED, and a
+        // target/attachment is FORBIDDEN — an ingest never attaches.
+        if (
+          kind.data !== 'statement' ||
+          storageBucket !== 'statements' ||
+          !accountIdParsed?.success ||
+          targetType !== undefined ||
+          targetId !== undefined
+        ) {
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Statement ingest requires an account and no attachment target.',
+            details: {},
+          });
+        }
+      } else {
+        // Attach: the target pair is optional (an unattached receipt in the
+        // bulk-upload inbox has neither), but if present BOTH must be present and
+        // valid. An accountId is FORBIDDEN in attach mode — that would be an
+        // ingest smuggled in past the discriminator [A3].
+        if (
+          input['accountId'] !== undefined ||
+          (targetType !== undefined && (!targetTypeParsed?.success || typeof targetId !== 'string')) ||
+          (targetType === undefined && targetId !== undefined)
+        ) {
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Confirm-upload request failed validation.',
+            details: {},
+          });
+        }
       }
       if ((kind.data === 'receipt' ? 'receipts' : 'statements') !== storageBucket) {
         return json(400, {
@@ -2369,6 +2409,55 @@ export default {
           message: `Unsupported file type: ${mimeType}`,
           details: {},
         });
+      }
+
+      if (mode === 'ingest') {
+        // Statement ingest [A3/A4/A12]. keel_statement_ingest_begin does the
+        // draft + transactional-outbox insert ATOMICALLY (a committed draft
+        // always has a committed delivery record) and dedupes on tenant content
+        // hash — a re-upload of the same bytes returns duplicate:true with the
+        // prior draft BEFORE minting a new one. source_hash is server-bound from
+        // the content_sha256 computed above, never client input (Law 5).
+        const { data, error } = await ctx.supabaseAdmin.rpc('keel_statement_ingest_begin', {
+          p_household_id: householdId.data,
+          p_entity_id: entityId.data,
+          p_document_id: documentId.data,
+          p_account_id: accountIdParsed!.data,
+          p_storage_bucket: canonicalBucketFor(kind.data),
+          p_storage_path: storagePath,
+          p_content_sha256: contentSha256,
+          p_mime_type: mimeType,
+          p_byte_size: bytes.byteLength,
+          p_original_filename: originalFilename,
+          p_created_by: userId,
+        });
+        if (error) return mapDbError(error);
+
+        const ingest = data as {
+          duplicate?: boolean;
+          documentVersionId?: string;
+          draftId?: string | null;
+        };
+        // Enqueue the extract job only for a FRESH draft (a duplicate already has
+        // one in flight or done; a re-enqueue would be redundant, though the
+        // worker is idempotent per version anyway). Best-effort: a queue/drain
+        // failure cannot undo the already-durable draft+outbox — the outbox
+        // sweeper (Slice 5) re-drives any dropped enqueue [A12].
+        const documentVersionId = ingest?.documentVersionId;
+        if (!ingest?.duplicate && typeof documentVersionId === 'string') {
+          const { error: enqueueError } = await ctx.supabaseAdmin.rpc('keel_enqueue', {
+            queue_name: 'sync_events',
+            message: {
+              jobType: 'statement_extract',
+              economicEventKey: `statement:extract:${documentVersionId}`,
+              refs: { documentVersionId, householdId: householdId.data },
+            },
+          });
+          if (!enqueueError) {
+            await ctx.supabaseAdmin.rpc('keel_cron_drain_sync', {});
+          }
+        }
+        return json(200, data);
       }
 
       const { data, error } = await ctx.supabaseAdmin.rpc('keel_documents_confirm_upload', {
@@ -2499,6 +2588,51 @@ export default {
         }),
       );
       return json(200, { rows: withUrls });
+    }
+
+    // Statement ingestion Slice 6 — drafts inbox. Mirrors /receipts/inbox: the
+    // proc (keel_list_statement_drafts) is ACCOUNT-scope filtered [A10] and
+    // returns storage pointers; this route mints the per-row short-lived signed
+    // read URL Postgres cannot sign. Served as Content-Disposition: attachment
+    // (never inline) so a hostile statement original can never execute in the
+    // browser (Law 5).
+    if (path === '/statements/drafts') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      if (!householdId.success) {
+        return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });
+      }
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'statements.drafts', {
+        kind: 'household',
+        householdId: householdId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+      const { data, error } = await ctx.supabase.rpc('keel_list_statement_drafts', {
+        p_household_id: householdId.data,
+      });
+      if (error) return mapDbError(error);
+      const rows = (data as { rows: Record<string, unknown>[] })?.rows ?? [];
+      const withUrls = await Promise.all(
+        rows.map(async (row) => {
+          const bucket = row['storageBucket'];
+          const objectPath = row['storagePath'];
+          // Statement originals live only in the canonical `statements` bucket;
+          // sign a 5-min read URL, forced to download (never inline) [A9].
+          if (bucket !== 'statements' || typeof objectPath !== 'string') {
+            return { ...row, url: null };
+          }
+          const { data: signed } = await ctx.supabaseAdmin.storage
+            .from('statements')
+            .createSignedUrl(objectPath, DOCUMENT_SIGNED_URL_TTL_S, { download: true });
+          return { ...row, url: signed?.signedUrl ?? null };
+        }),
+      );
+      return json(200, { ...(data as Record<string, unknown>), rows: withUrls });
     }
 
     if (path === '/commands') {

@@ -177,3 +177,42 @@ describe('statement-ingestion export (SLICE 3)', () => {
     expect(() => toJson(poisoned)).toThrow(ExportSecretError);
   });
 });
+
+// SLICE 6 (statement-ingestion-v2.md §5/§8/§12 [A11]) — statement_outbox, the
+// transactional-outbox delivery ledger, joins the audited export contract (its
+// table shipped in Slice 5 with export deferred; this is where the layer lands).
+const outboxRow = () => ({
+  id: '99999999-9999-4999-8999-999999999999',
+  household_id: HOUSEHOLD,
+  document_version_id: '44444444-4444-4444-8444-444444444444',
+  account_id: '00000000-0000-4000-8000-00000000a401',
+  status: 'pending',
+  enqueue_count: 1,
+  last_enqueued_at: '2026-06-30T12:05:00.000Z',
+  delivered_at: null,
+  created_at: '2026-06-30T12:00:00.000Z',
+});
+
+describe('statement_outbox export (SLICE 6)', () => {
+  it('is in the audited INCLUDE list', () => {
+    expect(INCLUDE.find((e) => e.table === 'statement_outbox')).toBeDefined();
+  });
+
+  it('serializes to a CSV file with an explicit header', () => {
+    const snap = snapshot({
+      tables: { ...emptyTables(), statement_outbox: [outboxRow()] } as never,
+    });
+    const files = toCsvFiles(snap);
+    expect(files.find((f) => f.name === 'statement_outbox.csv')).toBeDefined();
+  });
+
+  it('round-trips through JSON', () => {
+    const original = snapshot({
+      tables: { ...emptyTables(), statement_outbox: [outboxRow()] } as never,
+    });
+    const restored = fromJson(toJson(original));
+    expect(restored.tables.statement_outbox).toHaveLength(1);
+    const once = toJson(original);
+    expect(toJson(fromJson(once))).toBe(once);
+  });
+});
