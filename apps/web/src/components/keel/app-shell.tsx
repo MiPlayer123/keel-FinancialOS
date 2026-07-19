@@ -39,6 +39,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { KeelLogo, KeelMark } from '@/components/keel/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { useHousehold } from '@/components/keel/household-context';
+import { EntityLensSwitcher } from '@/components/keel/entity-lens-switcher';
 import {
   fetchAccounts,
   fetchConnections,
@@ -473,6 +474,16 @@ export function AppShell({ children }: { children: ReactNode }) {
           ) : null}
         </div>
 
+        {/* Global entity lens (persona theme #2). Renders itself only for a
+            multi-entity household; in the collapsed rail there's no room for a
+            labelled control, so it's shown at full width only when expanded —
+            single-entity households and the collapsed rail see nothing. */}
+        {isCollapsed ? null : (
+          <div className="px-3 pb-3">
+            <EntityLensSwitcher className="w-full" />
+          </div>
+        )}
+
         <div
           className={cn(
             'flex-1',
@@ -597,7 +608,12 @@ export function AppShell({ children }: { children: ReactNode }) {
             </SheetContent>
           </Sheet>
           <KeelLogo />
-          <div className="w-9" />
+          {/* Entity lens on phones. The switcher self-hides for single-entity
+              households; the min-w-9 wrapper preserves the right-side spacer so
+              the logo stays centered whether or not the control renders. */}
+          <div className="flex min-w-9 justify-end">
+            <EntityLensSwitcher className="h-9 max-w-[9rem]" />
+          </div>
         </header>
 
         {/* C17: bottom padding reserves room for the fixed phone-width tab
