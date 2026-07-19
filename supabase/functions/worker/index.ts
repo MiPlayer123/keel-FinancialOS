@@ -48,6 +48,7 @@ import {
   SyncCompletionError,
 } from './sync-completion.ts';
 import { processReceiptExtractJob } from './receipt-extract.ts';
+import { processStatementExtractJob, makeStatementJobIO } from './statement-extract.ts';
 
 const MAX_ATTEMPTS = 5;
 const VISIBILITY_TIMEOUT_S = 8;
@@ -1385,6 +1386,12 @@ export default {
       } else if (msg.message.jobType === 'receipt_extract') {
         // WS-J / F-030: receipt extraction (AI class B) + deterministic match.
         outcome = await processReceiptExtractJob(admin, msg.message.refs);
+      } else if (msg.message.jobType === 'statement_extract') {
+        // Statement ingestion Slice 5 [A12]: extract an uploaded bank/card/
+        // investment statement (AI class B). All IO goes through the typed
+        // StatementJobIO port [A1]; the only rpc it issues is the allowlisted
+        // keel_worker_persist_statement_extraction (Law 5).
+        outcome = await processStatementExtractJob(makeStatementJobIO(admin), msg.message.refs);
       } else {
         outcome = { ok: false, detail: `unknown jobType ${msg.message.jobType}` };
       }
