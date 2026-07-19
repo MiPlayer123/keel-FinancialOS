@@ -267,6 +267,11 @@ export type InvestmentHoldingRow = {
   priceMinor: string;
   valueMinor: string;
   costBasisMinor: string | null;
+  /** value − cost basis (signed minor units), or null when basis is unknown —
+   *  never fabricated to 0 (Law 9: an unreported basis is a real distinction). */
+  unrealizedGainMinor: string | null;
+  /** Unrealized return in integer basis points, or null when basis is null or 0. */
+  unrealizedGainBps: string | null;
   currency: string;
   source: 'manual' | 'plaid';
 };
@@ -293,6 +298,13 @@ export type InvestmentsOverview = {
    *  they are never folded into these (no FX conversion happens server-side). */
   totalHoldingsValueMinor: string;
   totalBalanceMinor: string;
+  /** USD cost basis / unrealized gain over the WITH-BASIS subset only. When
+   *  holdingsWithBasisCount < holdingsCount, the excluded rows must be surfaced
+   *  (Law 9): the gain total never mixes a full-value total against a partial cost. */
+  totalCostBasisMinor: string;
+  totalUnrealizedGainMinor: string;
+  holdingsWithBasisCount: number;
+  holdingsCount: number;
   balancesByCurrency: CurrencyTotalRow[];
   holdingsValueByCurrency: CurrencyValueRow[];
   currency: string;
@@ -312,6 +324,11 @@ export async function fetchInvestmentsOverview(householdId: string): Promise<Inv
     holdingsErrors: Array.isArray(data.holdingsErrors) ? data.holdingsErrors : [],
     totalHoldingsValueMinor: data.totalHoldingsValueMinor ?? '0',
     totalBalanceMinor: data.totalBalanceMinor ?? '0',
+    totalCostBasisMinor: data.totalCostBasisMinor ?? '0',
+    totalUnrealizedGainMinor: data.totalUnrealizedGainMinor ?? '0',
+    holdingsWithBasisCount:
+      typeof data.holdingsWithBasisCount === 'number' ? data.holdingsWithBasisCount : 0,
+    holdingsCount: typeof data.holdingsCount === 'number' ? data.holdingsCount : 0,
     balancesByCurrency: Array.isArray(data.balancesByCurrency) ? data.balancesByCurrency : [],
     holdingsValueByCurrency: Array.isArray(data.holdingsValueByCurrency)
       ? data.holdingsValueByCurrency

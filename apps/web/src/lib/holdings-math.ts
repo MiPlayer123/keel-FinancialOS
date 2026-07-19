@@ -38,3 +38,27 @@ export function computeHoldingValueMinor(qty: string, priceMinor: string): strin
   const value = (numerator + divisor / 2n) / divisor;
   return value.toString();
 }
+
+/**
+ * One-decimal percent label for an unrealized-return figure expressed in
+ * integer basis points (the exact ratio the read model already computed as
+ * `unrealizedGainBps` — 2500 bps = +25.0%). Mirrors `percentDeltaLabel`
+ * (net-worth-window.ts): pure BigInt math, U+2212 minus (matches `formatMoney`),
+ * sign taken from the value itself so "−4 bps" renders "−0.0%" not "+0.0%".
+ *
+ * Returns null when `bps` is null (a missing / zero cost basis has no defined
+ * return — never fabricate 0% or 100%).
+ */
+export function formatGainBpsLabel(bps: string | null): string | null {
+  if (bps === null) return null;
+  const trimmed = bps.trim();
+  if (!/^-?\d+$/.test(trimmed)) return null;
+  const b = BigInt(trimmed);
+  if (b === 0n) return '0.0%';
+  // bps → tenths of a percent: 100 bps = 1% = 10 tenths, so tenths = bps ÷ 10,
+  // truncated toward zero by BigInt division (same truncation as percentDeltaLabel).
+  const tenths = b / 10n;
+  const abs = tenths < 0n ? -tenths : tenths;
+  const sign = b < 0n ? '−' : '+';
+  return `${sign}${(abs / 10n).toString()}.${(abs % 10n).toString()}%`;
+}
