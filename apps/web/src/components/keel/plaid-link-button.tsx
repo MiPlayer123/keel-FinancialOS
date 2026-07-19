@@ -6,23 +6,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Plus, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { EntityPicker } from '@/components/keel/entity-picker';
 import {
   createLinkToken,
   exchangePublicToken,
   fetchEntities,
-  type EntityRow,
 } from '@/lib/keel-api';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Label } from '@/components/ui/label';
 
 function PlaidLinkLauncher({
   token,
@@ -47,16 +36,19 @@ function PlaidLinkLauncher({
 
 /**
  * Opens the real Plaid Link modal (works in sandbox + production). Flow:
- * click → resolve the DEFAULT entity for the connection (silently, when
- * there's only one; via a picker once a household has 2+) → create a
- * link_token from our backend → open Plaid Link → on success the browser
- * hands back a public_token → our backend exchanges it for a connection.
+ * click → pick a DEFAULT entity for the connection silently (no prompt,
+ * ever) → create a link_token from our backend → open Plaid Link → on
+ * success the browser hands back a public_token → our backend exchanges it
+ * for a connection.
  *
- * The chosen entity is only a DEFAULT: keel_finalize_link resolves each
- * account's entity individually — a reconnected account keeps the entity it
- * already had, an account with a business name (LLC / "Business") auto-lands
- * in the household's lone business entity, and everything else falls to this
- * default. Any account can be reassigned afterwards, so this is never a lock.
+ * The chosen entity is only a DEFAULT fallback: keel_finalize_link resolves
+ * each account's entity individually (keel_resolve_finalize_entity) — a
+ * reconnected account keeps the entity it already had, an account with a
+ * business name (LLC / "Business") auto-lands in the household's business
+ * entity, and everything else falls to the household's PERSONAL entity. Since
+ * the server re-derives the right entity per account, there's nothing to ask:
+ * we pass the personal entity (or the first entity) as the default and go
+ * straight into Plaid Link. Any account can be reassigned afterwards.
  */
 export function PlaidLinkButton({
   householdId,
@@ -69,11 +61,6 @@ export function PlaidLinkButton({
   const [token, setToken] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
-
-  const [entities, setEntities] = useState<EntityRow[] | null>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [pickerEntityId, setPickerEntityId] = useState('');
-  const [pickerCreatingEntity, setPickerCreatingEntity] = useState(false);
 
   const onSuccess = useCallback<PlaidLinkOnSuccess>(
     (publicToken, metadata) => {
@@ -128,27 +115,22 @@ export function PlaidLinkButton({
   async function connect() {
     setBusy(true);
     try {
-      // Always fetch fresh — a cached list could be stale (an entity
-      // created since the last click, or reassignment work done elsewhere)
-      // and silently pick the wrong entity or skip the picker it should show.
+      // Always fetch fresh — a cached list could be stale (an entity created
+      // since the last click) and pick a since-removed entity as the default.
       const rows = await fetchEntities(householdId);
-      setEntities(rows);
-      if (rows.length === 0) {
+      const first = rows[0];
+      if (!first) {
         toast.error('No entity to attach the connection to. Add one from Accounts first.');
         setBusy(false);
         return;
       }
-      const first = rows[0];
-      if (rows.length === 1 && first) {
-        await beginPlaidFlow(first.entityId);
-        return;
-      }
-      // 2+ entities: which books this connection belongs to isn't obvious —
-      // ask instead of silently guessing (BC-v2.1 §9.1 explicit ownership).
-      setPickerCreatingEntity(false);
-      setPickerEntityId(first?.entityId ?? '');
-      setPickerOpen(true);
-      setBusy(false);
+      // No prompt, ever: the server resolves each account's entity per account
+      // (keel_resolve_finalize_entity) — reconnect-inherit, business-name
+      // heuristic, else the household's PERSONAL entity. The entityId we send
+      // is only a fallback default, so prefer the personal entity when present
+      // and otherwise fall back to the first row.
+      const defaultEntityId = rows.find((r) => r.kind === 'personal')?.entityId ?? first.entityId;
+      await beginPlaidFlow(defaultEntityId);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not load entities.');
       setBusy(false);
@@ -170,52 +152,6 @@ export function PlaidLinkButton({
         {busy ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
         Connect a bank
       </Button>
-      <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Default entity for this connection</DialogTitle>
-            <DialogDescription>
-              Each account is assigned its own entity: accounts with a business name (LLC,
-              &ldquo;Business&rdquo;, etc.) land in your business books automatically, everything else
-              in the one below. You can reassign any account later.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-1.5">
-            <Label>Default entity</Label>
-            {entities ? (
-              <EntityPicker
-                householdId={householdId}
-                entities={entities}
-                value={pickerEntityId}
-                onChange={setPickerEntityId}
-                onEntityCreated={(created) => {
-                  setEntities((prev) => [...(prev ?? []), created]);
-                }}
-                onCreatingNewChange={setPickerCreatingEntity}
-              />
-            ) : null}
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setPickerOpen(false);
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              disabled={!pickerEntityId || pickerCreatingEntity}
-              onClick={() => {
-                setPickerOpen(false);
-                void beginPlaidFlow(pickerEntityId);
-              }}
-            >
-              Continue
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   );
 }
