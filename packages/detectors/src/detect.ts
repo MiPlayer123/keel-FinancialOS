@@ -361,7 +361,17 @@ export const detectRecurringSeries = (
   for (const transaction of parsed) {
     const counterpartyKey = transaction.counterpartyKey?.trim().toLowerCase() || normalizeCounterparty(transaction.description);
     const sign: TransactionSign = transaction.amount < 0n ? 'outflow' : 'inflow';
-    const key = [counterpartyKey, transaction.accountId, transaction.ledgerAccountId, sign, transaction.currency, NORMALIZER_VERSION].join('|');
+    // NORMALIZER_VERSION is deliberately NOT part of the group/series key — same as
+    // DETECTOR_VERSION and CONFIDENCE_VERSION, which live only in inputFingerprint.
+    // The series_key is the STABLE identity of a recurring series across the household;
+    // a normalizer bump (v1→v2) must re-detect the SAME series (a new candidate version
+    // under the existing series, the intended supersession path via
+    // ON CONFLICT (household_id, series_key) DO NOTHING), never mint a duplicate
+    // "twin" series that reappears as Suggested next to an already-CONFIRMED one and
+    // double-counts in projections. The normalizer version still fingerprints the
+    // detection INPUT below (line ~416) so re-detection is recorded, and rides the
+    // per-series normalizerVersion field — it just no longer forks the key.
+    const key = [counterpartyKey, transaction.accountId, transaction.ledgerAccountId, sign, transaction.currency].join('|');
     const group = groups.get(key) ?? { counterpartyKey, sign, rows: [] };
     group.rows.push(transaction);
     groups.set(key, group);

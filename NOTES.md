@@ -4,6 +4,52 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-19 — fix(recurring): review P1/P2 — supersede across normalizer bump + stop PayPal over-suppression
+
+Review of the B→A→C recurring fix surfaced two defects; fixed on this branch.
+
+P1 (blocking) — twin-series duplication on the normalizer bump. `NORMALIZER_VERSION`
+was embedded in the group/series_key composition in packages/detectors/src/detect.ts
+(~line 364, flowing into seriesKey ~line 379). This PR is the first-ever normalizer
+bump (v1→v2), so v2 re-detection produced a DIFFERENT series_key than v1; the upsert
+`ON CONFLICT (household_id, series_key) DO NOTHING` then inserted a NEW Suggested
+series instead of superseding, so every already-CONFIRMED series (e.g. an approved
+Spotify) reappeared as a duplicate twin and double-counted in projections. Fix
+(approach a): removed `NORMALIZER_VERSION` from the key composition, keeping it ONLY
+in inputFingerprint (~line 426) and the per-series normalizerVersion field (~line 429)
+— exactly how DETECTOR_VERSION/CONFIDENCE_VERSION were already handled. v2 re-detection
+now reuses the same series_key → new candidate version under the existing series (the
+intended supersession path); confirmed series untouched. Suppression (C) logic
+unchanged — only the KEY composition changed. Regression test added
+(packages/detectors/test/detect.test.ts, "keeps series_key STABLE across a
+normalizer-version bump (no twin series)"): asserts the emitted seriesKey equals
+fingerprint of the group+cadence+anchor+amount composition WITHOUT any normalizer
+token, so bumping NORMALIZER_VERSION cannot change it.
+
+P2 — PayPal over-suppression. packages/detectors/src/normalize.ts P2P_PATTERNS
+included bare `\bpaypal\b` / `\bpay\s*pal\b`, which suppressed REAL PayPal-billed
+merchant subscriptions whose bank memos lead with the rail token ("PAYPAL *SPOTIFY",
+"PP*NYTIMES"). Venmo/Zelle/Cash App/Square Cash are pure P2P (kept); PayPal is a mixed
+rail. Fix: dropped PayPal from hard P2P suppression entirely (safe default). The A
+quality gate still rejects irregular personal PayPal transfers. Updated the C classifier
+test (PayPal now → null) and added a detection-level test proving a clean monthly
+PayPal-billed subscription fires. Decision documented in a normalize.ts comment.
+
+P2 (cosmetic) FIX 3 — SKIPPED. `keel_list_recurring`'s top-level `formulaVersion`
+label is still 'recurring-grid-v1' (from main's 20260712120000_recurring.sql). Bumping
+it to v2 would require reproducing that ~115-line read proc (intricate nested jsonb
+aggregation + status-lifecycle + occurrence joins + ownership/grant guards) via
+CREATE OR REPLACE solely to change one cosmetic string — meaningful transcription
+risk for a purely cosmetic label. Per the review's own guidance ("prefer skipping if
+it means touching a proc you can't cleanly reproduce"), skipped. The authoritative
+per-series detectorVersion is already correct (recurring-grid-v2) on every candidate
+row; only the envelope label lags. No SQL touched → no pgTAP run required this pass.
+
+Verify: `cd apps/web && pnpm build` EXIT=0; root `pnpm vitest run` 931 passed (77 files);
+detector suite 92 passed. No migration/SQL changed.
+
+---
+
 ## 2026-07-19 — fix(recurring): drain the recurring_detection queue so detection actually runs
 
 Production bug: recurring detection had never produced a candidate for the real

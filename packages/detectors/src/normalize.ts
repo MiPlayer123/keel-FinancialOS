@@ -20,7 +20,8 @@ export const normalizeCounterparty = (description: string): string => {
 // ---------------------------------------------------------------------------
 // Recurring suppression (docs/RECURRING-RESEARCH.md item C).
 //
-// Personal peer-to-peer rails (Venmo / Zelle / Cash App / PayPal personal) and
+// Personal peer-to-peer rails (Venmo / Zelle / Cash App — NOT PayPal, a mixed
+// rail; see P2P_PATTERNS) and
 // reward / cashback / refund lines are NOT subscriptions or bills, even when the
 // same counterparty repeats ≥3× on a regular-looking cadence. Industry detectors
 // (Plaid, Monarch, Copilot, Rocket Money) all exclude these. KEEL suppresses them
@@ -37,17 +38,24 @@ export type SuppressionReason = 'p2p' | 'reward';
 
 // Personal P2P rails. Word-boundary-ish matching on the normalized-ish text so
 // e.g. a merchant literally named "Venmo Inc" (the company) is still caught — the
-// research treats the rail itself as non-subscription. "paypal" is included as a
-// personal rail; genuine PayPal-billed *merchant* subscriptions normalize under
-// the merchant's own descriptor, not a bare "paypal" counterparty.
+// research treats the rail itself as non-subscription.
+//
+// PayPal is DELIBERATELY NOT here (review P2, docs/RECURRING-RESEARCH.md item C).
+// Venmo / Zelle / Cash App / Square Cash are pure personal rails, but PayPal is a
+// MIXED rail: real merchant subscriptions bill through it, and the bank memo leads
+// with the rail token — e.g. "PAYPAL *SPOTIFY", "PP*NYTIMES", "PAYPAL *HULU". A
+// bare \bpaypal\b (or \bpp\*) suppressed every one of those genuine PayPal-billed
+// subscriptions, which is over-suppression. The safe default is to let PayPal-
+// billed lines flow into detection; the A quality gate + amount/cadence regularity
+// still reject irregular personal PayPal transfers. (If we ever want to catch
+// PERSONAL PayPal transfers specifically, match a clear personal-transfer
+// qualifier — never the bare rail token.)
 const P2P_PATTERNS: readonly RegExp[] = [
   /\bvenmo\b/u,
   /\bzelle\b/u,
   /\bcash\s*app\b/u,
   /\bcashapp\b/u,
   /\bsquare\s*cash\b/u,
-  /\bpaypal\b/u,
-  /\bpay\s*pal\b/u,
 ];
 
 // Reward / cashback / refund / rebate credits. These are inflow noise that snaps

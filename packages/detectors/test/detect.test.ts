@@ -3,6 +3,7 @@ import {
   DETECTOR_VERSION,
   NORMALIZER_VERSION,
   detectRecurringSeries,
+  fingerprint,
   normalizeCounterparty,
   recurringSuppressionReason,
   isSuppressedFromRecurring,
@@ -198,6 +199,42 @@ describe('detectRecurringSeries calendar-grid fitting', () => {
     expect(first[0]?.seriesKey).toMatch(/^[a-f0-9]{16}$/u);
   });
 
+  it('keeps series_key STABLE across a normalizer-version bump (no twin series)', () => {
+    // Review P1 regression: NORMALIZER_VERSION must NOT be part of the series_key.
+    // A v1→v2 normalizer bump must re-detect the SAME series (supersede via a new
+    // candidate version under the existing series_key), never mint a duplicate
+    // "twin" Suggested series next to an already-CONFIRMED one (which would
+    // double-count in projections). We assert the emitted series_key equals the
+    // fingerprint of the group+cadence+anchor+amount composition WITHOUT any
+    // normalizer token — so bumping NORMALIZER_VERSION cannot change it.
+    const series = detectRecurringSeries(
+      [
+        txn('n-1', '2026-05-09', '-699', 'Spotify'),
+        txn('n-2', '2026-06-09', '-699', 'Spotify'),
+        txn('n-3', '2026-07-09', '-699', 'Spotify'),
+      ],
+      { asOf: '2026-07-19' },
+    );
+    expect(series).toHaveLength(1);
+    const s = series[0];
+    if (!s) throw new Error('expected a detected series');
+
+    // Reconstruct the exact key composition the detector uses (detect.ts): the
+    // groupKey is counterpartyKey|accountId|ledgerAccountId|sign|currency (NO
+    // normalizer version), then series_key = fingerprint(groupKey|cadence|anchor|amount).
+    const groupKey = ['spotify', 'account-1', 'ledger-1', 'outflow', 'USD'].join('|');
+    const anchorJson = JSON.stringify(s.cadenceAnchor);
+    const identityAmount = s.amountKind === 'fixed' ? (s.representativeAmountMinor ?? '') : '';
+    const expectedKey = fingerprint(`${groupKey}|${s.cadence}|${anchorJson}|${identityAmount}`);
+
+    expect(s.seriesKey).toBe(expectedKey);
+    // Guard: the normalizer version must not leak into the key material at all.
+    expect(groupKey).not.toContain(NORMALIZER_VERSION);
+    // The per-series normalizerVersion field still rides the record (supersession
+    // is recorded), and the input fingerprint still folds it in — but the KEY is stable.
+    expect(s.normalizerVersion).toBe(NORMALIZER_VERSION);
+  });
+
   it('detects a Spotify-like 3-occurrence monthly subscription (real-data regression)', () => {
     // Mirrors the real household: 3 Spotify charges on the "Savor" credit card,
     // 2026-05-09 / 06-09 / 07-09, fixed -$6.99. Exactly 3 occurrences is the
@@ -358,7 +395,12 @@ describe('recurring suppression (C)', () => {
     expect(recurringSuppressionReason('VENMO PAYMENT JORDAN')).toBe('p2p');
     expect(recurringSuppressionReason('Zelle to Sam')).toBe('p2p');
     expect(recurringSuppressionReason('CASH APP*ALEX')).toBe('p2p');
-    expect(recurringSuppressionReason('PayPal Instant Transfer')).toBe('p2p');
+    // PayPal is a MIXED rail (review P2): PayPal-billed merchant subscriptions lead
+    // with the rail token in the memo, so PayPal is NOT hard-suppressed — these must
+    // remain eligible for detection.
+    expect(recurringSuppressionReason('PAYPAL *SPOTIFY')).toBeNull();
+    expect(recurringSuppressionReason('PP*NYTIMES')).toBeNull();
+    expect(recurringSuppressionReason('PayPal Instant Transfer')).toBeNull();
     expect(recurringSuppressionReason('CARD CASHBACK REWARD')).toBe('reward');
     expect(recurringSuppressionReason('Amazon REFUND')).toBe('reward');
     expect(recurringSuppressionReason('Statement Credit')).toBe('reward');
@@ -411,5 +453,26 @@ describe('recurring suppression (C)', () => {
     );
     expect(series).toHaveLength(1);
     expect(series[0]).toMatchObject({ counterpartyKey: 'streamly', sign: 'outflow' });
+  });
+
+  it('DETECTS a PayPal-billed merchant subscription (review P2 — no over-suppression)', () => {
+    // PayPal is a mixed rail: the memo leads with the rail token but the charge is a
+    // real subscription. Bare \bpaypal\b used to suppress these; now they flow into
+    // detection and a clean monthly PayPal-billed subscription fires.
+    const series = detectRecurringSeries(
+      [
+        txn('pp-1', '2026-05-09', '-699', 'PAYPAL *STREAMLY'),
+        txn('pp-2', '2026-06-09', '-699', 'PAYPAL *STREAMLY'),
+        txn('pp-3', '2026-07-09', '-699', 'PAYPAL *STREAMLY'),
+      ],
+      { asOf: '2026-07-19' },
+    );
+    expect(series).toHaveLength(1);
+    expect(series[0]).toMatchObject({
+      cadence: 'monthly',
+      sign: 'outflow',
+      amountKind: 'fixed',
+      occurrenceCount: 3,
+    });
   });
 });
