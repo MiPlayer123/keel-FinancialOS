@@ -111,6 +111,30 @@ describe('mapHoldingsGetToKeel', () => {
     expect(result.holdings[0]?.symbol).toBe('SEC-1');
   });
 
+  it('keeps equities and funds while skipping only the cash sweep in a mixed brokerage (2026-07-19 Fidelity regression)', () => {
+    // Regression for the "brokerage shows 0 holdings" incident: a real
+    // brokerage response mixes an equity + an index fund + a money-market
+    // sweep (type 'cash'). Only the sweep may be skipped (its value is the
+    // account cash balance); the equity and fund MUST survive the mapper.
+    const result = mapHoldingsGetToKeel({
+      holdings: [
+        holding('acct-1', 'sec-eq', { institution_value: 15000, quantity: 50, cost_basis: 9000, institution_price: 300 }),
+        holding('acct-1', 'sec-fund', { institution_value: 5020, quantity: 20, cost_basis: 4000 }),
+        holding('acct-1', 'sec-mmkt', { institution_price: 1, institution_value: 42000, quantity: 42000, cost_basis: 42000 }),
+      ],
+      securities: [
+        security('sec-eq', { ticker_symbol: 'EQTY', type: 'equity' }),
+        security('sec-fund', { ticker_symbol: 'IDXF', type: 'mutual fund' }),
+        security('sec-mmkt', { ticker_symbol: 'MMKT', type: 'cash' }),
+      ],
+    });
+
+    expect(result.holdings.map((h) => h.symbol)).toEqual(['EQTY', 'IDXF']);
+    expect(result.skipped).toEqual([
+      { accountExternalRef: 'acct-1', securityId: 'sec-mmkt', reason: 'cash_equivalent' },
+    ]);
+  });
+
   it('skips cash-equivalent securities (the account balance already covers cash)', () => {
     const result = mapHoldingsGetToKeel({
       holdings: [holding('acct-1', 'sec-cash')],
