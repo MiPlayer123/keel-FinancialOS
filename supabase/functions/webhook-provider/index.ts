@@ -181,6 +181,21 @@ export default {
       return json(200, { received: true, routed: false });
     }
 
+    // Investments readiness (F-013/F-014, migration 20260719200000): Fidelity
+    // and other OAuth institutions populate Investments data ASYNCHRONOUSLY
+    // after link — /investments/* returns 200-with-empty until the institution
+    // finishes its initial pull, signalled by these webhooks. The regular
+    // sync_notification path only drives /transactions/sync (cursor-based) and
+    // never re-pulls holdings/inv-txns, so without this the data sat invisible
+    // until the next cron refresh. Fire the idempotent re-pull immediately;
+    // non-fatal — the 3-minute refresh-balances cron remains the backstop.
+    if (webhookType === 'HOLDINGS' || webhookType === 'INVESTMENTS_TRANSACTIONS') {
+      const { error: repullError } = await admin.rpc('keel_trigger_investment_repull');
+      if (repullError) {
+        console.error(`investments repull trigger failed (non-fatal): ${repullError.message}`);
+      }
+    }
+
     return json(200, {
       received: true,
       routed: true,

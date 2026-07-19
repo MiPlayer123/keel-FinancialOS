@@ -1041,6 +1041,23 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
         try {
           const holdingsBody = await plaid.investmentsHoldingsGet(c.id, { access_token: token });
           const mapped = mapHoldingsGetToKeel(holdingsBody);
+          // Permanent non-PII observability (2026-07-19 Fidelity empty-body
+          // incident): distinguish "provider returned empty" from "mapper
+          // dropped rows" without ever logging amounts/names/ids (Law 12 —
+          // counts + skip reasons only). OAuth institutions populate
+          // Investments asynchronously, so 0/0 here is expected until the
+          // HOLDINGS webhook fires (see webhook-provider + 20260719200000).
+          console.log(
+            `holdings_sync conn=${c.id} provider_holdings=${
+              Array.isArray((holdingsBody as { holdings?: unknown[] }).holdings)
+                ? (holdingsBody as { holdings: unknown[] }).holdings.length
+                : -1
+            } provider_securities=${
+              Array.isArray((holdingsBody as { securities?: unknown[] }).securities)
+                ? (holdingsBody as { securities: unknown[] }).securities.length
+                : -1
+            } mapped=${mapped.holdings.length} skipped=${mapped.skipped.length}`,
+          );
           // supabase .rpc() resolves { data, error } and does NOT throw on a DB
           // error, so EVERY new RPC's `error` must be inspected — otherwise a
           // failed clear/snapshot is silently reported as a successful sync.
@@ -1121,6 +1138,21 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
               });
               pagesPulled += 1;
               const mappedTxns = mapInvestmentsTransactionsToKeel(invBody);
+              // Permanent non-PII observability (2026-07-19 Fidelity incident):
+              // counts only — proves whether Plaid returned rows vs the mapper
+              // skipping them. total_investment_transactions=0 with an OAuth
+              // item that should have activity usually means the institution
+              // hasn't finished its async Investments population yet.
+              console.log(
+                `inv_txns_sync conn=${c.id} window=${startDate}..${windowTo} offset=${offset} ` +
+                  `provider_total=${
+                    typeof (invBody as { total_investment_transactions?: unknown })
+                      .total_investment_transactions === 'number'
+                      ? (invBody as { total_investment_transactions: number })
+                          .total_investment_transactions
+                      : -1
+                  } page_rows=${mappedTxns.transactions.length} skipped=${mappedTxns.skipped.length}`,
+              );
               for (const t of mappedTxns.transactions) {
                 const { error: ingestErr } = await admin.rpc('keel_worker_ingest_investment_txn', {
                   p_household_id: c.household_id,
