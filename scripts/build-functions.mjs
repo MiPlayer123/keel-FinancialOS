@@ -47,6 +47,11 @@ await build({
     '@keel/ledger': join(root, 'packages', 'ledger', 'src', 'index.ts'),
     '@keel/exports': join(root, 'packages', 'exports', 'src', 'index.ts'),
     '@keel/detectors': join(root, 'packages', 'detectors', 'src', 'index.ts'),
+    // Subpath alias listed alongside the bare package: the statement parsers +
+    // extractors live under the '/statement' export subpath
+    // (packages/documents/package.json exports). Without this esbuild resolves
+    // '@keel/documents/statement' against the bare index.ts file and fails.
+    '@keel/documents/statement': join(root, 'packages', 'documents', 'src', 'statement', 'index.ts'),
     '@keel/documents': join(root, 'packages', 'documents', 'src', 'index.ts'),
     '@keel/plaid': join(root, 'packages', 'providers', 'plaid', 'src', 'index.ts'),
   },

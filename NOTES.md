@@ -4,6 +4,73 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-19 — SLICE 5 (statement-ingestion-v2): worker job + dispatch + transactional outbox + sweeper [A12]
+
+Ships the CONSUMER side of statement ingestion (worker) plus the durable-delivery
+outbox — deploy order reversed per §8 [A12] (worker understands the job BEFORE
+Slice 6's confirm-upload publishes it).
+
+- **StatementJobIO port [A1]** (`supabase/functions/worker/statement-extract.ts`).
+  The ONLY object touching Supabase/Storage/rpc: `resolveVersion` (household- +
+  account-verified `.from` reads → version + draft.account_id), `download` (one
+  Storage read → bytes), `buildExtractor` (env-gated fixture/cloud, same ⚑ as
+  receipts), `persist` (exactly `keel_worker_persist_statement_extraction`).
+  `processStatementExtractJob` composes resolve→download→route→parse→persist and
+  performs NO IO itself. Parsers + extractor receive ONLY bytes/typed data (Law
+  1/5). `routeStatementExtraction` sniffs PDF MAGIC BYTES (%PDF) over the declared
+  mime so a hostile `.csv` that is really a PDF routes to the model path, never
+  the CSV parser (§6); csv→parseCsvStatement, ofx/qfx→parseOfxStatement (both
+  pure, @keel/documents). Failures persist status='failed' + a SHORT error_code
+  (object_download_failed / object_too_large / extraction_failed) — never a
+  provider body/URL/key (Law 12). Size guard rejects >~20MB non-PDF before parse.
+- **Dispatch** (`worker/index.ts`): a `statement_extract` jobType branch beside
+  `receipt_extract`, dispatching to `processStatementExtractJob(makeStatementJobIO(admin), refs)`.
+- **Migration `20260720210000_statement_outbox.sql`** — transactional outbox +
+  sweeper [A12]. `statement_outbox(status pending|delivered|abandoned,
+  enqueue_count, last_enqueued_at, unique(document_version_id))` + composite
+  tenant FK `(household_id, account_id)→accounts`. Confirm-upload (Slice 6) will
+  write ONE outbox row IN THE SAME TXN as the draft, so a committed draft always
+  has a committed delivery record — the best-effort enqueue can then be retried
+  out-of-band. `keel_sweep_statement_outbox(grace, max_enqueues, batch)`
+  (SECURITY DEFINER, owner keel_worker, service_role only) finds pending-draft
+  outbox rows past the grace window and re-enqueues the `statement_extract` job
+  IDEMPOTENTLY: dedupe on document_version_id (unique) + advance last_enqueued_at
+  (≤1 enqueue per grace window); `FOR UPDATE SKIP LOCKED` for concurrency; marks
+  'delivered' once the draft leaves 'pending'; 'abandoned' after max sweeps.
+  pg_cron `keel-sweep-statement-outbox` every 5m (guarded schedule, mirrors
+  keel_cron_drain_recurring_detection). This replaces best-effort enqueue so a
+  queue failure can never strand a permanent pending draft.
+- **Build fix (required)**: main's functions vendor bundle was BROKEN after Slice
+  2 landed — `@keel/ai` re-exports the statement extractors which import
+  `@keel/documents/statement`, but `scripts/build-functions.mjs` only aliased the
+  bare `@keel/documents` (esbuild resolved the subpath against index.ts and
+  failed). Added the `@keel/documents/statement` subpath alias, and re-exported
+  the statement parsers (parseCsvStatement/parseOfxStatement/scanOfxSafety +
+  types) from `packages/documents/src/index.ts` so `export * from '@keel/documents'`
+  carries them into the bundle. `node scripts/build-functions.mjs` now succeeds
+  and the bundle contains the parsers/extractors (verified by grep).
+- **Tests** (`worker/test/statement-extract.test.ts`, 12): only-persist-rpc
+  capability boundary (real makeStatementJobIO over a spying admin → rpcNames ==
+  ['keel_worker_persist_statement_extraction'], reads only 3 scope tables + one
+  Storage download); idempotent re-delivery (two runs → byte-identical persist
+  args); household mismatch → NO persist/download; download-fail → status='failed'
+  + short code, no body; extractor-throw → extraction_failed, no leaked message;
+  mime routing (csv/ofx/pdf-magic-over-lying-mime); sweeper idempotency model
+  (re-enqueue exactly once per grace window; delivered stops it; abandoned after
+  max). All 12 pass; full worker suite 26/26; documents 149/149; ai 58/58;
+  documents+ai typecheck clean; capability-boundary CI clean.
+- **Deviations**: (1) fixed the pre-existing broken bundle build (cited above) —
+  not gold-plating, the slice's `node scripts/build-functions.mjs` acceptance
+  criterion could not pass otherwise. (2) The worker resolves account scope from
+  `statement_drafts.account_id` (server-authoritative) inside `resolveVersion`
+  rather than trusting the job message — tighter than the message-only receipt
+  pattern, consistent with §4 (draft.account_id NON-NULL) and Law 5 (never trust
+  ingested/queued scope). (3) The confirm-upload outbox WRITER + export-manifest
+  INCLUDE entry are Slice 6 per the reversed deploy order; this slice grants the
+  DB-side keel_export SELECT + RLS so the table is not invisible once populated.
+  The end-to-end enqueue→worker path is proven by a manual-enqueue integration
+  path (the dispatch branch + idempotent handler); sweeper DB behaviour applied
+  by the orchestrator after review.
 ## 2026-07-19 — SLICE 4 (statement-ingestion-v2 §6 [A9]): Storage widen + quarantine + per-kind content sniff
 
 Migration `20260720200000_statement_storage_quarantine.sql` (NOT applied to live — orchestrator

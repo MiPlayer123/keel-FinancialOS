@@ -136,6 +136,7 @@ export const EXCLUDE = [
   { schema: 'public', table: 'recurring_detection_claims', reason: 'Transient idempotent cron enqueue claims, not recurring financial history.' },
   { schema: 'public', table: 'household_notes', reason: 'Export layer pending — notes shipped 2026-07-18 without export wiring (Law 6 gap tracked in NOTES.md); flip to INCLUDE when the layer ships.' },
   { schema: 'public', table: 'household_tasks', reason: 'Export layer pending — tasks shipped 2026-07-18 without export wiring (Law 6 gap tracked in NOTES.md); flip to INCLUDE when the layer ships.' },
+  { schema: 'public', table: 'statement_outbox', reason: 'Export layer pending — internal delivery ledger; wire in Slice 6 (confirm-upload writer + INCLUDE entry + keel_export grant together); flip to INCLUDE when the layer ships.' },
   { schema: 'auth', table: 'users', reason: 'Auth identities and secrets are excluded; household membership user_id mappings remain portable.' },
 ] as const satisfies readonly ExcludedTableDefinition[];
 
