@@ -645,6 +645,13 @@ begin
     join pg_namespace namespace on namespace.oid = proc.pronamespace
     join pg_roles owner_role on owner_role.oid = proc.proowner
     where namespace.nspname = 'public' and proc.proname like 'keel%recurring%'
+      -- Only the RUNTIME recurring definers (read/upsert/reap/list) must be
+      -- keel_api/keel_worker-owned. Exclude cron drains (postgres-owned by
+      -- design) and export-chain layers (keel_export-owned) — they legitimately
+      -- match 'keel%recurring%' but are not runtime detection definers, and the
+      -- original broad check pre-dated them so it raised on a valid schema.
+      and proc.proname not like 'keel_cron_%'
+      and proc.proname not like 'keel_export_%'
       and proc.prosecdef and owner_role.rolname not in ('keel_api','keel_worker')
   ) then
     raise exception 'KEEL_OWNERSHIP: recurring definer has unexpected owner';
