@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import { Plus, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { setBudget, type BudgetRow } from '@/lib/keel-api';
+import { setBudgetTarget, type BudgetRow } from '@/lib/keel-api';
 import { Money } from '@/components/keel/money';
 import { Button } from '@/components/ui/button';
 import {
@@ -29,12 +29,14 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 export function AddBudgetCategoryPicker({
   categories,
   householdId,
+  userId,
   monthIso,
   onAdded,
 }: {
   /** Addable rows: live expense categories, not yet budgeted, not movement. */
   categories: BudgetRow[];
   householdId: string;
+  userId: string;
   monthIso: string;
   onAdded: () => void;
 }) {
@@ -64,10 +66,14 @@ export function AddBudgetCategoryPicker({
     if (busyId) return;
     setBusyId(row.categoryLedgerAccountId);
     try {
-      await setBudget({
+      // Opt in with an explicit, immediately-editable $0 amount target (valid
+      // per the non-negative set_target contract — not a hidden default).
+      await setBudgetTarget({
         householdId,
-        categoryLedgerAccountId: row.categoryLedgerAccountId,
+        userId,
         monthIso,
+        categoryLedgerAccountId: row.categoryLedgerAccountId,
+        kind: 'amount',
         amountMinor: '0',
       });
       toast.success(`Added ${row.categoryName} — set an amount to start tracking it.`);
