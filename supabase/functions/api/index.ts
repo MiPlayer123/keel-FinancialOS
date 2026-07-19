@@ -29,6 +29,7 @@ import {
   EntityIdSchema,
   EntityKindSchema,
   HouseholdIdSchema,
+  StatementDraftIdSchema,
   ExportSecretError,
   isWithinInlineExportLimit,
   mapAccountsGetToKeel,
@@ -2633,6 +2634,88 @@ export default {
         }),
       );
       return json(200, { ...(data as Record<string, unknown>), rows: withUrls });
+    }
+
+    if (path === '/statements/draft-detail') {
+      // SLICE 7: the extraction header + lines + holdings for ONE draft, so the
+      // review dialog prefills every editable field. Account-scoped inside the
+      // proc; authz floor is the viewer statements.drafts action.
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const draftId = StatementDraftIdSchema.safeParse(input['draftId']);
+      if (!householdId.success || !draftId.success) {
+        return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });
+      }
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'statements.drafts', {
+        kind: 'household',
+        householdId: householdId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+      const { data, error } = await ctx.supabase.rpc('keel_statement_draft_detail', {
+        p_household_id: householdId.data,
+        p_draft_id: draftId.data,
+      });
+      if (error) return mapDbError(error);
+      return json(200, data);
+    }
+
+    if (path === '/statements/issue-draft-approval') {
+      // SLICE 7: mint an approval token bound to the EXACT server-normalized
+      // statement body the approve command will redeem (Law 11 gate). The
+      // client sends the SAME `statement` object it will send to
+      // statements.approve_draft; the server reconstructs v_payload identically
+      // (draft account + server source_hash + balanceCheck forced) inside
+      // keel_cmd_statements_issue_draft_approval and hashes it. authz gates at
+      // partner (same class-B floor as statements.approve_draft).
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const draftId = StatementDraftIdSchema.safeParse(input['draftId']);
+      const balanceCheckRaw = input['balanceCheck'];
+      const balanceCheck =
+        balanceCheckRaw === 'strict' || balanceCheckRaw === 'anchor' ? balanceCheckRaw : null;
+      const statement = input['statement'];
+      if (
+        !householdId.success ||
+        !draftId.success ||
+        balanceCheck === null ||
+        statement === null ||
+        typeof statement !== 'object' ||
+        Array.isArray(statement)
+      ) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Issue-draft-approval request failed validation.',
+          details: {},
+        });
+      }
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'statements.approve_draft', {
+        householdId: householdId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+      // Snake-case the statement body EXACTLY as /commands does before the proc
+      // sees it, so the normalized payload the token binds matches the one the
+      // approve command (also snake-cased by toSnakeKeys) rebuilds byte-for-byte.
+      const { data, error } = await ctx.supabase.rpc(
+        'keel_cmd_statements_issue_draft_approval',
+        {
+          p_household_id: householdId.data,
+          p_draft_id: draftId.data,
+          p_balance_check: balanceCheck,
+          p_statement: toSnakeKeys(statement),
+        },
+      );
+      if (error) return mapDbError(error);
+      return json(200, data);
     }
 
     if (path === '/commands') {
