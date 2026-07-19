@@ -130,13 +130,26 @@ const processRecurringDetection = async (
     );
     if (upsertError) throw new Error(`recurring upsert failed: ${upsertError.message}`);
 
-    // Reap stale suggestions (migration 20260719031000): any 'suggested' series
-    // this run did NOT (re)emit is a false positive the previous, noisier runs
-    // produced — withdraw it so it drops off Review. Confirmed/rejected series
-    // are never touched; a withdrawn series comes back if a later run detects it
-    // again. Deterministic + idempotent (stable command_id per run+series), so a
-    // requeue/replay of this job is a no-op. Non-fatal: a reap failure must not
-    // fail the detection job (the candidates are already durably upserted).
+    // Reap stale suggestions (migrations 20260719031000 + 20260719080000): any
+    // 'suggested' series this run did NOT (re)emit is a false positive the
+    // previous, noisier runs produced — withdraw it so it drops off Review.
+    // Confirmed/rejected series are never touched; a withdrawn series comes back
+    // if a later run detects it again. Deterministic + idempotent (stable
+    // command_id per run+series), so a requeue/replay of this job is a no-op.
+    // Non-fatal: a reap failure must not fail the detection job (the candidates
+    // are already durably upserted).
+    //
+    // emittedSeriesIds is the FULL current detected set: the upsert returns every
+    // series it saw this run — freshly-inserted AND idempotent-conflict rows (its
+    // v_result is appended unconditionally) — so this is exactly "series active in
+    // this detection", not "series newly written". That is what the reap must
+    // diff against.
+    //
+    // p_detection_ran guards the "nuke everything" trap: when the detector
+    // legitimately produces ZERO candidates (all input excluded), emittedSeriesIds
+    // is empty; passing detectionRan=false makes the reap a no-op instead of
+    // withdrawing the entire Review list. A zero-candidate run is "found nothing
+    // this pass", never "everything prior is stale".
     const runResult = (upsertResult ?? {}) as {
       runId?: string;
       candidates?: Array<{ seriesId?: string }>;
@@ -153,6 +166,7 @@ const processRecurringDetection = async (
         p_household_id: householdId,
         p_run_id: runResult.runId,
         p_emitted_series_ids: emittedSeriesIds,
+        p_detection_ran: candidates.length > 0,
       });
       if (reapError) {
         console.error(`recurring reap failed (non-fatal): ${reapError.message}`);
