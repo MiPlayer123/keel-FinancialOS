@@ -1,6 +1,6 @@
 import { civilDateToEpochDay, daysInMonth, parseCivilDate } from './civil-date.js';
 import { fingerprint } from './fingerprint.js';
-import { NORMALIZER_VERSION, normalizeCounterparty } from './normalize.js';
+import { NORMALIZER_VERSION, normalizeCounterparty, recurringSuppressionReason } from './normalize.js';
 import { bigintSummary, compareBigints } from './statistics.js';
 import type {
   Cadence,
@@ -10,10 +10,44 @@ import type {
   TransactionSign,
 } from './types.js';
 
-export const DETECTOR_VERSION = 'recurring-grid-v1' as const;
+export const DETECTOR_VERSION = 'recurring-grid-v2' as const;
 export const CONFIDENCE_VERSION = 'recurring-score-bps-v1' as const;
 export const MAX_DETECTION_INPUT_ROWS = 10_000 as const;
 export const MAX_DETECTION_LOOKBACK_DAYS = 3_660 as const;
+
+// ---------------------------------------------------------------------------
+// Quality gate (recurring-grid-v2). A fit is only a genuine recurring series if
+// its occurrences fill enough of the cadence grid AND the actual inter-occurrence
+// spacing is regular. These two together kill the false positives reported in
+// docs/RECURRING-RESEARCH.md — irregular cashback, random Venmo, and 3 points
+// draped over a mostly-empty grid — without touching the deterministic spine.
+//
+// Everything here is integer arithmetic over slot indexes and counts (not money),
+// so it stays deterministic/replayable (Law 1/9) and never touches BigInt money.
+//
+// MIN_COVERAGE_NUM/DEN — matchedSlots/totalSlots >= 3/5 (0.60). A 3-occurrence
+//   series draped over 11 empty monthly slots (coverage ≈ 0.27, e.g. Jan/Jun/Nov)
+//   is rejected; a clean 3-consecutive-month subscription (coverage 1.0) survives;
+//   month-end rent with one skipped month (4/5 = 0.80) survives.
+// MAX_PERIOD_GAP — the largest gap between two consecutive matched slots, measured
+//   in whole cadence periods, may be at most 2 (one skipped period). A single 3+
+//   period jump (two consecutive skips, or an irregular point snapped to a distant
+//   slot) rejects the fit. Cadence-relative because the grid already encodes the
+//   cadence, so "gap of 2" means one skipped month for monthly, one skipped quarter
+//   for quarterly, etc.
+export const MIN_COVERAGE_NUM = 3 as const;
+export const MIN_COVERAGE_DEN = 5 as const;
+export const MAX_PERIOD_GAP = 2 as const;
+
+const passesQualityGate = (
+  matchedSlots: number,
+  totalSlots: number,
+  maxPeriodGap: number,
+): boolean =>
+  // matchedSlots / totalSlots >= MIN_COVERAGE_NUM / MIN_COVERAGE_DEN, cross-multiplied
+  // to stay in integers (no float on a ratio the gate turns on).
+  matchedSlots * MIN_COVERAGE_DEN >= totalSlots * MIN_COVERAGE_NUM &&
+  maxPeriodGap <= MAX_PERIOD_GAP;
 
 interface ParsedTransaction extends RecurringTransaction {
   readonly amount: bigint;
@@ -78,7 +112,12 @@ const fitSlots = (
   input: readonly ParsedTransaction[],
   slots: readonly GridSlot[],
   toleranceDays: number,
-): { matched: ParsedTransaction[]; totalSlots: number; residualDays: number } | null => {
+): {
+  matched: ParsedTransaction[];
+  totalSlots: number;
+  residualDays: number;
+  maxPeriodGap: number;
+} | null => {
   const ranked = input.flatMap((transaction) =>
     slots.flatMap((slot, slotIndex) => {
       const residual = absNumber(transaction.epochDay - slot.epochDay);
@@ -103,10 +142,20 @@ const fitSlots = (
   const chosenSlotIndexes = chosen.map((item) => item.slotIndex);
   const firstSlot = Math.min(...chosenSlotIndexes);
   const lastSlot = Math.max(...chosenSlotIndexes);
+  // Interval regularity: the largest jump between two consecutive matched slots,
+  // in whole cadence periods (each grid slot is exactly one period apart). A clean
+  // series is all 1s; one skipped period is a 2; anything larger is irregular.
+  const sortedSlotIndexes = [...chosenSlotIndexes].sort((left, right) => left - right);
+  let maxPeriodGap = 1;
+  for (let i = 1; i < sortedSlotIndexes.length; i += 1) {
+    const gap = (sortedSlotIndexes[i] as number) - (sortedSlotIndexes[i - 1] as number);
+    if (gap > maxPeriodGap) maxPeriodGap = gap;
+  }
   return {
     matched: chosen.map((item) => item.transaction).sort(compareTransactions),
     totalSlots: lastSlot - firstSlot + 1,
     residualDays: chosen.reduce((sum, item) => sum + item.residual, 0),
+    maxPeriodGap,
   };
 };
 
@@ -131,6 +180,11 @@ const makeFit = (
 ): Fit | null => {
   const result = fitSlots(subset, slots, toleranceDays);
   if (!result) return null;
+  // Quality gate (recurring-grid-v2): reject sparse or irregular fits before they
+  // ever become a candidate. See passesQualityGate / MIN_COVERAGE_* / MAX_PERIOD_GAP.
+  if (!passesQualityGate(result.matched.length, result.totalSlots, result.maxPeriodGap)) {
+    return null;
+  }
   const amounts = result.matched.map((transaction) => transaction.amount);
   const fixed = amounts.every((amount) => amount === amounts[0]);
   const fitKey = `${cadence}|${JSON.stringify(anchor)}|${result.matched.map((item) => item.txnId).join(',')}`;
@@ -296,7 +350,12 @@ export const detectRecurringSeries = (
   const asOfEpochDay = civilDateToEpochDay(options.asOf);
   const parsed = transactions.map(parseTransaction)
     .filter((transaction) => transaction.effectiveDate <= options.asOf &&
-      transaction.epochDay >= asOfEpochDay - MAX_DETECTION_LOOKBACK_DAYS)
+      transaction.epochDay >= asOfEpochDay - MAX_DETECTION_LOOKBACK_DAYS &&
+      // C (docs/RECURRING-RESEARCH.md): personal P2P rails and reward/refund lines
+      // are never recurring subscriptions/bills. Suppress them from detection so
+      // they are not OFFERED as candidates — the rows stay in the ledger and export
+      // (Law 6); they simply do not become a recurring suggestion.
+      recurringSuppressionReason(transaction.description) === null)
     .sort(compareTransactions);
   const groups = new Map<string, { counterpartyKey: string; sign: TransactionSign; rows: ParsedTransaction[] }>();
   for (const transaction of parsed) {

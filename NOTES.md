@@ -4792,3 +4792,44 @@ stays BigInt-on-minor-units in the existing helpers).
   worker edge-fn tests initially failed only because the generated
   `_shared/vendor/keel-domain.mjs` bundle wasn't built in the fresh worktree —
   unrelated to this change, which touches no function files).
+## Recurring false-positive fix — path B→A→C (docs/RECURRING-RESEARCH.md), 2026-07-19
+Kills the three reported false positives (cashback, mixed-in paychecks, random Venmo) while
+keeping the deterministic grid detector (Law 1/9). Suggest-only throughout (Law 10 class B);
+suppression is suggestion-only, data stays in the ledger + export (Law 6).
+
+- **B (presentation, apps/web/src/app/dashboard/recurring/page.tsx):** split the one recurring
+  list into two lanes — "Subscriptions & bills" (outflows) and "Recurring income" (inflows/
+  income-bucket), each still grouped by status (Suggested/Active/Paved). Paychecks are real
+  recurring; B just routes them to income instead of the subscription list. New RecurringLanes
+  wrapper + lane-aware SeriesSection; isIncomeSeries/isExcludedSeries helpers.
+- **A (the real fix, packages/detectors/src/detect.ts):** quality gate before a Fit becomes a
+  candidate — (1) coverage floor matchedSlots/totalSlots >= 3/5 (0.60), (2) interval regularity
+  max period-gap <= 2 (one skipped period, cadence-relative via slot indexes). Integer math only
+  (no float on the gate). DETECTOR_VERSION 'recurring-grid-v1' → 'recurring-grid-v2'; the version
+  is part of inputFingerprint so v2 re-emits fresh candidate versions on the nightly re-detect and
+  supersedes v1 per-series (candidate versioning is free-text per-row; nothing is orphaned).
+  - Threshold judgment call (owner may tune): coverage 0.60 + maxGap 2 lets an every-other-month
+    fixed 3-occurrence series through (coverage 3/5, gaps [2,2]); all THREE reported false positives
+    die on coverage/gap regardless. Documented inline in detect.ts.
+- **C (suppression, packages/detectors/src/normalize.ts + migration 20260719010000):** deterministic
+  deny-list of personal P2P rails (Venmo/Zelle/Cash App/PayPal) and reward/cashback/refund/rebate/
+  statement-credit strings, applied at detection so they never become candidates — works for CSV/QIF/
+  manual imports too (no PFC needed). NORMALIZER_VERSION 'counterparty-v1' → 'counterparty-v2' (part of
+  grouping key + fingerprint). SQL half (migration FILE ONLY, not applied to any remote DB): extend
+  keel_recurring_classification to route Plaid TRANSFER_IN/TRANSFER_OUT to a new 'excluded' bucket
+  (defense-in-depth for legacy v1 rows); formulaVersion → recurring-classification-v2. No table/column
+  change → no 008 allowlist / export change. CREATE OR REPLACE (same signature), ownership+grants
+  re-asserted.
+
+Tests: packages/detectors/test/detect.test.ts — new A suite (irregular Jan/Jun/Nov rejected, irregular
+cashback-like rejected, random-Venmo-like rejected; clean monthly + biweekly paycheck + skipped-month
+rent still fire) and C suite (Venmo-person + cashback series not offered; real merchant still fires).
+pgTAP 030 gains an excluded-bucket + formulaVersion-v2 behavioral assertion. Root `pnpm vitest run`
+929 passed; `supabase test db` Result: PASS (31 files, 787 tests) on a throwaway local stack;
+`cd apps/web && pnpm build` exit 0.
+
+Pre-existing (NOT mine): packages/detectors' 100%-coverage gate was already red at baseline on
+timeline.ts (99.76/97.73); my changes nudged it to 99.78/97.82. detect.ts/normalize.ts are 100%.
+Also left keel_list_recurring's cosmetic top-level formulaVersion label 'recurring-grid-v1' untouched
+(a different read proc a parallel branch may own; the authoritative per-series detectorVersion comes
+from the candidate row and is now v2).

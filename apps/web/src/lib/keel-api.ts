@@ -1478,7 +1478,9 @@ export type RecurringSeriesRow = {
 };
 
 // ---- F-028 recurring classification + manual-schedule linking --------------
-export type RecurringBucket = 'income' | 'subscription' | 'utility' | 'bill';
+// 'excluded' = a detected series that is NOT a subscription/bill/income and must
+// not be offered as recurring (personal P2P transfers). C, docs/RECURRING-RESEARCH.md.
+export type RecurringBucket = 'income' | 'subscription' | 'utility' | 'bill' | 'excluded';
 export type RecurringClassificationRow = {
   seriesId: string;
   bucket: RecurringBucket;

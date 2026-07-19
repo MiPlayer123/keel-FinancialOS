@@ -4,6 +4,8 @@ import {
   NORMALIZER_VERSION,
   detectRecurringSeries,
   normalizeCounterparty,
+  recurringSuppressionReason,
+  isSuppressedFromRecurring,
   type RecurringTransaction,
 } from '../src/index.js';
 
@@ -31,7 +33,7 @@ describe('counterparty normalization', () => {
     expect(normalizeCounterparty('  ACME  RENT store #123 2026-01-31  ')).toBe('acme rent');
     expect(normalizeCounterparty('NETFLIX 0042')).toBe('netflix');
     expect(normalizeCounterparty('')).toBe('unknown');
-    expect(NORMALIZER_VERSION).toBe('counterparty-v1');
+    expect(NORMALIZER_VERSION).toBe('counterparty-v2');
   });
 });
 
@@ -240,5 +242,174 @@ describe('detectRecurringSeries calendar-grid fitting', () => {
     const replayAtLaterAsOf = detectRecurringSeries(input, { asOf: '2024-04-01' })[0];
 
     expect(first?.inputFingerprint).not.toBe(replayAtLaterAsOf?.inputFingerprint);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A — interval-regularity + quality-floor gate (recurring-grid-v2).
+// docs/RECURRING-RESEARCH.md: 3 points draped over a mostly-empty grid, or
+// irregularly spaced, must NOT be offered as recurring. Clean subscriptions and
+// real biweekly paychecks must still fire (paychecks are real recurring — B just
+// routes them to income).
+// ---------------------------------------------------------------------------
+describe('recurring-grid-v2 quality gate (A)', () => {
+  it('bumps DETECTOR_VERSION to recurring-grid-v2', () => {
+    expect(DETECTOR_VERSION).toBe('recurring-grid-v2');
+  });
+
+  it('rejects an irregular 3-occurrence series (Jan / Jun / Nov, low coverage)', () => {
+    // 3 same-counterparty charges 5 months apart each: coverage over the matched
+    // span is 3/11 ≈ 0.27 (below the 0.60 floor) and the period-gaps are 5, not 1.
+    // The old detector draped these over a monthly grid and emitted them.
+    const series = detectRecurringSeries(
+      [
+        txn('irr-1', '2024-01-12', '-4200', 'Odd Merchant'),
+        txn('irr-2', '2024-06-12', '-4200', 'Odd Merchant'),
+        txn('irr-3', '2024-11-12', '-4200', 'Odd Merchant'),
+      ],
+      { asOf: '2024-11-30' },
+    );
+    expect(series).toEqual([]);
+  });
+
+  it('rejects an irregular cashback-like inflow series (uneven gaps)', () => {
+    // A rewards credit that lands on uneven dates: Jan 3 → Feb 27 (≈1 month) →
+    // Jun 18 (≈4 months). On a monthly grid the slots are 0, 1, 5 — a max period
+    // gap of 4 (well past the cap of 2) and coverage 3/6 = 0.50 (below the 0.60
+    // floor). No cadence can drape these regularly, so nothing is emitted.
+    // (Also suppressed by C on a real "cashback" descriptor; named neutrally here
+    // to isolate the A gate.)
+    const series = detectRecurringSeries(
+      [
+        txn('cb-1', '2024-01-03', '350', 'Points Credit'),
+        txn('cb-2', '2024-02-27', '512', 'Points Credit'),
+        txn('cb-3', '2024-06-18', '190', 'Points Credit'),
+      ],
+      { asOf: '2024-06-30' },
+    );
+    expect(series).toEqual([]);
+  });
+
+  it('rejects random-Venmo-like irregular inflows (neutral description)', () => {
+    // Same payer, ≥3×, but the dates are scattered: no cadence grid covers 60% of
+    // the span with gaps ≤ 2 periods. (A gate proof; C would also suppress a real
+    // "Venmo" descriptor — see the C suite.)
+    const series = detectRecurringSeries(
+      [
+        txn('p2p-1', '2024-02-02', '5000', 'Friend Transfer'),
+        txn('p2p-2', '2024-02-19', '2500', 'Friend Transfer'),
+        txn('p2p-3', '2024-04-30', '8000', 'Friend Transfer'),
+        txn('p2p-4', '2024-07-15', '1500', 'Friend Transfer'),
+      ],
+      { asOf: '2024-07-31' },
+    );
+    expect(series).toEqual([]);
+  });
+
+  it('still emits a clean monthly Spotify-like series (3 consecutive months)', () => {
+    const series = detectRecurringSeries(
+      [
+        txn('spot-1', '2026-05-09', '-699', 'Streamly'),
+        txn('spot-2', '2026-06-09', '-699', 'Streamly'),
+        txn('spot-3', '2026-07-09', '-699', 'Streamly'),
+      ],
+      { asOf: '2026-07-19' },
+    );
+    expect(series).toHaveLength(1);
+    expect(series[0]).toMatchObject({ cadence: 'monthly', amountKind: 'fixed', occurrenceCount: 3 });
+  });
+
+  it('still emits a biweekly paycheck-like series (real recurring, routed to income by B)', () => {
+    const series = detectRecurringSeries(
+      [
+        txn('pay-1', '2024-01-05', '200000', 'Acme Payroll'),
+        txn('pay-2', '2024-01-19', '200000', 'Acme Payroll'),
+        txn('pay-3', '2024-02-02', '200000', 'Acme Payroll'),
+        txn('pay-4', '2024-02-16', '200000', 'Acme Payroll'),
+      ],
+      { asOf: '2024-02-16' },
+    );
+    expect(series).toHaveLength(1);
+    expect(series[0]).toMatchObject({ cadence: 'biweekly', sign: 'inflow', occurrenceCount: 4 });
+  });
+
+  it('still tolerates one skipped period (month-end rent with April missing)', () => {
+    // coverage 4/5 = 0.80, max period-gap = 2 (one skipped month) — must survive.
+    const series = detectRecurringSeries(
+      [
+        txn('rent-1', '2024-01-31', '-250000'),
+        txn('rent-2', '2024-02-29', '-250000'),
+        txn('rent-3', '2024-03-31', '-250000'),
+        txn('rent-4', '2024-05-31', '-250000'),
+      ],
+      { asOf: '2024-05-31' },
+    );
+    expect(series).toHaveLength(1);
+    expect(series[0]).toMatchObject({ coverage: { matchedSlots: 4, totalSlots: 5 } });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C — deterministic P2P + reward/refund suppression (recurring suggestion
+// suppression, NOT deletion — the rows stay in the ledger and export, Law 6).
+// ---------------------------------------------------------------------------
+describe('recurring suppression (C)', () => {
+  it('classifies P2P rails and reward/refund descriptions, passes real merchants', () => {
+    expect(recurringSuppressionReason('VENMO PAYMENT JORDAN')).toBe('p2p');
+    expect(recurringSuppressionReason('Zelle to Sam')).toBe('p2p');
+    expect(recurringSuppressionReason('CASH APP*ALEX')).toBe('p2p');
+    expect(recurringSuppressionReason('PayPal Instant Transfer')).toBe('p2p');
+    expect(recurringSuppressionReason('CARD CASHBACK REWARD')).toBe('reward');
+    expect(recurringSuppressionReason('Amazon REFUND')).toBe('reward');
+    expect(recurringSuppressionReason('Statement Credit')).toBe('reward');
+    // Genuine subscriptions/bills are NOT suppressed.
+    expect(recurringSuppressionReason('Spotify')).toBeNull();
+    expect(recurringSuppressionReason('Acme Payroll')).toBeNull();
+    expect(recurringSuppressionReason('City Utilities')).toBeNull();
+    // Boolean convenience helper mirrors the reason function.
+    expect(isSuppressedFromRecurring('VENMO PAYMENT JORDAN')).toBe(true);
+    expect(isSuppressedFromRecurring('Spotify')).toBe(false);
+  });
+
+  it('does not offer a regular Venmo-person series as recurring', () => {
+    // Even perfectly monthly, same-payer Venmo is not a subscription — suppressed.
+    const series = detectRecurringSeries(
+      [
+        txn('v-1', '2024-01-10', '5000', 'VENMO PAYMENT FROM CASEY'),
+        txn('v-2', '2024-02-10', '5000', 'VENMO PAYMENT FROM CASEY'),
+        txn('v-3', '2024-03-10', '5000', 'VENMO PAYMENT FROM CASEY'),
+      ],
+      { asOf: '2024-03-31' },
+    );
+    expect(series).toEqual([]);
+  });
+
+  it('does not offer a regular cashback series as recurring', () => {
+    const series = detectRecurringSeries(
+      [
+        txn('r-1', '2024-01-15', '250', 'MONTHLY CASHBACK REWARD'),
+        txn('r-2', '2024-02-15', '250', 'MONTHLY CASHBACK REWARD'),
+        txn('r-3', '2024-03-15', '250', 'MONTHLY CASHBACK REWARD'),
+      ],
+      { asOf: '2024-03-31' },
+    );
+    expect(series).toEqual([]);
+  });
+
+  it('still detects a genuine merchant subscription in the same run', () => {
+    // A real subscription and a Venmo stream together: only the subscription fires.
+    const series = detectRecurringSeries(
+      [
+        txn('sub-1', '2024-01-06', '-1099', 'Streamly'),
+        txn('sub-2', '2024-02-06', '-1099', 'Streamly'),
+        txn('sub-3', '2024-03-06', '-1099', 'Streamly'),
+        txn('v-1', '2024-01-10', '5000', 'VENMO PAYMENT FROM CASEY'),
+        txn('v-2', '2024-02-10', '5000', 'VENMO PAYMENT FROM CASEY'),
+        txn('v-3', '2024-03-10', '5000', 'VENMO PAYMENT FROM CASEY'),
+      ],
+      { asOf: '2024-03-31' },
+    );
+    expect(series).toHaveLength(1);
+    expect(series[0]).toMatchObject({ counterpartyKey: 'streamly', sign: 'outflow' });
   });
 });
