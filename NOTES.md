@@ -4879,3 +4879,51 @@ timeline.ts (99.76/97.73); my changes nudged it to 99.78/97.82. detect.ts/normal
 Also left keel_list_recurring's cosmetic top-level formulaVersion label 'recurring-grid-v1' untouched
 (a different read proc a parallel branch may own; the authoritative per-series detectorVersion comes
 from the candidate row and is now v2).
+## 20260719020000 — transfer PFC income mapping (fix: 881 "Other Income")
+Live diagnosis (household a1ba3759): of 1,351 categorized txns, 881 sat in
+"Other Income". All 881 are INFLOWS. Their Plaid PFC:
+  TRANSFER_IN_TRANSFER_IN_FROM_APPS 309 (Venmo/Zelle/Apple Cash — counterparties
+    array names them), TRANSFER_OUT_ACCOUNT_TRANSFER 58, LOAN_PAYMENTS_
+    CREDIT_CARD_PAYMENT 12, other TRANSFER_IN 6 → 385 are TRANSFERS wrongly
+    filed as income (~$62k of ~$190k reported income). OTHER_OTHER 466 = genuinely
+    ambiguous Venmo P2P (Plaid gave no signal) — stay Other Income, need manual.
+ROOT CAUSE: keel_pfc_to_category_key (20260713090000 §3) income branch collapsed
+every non-'INCOME' primary to 'other_income'; the expense branch already routed
+TRANSFER_IN/OUT→transfers. Same shape as the 20260719000000 recurring-reader
+liability bug (a kind/sign branch silently dropping a class).
+WHY THE TRANSFER DETECTOR DIDN'T RESCUE THEM: keel_detect_transfers pairs exact
+opposite amounts across accounts within 3d. Read-only replay of its own logic:
+0 additional exact pairs exist — it already caught all 23 pairable outflow legs
+(→ the 29 confirmed links). These transfers are ONE-SIDED (Venmo/most paid cards
+not connected). Widening the window to 5–14d was tested and produces FALSE
+POSITIVES (P2P-heavy data, many colliding round amounts: "-$30 to Prashanth"
+pairs an unrelated "+$30 Zara cruise"). The 3d exact window is correctly
+conservative and is LEFT UNCHANGED — the fix is the PFC→category mapping.
+FIX (deterministic Law 1; suggest→approve Laws 2/10 class B; NO bulk overwrite):
+  1. keel_pfc_to_category_key income branch: TRANSFER_IN/OUT/LOAN_PAYMENTS →
+     'transfers_in'. (Expense branch byte-identical.)
+  2. New per-entity income-kind "Transfers In" category (pfc_key transfers_in) —
+     needed a DISTINCT name because ledger_accounts_category_name_ci is unique on
+     (entity_id, lower(name)) IGNORING kind, and the seeded "Transfers" is
+     expense-kind (the join requires cat.kind = txn income kind). Seeded for
+     future entities + backfilled non-fixture entities (idempotent).
+  3. keel_cash_flow / keel_cash_flow_monthly exclude the 'transfers'/'transfers_in'
+     category (new keel_txn_is_transfer_category helper). This is the actual
+     income-inflation fix: analytics key off ledger KIND, so a one-sided Venmo
+     inflow stays income until its CATEGORY is excluded (a paired link never
+     exists for it). formulaVersion → cash-flow-v4-transfer-category-excluded /
+     cash-flow-monthly-v3-transfer-category-excluded.
+Existing 881 reach the corrected mapping ONLY as keel_detect_category_suggestions
+proposals (their overlay source is 'plaid_pfc' = that detector's target class);
+keel_autocategorize_household is ON CONFLICT DO NOTHING so it never re-labels
+them. Future syncs get the right category at ingestion via the same mapper.
+HONEST SCOPE: reclassifies the ~385 TRANSFER_*/LOAN_PAYMENTS inflows as
+Transfers-In suggestions; the 466 OTHER_OTHER Venmo rows still need manual
+categorization (no transfer signal from Plaid). NO detector change; NO ledger
+overwrite. No column/table change (Law 6 export unaffected — new rows are
+ordinary ledger_accounts, already exported).
+Local throwaway stack: supabase start → db reset → test db = Result: PASS
+(32 files, 803 pgTAP tests; new 032 + updated 027/029). Root vitest 918 pass
+(after build-functions.mjs generates the gitignored vendor bundle; the 2 suites
+that fail without it are pre-existing artifact-missing failures, not this change).
+apps/web pnpm build green (ESLint).
