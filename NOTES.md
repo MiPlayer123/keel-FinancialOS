@@ -4,6 +4,90 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-19 — fix(recurring): drain the recurring_detection queue so detection actually runs
+
+Production bug: recurring detection had never produced a candidate for the real
+household (`recurring_candidate_versions` = 0 rows) — no Spotify/paycheck/bill
+auto-detected. Diagnosed read-only against the live DB (`supabase-keel` MCP,
+project `yrbteeownwjhcushwaga`); NO remote DB writes were made.
+
+**Root-cause trace.** Two independent bugs, both fixed in migration
+`20260719000000_recurring_detection_drain_and_liability_reader.sql`:
+
+1. PRIMARY — nothing drains the queue. `keel-recurring-detection` cron
+   (`0 3 * * *`) calls `keel_cron_enqueue_recurring_detection()` which only
+   ENQUEUES one job/household into pgmq `recurring_detection`. The only drain
+   crons on cloud are `keel-drain-sync` (`*/3`) and `keel-active-syncs`
+   (`*/15`), both for the `sync_events` queue: `keel_cron_drain_sync()` POSTs
+   `/worker/drain` with an empty body → worker defaults `queue='sync_events'`.
+   Nothing ever POSTs `/worker/drain {"queue":"recurring_detection"}`, so the
+   worker's `processRecurringDetection` handler (already wired in
+   `worker/index.ts` for `jobType='recurring_detection'`) is never invoked.
+   `pgmq.q_recurring_detection` had 6 messages stuck since 2026-07-13 with
+   `read_ct = 0`. Fix: `keel_cron_drain_recurring_detection()` +
+   `cron.schedule('keel-drain-recurring-detection','*/15 * * * *', …)`,
+   mirroring `keel_cron_drain_sync` EXACTLY (vault secrets
+   `keel_automations_key` / `keel_functions_base`, `net.http_post`, no
+   hardcoded credential) but with body `{"queue":"recurring_detection"}`. NO
+   worker code change needed — the `/drain` endpoint already dispatches by the
+   `queue` param. Cadence 15m: queue is enqueued once/day, so 15m picks up each
+   day's job + the backlog promptly without hammering the worker.
+
+   Backlog recovery: the 6 stuck messages are past their visibility timeout
+   with `read_ct=0`, so `pgmq.read` returns them on the first drain — consumed
+   with NO re-enqueue. `keel_recurring_upsert_candidates` is idempotent
+   (run_key + candidate input-fingerprint dedupe), so replaying overlapping
+   buckets is safe.
+
+2. SECONDARY — reader excluded credit cards. Even after draining, Spotify would
+   still not detect: the 3 real Spotify charges (2026-05-09/06-09/07-09, fixed
+   -$6.99) are on the "Savor" credit card, whose real-account ledger is
+   `kind='liability'`. `keel_recurring_read_txns` joined the real-account
+   posting with `asset_ledger.kind = 'asset'`, silently dropping every
+   liability (credit-card) txn — 4 of this household's 10 accounts. Verified
+   read-only: reader returned 1206 rows, ZERO matching "spotify"; the 3 txns
+   exist posted/non-voided with exactly one real-account posting each (the
+   `=1` single-real-account guard passes; only the `kind='asset'` predicate
+   drops them). Fix: widen to `asset_ledger.kind in ('asset','liability')`.
+   The single-real-account guard is already kind-agnostic (counts postings on
+   any real account), so the offset expense/income leg stays excluded exactly
+   as before. Function body otherwise byte-identical to `20260712120000`;
+   re-applied ownership (`keel_worker`) + grants.
+
+**Detector is correct (not a third bug).** `detectRecurringSeries` needs ≥3
+occurrences with normalized-counterparty grouping + cadence fit; 3 monthly
+Spotify charges classify as a fixed `monthly` `day_of_month` day=9 series
+(exactly 3 = the minimum `chosen.length < 3` accepts). Added regression test
+`packages/detectors/test/detect.test.ts` ("Spotify-like 3-occurrence monthly")
+mirroring the real data — passes.
+
+**Local validation (throwaway Docker Postgres, never cloud).** Migration applies
+clean in `--single-transaction` (pg_cron `create extension` unavailable in the
+bare image hits the guarded `exception when others` → notice, same as the
+existing recurring/sync migrations do locally). Verified directly:
+`cron.schedule('keel-drain-recurring-detection', …)` registers the job;
+fixed reader returns the liability Spotify txn (`-699`, ledger = card ledger,
+NOT the expense offset) where the old `kind='asset'` variant returned 0.
+
+**Tests.** `pnpm vitest run` 904 passed (2 vitest "FAIL" files are only vitest
+mis-globbing `worker/test/*` which needs the generated vendor bundle — NOT part
+of the canonical runner). Canonical deno suite
+`deno test supabase/functions/_shared/*.test.ts supabase/functions/worker/*.test.ts`
+= 14 passed / 0 failed. Detector suite 79 passed. `cd apps/web && pnpm build`
+green (ESLint clean). No worker source changed, so the vendor bundle
+(`node scripts/build-functions.mjs`, gitignored) need not be redeployed.
+
+**Merge/deploy for orchestrator (cloud):** apply migration
+`20260719000000_recurring_detection_drain_and_liability_reader.sql` to the cloud
+DB (psql `--single-transaction`, per the migrations-go-to-live directive). This
+registers the `keel-drain-recurring-detection` cron and replaces
+`keel_recurring_read_txns`. No edge-function redeploy required (worker code
+unchanged). The 6 backlog messages drain automatically within 15m; to verify,
+check `recurring_candidate_versions` / `recurring_series` populate for household
+`a1ba3759-…636c` and that Spotify appears.
+
+---
+
 ## 2026-07-18 — WS-J finalize: review P2s + rebase onto main (WS-H #68 + WS-I #69)
 
 Two P2 review fixes, then rebased `ws-j-receipts` onto current `origin/main`.
