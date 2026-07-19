@@ -7,6 +7,7 @@ import { Wallet } from 'lucide-react';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
+import { useEntityLens, lensAccountIdSet } from '@/components/keel/entity-lens-context';
 import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
 import {
   fetchAccounts,
@@ -735,6 +736,15 @@ function ProjectedCashCard({
 
 function HomeBody() {
   const { householdId, ready } = useHousehold();
+  // Global entity lens (persona theme #2). null = "All entities" (blended,
+  // pre-lens dashboard). A concrete id scopes every widget that can be
+  // decomposed client-side by account→entity (net worth, spending mix,
+  // insights, recent transactions, accounts summary). Widgets backed by a
+  // household-wide PRE-AGGREGATED read model (Cash flow, Cash-flow-by-month,
+  // Needs-attention, Free-to-spend) can't be split per entity here without a
+  // backend scope param — those are HIDDEN under an active lens rather than
+  // shown with a household number that contradicts the scoped hero (Law 9).
+  const { entityId: entityLens, entity: lensEntity } = useEntityLens();
   const balances = useKeelQuery<TrialBalanceRow>('ledger.trial_balance', householdId);
   // Net-worth trend now lives inside NetWorthHero (C11 fusion) — it fetches
   // the longest supported series once and subsets per range pill (C10).
@@ -836,17 +846,33 @@ function HomeBody() {
   const waitingForAccounts = householdId !== null && accounts === null;
   const loading = !ready || balances.loading || waitingForAccounts;
 
+  // The account ids inside the current lens (null = blended, no restriction) —
+  // the one mapping every decomposable widget below narrows through.
+  const lensAccountIds = useMemo(
+    () => lensAccountIdSet(entityLens, accounts ?? []),
+    [entityLens, accounts],
+  );
+  // richTxns scoped to the lens before any spending/insight/recent derivation,
+  // so every transaction-derived card reflects exactly the lensed accounts.
+  const lensTxns = useMemo(
+    () =>
+      lensAccountIds === null
+        ? (richTxns ?? [])
+        : (richTxns ?? []).filter((t) => lensAccountIds.has(t.accountId)),
+    [richTxns, lensAccountIds],
+  );
+
   // Hooks must run on EVERY render — these sit ABOVE the early returns below
   // (Rules of Hooks; placing them after `if (loading) return …` crashed the
   // whole dashboard — caught by the live UI verification pass).
-  const spending = useMemo(() => spendingMix(richTxns ?? []), [richTxns]);
-  const insights = useMemo(() => buildInsights(richTxns ?? []), [richTxns]);
+  const spending = useMemo(() => spendingMix(lensTxns), [lensTxns]);
+  const insights = useMemo(() => buildInsights(lensTxns), [lensTxns]);
   const recentTransactions = useMemo(
     () =>
-      [...(richTxns ?? [])]
+      [...lensTxns]
         .sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate))
         .slice(0, 8),
-    [richTxns],
+    [lensTxns],
   );
   const todayIso = new Date().toISOString().slice(0, 10);
   const upcomingRecurring = useMemo(
@@ -885,7 +911,14 @@ function HomeBody() {
     );
   }
 
-  const accountList = accounts ?? [];
+  // Under an active lens the accounts summary + net worth count only the
+  // lensed entity's accounts (a VIEW filter — the others aren't gone, just out
+  // of scope). Blended keeps every account, unchanged.
+  const lensActive = entityLens !== null;
+  const accountList =
+    lensAccountIds === null
+      ? (accounts ?? [])
+      : (accounts ?? []).filter((a) => lensAccountIds.has(a.id));
 
   const balanceByLedger = new Map(balances.rows.map((r) => [r.ledgerAccountId, r.balanceMinor]));
   const netMinor = accountList.reduce((acc, a) => {
@@ -909,54 +942,68 @@ function HomeBody() {
   return (
     <>
       {/* Fused net-worth hero (C11): number + Δ + % + window + chart as one
-          unit, with range pills (C10). Replaces the old bare Net position
-          card AND the separate 90-day net-worth chart card. */}
+          unit, with range pills (C10). Under an active entity lens it's
+          entity-scoped — the household-wide trend is suppressed and the number
+          equals this entity's accounts (see NetWorthHero). */}
       <div className="flex flex-col gap-2">
         <NetWorthHero
           householdId={householdId}
           fallbackNetMinor={netMinor.toString()}
           fallbackAsOf={balances.asOf}
+          entityScoped={lensActive}
+          {...(lensActive && lensEntity ? { scopeLabel: `${lensEntity.name} only` } : {})}
         />
         <div className="flex justify-end px-1">
           <SyncStatus householdId={householdId} connections={connections ?? []} />
         </div>
       </div>
 
-      {/* Unified actionable inbox (C16). Absorbs the old TransferNudgeBanner:
-          suggested transfers are part of the review row's count, and Review is
-          where confirming them (excluding from spending) actually happens. */}
-      <NeedsAttention
-        householdId={householdId}
-        recurring={recurringSeries}
-        bills={forecast?.bills ?? null}
-        connections={connections}
-        transactions={richTxns}
-      />
+      {/* Unified actionable inbox (C16). It reads household-wide review/recurring
+          state that can't be split per entity client-side, so it's shown only
+          in the blended view — an entity lens would otherwise imply its counts
+          are scoped when they aren't. */}
+      {lensActive ? null : (
+        <NeedsAttention
+          householdId={householdId}
+          recurring={recurringSeries}
+          bills={forecast?.bills ?? null}
+          connections={connections}
+          transactions={richTxns}
+        />
+      )}
 
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
-        <div className="flex min-w-0 flex-col gap-4 [&>*]:max-w-none">
-          <CashFlowCard householdId={householdId} />
-          {showMonthlyFlow ? (
-            <Card size="sm">
-              <CardHeader>
-                <CardTitle>Cash flow by month</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <CashFlowMonthlyChart rows={monthlyFlow} height={180} />
-              </CardContent>
-            </Card>
-          ) : null}
-        </div>
+        {/* Cash-flow cards read pre-aggregated household read models — hidden
+            under a lens rather than shown blended next to a scoped hero. */}
+        {lensActive ? null : (
+          <div className="flex min-w-0 flex-col gap-4 [&>*]:max-w-none">
+            <CashFlowCard householdId={householdId} />
+            {showMonthlyFlow ? (
+              <Card size="sm">
+                <CardHeader>
+                  <CardTitle>Cash flow by month</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <CashFlowMonthlyChart rows={monthlyFlow} height={180} />
+                </CardContent>
+              </Card>
+            ) : null}
+          </div>
+        )}
 
+        {/* Transaction-derived cards ARE entity-decomposable — they run on the
+            lens-scoped transactions/accounts computed above. */}
         <SpendingCard spending={spending} insights={insights} />
         <RecentTransactionsCard rows={recentTransactions} />
-        <UpcomingRecurringCard rows={upcomingRecurring} todayIso={todayIso} />
+        {lensActive ? null : (
+          <UpcomingRecurringCard rows={upcomingRecurring} todayIso={todayIso} />
+        )}
         <AccountsSummaryCard accounts={accountList} balanceByLedger={balanceByLedger} />
         <NotesTasksCard householdId={householdId} compact />
-        {forecast !== null ? (
+        {!lensActive && forecast !== null ? (
           <ProjectedCashCard forecast={forecast} varies={forecastVaries} todayIso={todayIso} />
         ) : null}
-        {hasBudget ? (
+        {!lensActive && hasBudget ? (
           <FreeToSpendCard
             richTxns={richTxns ?? []}
             series={recurringSeries ?? []}
