@@ -203,8 +203,13 @@ begin
 end;
 $$;
 
+-- keel_worker needs CREATE on schema public to own a function there; it is
+-- revoked on live (local-vs-live grant drift), so grant-alter-revoke exactly
+-- as the Slice 3 persist proc does (20260720180000 L772-774).
+grant create on schema public to keel_worker;
 alter function public.keel_sweep_statement_outbox(interval, integer, integer)
   owner to keel_worker;
+revoke create on schema public from keel_worker;
 revoke all on function public.keel_sweep_statement_outbox(interval, integer, integer)
   from public, anon, authenticated;
 grant execute on function public.keel_sweep_statement_outbox(interval, integer, integer)
