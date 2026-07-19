@@ -99,6 +99,7 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'transactions.set_splits': 'keel_cmd_set_splits',
   'transactions.set_date': 'keel_cmd_set_date',
   'accounts.dedupe_reconnect': 'keel_cmd_dedupe_reconnect_account',
+  'accounts.dedupe_archived': 'keel_cmd_dedupe_archived_duplicates',
   'accounts.set_opening_balance': 'keel_cmd_set_opening_balance',
   'accounts.reanchor_balance': 'keel_cmd_reanchor_balance',
   'categorization.decide_suggestion': 'keel_cmd_decide_category_suggestion',
@@ -146,6 +147,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'investments.overview': 'keel_investments_overview',
   'investments.value_daily': 'keel_investments_value_daily',
   'connections.list_reconnect_matches': 'keel_list_reconnect_matches',
+  'connections.list_archived_duplicate_matches': 'keel_list_archived_duplicate_matches',
   'receipts.inbox': 'keel_receipts_inbox',
 };
 

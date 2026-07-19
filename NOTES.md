@@ -4,6 +4,80 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-19 — fix(ledger): dedupe reconnect duplicates on ARCHIVED accounts + auto-archive superseded accounts at finalize
+
+Migration `20260719210000_dedupe_archived_duplicates.sql` (NOT applied to live —
+orchestrator applies after review). Stage 1 spine correction; Law 9 (idempotent
+economics / one economic history), Law 2 (reversible correction, suggest→approve),
+BC-v2.1 §9.1 invariants 3+5; CLAUDE.md soft-delete directive.
+
+Problem (verified live, household a1ba3759): after Fidelity disconnect→reconnect,
+the archived "Cash Management (Individual)" (conn a08bc4aa, archived by
+20260719120000) still holds 33 non-voided canonical txns that exactly duplicate
+txns on the ACTIVE "Fidelity (Individual)" (conn 7e9bdccf) — keel_cash_flow
+double-counts (e.g. 2026-05-29 dividend +2903 twice as Income).
+keel_cmd_dedupe_reconnect_account (20260718061000) can't reach this state: it
+requires the old account un-archived and voids the NEW side. Post-archive the
+roles invert — the active account is the system of record, so the ARCHIVED copies
+are the ones to void. Critical asymmetry honored: 2 archived-only txns (the
+2026-06-30 dividend +461 / reinvestment −461, not yet delivered by the new
+connection) are the sole record of real events and are preserved.
+
+What shipped:
+- `keel_archived_duplicate_pairs` — single-sourced matching core (same predicate
+  family as the reconnect dedupe: household + effective_date + description +
+  cash amount + currency, rank-paired one-to-one). NEW vs the original: a
+  CAPACITY OFFSET — already-voided old-side copies keep consuming match
+  capacity (old live rank k pairs with active rank k + prior-voided-in-group).
+  Without it, re-running after voiding one of two identical archived twins
+  re-ranks the survivor to 1 and voids a SECOND real event against the same
+  active copy. Found by the pgTAP property test ("re-run is a no-op" failed,
+  got 1 want 0), fixed, test green.
+- `keel_list_archived_duplicate_matches` — review reader (archived old side on a
+  disconnected conn × active new side, mask-or-name+subtype fingerprint, same
+  institution) with per-match duplicateCount preview. Suggest→approve: nothing
+  runs without the user triggering the command.
+- `keel_cmd_dedupe_archived_duplicates` (accounts.dedupe_archived) — validates
+  scope/archived/disconnected/active/currency/kind/institution/fingerprint
+  (mirrors review findings r3606990724 + r3606990731 incl. FOR UPDATE re-check),
+  then voids archived-side copies via the standard mechanism: reversal batch +
+  journal_revisions + status='voided'/voided_at + audit_log + domain event.
+  Never DELETEs; idempotent (voided rows leave the candidate set; economic-key
+  replay returns stored result); reversible (compensating re-reversal restores —
+  proven in test).
+- `keel_archive_superseded_accounts` + `keel_finalize_link` replacement (body
+  identical to 20260719060000 + one added `perform`) — prevent recurrence: at
+  link-finalize, same-institution same-fingerprint accounts on DISCONNECTED
+  connections are soft-archived (archived_at + audit rows), and a disconnected
+  connection with all accounts archived is archived too. Accounts on active
+  connections are never touched. Ordering vs dedupe is no longer load-bearing
+  because the dedupe path now matches archived accounts.
+- Wired accounts.dedupe_archived + connections.list_archived_duplicate_matches
+  into api COMMAND_TO_PROC/QUERY_TO_PROC (Law 7). No web UI yet (not in scope).
+
+Tests: `scripts/run-dedupe-archived-pgtap.sh` (throwaway initdb cluster, same
+pattern as run-finalize-entity-pgtap.sh; slices the REAL shared helpers from
+20260710210600 and loads the REAL migration file). 26/26 pass: one-to-one void,
+archived-only preserved, voided-active-twin preserved, coincidental unrelated
+duplicates untouched, balanced reversal, nothing deleted, no-op re-run,
+idempotent replay, audit rows, validation refusals, restore-by-re-reversal,
+auto-archive (+conn archive) idempotent with audit and active-conn safety.
+
+Live dry-run (SELECT-only, exact shipped pairing SQL): 33 would-void on
+855af8e8 vs abe2157a — per type: DIVIDEND 4 (+4,379), REINVESTMENT 4 (−4,379),
+EFT Received 6 (+4,501,134), PURCHASE INTO CORE 5 (−4,000,500), REDEMPTION 6
+(+4,000,516), TRANSFERRED TO VS 7 (−4,454,650), OTHER DEBIT crypto 1 (−46,500);
+net cash 0 (consistent with 20260719120000's ledger-sum==anchors guard), 2
+preserved. Reader would also surface the 3 empty archived matches (8ab78400 ×2,
+a08bc4aa LLC) with duplicateCount 0 — harmless.
+
+Deviations: none from spec; the capacity offset is an addition over the original
+command's matching core, justified above (Law 9 property would otherwise break).
+NOT deployed: migration + edge functions (orchestrator: apply migration, then
+node scripts/build-functions.mjs && supabase functions deploy api worker).
+
+---
+
 ## 2026-07-19 — fix(plaid): Fidelity investments never consented (ADDITIONAL_CONSENT_REQUIRED)
 
 Root cause (confirmed via Plaid dashboard Activity log): `/investments/holdings/get`
