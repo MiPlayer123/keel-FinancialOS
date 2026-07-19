@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { isAutoCategorized, isReviewedCategory, type CategorySourceLike } from '@/lib/review-state';
 
 const row = (
-  categorySource: 'user' | 'rule' | 'plaid_pfc' | null,
+  categorySource: 'user' | 'rule' | 'plaid_pfc' | 'transfer_confirm' | null,
   splits: CategorySourceLike['splits'] = null,
 ): CategorySourceLike => ({ categorySource, splits });
 
@@ -56,6 +56,11 @@ describe('isReviewedCategory', () => {
 
   it('is false for a PFC-mapped category', () => {
     expect(isReviewedCategory(row('plaid_pfc'))).toBe(false);
+  });
+
+  it('is true for a transfer-confirm leg (audited human confirm decision)', () => {
+    expect(isReviewedCategory(row('transfer_confirm'))).toBe(true);
+    expect(isAutoCategorized(row('transfer_confirm'))).toBe(false);
   });
 
   it('is false for a still-uncategorized transaction', () => {

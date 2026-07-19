@@ -703,7 +703,7 @@ export type RichTransactionRow = {
    * 'user' too); 'rule' / 'plaid_pfc' = machine-filed, never individually
    * reviewed. See lib/review-state.ts for the derived "Auto" badge check.
    */
-  categorySource?: 'user' | 'rule' | 'plaid_pfc' | null;
+  categorySource?: 'user' | 'rule' | 'plaid_pfc' | 'transfer_confirm' | null;
   /** Present (non-null) only for multi-split transactions. */
   splits?: TransactionSplit[] | null;
   /** User labels, orthogonal to categories (absent pre-tags-migration). */
