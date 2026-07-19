@@ -1153,6 +1153,155 @@ export async function copyBudgets(householdId: string, monthIso: string): Promis
   return typeof res.copied === 'number' ? res.copied : 0;
 }
 
+// ---------------------------------------------------------------------------
+// Budgeting v2 (SLICE B2) — planned total + opt-in category targets, resolved
+// by keel_budget_month (formulaVersion budget-v4-plan). Money is minor-unit
+// STRINGS; percents are integer basis points (0..10000). See migration
+// 20260720170000_budgeting_v2_plan.sql.
+// ---------------------------------------------------------------------------
+
+export type BudgetTargetKind = 'amount' | 'percent_of_total';
+export type BudgetTotalBasis = 'amount' | 'percent_of_income';
+
+export type BudgetMonthRow = {
+  categoryLedgerAccountId: string;
+  categoryName: string;
+  parentLedgerAccountId: string | null;
+  currency: string;
+  kind: BudgetTargetKind;
+  /** Amount rows carry amountMinor; percent rows carry percentBp. */
+  declared: { amountMinor?: string; percentBp?: number };
+  /** Resolved target in minor units (amount as-is, or floor(total×bp/10000)). */
+  resolvedMinor: string;
+  spentMinor: string;
+  rollover: boolean;
+  /** Signed carry from prior rollover months; null unless rollover is on. */
+  carryMinor: string | null;
+  /** resolvedMinor + carry when rollover is on, else resolvedMinor. */
+  availableMinor: string;
+};
+
+export type BudgetMonth = {
+  scope: { householdId: string; month: string };
+  asOf: string;
+  formulaVersion: string;
+  total: {
+    /** 'amount' | 'percent_of_income' | 'implicit_sum' (no explicit total set). */
+    basis: string;
+    resolvedMinor: string;
+    declaredAmountMinor: string | null;
+    declaredPercentBp: number | null;
+  };
+  expectedIncomeMinor: string | null;
+  /** total − Σ resolved category targets. Negative = over-allocated (flag). */
+  leftToBudgetMinor: string;
+  everythingElseSpentMinor: string;
+  rows: BudgetMonthRow[];
+};
+
+/** The v4 plan read model for a month (opt-in categories + total + residual). */
+export async function fetchBudgetMonth(householdId: string, monthIso: string): Promise<BudgetMonth> {
+  return invoke<BudgetMonth>('api/queries', {
+    query: 'budgets.month',
+    householdId,
+    month: monthIso,
+  });
+}
+
+/** budgets.set_total — the plan total (dollar amount OR % of expected income). */
+export async function setBudgetTotal(input: {
+  householdId: string;
+  userId: string;
+  monthIso: string;
+  basis: BudgetTotalBasis;
+  /** minor-unit string; required iff basis === 'amount'. */
+  amountMinor?: string;
+  /** integer bp 0..10000; required iff basis === 'percent_of_income'. */
+  percentBp?: number;
+}): Promise<CommandResult> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'budgets.set_total',
+    economicEventKey: `budgets.set_total:${input.householdId}:${input.monthIso}:${newId()}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload:
+      input.basis === 'amount'
+        ? { month: input.monthIso, basis: 'amount', amountMinor: input.amountMinor }
+        : { month: input.monthIso, basis: 'percent_of_income', percentBp: input.percentBp },
+  });
+}
+
+/** budgets.set_target — one category target (dollar amount OR % of the total). */
+export async function setBudgetTarget(input: {
+  householdId: string;
+  userId: string;
+  monthIso: string;
+  categoryLedgerAccountId: string;
+  kind: BudgetTargetKind;
+  amountMinor?: string;
+  percentBp?: number;
+  rollover?: boolean;
+}): Promise<CommandResult> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'budgets.set_target',
+    economicEventKey: `budgets.set_target:${input.categoryLedgerAccountId}:${input.monthIso}:${newId()}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload:
+      input.kind === 'amount'
+        ? {
+            month: input.monthIso,
+            categoryLedgerAccountId: input.categoryLedgerAccountId,
+            kind: 'amount',
+            amountMinor: input.amountMinor,
+            ...(input.rollover !== undefined ? { rollover: input.rollover } : {}),
+          }
+        : {
+            month: input.monthIso,
+            categoryLedgerAccountId: input.categoryLedgerAccountId,
+            kind: 'percent_of_total',
+            percentBp: input.percentBp,
+            ...(input.rollover !== undefined ? { rollover: input.rollover } : {}),
+          },
+  });
+}
+
+/** budgets.remove_target — soft removal (end-date); the category rejoins the residual. */
+export async function removeBudgetTarget(input: {
+  householdId: string;
+  userId: string;
+  monthIso: string;
+  categoryLedgerAccountId: string;
+}): Promise<CommandResult> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'budgets.remove_target',
+    economicEventKey: `budgets.remove_target:${input.categoryLedgerAccountId}:${input.monthIso}:${newId()}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: { month: input.monthIso, categoryLedgerAccountId: input.categoryLedgerAccountId },
+  });
+}
+
+/** budgets.set_expected_income — user-confirmed expected income for a month. */
+export async function setBudgetExpectedIncome(input: {
+  householdId: string;
+  userId: string;
+  monthIso: string;
+  amountMinor: string;
+}): Promise<CommandResult> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'budgets.set_expected_income',
+    economicEventKey: `budgets.set_expected_income:${input.householdId}:${input.monthIso}:${newId()}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: { month: input.monthIso, amountMinor: input.amountMinor },
+  });
+}
+
 /** Create a custom category, optionally nested one level under a parent. */
 export async function createCategory(input: {
   householdId: string;
