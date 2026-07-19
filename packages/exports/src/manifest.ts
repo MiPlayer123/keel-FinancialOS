@@ -93,6 +93,13 @@ export const INCLUDE = [
   include({ schema: 'public', table: 'document_attachments', columns: ['id', 'household_id', 'document_id', 'canonical_transaction_id', 'paycheck_id', 'reimbursement_claim_id', 'statement_id', 'attached_by', 'attached_at', 'detached_by', 'detached_at'], sortKey: ['id'], timestampColumns: ['attached_at', 'detached_at'], bigintColumns: [] }),
   include({ schema: 'public', table: 'document_extractions', columns: ['id', 'household_id', 'document_version_id', 'status', 'extractor', 'extractor_version', 'merchant', 'amount_minor', 'currency', 'txn_date', 'confidence', 'raw_evidence', 'error_code', 'created_at'], sortKey: ['id'], timestampColumns: ['created_at'], bigintColumns: ['amount_minor'] }),
   include({ schema: 'public', table: 'document_transaction_matches', columns: ['id', 'household_id', 'document_version_id', 'canonical_transaction_id', 'status', 'score', 'reason_codes', 'suggested_by', 'attachment_id', 'decided_by', 'decided_at', 'created_at'], sortKey: ['id'], timestampColumns: ['decided_at', 'created_at'], bigintColumns: [] }),
+  // Approval-token provenance (Law 11 / Law 6). The record of what was approved,
+  // by whom, over which server-normalized payload, when — portable household
+  // data. normalized_payload is INCLUDED verbatim: statement approvals embed no
+  // secrets (only already-exported ledger facts), and the json-secret export
+  // scan guards it. If a future proposal_kind ever binds a secret-bearing
+  // payload, redact normalized_payload for that kind before it ships (NOTES.md).
+  include({ schema: 'public', table: 'approval_tokens', columns: ['token_id', 'household_id', 'actor_user_id', 'command', 'payload_sha256', 'normalized_payload', 'scope', 'account_id', 'proposal_kind', 'proposal_ref', 'proposal_version', 'policy_version', 'status', 'issued_at', 'expires_at', 'redeemed_at', 'redeemed_command_id', 'created_at'], sortKey: ['token_id'], timestampColumns: ['issued_at', 'expires_at', 'redeemed_at', 'created_at'], bigintColumns: [] }),
 ] as const;
 
 export type ExportTableName = (typeof INCLUDE)[number]['table'];

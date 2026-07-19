@@ -4,6 +4,98 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-19 — SLICE 0 (statement-ingestion-v2): approval-token SQL primitive + one shared statement validate/materialize
+
+Migration `20260720100000_approval_tokens.sql` (NOT applied to live — orchestrator
+applies after review). Prerequisite slice per `docs/harness/plans/statement-ingestion-v2.md`
+§SLICE 0. Cites CLAUDE.md Law 11 (typed AI responses + approval tokens binding
+exact payload/actor/scope/version/expiry), Law 7 / BC-v2.1 §9.1 (one
+authorization compiler, scope-safe calculation), Law 2 (append-only), Law 6
+(full export always works).
+
+Why: `packages/contracts/src/ai.ts` already carried `ApprovalTokenSchema` +
+`AiResponseRecordSchema` as Zod TYPES, but a grep for `approval_token|redeem|
+issue_token` over `supabase/migrations/**` returned nothing — the schema existed
+with NO SQL enforcement primitive. Both statement-ingestion and paycheck need
+it, so it is built standalone/first.
+
+What shipped:
+- `approval_token_status` enum (issued/redeemed/expired/revoked) + `approval_tokens`
+  table exactly per the plan (composite tenant FK `(household_id, account_id) →
+  accounts`; `payload_sha256` 64-hex CHECK). Immutable-except-status trigger
+  `keel_approval_token_guard`: blocks DELETE, allows only issued→{redeemed,
+  expired,revoked}, freezes every other column, and only lets a redemption stamp
+  `redeemed_at`/`redeemed_command_id`.
+- `keel_approval_token_issue(...)` SECURITY DEFINER: membership+write check;
+  actor DERIVED from JWT via `keel_actor_from_jwt` (caller `p_actor` ignored —
+  forgery guard, same finding that hardened the shared helper); account-scoped
+  `keel_recurring_account_access(...,true)` when account present; binds
+  `payload_sha256 = keel_payload_hash(normalized_payload)`; TTL in (0, 86400];
+  returns `{tokenId, payloadSha256, actorUserId, expiresAt}`.
+- `keel_approval_token_redeem(...)` SECURITY DEFINER, one-use: `select … for
+  update`; status='issued' else replay P0007 / P0009; expiry via
+  `clock_timestamp()` (see deviation) → P0009; actor = JWT sub else reject;
+  command match; `keel_payload_hash(server-normalized payload) = payload_sha256`
+  else tamper reject; proposal_version match; on success flip to 'redeemed' +
+  stamp. The hash is over the SERVER-normalized payload the redeem caller passes,
+  never the client raw body.
+- `keel_statement_validate_and_materialize(household, payload, actor)` (Law 7):
+  the current live `keel_statement_create` validation+insert body EXTRACTED
+  byte-for-byte (verified with a diff harness — identical modulo the actor
+  variable being passed as a param instead of a local) into one internal
+  SECURITY DEFINER helper. `keel_statement_create` refactored to call it;
+  everything outside the extracted body (auth, idempotency, effects/result
+  shape, finish_command, unique_violation→P0007) preserved verbatim, so the
+  manual path stays behaviorally byte-identical. No validation-semantics change
+  in this slice (anchor/coalesce belong to a later slice).
+- Export (Law 6): `approval_tokens` added to the exporter INCLUDE list
+  (`packages/exports/src/manifest.ts`, INCLUDE 78→79) AND to the SQL
+  `keel_export_household` via the receipts rename-chain idiom
+  (`keel_export_household_pre_approval_tokens`). `normalized_payload` is exported
+  VERBATIM — statement approvals embed only already-exported ledger facts, no
+  secret — and the recursive `assertNoExportSecrets` guard fires if a token
+  payload ever carries one (proven in `packages/exports/test/approval-tokens.test.ts`).
+- Grants/RLS: procs owned by `keel_api` (non-login/non-super/non-BYPASSRLS) via
+  the exact ownership ritual from 20260710210600 / 20260712150000; issue/redeem
+  EXECUTE to keel_api+authenticated; RLS member-read only; no direct client
+  write. `KEEL_OWNERSHIP` fail-closed DO block re-asserts ownership.
+
+Deviations (cited):
+1. **Expiry status flip moved to a sweeper.** The plan says redeem should "flip
+   to 'expired'". But redeem is called INSIDE the command transaction that is
+   about to mutate; on the P0009 raise that whole transaction rolls back, taking
+   any status write with it (proven: pgTAP asserts the row is still 'issued'
+   immediately after a rejected expired redeem). So redeem only REJECTS expired
+   tokens; a new `keel_approval_token_expire_sweep()` (service_role/pg_cron,
+   idempotent, its own transaction) DURABLY flips past-expiry issued tokens to
+   'expired'. Terminal 'expired' is eventually-consistent — the security
+   property (an expired token is never redeemable) is enforced synchronously at
+   redeem. This is the smallest deterministic version that satisfies both the
+   one-use security invariant and the plan's terminal-state intent.
+2. **`clock_timestamp()` not `now()` for the expiry gate.** `now()` is
+   transaction-start time; a long-running command transaction could otherwise
+   redeem a token that expired mid-transaction. `clock_timestamp()` evaluates
+   real wall-clock at the moment of redeem, which is the correct expiry semantic
+   and is deterministically testable inside a single pgTAP transaction.
+3. **Sweeper added beyond the literal plan list.** Justified by deviation 1 —
+   without it there is no durable path to the 'expired' terminal state the plan
+   asks for.
+
+Tests (frozen first, all green):
+- pgTAP `tests/pgtap/approval_tokens.sql` (runner `scripts/run-approval-tokens-pgtap.sh`,
+  throwaway PG cluster, real helpers+migration sliced in): 32 assertions pass —
+  issue→redeem happy, tamper, replay P0007, command/version/actor/account
+  mismatches, immutability (no delete / no non-status mutation), expiry reject +
+  sweeper flip, ownership, and the byte-identical `keel_statement_create` manual
+  path (creates exactly one statement + one line via the shared helper).
+- `packages/contracts/test/approval-token.test.ts` (3) — `ApprovalTokenSchema`
+  round-trips the issue proc output shape + rejects bad hash/actor.
+- `packages/exports/test/approval-tokens.test.ts` (4) + manifest/property count
+  bumps (78→79) — CSV/JSON serialization, JSON round-trip, secret-scan.
+- `cd apps/web && pnpm build` clean (ESLint gate; contracts+exports touched).
+
+---
+
 ## 2026-07-19 — fix(ledger): dedupe reconnect duplicates on ARCHIVED accounts + auto-archive superseded accounts at finalize
 
 Migration `20260719210000_dedupe_archived_duplicates.sql` (NOT applied to live —
