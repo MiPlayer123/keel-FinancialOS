@@ -49,13 +49,16 @@ insert into public.recurring_occurrences(household_id,id,series_id,candidate_ver
 
 set local role authenticated; set local request.jwt.claims='{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
 
--- Classification: utility series → 'utility' (from PFC); income series → 'income' (from sign).
+-- Classification: utility series → 'utility' (from PFC). The inflow fixture's
+-- counterparty_key is 'Payroll Inc' — a payroll token — so under the
+-- 20260719090000 paycheck classifier it is 'paycheck' (payroll/wages), not plain
+-- income.
 select is(
   (select r->>'bucket' from jsonb_array_elements(public.keel_recurring_classification('00000000-0000-4000-8000-00000000a001')->'rows') r where r->>'seriesId'='d9000000-0000-4000-8000-000000000401'),
   'utility','utility PFC classifies the outflow series as utility');
 select is(
   (select r->>'bucket' from jsonb_array_elements(public.keel_recurring_classification('00000000-0000-4000-8000-00000000a001')->'rows') r where r->>'seriesId'='d9000000-0000-4000-8000-000000000402'),
-  'income','inflow series classifies as income');
+  'paycheck','a payroll inflow (counterparty carries a payroll token) classifies as paycheck');
 
 -- C (migration 20260719010000): a personal P2P inflow series whose matched
 -- transaction carries Plaid TRANSFER_IN classifies as 'excluded' — NOT income —
@@ -83,7 +86,50 @@ select is(
   'excluded','a P2P (TRANSFER_IN) inflow series is excluded, not shown as income');
 select is(
   (public.keel_recurring_classification('00000000-0000-4000-8000-00000000a001')->>'formulaVersion'),
-  'recurring-classification-v2','classification formula version bumped to v2');
+  'recurring-classification-v3-paycheck','classification formula version bumped to v3 (paycheck)');
+
+-- 20260719090000: PAYCHECK vs plain-INCOME split. A non-payroll inflow series
+-- (a money-market dividend — no payroll token, carries a 'dividend' term) stays
+-- 'income', NOT 'paycheck', so it never appears in the Paychecks "detected
+-- paychecks" section. Fresh '…404' inflow series, no matched txn (mirrors the
+-- live data where inflow occurrences are unmatched — the rule is token-driven).
+reset role;
+insert into public.recurring_series(id,household_id,series_key,account_id,ledger_account_id,counterparty_key,currency,sign,status,current_candidate_version_id) values
+('d9000000-0000-4000-8000-000000000404','00000000-0000-4000-8000-00000000a001','pgtap-paycheck-dividend','00000000-0000-4000-8000-00000000a401','00000000-0000-4000-8000-00000000a301','dividend received fidelity government money market spaxx cash','USD','inflow','suggested',null);
+insert into public.recurring_candidate_versions(id,household_id,series_id,detector_run_id,candidate_hash,input_fingerprint,detector_version,confidence_version,normalizer_version,as_of,score_bps,evidence,candidate) values
+('d9000000-0000-4000-8000-000000000504','00000000-0000-4000-8000-00000000a001','d9000000-0000-4000-8000-000000000404','d9000000-0000-4000-8000-000000000301',repeat('4',64),repeat('4',32),'v1','v1','v1','2026-05-20',9000,
+  jsonb_build_array(jsonb_build_object('x',1),jsonb_build_object('x',1),jsonb_build_object('x',1)),'{}'::jsonb);
+update public.recurring_series set current_candidate_version_id='d9000000-0000-4000-8000-000000000504' where id='d9000000-0000-4000-8000-000000000404';
+insert into public.recurring_occurrences(household_id,id,series_id,candidate_version_id,occurrence_key,expected_date,expected_amount_minor,currency,amount_kind,status,matched_txn_id,score_bps,evidence,input_fingerprint,detector_version,confidence_version,as_of) values
+('00000000-0000-4000-8000-00000000a001','d9000000-0000-4000-8000-000000000604','d9000000-0000-4000-8000-000000000404','d9000000-0000-4000-8000-000000000504',repeat('4',24),'2026-06-01',461,'USD','fixed','expected',null,9000,
+  jsonb_build_array(jsonb_build_object('x',1),jsonb_build_object('x',1),jsonb_build_object('x',1)),repeat('4',24),'v1','v1','2026-05-20');
+set local role authenticated; set local request.jwt.claims='{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
+select is(
+  (select r->>'bucket' from jsonb_array_elements(public.keel_recurring_classification('00000000-0000-4000-8000-00000000a001')->'rows') r where r->>'seriesId'='d9000000-0000-4000-8000-000000000404'),
+  'income','a dividend inflow (no payroll token) stays plain income, not paycheck');
+
+-- Decline (dismiss) one detected-paycheck occurrence: soft-state, idempotent,
+-- and it does NOT mute the series (the paycheck series itself is untouched).
+select lives_ok($$select public.keel_cmd_dismiss_detected_paycheck('d9000000-0000-4000-8000-000000000801','pgtap:dpd:1','{}','00000000-0000-4000-8000-00000000a001',
+  jsonb_build_object('series_id','d9000000-0000-4000-8000-000000000402','occurrence_date','2026-06-15'))$$,'a detected paycheck occurrence is declined');
+select is((select jsonb_array_length(public.keel_list_detected_paycheck_dismissals('00000000-0000-4000-8000-00000000a001')->'rows')),1,'the dismissal is listed');
+-- Idempotent: declining the same (employer, date) again is a no-op (one row).
+select lives_ok($$select public.keel_cmd_dismiss_detected_paycheck('d9000000-0000-4000-8000-000000000802','pgtap:dpd:2','{}','00000000-0000-4000-8000-00000000a001',
+  jsonb_build_object('series_id','d9000000-0000-4000-8000-000000000402','occurrence_date','2026-06-15'))$$,'re-declining the same occurrence is a no-op');
+select is((select count(*)::int from public.detected_paycheck_dismissals where household_id='00000000-0000-4000-8000-00000000a001'),1,'still exactly one dismissal row (idempotent)');
+-- The paycheck series itself is untouched — it still classifies as 'paycheck'.
+select is(
+  (select r->>'bucket' from jsonb_array_elements(public.keel_recurring_classification('00000000-0000-4000-8000-00000000a001')->'rows') r where r->>'seriesId'='d9000000-0000-4000-8000-000000000402'),
+  'paycheck','declining an occurrence does not mute the paycheck series');
+-- An OUTFLOW series cannot be a detected paycheck.
+select throws_ok($$select public.keel_cmd_dismiss_detected_paycheck('d9000000-0000-4000-8000-000000000803','pgtap:dpd:3','{}','00000000-0000-4000-8000-00000000a001',
+  jsonb_build_object('series_id','d9000000-0000-4000-8000-000000000401','occurrence_date','2026-06-15'))$$,'P0009',null,'declining an outflow series is rejected');
+-- A hard DELETE / UPDATE on the dismissal table is blocked (append-only).
+set local role postgres;
+select throws_ok($$delete from public.detected_paycheck_dismissals where household_id='00000000-0000-4000-8000-00000000a001'$$,'P0010',null,'hard delete of a dismissal is blocked');
+select throws_ok($$update public.detected_paycheck_dismissals set occurrence_date='2026-07-01' where household_id='00000000-0000-4000-8000-00000000a001'$$,'P0010',null,'update of a dismissal is blocked');
+select ok(has_table_privilege('keel_export','public.detected_paycheck_dismissals','SELECT'),'export role can read the dismissal table');
+set local role authenticated; set local request.jwt.claims='{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
 
 -- Create a matching manual schedule (a monthly bill, negative amount).
 select lives_ok($$select public.keel_schedule_save('00000000-0000-4000-8000-00000000a001',null,'00000000-0000-4000-8000-00000000a401','Utility Co bill',-5000,null,'monthly','2026-06-15',null)$$,'schedule created');

@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useMemo, useState } from 'react';
-import { Repeat, Loader2, CalendarClock, Plus, Pause, Play, CheckCircle2, SkipForward, XCircle } from 'lucide-react';
+import Link from 'next/link';
+import { Repeat, Loader2, CalendarClock, Plus, Pause, Play, CheckCircle2, SkipForward, XCircle, Banknote, ArrowRight } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
@@ -396,6 +397,7 @@ function RecurringLanes({
 const EXPENSE_BUCKET_ORDER: RecurringBucket[] = ['bill', 'utility', 'subscription'];
 const BUCKET_LABELS: Record<RecurringBucket, string> = {
   income: 'Income',
+  paycheck: 'Paychecks',
   bill: 'Bills',
   utility: 'Utilities',
   subscription: 'Subscriptions',
@@ -421,7 +423,9 @@ function isIncomeSeries(
 ): boolean {
   if (isExcludedSeries(s, bucketBySeries)) return false;
   const bucket = bucketBySeries.get(s.seriesId);
-  if (bucket) return bucket === 'income';
+  // Both plain income AND paychecks live on the income lane (a paycheck is
+  // income, just marked distinctly). Everything else classified is an outflow.
+  if (bucket) return bucket === 'income' || bucket === 'paycheck';
   return s.sign === 'inflow';
 }
 
@@ -502,6 +506,7 @@ function SeriesSection({
             <SeriesCard
               key={s.seriesId}
               series={s}
+              bucket={bucketBySeries.get(s.seriesId) ?? null}
               accountName={accountName(s.accountId)}
               link={linkBySeries.get(s.seriesId) ?? null}
               schedules={schedules}
@@ -520,6 +525,7 @@ function SeriesSection({
 
 function SeriesCard({
   series,
+  bucket,
   accountName,
   link,
   schedules,
@@ -530,6 +536,7 @@ function SeriesCard({
   onLinksChanged,
 }: {
   series: RecurringSeriesRow;
+  bucket: RecurringBucket | null;
   accountName: string;
   link: RecurringScheduleLink | null;
   schedules: ScheduleRow[];
@@ -609,11 +616,34 @@ function SeriesCard({
     <Card>
       <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0 space-y-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <p className="truncate text-sm font-medium">{series.counterpartyKey}</p>
-            <Badge variant="secondary" className="capitalize">
-              {series.sign}
-            </Badge>
+            {bucket === 'paycheck' ? (
+              <>
+                {/* PAYROLL/WAGES: clearly marked as a paycheck, and linked to the
+                    Paychecks page where it's confirm-or-decline. Non-payroll
+                    income (dividends, interest) shows no such badge. */}
+                <Badge className="gap-1">
+                  <Banknote className="size-3" />
+                  Paycheck
+                </Badge>
+                <Link
+                  href="/dashboard/paychecks"
+                  className="inline-flex items-center gap-0.5 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                >
+                  Tracked on Paychecks
+                  <ArrowRight className="size-3" />
+                </Link>
+              </>
+            ) : series.sign === 'inflow' ? (
+              <Badge variant="outline" className="text-muted-foreground">
+                Recurring income
+              </Badge>
+            ) : (
+              <Badge variant="secondary" className="capitalize">
+                {series.sign}
+              </Badge>
+            )}
           </div>
           <p className="text-xs text-muted-foreground">
             {accountName}

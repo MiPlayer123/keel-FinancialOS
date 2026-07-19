@@ -12,6 +12,7 @@ import {
   ArrowLeftRight,
   ChevronDown,
   ListChecks,
+  Banknote,
 } from 'lucide-react';
 import { LazyMotion, domMax, m, useMotionValue, useTransform } from 'motion/react';
 import { toast } from 'sonner';
@@ -31,9 +32,11 @@ import {
   decideTransfer,
   detectCategorySuggestions,
   fetchCategories,
+  fetchRecurringClassification,
   type CategoryRow,
   type CategorySuggestionRow,
   type QueryResult,
+  type RecurringClassificationRow,
   type RecurringSeriesRow,
   type RichTransactionRow,
   type TransferLinkRow,
@@ -99,13 +102,26 @@ function ReviewBody() {
   const [catSelecting, setCatSelecting] = useState(false);
   const [catSelected, setCatSelected] = useState<Set<string>>(new Set());
   const [catBulkBusy, setCatBulkBusy] = useState(false);
+  // Classification so a payroll recurring suggestion is clearly marked as a
+  // Paycheck here too (same deterministic bucket the Recurring page uses).
+  const [classification, setClassification] = useState<RecurringClassificationRow[]>([]);
 
   useEffect(() => {
     if (!householdId) return;
     void fetchCategories(householdId)
       .then(setCategories)
       .catch(() => undefined);
+    void fetchRecurringClassification(householdId)
+      .then(setClassification)
+      .catch(() => {
+        setClassification([]);
+      });
   }, [householdId]);
+
+  const paycheckSeriesIds = useMemo(
+    () => new Set(classification.filter((c) => c.bucket === 'paycheck').map((c) => c.seriesId)),
+    [classification],
+  );
 
   const markResolved = useCallback((txnIds: string[]) => {
     if (txnIds.length === 0) return;
@@ -350,6 +366,7 @@ function ReviewBody() {
             <SuggestionCard
               key={series.seriesId}
               series={series}
+              isPaycheck={paycheckSeriesIds.has(series.seriesId)}
               householdId={householdId}
               userId={userId}
               onRemove={() => removeRecurring([series.seriesId])}
@@ -1178,12 +1195,15 @@ function CategorizationCard({
 
 function SuggestionCard({
   series,
+  isPaycheck,
   householdId,
   userId,
   onRemove,
   onDone,
 }: {
   series: RecurringSeriesRow;
+  /** Payroll/wages (deterministic classifier); marked as a Paycheck here too. */
+  isPaycheck: boolean;
   householdId: string;
   userId: string | null;
   /** Optimistic removal (F-003); returns a restore for the failure path. */
@@ -1249,9 +1269,16 @@ function SuggestionCard({
             <p className="truncate font-medium" title={series.counterpartyKey}>
               {merchantDisplayName(series.counterpartyKey.toUpperCase())}
             </p>
-            <Badge variant="secondary" className="capitalize">
-              {series.sign}
-            </Badge>
+            {isPaycheck ? (
+              <Badge className="gap-1">
+                <Banknote className="size-3" />
+                Paycheck
+              </Badge>
+            ) : (
+              <Badge variant="secondary" className="capitalize">
+                {series.sign}
+              </Badge>
+            )}
           </div>
           {first ? (
             <p className="text-sm text-muted-foreground">
