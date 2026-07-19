@@ -17,6 +17,8 @@ import {
   ReimbursementClaimIdSchema,
   SettlementIdSchema,
   StatementIdSchema,
+  StatementDraftIdSchema,
+  ApprovalTokenIdSchema,
   ReconciliationSessionIdSchema,
   UserIdSchema,
 } from './ids.js';
@@ -199,12 +201,42 @@ export const SettleReimbursementPayloadSchema=z.object({
 }).strict();
 export const ReverseSettlementPayloadSchema=z.object({settlementId:SettlementIdSchema,reason:z.string().min(1).max(500)}).strict();
 export const ReverseClaimPayloadSchema=z.object({claimId:ReimbursementClaimIdSchema,reason:z.string().min(1).max(500)}).strict();
+// [A6] statement balance-check mode: strict (opening+Σ=ending) or anchor
+// (investment/valuation ending is a mark-to-market, not a line sum — carries a
+// typed reason + a stored gap explanation, gate-8 provenance).
+export const StatementBalanceCheckSchema=z.enum(['strict','anchor']);
+export const StatementAnchorReasonSchema=z.enum(['investment_valuation','market_value','no_transaction_detail']);
+const StatementLineSchema=z.object({lineKey:z.string().min(1).max(100),date:IsoDateSchema,amountMinor:MinorUnitsStringSchema,description:z.string().min(1).max(500)}).strict();
+// [A6] lines min1 -> min0: zero-line anchor/valuation statements are expressible.
+// balanceCheck/anchor fields optional; default strict on the server for the
+// manual create path (byte-identical). See NOTES.md contract amendment.
 export const CreateStatementPayloadSchema=z.object({accountId:AccountIdSchema,periodStart:IsoDateSchema,periodEnd:IsoDateSchema,
  openingMinor:MinorUnitsStringSchema,endingMinor:MinorUnitsStringSchema,currency:CurrencyCodeSchema,sourceHash:z.string().regex(/^[a-f0-9]{64}$/u),
- lines:z.array(z.object({lineKey:z.string().min(1).max(100),date:IsoDateSchema,amountMinor:MinorUnitsStringSchema,description:z.string().min(1).max(500)}).strict()).min(1).max(5000)}).strict();
+ lines:z.array(StatementLineSchema).min(0).max(5000),
+ balanceCheck:StatementBalanceCheckSchema.optional(),anchorReason:StatementAnchorReasonSchema.optional(),anchorGapExplanation:z.string().min(1).max(1000).optional()}).strict();
 const ResolutionSchema=z.enum(['matched_transaction','stale_balance','missing_event','duplicate','pending_posting','opening_balance','adjustment']);
-export const CloseReconciliationPayloadSchema=z.object({statementId:StatementIdSchema,items:z.array(z.object({lineId:z.uuid(),resolution:ResolutionSchema,transactionId:CanonicalTransactionIdSchema.optional(),explanation:z.string().min(1).max(500)}).strict()).min(1).max(5000),
+// [A6] items min1 -> min0: a zero-line anchor statement needs zero item explanations.
+export const CloseReconciliationPayloadSchema=z.object({statementId:StatementIdSchema,items:z.array(z.object({lineId:z.uuid(),resolution:ResolutionSchema,transactionId:CanonicalTransactionIdSchema.optional(),explanation:z.string().min(1).max(500)}).strict()).min(0).max(5000),
  adjustments:z.array(z.object({kind:ResolutionSchema.exclude(['matched_transaction']),amountMinor:MinorUnitsStringSchema,explanation:z.string().min(1).max(500)}).strict()).max(100)}).strict();
+// SLICE 3: dismiss a statement draft (Law 2 reversible-to-terminal; Class B).
+export const DismissStatementDraftPayloadSchema=z.object({draftId:StatementDraftIdSchema}).strict();
+// SLICE 3: the TOKEN-BOUND statement-draft approval (Law 11 HARD GATE). Carries
+// draftId + approvalTokenId + balanceCheck + the full server-normalizable
+// statement body. `sourceHash`/`accountId` in the body are ignored server-side
+// (the server binds the true content_sha256 + draft account before hashing);
+// lines min0 for anchor/zero-line statements.
+export const ApproveStatementDraftPayloadSchema=z.object({
+ draftId:StatementDraftIdSchema,
+ approvalTokenId:ApprovalTokenIdSchema,
+ balanceCheck:StatementBalanceCheckSchema,
+ statement:z.object({
+  accountId:AccountIdSchema,periodStart:IsoDateSchema,periodEnd:IsoDateSchema,
+  openingMinor:MinorUnitsStringSchema,endingMinor:MinorUnitsStringSchema,currency:CurrencyCodeSchema,
+  sourceHash:z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  lines:z.array(StatementLineSchema).min(0).max(5000),
+  anchorReason:StatementAnchorReasonSchema.optional(),anchorGapExplanation:z.string().min(1).max(1000).optional()
+ }).strict()
+}).strict();
 export const ReopenReconciliationPayloadSchema=z.object({sessionId:ReconciliationSessionIdSchema,reason:z.string().min(1).max(500)}).strict();
 // F-029: set (1-31) or clear (null) an account's expected statement close day.
 export const SetStatementCadencePayloadSchema=z.object({accountId:AccountIdSchema,closeDay:z.number().int().min(1).max(31).nullable()}).strict();
@@ -435,6 +467,8 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'reimbursements.reverse_settlement':ReverseSettlementPayloadSchema,
   'reimbursements.reverse_claim':ReverseClaimPayloadSchema,
   'statements.create':CreateStatementPayloadSchema,
+  'statements.approve_draft':ApproveStatementDraftPayloadSchema,
+  'statements.dismiss_draft':DismissStatementDraftPayloadSchema,
   'statements.set_cadence':SetStatementCadencePayloadSchema,
   'reconciliations.close':CloseReconciliationPayloadSchema,
   'reconciliations.reopen':ReopenReconciliationPayloadSchema,
