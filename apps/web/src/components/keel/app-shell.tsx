@@ -237,8 +237,11 @@ function currencySubtotal(
  * left rail. Each row carries a right-aligned balance, each group header its
  * subtotal, and net worth is pinned at the foot — the same figures the
  * Accounts page shows (both read `ledger.trial_balance`, so the rows sum to
- * the net worth exactly). Caps keep the rail calm; balances hide when the
- * sidebar is collapsed because the whole subnav is (see NavLinks).
+ * the net worth exactly). Every account is listed in its group (no cap) and
+ * the rail scrolls with its container (the desktop <aside> is h-dvh
+ * overflow-y-auto; the mobile drawer is min-h-0 overflow-y-auto — see
+ * AppShell); balances hide when the sidebar is collapsed because the whole
+ * subnav is (see NavLinks).
  */
 function SidebarAccounts({
   pathname,
@@ -290,7 +293,6 @@ function SidebarAccounts({
     const kind = kinds.get(a.ledgerAccountId);
     return kind !== 'asset' && kind !== 'liability';
   });
-  const CAP = 6;
 
   // Net worth across every account in the dominant currency. Equals the
   // Accounts-page net worth for single-currency households (the common case);
@@ -315,7 +317,7 @@ function SidebarAccounts({
             />
           ) : null}
         </div>
-        {rows.slice(0, CAP).map((a) => {
+        {rows.map((a) => {
           const href = `/dashboard/accounts/${a.id}`;
           const active = pathname === href;
           const bal = byLedger.get(a.ledgerAccountId);
@@ -364,15 +366,6 @@ function SidebarAccounts({
             </div>
           );
         })}
-        {rows.length > CAP ? (
-          <Link
-            href="/dashboard/accounts"
-            onClick={() => onNavigate?.()}
-            className="block rounded-md py-1 pl-6 pr-3 text-xs text-muted-foreground/70 hover:text-foreground"
-          >
-            +{String(rows.length - CAP)} more
-          </Link>
-        ) : null}
       </div>
     );
   };
