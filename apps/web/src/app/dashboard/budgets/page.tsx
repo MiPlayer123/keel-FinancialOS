@@ -1,19 +1,25 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { PiggyBank, ChevronLeft, ChevronRight, Copy, Loader2, ChevronDown } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { PiggyBank, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { RebalanceBudgetsDialog } from '@/components/keel/rebalance-budgets-dialog';
 import { AddBudgetCategoryPicker } from '@/components/keel/add-budget-category-picker';
+import { BudgetPlanHeader } from '@/components/keel/budget-plan-header';
+import { BudgetCategoryRow } from '@/components/keel/budget-category-row';
 import { useHousehold } from '@/components/keel/household-context';
-import { fetchBudgets, setBudget, copyBudgets, type BudgetRow } from '@/lib/keel-api';
+import {
+  fetchBudgetMonth,
+  fetchCategories,
+  type BudgetMonth,
+  type BudgetMonthRow,
+  type CategoryRow,
+} from '@/lib/keel-api';
 import { isMoneyMovementCategoryName } from '@/lib/spending';
-import { parseSignedDollars, minorToDollars } from '@/lib/hash';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 
 function monthStartIso(offset: number): string {
@@ -34,7 +40,7 @@ export default function BudgetsPage() {
     <>
       <PageHeader
         title="Budgets"
-        description="Budget only the categories you choose — spending tracked against them, transfers excluded."
+        description="A plan total you steer, the categories you choose, and everything else in one line."
       />
       <div className="p-6">
         <BudgetsBody />
@@ -44,36 +50,39 @@ export default function BudgetsPage() {
 }
 
 function BudgetsBody() {
-  const { householdId, ready } = useHousehold();
+  const { householdId, userId, ready } = useHousehold();
   const [offset, setOffset] = useState(0);
-  const [rows, setRows] = useState<BudgetRow[] | null>(null);
+  const [plan, setPlan] = useState<BudgetMonth | null>(null);
+  const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [available, setAvailable] = useState(true);
-  const [copying, setCopying] = useState(false);
   const monthIso = monthStartIso(offset);
 
   const load = useCallback(async () => {
     if (!householdId) return;
     try {
-      setRows(await fetchBudgets(householdId, monthIso));
+      const [p, cats] = await Promise.all([
+        fetchBudgetMonth(householdId, monthIso),
+        fetchCategories(householdId).catch(() => [] as CategoryRow[]),
+      ]);
+      setPlan(p);
+      setCategories(cats);
     } catch (err) {
-      // Only a missing backend (unknown query / missing proc) means "not
-      // deployed yet" — transient failures show a toast and keep the page.
       const msg = err instanceof Error ? err.message : '';
       if (/unknown query|does not exist|not_found/i.test(msg)) {
         setAvailable(false);
       } else {
-        setRows([]);
+        setPlan(null);
         toast.error(msg || 'Could not load budgets.');
       }
     }
   }, [householdId, monthIso]);
 
   useEffect(() => {
-    setRows(null);
+    setPlan(null);
     void load();
   }, [load]);
 
-  if (!ready || (rows === null && available)) {
+  if (!ready || (plan === null && available)) {
     return (
       <div className="space-y-2">
         {Array.from({ length: 6 }).map((_, i) => (
@@ -83,7 +92,7 @@ function BudgetsBody() {
     );
   }
 
-  if (!available || !householdId) {
+  if (!available || !householdId || !userId || !plan) {
     return (
       <EmptyState
         icon={<PiggyBank className="size-6" />}
@@ -93,80 +102,55 @@ function BudgetsBody() {
     );
   }
 
-  const raw = rows ?? [];
-  // BUDGETS-4: the seeded "Transfers" buckets are money-movement, not spending —
-  // their "spent" would contradict this page's "transfers excluded" subtitle.
-  // A row the user has actually budgeted is never hidden; only unbudgeted
-  // movement rows are suppressed (and they'd never reach the picker either).
-  const movementIds = new Set(
-    raw
-      .filter((r) => isMoneyMovementCategoryName(r.categoryName))
-      .map((r) => r.categoryLedgerAccountId),
-  );
-  const isMovement = (r: BudgetRow) =>
-    movementIds.has(r.categoryLedgerAccountId) ||
-    (r.parentLedgerAccountId != null && movementIds.has(r.parentLedgerAccountId));
+  const rows = plan.rows;
+  const budgetedIds = new Set(rows.map((r) => r.categoryLedgerAccountId));
 
-  // Children sort directly under their parent (one-level tree).
-  const nameById = new Map(raw.map((r) => [r.categoryLedgerAccountId, r.categoryName]));
-  const groupOf = (r: BudgetRow) =>
-    r.parentLedgerAccountId ? (nameById.get(r.parentLedgerAccountId) ?? '') : r.categoryName;
-  const depthOf = (r: BudgetRow) => (r.parentLedgerAccountId ? 1 : 0);
-
-  // OPT-IN (founder ask a): the visible list is ONLY the categories with a
-  // budget row. Everything else's spend collapses into one read-only
-  // "Everything else" line — the total picture never lies by omission, but the
-  // page stops "showing everything."
-  const budgeted = [...raw]
-    .filter((r) => r.budgetMinor !== null)
-    .sort(
-      (a, b) =>
-        groupOf(a).localeCompare(groupOf(b)) ||
-        depthOf(a) - depthOf(b) ||
-        a.categoryName.localeCompare(b.categoryName),
-    );
-  const budgetedIds = new Set(budgeted.map((r) => r.categoryLedgerAccountId));
-
-  // Categories the picker can still add: live expense categories that are
-  // neither already budgeted nor money-movement buckets.
-  const addable = [...raw]
+  // Categories the picker can still add: live EXPENSE categories not already
+  // targeted and not money-movement buckets. Fed from categories.list (the
+  // authoritative taxonomy), shaped into the picker's BudgetRow contract.
+  const addable = categories
     .filter(
-      (r) => !budgetedIds.has(r.categoryLedgerAccountId) && !isMovement(r),
+      (c) =>
+        c.kind === 'expense' &&
+        !budgetedIds.has(c.ledgerAccountId) &&
+        !isMoneyMovementCategoryName(c.name),
     )
+    .map((c) => ({
+      categoryLedgerAccountId: c.ledgerAccountId,
+      categoryName: c.name,
+      currency: 'USD',
+      parentLedgerAccountId: c.parentLedgerAccountId ?? null,
+      budgetMinor: null,
+      spentMinor: '0',
+    }))
     .sort((a, b) => a.categoryName.localeCompare(b.categoryName));
 
-  // "Everything else" = summed spend of every unbudgeted, non-movement category.
-  // Parent rows are excluded when they have budgeted-or-shown children? No: the
-  // spent figure per row is already the category's own postings (leaf-level in
-  // the split-aware formula), so summing all unbudgeted non-movement rows is a
-  // clean, non-double-counting total of "spend outside your budget."
-  const everythingElseSpent = raw
-    .filter((r) => !budgetedIds.has(r.categoryLedgerAccountId) && !isMovement(r))
-    .reduce((acc, r) => acc + BigInt(r.spentMinor), 0n);
-
-  const totals = budgeted.reduce(
-    (acc, r) => ({
-      budget: acc.budget + BigInt(r.budgetMinor ?? '0'),
-      spent: acc.spent + BigInt(r.spentMinor),
-    }),
-    { budget: 0n, spent: 0n },
+  // Children sort under their parent (one-level tree), like the v1 view.
+  const nameById = new Map(rows.map((r) => [r.categoryLedgerAccountId, r.categoryName]));
+  const groupOf = (r: BudgetMonthRow) =>
+    r.parentLedgerAccountId ? (nameById.get(r.parentLedgerAccountId) ?? '') : r.categoryName;
+  const depthOf = (r: BudgetMonthRow) => (r.parentLedgerAccountId ? 1 : 0);
+  const sorted = [...rows].sort(
+    (a, b) =>
+      groupOf(a).localeCompare(groupOf(b)) ||
+      depthOf(a) - depthOf(b) ||
+      a.categoryName.localeCompare(b.categoryName),
   );
 
-  async function copyForward() {
-    if (!householdId) return;
-    setCopying(true);
-    try {
-      const copied = await copyBudgets(householdId, monthIso);
-      toast.success(
-        copied > 0 ? `Copied ${String(copied)} budgets from last month.` : 'Nothing to copy.',
-      );
-      await load();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Copy failed.');
-    } finally {
-      setCopying(false);
-    }
-  }
+  // Rebalance operates on amount targets (it proposes dollar figures). Percent
+  // targets are steered by the total, so they are excluded from the dialog's
+  // candidate set — passed as v1-shaped BudgetRows for its existing contract.
+  const rebalanceRows = sorted
+    .filter((r) => r.kind === 'amount')
+    .map((r) => ({
+      categoryLedgerAccountId: r.categoryLedgerAccountId,
+      categoryName: r.categoryName,
+      currency: r.currency,
+      parentLedgerAccountId: r.parentLedgerAccountId,
+      budgetMinor: r.resolvedMinor,
+      rollover: r.rollover,
+      spentMinor: r.spentMinor,
+    }));
 
   return (
     <div className="space-y-6">
@@ -196,32 +180,23 @@ function BudgetsBody() {
           </Button>
         </div>
         <div className="flex items-center gap-2">
-          {budgeted.length === 0 ? (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={copying}
-              onClick={() => {
-                void copyForward();
-              }}
-            >
-              {copying ? <Loader2 className="size-4 animate-spin" /> : <Copy className="size-4" />}
-              Copy last month
-            </Button>
-          ) : (
+          {rebalanceRows.length > 0 ? (
             <RebalanceBudgetsDialog
               householdId={householdId}
+              userId={userId}
               monthIso={monthIso}
-              rows={budgeted}
+              rows={rebalanceRows}
+              totalMinor={plan.total.resolvedMinor}
               onDone={() => {
                 void load();
               }}
             />
-          )}
+          ) : null}
           <AddBudgetCategoryPicker
             categories={addable}
             householdId={householdId}
             monthIso={monthIso}
+            userId={userId}
             onAdded={() => {
               void load();
             }}
@@ -229,20 +204,17 @@ function BudgetsBody() {
         </div>
       </div>
 
-      {budgeted.length > 0 ? (
-        <div className="rounded-lg border border-border bg-card px-5 py-4">
-          <div className="flex items-baseline justify-between">
-            <p className="text-sm text-muted-foreground">Budgeted so far</p>
-            <p className="text-sm">
-              <Money amountMinor={totals.spent.toString()} /> of{' '}
-              <Money amountMinor={totals.budget.toString()} />
-            </p>
-          </div>
-          <ProgressBar spent={totals.spent} budget={totals.budget} />
-        </div>
-      ) : null}
+      <BudgetPlanHeader
+        plan={plan}
+        householdId={householdId}
+        userId={userId}
+        monthIso={monthIso}
+        onSaved={() => {
+          void load();
+        }}
+      />
 
-      {budgeted.length === 0 ? (
+      {sorted.length === 0 ? (
         <EmptyState
           icon={<PiggyBank className="size-6" />}
           title="No budgets yet"
@@ -252,12 +224,14 @@ function BudgetsBody() {
         <section className="space-y-2">
           <h3 className="text-sm font-medium text-muted-foreground">Budgeted categories</h3>
           <div className="overflow-hidden rounded-lg border border-border">
-            {budgeted.map((r, i) => (
-              <BudgetLine
+            {sorted.map((r, i) => (
+              <BudgetCategoryRow
                 key={r.categoryLedgerAccountId}
                 row={r}
+                totalMinor={plan.total.resolvedMinor}
                 first={i === 0}
                 householdId={householdId}
+                userId={userId}
                 monthIso={monthIso}
                 onSaved={() => {
                   void load();
@@ -268,27 +242,20 @@ function BudgetsBody() {
         </section>
       )}
 
-      <EverythingElseLine spentMinor={everythingElseSpent} unbudgetedRows={addable} />
+      <EverythingElseLine spentMinor={BigInt(plan.everythingElseSpentMinor)} />
     </div>
   );
 }
 
 /**
- * Collapsed read-only summary of spend outside the budget (Monarch flex "everything
- * else" pattern). Expands to show the underlying categories so the total is never
- * a black box — but it's informational, never editable here (add a category to
- * budget it). Spent-only: there is no budget line, so no red is used.
+ * Collapsed read-only summary of spend outside the budget (Monarch flex pattern).
+ * Spent-only: no budget line, so no red is used (Law 8). The v4 read model gives
+ * a single everythingElseSpentMinor total; the per-category breakdown lives in
+ * the transactions view, so this line stays a calm one-liner.
  */
-function EverythingElseLine({
-  spentMinor,
-  unbudgetedRows,
-}: {
-  spentMinor: bigint;
-  unbudgetedRows: BudgetRow[];
-}) {
+function EverythingElseLine({ spentMinor }: { spentMinor: bigint }) {
   const [open, setOpen] = useState(false);
-  const withSpend = unbudgetedRows.filter((r) => r.spentMinor !== '0');
-  if (spentMinor === 0n && withSpend.length === 0) return null;
+  if (spentMinor === 0n) return null;
   return (
     <section className="space-y-2">
       <div className="overflow-hidden rounded-lg border border-dashed border-border">
@@ -311,264 +278,12 @@ function EverythingElseLine({
           </span>
         </button>
         {open ? (
-          <div className="border-t border-border">
-            {withSpend.length === 0 ? (
-              <p className="px-4 py-3 text-xs text-muted-foreground">
-                No spending in unbudgeted categories this month.
-              </p>
-            ) : (
-              withSpend
-                .slice()
-                .sort((a, b) =>
-                  BigInt(b.spentMinor) > BigInt(a.spentMinor)
-                    ? 1
-                    : BigInt(b.spentMinor) < BigInt(a.spentMinor)
-                      ? -1
-                      : a.categoryName.localeCompare(b.categoryName),
-                )
-                .map((r, i) => (
-                  <div
-                    key={r.categoryLedgerAccountId}
-                    className={`flex items-center justify-between gap-3 px-4 py-2 text-sm ${
-                      i === 0 ? '' : 'border-t border-border'
-                    }`}
-                  >
-                    <span className="min-w-0 truncate text-muted-foreground">{r.categoryName}</span>
-                    <Money amountMinor={r.spentMinor} className="text-sm text-foreground" />
-                  </div>
-                ))
-            )}
-          </div>
+          <p className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
+            Spend in categories you haven&apos;t budgeted. Add one above to start tracking it — or
+            open Transactions to see the detail.
+          </p>
         ) : null}
       </div>
-      <p className="text-xs text-muted-foreground">
-        Spend in categories you haven&apos;t budgeted. Add one above to start tracking it.
-      </p>
     </section>
-  );
-}
-
-function ProgressBar({ spent, budget }: { spent: bigint; budget: bigint }) {
-  // budget ≤ 0 (carry ate it all) reads as fully over, matching the copy
-  // beside it — never a green empty bar under an "Over by…" label.
-  const over = budget > 0n ? spent > budget : budget < 0n || spent > 0n;
-  const pct =
-    budget <= 0n
-      ? over
-        ? 100
-        : 0
-      : Math.min(100, Number((spent * 100n) / budget));
-  return (
-    <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-secondary">
-      <div
-        className="h-full rounded-full"
-        style={{
-          width: `${String(Math.max(pct, spent > 0n ? 2 : 0))}%`,
-          background: over ? 'var(--keel-negative)' : 'var(--chart-1)',
-        }}
-      />
-    </div>
-  );
-}
-
-function BudgetLine({
-  row,
-  first,
-  householdId,
-  monthIso,
-  onSaved,
-}: {
-  row: BudgetRow;
-  first: boolean;
-  householdId: string;
-  monthIso: string;
-  onSaved: () => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const spent = useMemo(() => BigInt(row.spentMinor), [row.spentMinor]);
-  const budget = row.budgetMinor !== null ? BigInt(row.budgetMinor) : null;
-  // Rollover months measure against budget + carry ("available").
-  const rollover = row.rollover === true;
-  const available =
-    budget !== null
-      ? rollover && row.availableMinor != null
-        ? BigInt(row.availableMinor)
-        : budget
-      : null;
-  const remaining = available !== null ? available - spent : null;
-
-  async function save(nextRollover?: boolean) {
-    const trimmed = value.trim();
-    let amountMinor: string | null = null;
-    if (nextRollover !== undefined) {
-      // Rollover-only toggle: null amount + flag = "keep the amount"
-      // server-side, so a stale client value can never revert an edit.
-      amountMinor = null;
-    } else if (trimmed.length > 0) {
-      const minor = parseSignedDollars(trimmed);
-      if (minor === null || minor.startsWith('-')) {
-        toast.error('Enter a non-negative amount.');
-        return;
-      }
-      amountMinor = minor;
-    }
-    setBusy(true);
-    try {
-      await setBudget({
-        householdId,
-        categoryLedgerAccountId: row.categoryLedgerAccountId,
-        monthIso,
-        amountMinor,
-        ...(nextRollover !== undefined ? { rollover: nextRollover } : {}),
-      });
-      // A rollover toggle leaves any in-progress amount edit alone.
-      if (nextRollover === undefined) setEditing(false);
-      onSaved();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not save the budget.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  // Clearing a budget (empty save) removes the row from the opt-in list — it
-  // rejoins "Everything else."
-  async function remove() {
-    setBusy(true);
-    try {
-      await setBudget({
-        householdId,
-        categoryLedgerAccountId: row.categoryLedgerAccountId,
-        monthIso,
-        amountMinor: null,
-      });
-      onSaved();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not remove the budget.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className={`px-4 py-3 ${first ? '' : 'border-t border-border'}`}>
-      <div className="flex items-center justify-between gap-3">
-        <p
-          className={`min-w-0 flex-1 truncate text-sm font-medium ${
-            row.parentLedgerAccountId ? 'pl-4' : ''
-          }`}
-        >
-          {row.categoryName}
-        </p>
-        <div className="flex shrink-0 items-center gap-3 text-sm">
-          <span className="text-muted-foreground">
-            <Money amountMinor={row.spentMinor} className="text-foreground" /> spent
-          </span>
-          {editing ? (
-            <span className="flex items-center gap-1.5">
-              <Input
-                className="h-8 w-24 text-right"
-                inputMode="decimal"
-                autoFocus
-                value={value}
-                placeholder="0.00"
-                onChange={(e) => {
-                  setValue(e.target.value);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void save();
-                  if (e.key === 'Escape') setEditing(false);
-                }}
-              />
-              <Button
-                size="sm"
-                className="h-8"
-                disabled={busy}
-                onClick={() => {
-                  void save();
-                }}
-              >
-                {busy ? <Loader2 className="size-4 animate-spin" /> : 'Save'}
-              </Button>
-            </span>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 min-w-24 justify-end font-mono tabular-nums"
-              onClick={() => {
-                setValue(budget !== null ? minorToDollars(row.budgetMinor ?? '0') : '');
-                setEditing(true);
-              }}
-            >
-              {budget !== null ? (
-                <Money amountMinor={row.budgetMinor ?? '0'} className="text-sm" muteZero={false} />
-              ) : (
-                <span className="text-xs text-muted-foreground">Set budget</span>
-              )}
-            </Button>
-          )}
-        </div>
-      </div>
-      {budget !== null && available !== null ? (
-        <>
-          <ProgressBar spent={spent} budget={available} />
-          <div className="mt-1 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-            <p>
-              {remaining !== null && remaining < 0n ? (
-                <>
-                  Over by <Money amountMinor={remaining.toString()} className="text-xs" />
-                </>
-              ) : remaining !== null ? (
-                <>
-                  <Money amountMinor={remaining.toString()} className="text-xs text-foreground" />{' '}
-                  left
-                  {rollover && row.carryMinor != null && row.carryMinor !== '0' ? (
-                    <>
-                      {' '}
-                      (incl.{' '}
-                      <Money amountMinor={row.carryMinor} signed className="text-xs" /> carried)
-                    </>
-                  ) : null}
-                </>
-              ) : null}
-            </p>
-            <div className="flex shrink-0 items-center gap-2">
-              {row.rollover !== undefined ? (
-                <button
-                  type="button"
-                  disabled={busy}
-                  className={`rounded-full border px-2 py-0.5 transition-colors ${
-                    rollover
-                      ? 'border-foreground/30 text-foreground'
-                      : 'border-dashed border-border hover:text-foreground'
-                  }`}
-                  title="Carry unspent budget (or overspend) into next month"
-                  onClick={() => {
-                    void save(!rollover);
-                  }}
-                >
-                  {rollover ? 'Rollover on' : 'Rollover'}
-                </button>
-              ) : null}
-              <button
-                type="button"
-                disabled={busy}
-                className="rounded-full border border-dashed border-border px-2 py-0.5 transition-colors hover:text-foreground"
-                title="Remove this budget — the category moves to Everything else"
-                onClick={() => {
-                  void remove();
-                }}
-              >
-                Remove
-              </button>
-            </div>
-          </div>
-        </>
-      ) : null}
-    </div>
   );
 }
