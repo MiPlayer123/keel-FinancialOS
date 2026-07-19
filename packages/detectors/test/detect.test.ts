@@ -196,6 +196,40 @@ describe('detectRecurringSeries calendar-grid fitting', () => {
     expect(first[0]?.seriesKey).toMatch(/^[a-f0-9]{16}$/u);
   });
 
+  it('detects a Spotify-like 3-occurrence monthly subscription (real-data regression)', () => {
+    // Mirrors the real household: 3 Spotify charges on the "Savor" credit card,
+    // 2026-05-09 / 06-09 / 07-09, fixed -$6.99. Exactly 3 occurrences is the
+    // minimum the detector accepts; this pins that a monthly subscription with
+    // no more than the minimum count still produces a candidate.
+    const series = detectRecurringSeries(
+      [
+        txn('spotify-1', '2026-05-09', '-699', 'Spotify'),
+        txn('spotify-2', '2026-06-09', '-699', 'Spotify'),
+        txn('spotify-3', '2026-07-09', '-699', 'Spotify'),
+      ],
+      { asOf: '2026-07-19' },
+    );
+
+    expect(series).toHaveLength(1);
+    expect(series[0]).toMatchObject({
+      counterpartyKey: 'spotify',
+      cadence: 'monthly',
+      cadenceAnchor: { kind: 'day_of_month', day: 9, intervalMonths: 1 },
+      sign: 'outflow',
+      amountKind: 'fixed',
+      representativeAmountMinor: '-699',
+      occurrenceCount: 3,
+      lastSeen: '2026-07-09',
+      requiresApproval: true,
+    });
+    expect(series[0]?.scoreBps).toBeGreaterThan(0);
+    expect(series[0]?.evidence.map((item) => item.txnId)).toEqual([
+      'spotify-1',
+      'spotify-2',
+      'spotify-3',
+    ]);
+  });
+
   it('binds candidate identity to the run-wide as-of date', () => {
     const input = [
       txn('rent-1', '2024-01-31', '-250000'),
