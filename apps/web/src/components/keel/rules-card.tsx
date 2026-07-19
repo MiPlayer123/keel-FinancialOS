@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Wand2, Plus, Trash2, Loader2, Play, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { useHousehold } from '@/components/keel/household-context';
+import { entityLabel, hasMultipleEntities } from '@/lib/category-picker';
 import {
   applyRules,
   deleteRule,
@@ -61,6 +62,14 @@ export function RulesCard() {
   const [busy, setBusy] = useState(false);
   const [applying, setApplying] = useState(false);
   const [preview, setPreview] = useState<{ categorized: number; renamed: number } | null>(null);
+
+  // A rule targets one category, but a household can have identically-named
+  // categories once per entity — so when more than one entity is represented
+  // this cross-entity picker labels the category by entity to disambiguate
+  // (D-060). The rule's entity is derived server-side from the chosen category.
+  const showEntity = useMemo(() => hasMultipleEntities(categories), [categories]);
+  const catLabel = (c: CategoryRow) =>
+    entityLabel(c.name, c.entityName, showEntity) + (c.kind === 'income' ? ' (income)' : '');
 
   useEffect(() => {
     if (!householdId) return;
@@ -263,10 +272,7 @@ export function RulesCard() {
                 <Select
                   value={categoryId ?? undefined}
                   items={Object.fromEntries(
-                    categories.map((c) => [
-                      c.ledgerAccountId,
-                      c.kind === 'income' ? `${c.name} (income)` : c.name,
-                    ]),
+                    categories.map((c) => [c.ledgerAccountId, catLabel(c)]),
                   )}
                   onValueChange={(v) => {
                     setCategoryId(v);
@@ -279,8 +285,7 @@ export function RulesCard() {
                     {categories.map((c) => (
                       <SelectItem key={c.ledgerAccountId} value={c.ledgerAccountId}>
                         <span className={c.parentLedgerAccountId ? 'pl-3' : ''}>
-                          {c.name}
-                          {c.kind === 'income' ? ' (income)' : ''}
+                          {catLabel(c)}
                         </span>
                       </SelectItem>
                     ))}

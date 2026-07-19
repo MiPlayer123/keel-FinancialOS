@@ -48,12 +48,15 @@ import {
   type SplitDraftRow,
 } from '@/lib/split-editor';
 import {
+  entityLabel,
   groupForPicker,
   hasExactName,
+  hasMultipleEntities,
   inferKindFromAmount,
   parseRecents,
   pushRecent,
   recentCategoriesKey,
+  scopeToEntity,
 } from '@/lib/category-picker';
 import { maskAccountLabel } from '@/lib/account-label';
 import { merchantDisplayName } from '@/lib/merchant-name';
@@ -428,10 +431,24 @@ export function CategoryPicker({
   // name resolvable) immediately, before the parent refetches categories.
   const [created, setCreated] = useState<CategoryRow[]>([]);
 
+  // Entity-scope (D-060): a transaction can only be categorized into its OWN
+  // entity's categories (the categorize / set-splits procs reject a
+  // cross-entity category). The scope entity is the explicit caller pin
+  // (split rows pass the txn's entity) or the row's owning entity. When
+  // neither is known (pre-migration rows), fall through unscoped — the label
+  // below then disambiguates identical names by entity. This is exactly what
+  // makes the founder's "duplicated" Personal+Business categories collapse to
+  // just this transaction's entity.
+  const scopeEntityId = createEntityId ?? row.entityId ?? null;
   const allMerged = useMemo(() => {
     const known = new Set(categories.map((c) => c.ledgerAccountId));
-    return [...categories, ...created.filter((c) => !known.has(c.ledgerAccountId))];
-  }, [categories, created]);
+    const full = [...categories, ...created.filter((c) => !known.has(c.ledgerAccountId))];
+    return scopeToEntity(full, scopeEntityId);
+  }, [categories, created, scopeEntityId]);
+
+  // Only label with the entity when the picker actually spans more than one
+  // (an unscoped multi-entity view). A scoped or single-entity list is clean.
+  const showEntity = useMemo(() => hasMultipleEntities(allMerged), [allMerged]);
 
   // A "Transfer" category exists on the taxonomy (any entity/kind). Used to
   // decide whether to show the direction-neutral Transfer affordance (P1-7).
@@ -660,7 +677,9 @@ export function CategoryPicker({
                       commit(c);
                     }}
                   >
-                    <span className="truncate">{c.name}</span>
+                    <span className="truncate">
+                      {entityLabel(c.name, c.entityName, showEntity)}
+                    </span>
                   </CommandItem>
                 ))}
               </CommandGroup>
@@ -677,7 +696,7 @@ export function CategoryPicker({
                     }}
                   >
                     <span className={depth === 1 ? 'truncate pl-3' : 'truncate'}>
-                      {c.name}
+                      {entityLabel(c.name, c.entityName, showEntity)}
                     </span>
                   </CommandItem>
                 ))}

@@ -5928,6 +5928,36 @@ CSV/OFX text inert data-tier; stored verbatim, never a tool/fetch/RPC trigger).
   check) rather than leaving dead code — documented inline. Pre-existing root lint/typecheck failures
   on main (transfer-grouping.test, receipt-cases Math.round, contracts zod) are untouched by this slice.
 
+## D-060 — Unified category picker: entity-scope + entity labels (founder feedback)
+Founder reported categories double-showing in the budgeting "Add category" picker
+("Lodging", "Vacation", "Uncategorized Expense" each twice) and inconsistent
+category dropdowns (a limited inline dropdown vs a fuller "other" one). Root cause
+(verified on live household a1ba3759-…): categories are ledger_accounts scoped PER
+ENTITY — every seeded category exists ONCE for "Personal" and ONCE for "Business
+(LLC)" with the same name/pfc_key but distinct entity_id (each n=1, NOT duplicate
+rows). Pickers listed both entities with no entity label, so they read as dupes.
+
+Fix (no rows deleted — each entity's chart of accounts is legitimate):
+- Migration 20260720230000: keel_list_categories now emits entityName (join
+  entities); keel_list_transactions_rich(_page) now emit entityId (= acc.entity_id,
+  the txn's owning-account entity — exactly what the categorize/set-splits procs
+  validate against). Both restated verbatim from the LIVE defs (incl. the
+  20260720220000 categoryPfcKey overlay fix — the worktree file was behind live) +
+  one added key each; grants restated.
+- Shared pure helpers in lib/category-picker.ts: scopeToEntity, hasMultipleEntities,
+  entityLabel — the single canonical scope/label logic every surface uses.
+- Transaction pickers ENTITY-SCOPE to the row's/account's entity (a Personal-account
+  txn only offers Personal categories — matches the server guard, can only hide
+  options it would reject): CategoryPicker (ledger/review/detail + splits via
+  createEntityId), add-transaction-dialog, recurring schedule editor. import-csv was
+  already entity-scoped.
+- Genuinely cross-entity surfaces LABEL by entity when >1 entity present: budgeting
+  "Add category" picker, ledger bulk-apply bar, rules-card. Single-entity households
+  stay clean (no suffix).
+Same-entity write guards unchanged (keel_categorize_transaction line 458 /
+keel_set_transaction_splits line 177) — scoping the UI makes the picked category
+provably same-entity, strictly safer. Tests: 28 in category-picker.test.ts (376
+web total green); apps/web pnpm build (ESLint gate) green.
 ## 2026-07-19 — cash-flow v6: overlay-classified income/expense (Law 9 single source of truth)
 - Migration 20260720220000_cash_flow_overlay_classified.sql. keel_cash_flow ->
   'cash-flow-v6-overlay-classified'; keel_cash_flow_monthly ->

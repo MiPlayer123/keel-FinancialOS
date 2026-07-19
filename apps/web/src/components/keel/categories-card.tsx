@@ -15,6 +15,7 @@ import {
   type CategoryRow,
 } from '@/lib/keel-api';
 import { TAX_LINES, taxLineLabel } from '@/lib/tax-lines';
+import { entityLabel, hasMultipleEntities } from '@/lib/category-picker';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -70,6 +71,11 @@ export function CategoriesCard() {
     () => categories.filter((c) => c.kind === kind && !c.parentLedgerAccountId),
     [categories, kind],
   );
+  // The manager lists a multi-entity chart of accounts, so identically-named
+  // categories from different entities must be labelled to disambiguate
+  // (D-060). Single-entity households stay clean.
+  const showEntity = useMemo(() => hasMultipleEntities(categories), [categories]);
+  const catLabel = (c: CategoryRow) => entityLabel(c.name, c.entityName, showEntity);
 
   if (!householdId) return null;
 
@@ -168,7 +174,7 @@ export function CategoriesCard() {
                   {c.parentLedgerAccountId ? (
                     <CornerDownRight className="size-3 opacity-60" />
                   ) : null}
-                  {c.name}
+                  {catLabel(c)}
                 </Badge>
               ))}
             </div>
@@ -179,7 +185,7 @@ export function CategoriesCard() {
                     {c.parentLedgerAccountId ? (
                       <CornerDownRight className="size-3 opacity-60" />
                     ) : null}
-                    {c.name}
+                    {catLabel(c)}
                   </Badge>
                 ))}
               </div>
@@ -232,7 +238,7 @@ export function CategoriesCard() {
                   value={parentId ?? 'none'}
                   items={{
                     none: 'Top level',
-                    ...Object.fromEntries(parents.map((p) => [p.ledgerAccountId, p.name])),
+                    ...Object.fromEntries(parents.map((p) => [p.ledgerAccountId, catLabel(p)])),
                   }}
                   onValueChange={(v) => {
                     setParentId(v === 'none' ? null : v);
@@ -245,7 +251,7 @@ export function CategoriesCard() {
                     <SelectItem value="none">Top level</SelectItem>
                     {parents.map((p) => (
                       <SelectItem key={p.ledgerAccountId} value={p.ledgerAccountId}>
-                        {p.name}
+                        {catLabel(p)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -380,11 +386,18 @@ function CategoryManageRow({
   const hasChildren = siblings.some(
     (s) => s.parentLedgerAccountId === category.ledgerAccountId,
   );
+  // Reparent/reassign can only stay WITHIN this category's entity — the
+  // reparent proc enforces same-entity, and a household has an identically
+  // named category per entity, so an unscoped list would both offer invalid
+  // cross-entity parents and read as duplicates (D-060).
   const parentOptions = siblings.filter(
-    (s) => !s.parentLedgerAccountId && s.ledgerAccountId !== category.ledgerAccountId,
+    (s) =>
+      s.entityId === category.entityId &&
+      !s.parentLedgerAccountId &&
+      s.ledgerAccountId !== category.ledgerAccountId,
   );
   const reassignOptions = siblings.filter(
-    (s) => s.ledgerAccountId !== category.ledgerAccountId,
+    (s) => s.entityId === category.entityId && s.ledgerAccountId !== category.ledgerAccountId,
   );
 
   async function run(action: () => Promise<unknown>, success: string) {

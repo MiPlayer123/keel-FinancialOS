@@ -10,6 +10,62 @@
 
 import type { CategoryRow } from './keel-api';
 
+/**
+ * Entity-scope a category list to a single entity (D-060). Categories are
+ * ledger_accounts scoped per entity, so the SAME name exists once per entity
+ * with a distinct id — a transaction can only be categorized into its own
+ * entity's categories (the categorize / set-splits procs reject a cross-entity
+ * category). Scoping to the transaction's entity therefore both removes the
+ * apparent duplication AND can only ever hide options the server would reject.
+ *
+ * When `entityId` is null/undefined (a genuinely cross-entity view, or a row
+ * whose entity is not yet known pre-migration) the full list passes through
+ * unchanged — callers on those surfaces disambiguate with an entity LABEL
+ * (`entityLabel`) instead. Pure, deterministic (no React/network).
+ */
+export function scopeToEntity<T extends { entityId: string }>(
+  categories: readonly T[],
+  entityId: string | null | undefined,
+): T[] {
+  if (entityId === null || entityId === undefined) return [...categories];
+  return categories.filter((c) => c.entityId === entityId);
+}
+
+/**
+ * True when more than one owning entity is represented — the signal that a
+ * category picker must disambiguate identically-named categories with an
+ * entity label. A single-entity household (or an already entity-scoped list)
+ * needs no label, so identical names never collide there.
+ */
+export function hasMultipleEntities(
+  categories: readonly { entityId: string }[],
+): boolean {
+  const seen = new Set<string>();
+  for (const c of categories) {
+    seen.add(c.entityId);
+    if (seen.size > 1) return true;
+  }
+  return false;
+}
+
+/**
+ * Display name for a category, suffixed with its entity only when the picker
+ * spans more than one entity (so a single-entity household stays clean). This
+ * is what turns two entities' identical "Lodging" rows into "Lodging ·
+ * Personal" / "Lodging · Business (LLC)". entityName is a data-tier string,
+ * only displayed (Law 5).
+ */
+export function entityLabel(
+  name: string,
+  entityName: string | null | undefined,
+  showEntity: boolean,
+): string {
+  if (!showEntity || entityName === null || entityName === undefined || entityName === '') {
+    return name;
+  }
+  return `${name} · ${entityName}`;
+}
+
 /** Case- and diacritic-insensitive search form ("Café" matches "cafe"). */
 export function normalizeSearch(s: string): string {
   return s

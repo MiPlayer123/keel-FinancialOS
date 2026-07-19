@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2, Split, X } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -10,6 +10,7 @@ import {
   type CategoryRow,
   type RichTransactionRow,
 } from '@/lib/keel-api';
+import { entityLabel, hasMultipleEntities, scopeToEntity } from '@/lib/category-picker';
 import { parseSignedDollars, minorToDollars } from '@/lib/hash';
 import { Button } from '@/components/ui/button';
 import {
@@ -123,9 +124,25 @@ export function AddTransactionDialog({
     if (open) setAttemptKey(crypto.randomUUID());
   }, [open]);
 
+  // Entity-scope to the chosen account's entity (D-060): a manual transaction
+  // posts into that account's entity, and the split/category must belong to
+  // the same entity (the set-splits proc rejects a cross-entity category).
+  // Scoping here removes the identical-name Personal/Business duplication and
+  // can only hide options the server would reject. Falls through unscoped
+  // until an account is picked (and label-disambiguates if multi-entity).
+  const accountEntityId = useMemo(
+    () => accounts.find((a) => a.id === accountId)?.entityId ?? null,
+    [accounts, accountId],
+  );
   const options = useMemo(
-    () => categories.filter((c) => c.kind === direction),
-    [categories, direction],
+    () =>
+      scopeToEntity(categories, accountEntityId).filter((c) => c.kind === direction),
+    [categories, direction, accountEntityId],
+  );
+  const showEntity = useMemo(() => hasMultipleEntities(options), [options]);
+  const catLabel = useCallback(
+    (c: CategoryRow) => entityLabel(c.name, c.entityName, showEntity),
+    [showEntity],
   );
   const payeeMemory = useMemo(() => buildPayeeMemory(history), [history]);
   const [suggestOpen, setSuggestOpen] = useState(false);
@@ -156,8 +173,8 @@ export function AddTransactionDialog({
     setSuggestOpen(false);
   }
   const optionItems = useMemo(
-    () => Object.fromEntries(options.map((c) => [c.ledgerAccountId, c.name])),
-    [options],
+    () => Object.fromEntries(options.map((c) => [c.ledgerAccountId, catLabel(c)])),
+    [options, catLabel],
   );
   const isSplit = splits.length > 1;
 
@@ -433,9 +450,9 @@ export function AddTransactionDialog({
                     {options.map((c) => (
                       <SelectItem key={c.ledgerAccountId} value={c.ledgerAccountId}>
                         {c.parentLedgerAccountId ? (
-                          <span className="pl-3">{c.name}</span>
+                          <span className="pl-3">{catLabel(c)}</span>
                         ) : (
-                          c.name
+                          catLabel(c)
                         )}
                       </SelectItem>
                     ))}
