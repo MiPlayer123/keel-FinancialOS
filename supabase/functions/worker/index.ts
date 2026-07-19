@@ -116,16 +116,48 @@ const processRecurringDetection = async (
     });
     if (readError) throw new Error(`recurring read failed: ${readError.message}`);
     const candidates = detectRecurringSeries((rows ?? []) as RecurringTransaction[], { asOf });
-    const { error: upsertError } = await admin.rpc('keel_recurring_upsert_candidates', {
-      p_household_id: householdId,
-      p_run_key: msg.message.economicEventKey,
-      p_as_of: asOfTimestamp,
-      p_detector_version: DETECTOR_VERSION,
-      p_confidence_version: CONFIDENCE_VERSION,
-      p_normalizer_version: NORMALIZER_VERSION,
-      p_candidates: candidates,
-    });
+    const { data: upsertResult, error: upsertError } = await admin.rpc(
+      'keel_recurring_upsert_candidates',
+      {
+        p_household_id: householdId,
+        p_run_key: msg.message.economicEventKey,
+        p_as_of: asOfTimestamp,
+        p_detector_version: DETECTOR_VERSION,
+        p_confidence_version: CONFIDENCE_VERSION,
+        p_normalizer_version: NORMALIZER_VERSION,
+        p_candidates: candidates,
+      },
+    );
     if (upsertError) throw new Error(`recurring upsert failed: ${upsertError.message}`);
+
+    // Reap stale suggestions (migration 20260719031000): any 'suggested' series
+    // this run did NOT (re)emit is a false positive the previous, noisier runs
+    // produced — withdraw it so it drops off Review. Confirmed/rejected series
+    // are never touched; a withdrawn series comes back if a later run detects it
+    // again. Deterministic + idempotent (stable command_id per run+series), so a
+    // requeue/replay of this job is a no-op. Non-fatal: a reap failure must not
+    // fail the detection job (the candidates are already durably upserted).
+    const runResult = (upsertResult ?? {}) as {
+      runId?: string;
+      candidates?: Array<{ seriesId?: string }>;
+    };
+    if (runResult.runId) {
+      const emittedSeriesIds = Array.from(
+        new Set(
+          (runResult.candidates ?? [])
+            .map((candidate) => candidate.seriesId)
+            .filter((seriesId): seriesId is string => typeof seriesId === 'string'),
+        ),
+      );
+      const { error: reapError } = await admin.rpc('keel_recurring_reap_stale_suggestions', {
+        p_household_id: householdId,
+        p_run_id: runResult.runId,
+        p_emitted_series_ids: emittedSeriesIds,
+      });
+      if (reapError) {
+        console.error(`recurring reap failed (non-fatal): ${reapError.message}`);
+      }
+    }
     await admin.rpc('keel_meter_recurring_detection', {
       p_household_id: householdId,
       p_ok: true,
