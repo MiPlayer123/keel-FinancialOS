@@ -170,6 +170,56 @@ select b.household_id, b.category_ledger_account_id, b.month, null,
       and t.end_month is null
  );
 
+-- CONTIGUITY (Law 9 v3-equivalence, invariant "reproducible numbers"). The
+-- insert above converts each historical monthly budgets row into a SEPARATE
+-- open-ended target. Consecutive-month budgets would otherwise become
+-- OVERLAPPING live targets, so (a) the carry CTE's prior_months generate_series
+-- would double-count each covered month (proven: a 3-month rollover inflates
+-- carry ~2x vs v3), and (b) the current-month live_targets predicate would match
+-- every overlapping target, listing a category multiple times in rows and
+-- over-subtracting leftToBudget. The standing-target model wants ONE contiguous
+-- interval per (category, month): end-date each backfilled open row at the next
+-- month that also has a budget for the same category. Only the LATEST budgeted
+-- month per category stays open (end_month = NULL). Restricted to the backfilled
+-- amount rows (never touches a total row or a pre-existing v4 target). Result:
+-- exactly one live target per (category, month), reproducing v3 exactly.
+-- Correlated scalar subquery (not UPDATE...FROM LATERAL: the update target is
+-- not in scope for a LATERAL FROM item in Postgres). Evaluated against the
+-- pre-UPDATE snapshot, so every backfilled row still reads end_month IS NULL —
+-- each row's next boundary is the min OTHER backfilled month strictly greater.
+update public.budget_targets t
+   set end_month = (
+     select min(t2.effective_month)
+       from public.budget_targets t2
+      where t2.household_id = t.household_id
+        and t2.category_ledger_account_id = t.category_ledger_account_id
+        and t2.category_ledger_account_id is not null
+        and t2.target_kind = 'amount'
+        and t2.effective_month > t.effective_month
+        and t2.end_month is null
+   )
+ where t.category_ledger_account_id is not null
+   and t.target_kind = 'amount'
+   and t.end_month is null
+   and t.amount_minor is not null
+   -- only close rows that came from THIS backfill (a real budgets row exists at
+   -- this exact month for this category) — never a hand-authored open target —
+   -- and only when a LATER backfilled month exists (else stay open / NULL).
+   and exists (
+     select 1 from public.budgets b
+      where b.household_id = t.household_id
+        and b.category_ledger_account_id = t.category_ledger_account_id
+        and b.month = t.effective_month
+   )
+   and exists (
+     select 1 from public.budget_targets t3
+      where t3.household_id = t.household_id
+        and t3.category_ledger_account_id = t.category_ledger_account_id
+        and t3.target_kind = 'amount'
+        and t3.effective_month > t.effective_month
+        and t3.end_month is null
+   );
+
 -- ===========================================================================
 -- 6. Commands. All follow the envelope ritual: member-write assert,
 --    actor-from-jwt (forgery guard), idempotency, keel_finish_command. Soft
@@ -213,8 +263,14 @@ begin
      set end_month = v_month
    where household_id = p_household_id and category_ledger_account_id is null
      and end_month is null and effective_month < v_month;
-  -- Replace a same-month open total row in place (correction), else insert.
-  delete from public.budget_targets
+  -- Replace a same-month open total row in place (correction). Law 2 + the
+  -- 2026-07-17 soft-delete directive: TOMBSTONE the superseded row (end_month =
+  -- effective_month → covers zero live months) instead of DELETE, so the
+  -- correction is reversible and audit-consistent — matching remove_target. The
+  -- 'one live total' partial index (WHERE end_month IS NULL) no longer sees the
+  -- tombstoned row, so the fresh insert below does not collide.
+  update public.budget_targets
+     set end_month = effective_month
    where household_id = p_household_id and category_ledger_account_id is null
      and end_month is null and effective_month = v_month;
   insert into public.budget_targets
@@ -276,7 +332,13 @@ begin
      set end_month = v_month
    where household_id = p_household_id and category_ledger_account_id = v_cat
      and end_month is null and effective_month < v_month;
-  delete from public.budget_targets
+  -- Same-month correction: TOMBSTONE the superseded open row (Law 2 + 2026-07-17
+  -- soft-delete directive), never DELETE. end_month = effective_month → zero live
+  -- months, excluded by the 'one live category' partial index (WHERE end_month IS
+  -- NULL), so the fresh insert below is collision-free and the old target stays
+  -- auditable/reversible.
+  update public.budget_targets
+     set end_month = effective_month
    where household_id = p_household_id and category_ledger_account_id = v_cat
      and end_month is null and effective_month = v_month;
   insert into public.budget_targets
@@ -357,7 +419,12 @@ begin
   update public.budget_expected_income
      set end_month = v_month
    where household_id = p_household_id and end_month is null and effective_month < v_month;
-  delete from public.budget_expected_income
+  -- Same-month correction: TOMBSTONE the superseded open row (Law 2 + 2026-07-17
+  -- soft-delete directive), never DELETE. end_month = effective_month → zero live
+  -- months, excluded by budget_expected_income_one_live (WHERE end_month IS NULL),
+  -- so the fresh insert is collision-free and the prior figure stays auditable.
+  update public.budget_expected_income
+     set end_month = effective_month
    where household_id = p_household_id and end_month is null and effective_month = v_month;
   insert into public.budget_expected_income
     (household_id, effective_month, amount_minor, currency)

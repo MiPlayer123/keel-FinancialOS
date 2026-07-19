@@ -4,6 +4,98 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-19 — SLICE 0 (statement-ingestion-v2): approval-token SQL primitive + one shared statement validate/materialize
+
+Migration `20260720100000_approval_tokens.sql` (NOT applied to live — orchestrator
+applies after review). Prerequisite slice per `docs/harness/plans/statement-ingestion-v2.md`
+§SLICE 0. Cites CLAUDE.md Law 11 (typed AI responses + approval tokens binding
+exact payload/actor/scope/version/expiry), Law 7 / BC-v2.1 §9.1 (one
+authorization compiler, scope-safe calculation), Law 2 (append-only), Law 6
+(full export always works).
+
+Why: `packages/contracts/src/ai.ts` already carried `ApprovalTokenSchema` +
+`AiResponseRecordSchema` as Zod TYPES, but a grep for `approval_token|redeem|
+issue_token` over `supabase/migrations/**` returned nothing — the schema existed
+with NO SQL enforcement primitive. Both statement-ingestion and paycheck need
+it, so it is built standalone/first.
+
+What shipped:
+- `approval_token_status` enum (issued/redeemed/expired/revoked) + `approval_tokens`
+  table exactly per the plan (composite tenant FK `(household_id, account_id) →
+  accounts`; `payload_sha256` 64-hex CHECK). Immutable-except-status trigger
+  `keel_approval_token_guard`: blocks DELETE, allows only issued→{redeemed,
+  expired,revoked}, freezes every other column, and only lets a redemption stamp
+  `redeemed_at`/`redeemed_command_id`.
+- `keel_approval_token_issue(...)` SECURITY DEFINER: membership+write check;
+  actor DERIVED from JWT via `keel_actor_from_jwt` (caller `p_actor` ignored —
+  forgery guard, same finding that hardened the shared helper); account-scoped
+  `keel_recurring_account_access(...,true)` when account present; binds
+  `payload_sha256 = keel_payload_hash(normalized_payload)`; TTL in (0, 86400];
+  returns `{tokenId, payloadSha256, actorUserId, expiresAt}`.
+- `keel_approval_token_redeem(...)` SECURITY DEFINER, one-use: `select … for
+  update`; status='issued' else replay P0007 / P0009; expiry via
+  `clock_timestamp()` (see deviation) → P0009; actor = JWT sub else reject;
+  command match; `keel_payload_hash(server-normalized payload) = payload_sha256`
+  else tamper reject; proposal_version match; on success flip to 'redeemed' +
+  stamp. The hash is over the SERVER-normalized payload the redeem caller passes,
+  never the client raw body.
+- `keel_statement_validate_and_materialize(household, payload, actor)` (Law 7):
+  the current live `keel_statement_create` validation+insert body EXTRACTED
+  byte-for-byte (verified with a diff harness — identical modulo the actor
+  variable being passed as a param instead of a local) into one internal
+  SECURITY DEFINER helper. `keel_statement_create` refactored to call it;
+  everything outside the extracted body (auth, idempotency, effects/result
+  shape, finish_command, unique_violation→P0007) preserved verbatim, so the
+  manual path stays behaviorally byte-identical. No validation-semantics change
+  in this slice (anchor/coalesce belong to a later slice).
+- Export (Law 6): `approval_tokens` added to the exporter INCLUDE list
+  (`packages/exports/src/manifest.ts`, INCLUDE 78→79) AND to the SQL
+  `keel_export_household` via the receipts rename-chain idiom
+  (`keel_export_household_pre_approval_tokens`). `normalized_payload` is exported
+  VERBATIM — statement approvals embed only already-exported ledger facts, no
+  secret — and the recursive `assertNoExportSecrets` guard fires if a token
+  payload ever carries one (proven in `packages/exports/test/approval-tokens.test.ts`).
+- Grants/RLS: procs owned by `keel_api` (non-login/non-super/non-BYPASSRLS) via
+  the exact ownership ritual from 20260710210600 / 20260712150000; issue/redeem
+  EXECUTE to keel_api+authenticated; RLS member-read only; no direct client
+  write. `KEEL_OWNERSHIP` fail-closed DO block re-asserts ownership.
+
+Deviations (cited):
+1. **Expiry status flip moved to a sweeper.** The plan says redeem should "flip
+   to 'expired'". But redeem is called INSIDE the command transaction that is
+   about to mutate; on the P0009 raise that whole transaction rolls back, taking
+   any status write with it (proven: pgTAP asserts the row is still 'issued'
+   immediately after a rejected expired redeem). So redeem only REJECTS expired
+   tokens; a new `keel_approval_token_expire_sweep()` (service_role/pg_cron,
+   idempotent, its own transaction) DURABLY flips past-expiry issued tokens to
+   'expired'. Terminal 'expired' is eventually-consistent — the security
+   property (an expired token is never redeemable) is enforced synchronously at
+   redeem. This is the smallest deterministic version that satisfies both the
+   one-use security invariant and the plan's terminal-state intent.
+2. **`clock_timestamp()` not `now()` for the expiry gate.** `now()` is
+   transaction-start time; a long-running command transaction could otherwise
+   redeem a token that expired mid-transaction. `clock_timestamp()` evaluates
+   real wall-clock at the moment of redeem, which is the correct expiry semantic
+   and is deterministically testable inside a single pgTAP transaction.
+3. **Sweeper added beyond the literal plan list.** Justified by deviation 1 —
+   without it there is no durable path to the 'expired' terminal state the plan
+   asks for.
+
+Tests (frozen first, all green):
+- pgTAP `tests/pgtap/approval_tokens.sql` (runner `scripts/run-approval-tokens-pgtap.sh`,
+  throwaway PG cluster, real helpers+migration sliced in): 32 assertions pass —
+  issue→redeem happy, tamper, replay P0007, command/version/actor/account
+  mismatches, immutability (no delete / no non-status mutation), expiry reject +
+  sweeper flip, ownership, and the byte-identical `keel_statement_create` manual
+  path (creates exactly one statement + one line via the shared helper).
+- `packages/contracts/test/approval-token.test.ts` (3) — `ApprovalTokenSchema`
+  round-trips the issue proc output shape + rejects bad hash/actor.
+- `packages/exports/test/approval-tokens.test.ts` (4) + manifest/property count
+  bumps (78→79) — CSV/JSON serialization, JSON round-trip, secret-scan.
+- `cd apps/web && pnpm build` clean (ESLint gate; contracts+exports touched).
+
+---
+
 ## 2026-07-19 — fix(ledger): dedupe reconnect duplicates on ARCHIVED accounts + auto-archive superseded accounts at finalize
 
 Migration `20260719210000_dedupe_archived_duplicates.sql` (NOT applied to live —
@@ -5481,3 +5573,49 @@ Standing effective-dated targets, not per-month copies. leftToBudget = total −
   bundle + redeploy api AFTER the migration: node scripts/build-functions.mjs && supabase
   functions deploy api worker). v1 budgets table + budget-v3 read model LEFT INTACT until a
   later cutover slice.
+## Statement Ingestion SLICE 1 — pure parsers + types + IO-port + capability CI (2026-07-19)
+Plan: docs/harness/plans/statement-ingestion-v2.md SLICE 1 (§1 capability boundary [A1],
+§2 red-team [A2], §7 pure packages). Pure TS only — no DB/SQL. Laws cited: 1 (deterministic
+parsers, LLM never here), 4 (money = BIGINT minor units via STRING math, no floats), 5 (all
+CSV/OFX text inert data-tier; stored verbatim, never a tool/fetch/RPC trigger).
+- Files: packages/documents/src/statement/{types,money,csv,ofx,payment-matcher,index}.ts;
+  scripts/check-capability-boundary.mjs (+ .d.mts); wired into .github/workflows/ci.yml harness
+  gates step + root `check:capability-boundary` script. Package gains @keel/test-fixtures +
+  fast-check devDeps (RED_TEAM_STRINGS + fuzz).
+- Money string-math (money.ts): parse cleans symbol/commas/parens/sign, splits on '.', pads or
+  TRUNCATES-toward-zero the fraction as TEXT, concatenates digit runs, one BigInt() at the end.
+  No Number/parseFloat/×100 in the value path. Per-currency scale (JPY/KRW=0, BHD/KWD=3, default
+  2). Round-trip property (parse∘format) proven; property test asserts amounts stay integer
+  strings across random/fuzz input.
+- CSV (RFC-4180): quotes, embedded commas/newlines, doubled quotes, BOM (TextDecoder strips it),
+  CRLF/LF; header-alias mapper (Date/Posted/Transaction Date; single Amount OR Debit+Credit split
+  with debit=outflow/credit=inflow; Description/Memo/Payee; Currency); per-field row/col/byte-offset
+  provenance; rejects >5000 data rows BEFORE building the line array; period = min/max line date;
+  balances null when absent.
+- OFX (ofx.ts): ENTITY-FREE by construction — scanOfxSafety rejects DOCTYPE/DTD, <!ENTITY,
+  numeric char refs, and any non-builtin &name; (blocks external-entity + billion-laughs) → inert
+  record with null_reason 'hostile'. Tolerant 1.x SGML (leaf tags) + 2.x XML tokenizer. Bank/card:
+  STMTRS/CCSTMTRS → BANKTRANLIST/STMTTRN (DTPOSTED,TRNAMT,NAME/MEMO,FITID) + LEDGERBAL→ending,
+  ACCTID→accountHint, kindHint bank|card. Investment: INVSTMTRS → INVPOSLIST (POSSTOCK/POSMF/…) +
+  SECLIST → holdings with CUSIP/ISIN/ticker; qty is a decimal string (NOT money, never summed).
+  All money via the same string→minor path; OFX element-path provenance.
+- payment-matcher.ts: PURE mirror of exact-only card-payment match (SQL comes in a later slice).
+  |ending| exact only, forward window [periodEnd, +35d] inclusive, eligibility + never-resurrect-
+  rejected, single survivor → suggest(score 100), ≥2 → ABSTAIN 'ambiguous' (never auto-confirm),
+  deterministic ranking (transfer-link → nearest date → lowest id).
+- Capability boundary: scripts/check-capability-boundary.mjs FAILS if any file under
+  packages/documents/src/statement/ (or *matcher*/extraction-core) references
+  supabase|createClient|.rpc(|.from(|.storage|fetch(|@supabase. Golden-negative test proves it
+  fires on a planted violation; a no-IO-import test proves the statement sources import only sibling
+  ./ modules. (The gate caught a real `Array.from(` → rewrote to spread.)
+- Red-team (test/fixtures/statement-cases.ts, CI-blocking): CSV formula-injection headers (=cmd,@SUM)
+  + RED_TEAM_STRINGS in headers/descriptions; debit/credit columns with payloads; OFX NAME/MEMO/SECNAME
+  carrying RED_TEAM_STRINGS — asserted stored VERBATIM as inert strings; the module structurally
+  cannot reach IO (proven by the boundary gate + no-IO-import test). Fuzz/property tests over malformed
+  CSV/OFX (never throw, never leak a float).
+- Results: 149 tests pass; documents package coverage 100% stmts/branches/functions/lines (the
+  package enforces 100% via vitest thresholds); package typecheck clean; all NEW files lint clean.
+  Deviation-adjacent note: reached 100% branch coverage by removing genuinely-unreachable defensive
+  branches (TextDecoder never throws on bytes and strips BOM itself; BigInt guarded by a digit-run
+  check) rather than leaving dead code — documented inline. Pre-existing root lint/typecheck failures
+  on main (transfer-grouping.test, receipt-cases Math.round, contracts zod) are untouched by this slice.

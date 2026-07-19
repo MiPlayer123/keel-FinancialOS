@@ -24,10 +24,11 @@ jobs:
       - run: pnpm lint
       # Mechanical harness gates (docs/harness/README.md): pure packages stay
       # SDK-free; every api route is UI-reachable or allowlisted with a reason.
-      - name: harness gates (purity + UI reachability)
+      - name: harness gates (purity + UI reachability + capability boundary)
         run: |
           node scripts/harness/verify-purity.mjs
           node scripts/harness/verify-reachability.mjs
+          node scripts/check-capability-boundary.mjs
       # worker vitest + deno suites import the generated vendor bundle
       # (git-ignored) — build it or the suites die at import time.
       - run: pnpm build:functions

@@ -17,7 +17,8 @@
     "build:functions": "node scripts/build-functions.mjs",
     "provision:local": "node scripts/dev/provision-local-env.mjs",
     "test:integration": "vitest run --config tests/integration/vitest.config.ts",
-    "audit:queries": "node scripts/audit/query-surface.mjs"
+    "audit:queries": "node scripts/audit/query-surface.mjs",
+    "check:capability-boundary": "node scripts/check-capability-boundary.mjs"
   },
   "devDependencies": {
     "@keel/contracts": "workspace:*",
