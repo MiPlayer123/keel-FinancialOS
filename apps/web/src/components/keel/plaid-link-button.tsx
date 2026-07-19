@@ -47,11 +47,16 @@ function PlaidLinkLauncher({
 
 /**
  * Opens the real Plaid Link modal (works in sandbox + production). Flow:
- * click → resolve which entity the connection belongs to (silently, when
+ * click → resolve the DEFAULT entity for the connection (silently, when
  * there's only one; via a picker once a household has 2+) → create a
  * link_token from our backend → open Plaid Link → on success the browser
- * hands back a public_token → our backend exchanges it for a connection
- * under the chosen entity.
+ * hands back a public_token → our backend exchanges it for a connection.
+ *
+ * The chosen entity is only a DEFAULT: keel_finalize_link resolves each
+ * account's entity individually — a reconnected account keeps the entity it
+ * already had, an account with a business name (LLC / "Business") auto-lands
+ * in the household's lone business entity, and everything else falls to this
+ * default. Any account can be reassigned afterwards, so this is never a lock.
  */
 export function PlaidLinkButton({
   householdId,
@@ -168,14 +173,15 @@ export function PlaidLinkButton({
       <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Which entity is this for?</DialogTitle>
+            <DialogTitle>Default entity for this connection</DialogTitle>
             <DialogDescription>
-              Choose the books this connection belongs to — you can&apos;t move it later without
-              reassigning the account.
+              Each account is assigned its own entity: accounts with a business name (LLC,
+              &ldquo;Business&rdquo;, etc.) land in your business books automatically, everything else
+              in the one below. You can reassign any account later.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
-            <Label>Entity</Label>
+            <Label>Default entity</Label>
             {entities ? (
               <EntityPicker
                 householdId={householdId}

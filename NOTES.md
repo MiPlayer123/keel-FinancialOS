@@ -4,6 +4,89 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-19 — fix(connections): two connect-flow bugs (disconnected shows "syncing"; per-connection entity is wrong for multi-entity connections)
+
+Triggered by the user disconnecting + reconnecting Fidelity.
+
+ISSUE 1 — a disconnected connection read as "syncing". apps/web/src/lib/keel-api.ts
+computed `isSyncing` purely from `sync_desired_generation !== sync_committed_generation
+|| continuationFresh`, with no status gate. The live Fidelity connection is
+`disconnected` with desired 57 / committed 56 (a sync interrupted by the disconnect),
+so it read isSyncing=true forever — nothing will ever advance the committed generation
+on a dead connection, so "Syncing…" stuck and "Sync now"/"Fix balance" stayed disabled.
+Fix: gate on `status === 'active'`. Extracted the decision into a pure exported
+`computeIsSyncing()` and unit-tested it (apps/web/src/lib/connection-sync-state.test.ts,
+7 cases incl. the exact live Fidelity state). `status` was already selected in
+fetchConnections. The account-detail page reads `connection.isSyncing` from the same
+fetchConnections, so one reader fix covers both surfaces.
+
+ISSUE 2 — entity assignment was one-per-connection. keel_finalize_link
+(20260717220000) created ALL of a connection's accounts under v_attempt.entity_id (the
+modal's single per-connection pick). Wrong for Fidelity, whose accounts belong to
+different entities. Live read-only confirmed the household has exactly two entities
+(Personal `a44c4336…`, Business/LLC `12075118…` kind=llc_single) and the disconnected
+Fidelity connection still holds two non-archived accounts: "Limited Liability Company"
+(brokerage, mask 6027) → Business, "Cash Management (Individual)" (cash management,
+mask 6691) → Personal.
+
+Investigated the "touches entity" claim on keel_cmd_dedupe_reconnect_account
+(20260718061000): it does NOT touch entity_id at all — it only voids duplicate txns on
+the NEW account and leaves both account rows separate, so the OLD account keeps its
+entity naturally. The real overwrite risk is keel_finalize_link stamping the modal
+entity on the freshly-created reconnect accounts BEFORE dedupe runs.
+
+Fix (migration 20260719040000_finalize_link_per_account_entity.sql — FILE ONLY, never
+applied): entity resolution is now PER ACCOUNT via a single-sourced resolver
+`keel_resolve_finalize_entity`, in preference order: (1) reconnect-inherit — if a new
+account matches an existing same-institution account (same mask, else name+subtype,
+identical predicate to keel_list_reconnect_matches), inherit that account's entity so
+the modal can't stomp a curated per-account entity on reconnect; (2) business-name
+heuristic — name matches LLC / l.l.c / "limited liability" / "business" / inc / corp /
+"incorporated" / "corporation" AND the household has EXACTLY ONE non-personal entity →
+that entity (guard keeps it deterministic; 0 or 2+ disables it); (3) default → the
+household's Personal entity (fallback to the modal choice only if no personal entity
+exists, so never worse than before). Signature unchanged (uuid,uuid,text,timestamptz,
+jsonb) → CREATE OR REPLACE preserves OID/owner=keel_api/security-definer/grant to
+service_role; grants restated idempotently with an insufficient_privilege guard for
+manual psql applies. No schema/column change → Law 6 export unaffected. Money invariant
+untouched (entity is a scoping attribute; Σ postings still 0). keel_apply_account_balance
+reads each account's entity for its Opening Balances equity account, so a
+correctly-placed account also books its opening balance in the right entity — no change
+needed there.
+
+Modal copy fix (apps/web/src/components/keel/plaid-link-button.tsx): the picker no
+longer claims "you can't move it later without reassigning the account" (false —
+reassign is easy and supported). Retitled "Default entity for this connection",
+description explains per-account assignment + business-name auto-routing + "reassign any
+account later". Still a lightweight default picker only when 2+ entities (sets the
+DEFAULT for accounts the heuristic doesn't classify); single-entity households proceed
+silently as before.
+
+Deviation note: I did NOT alter keel_cmd_dedupe_reconnect_account — the prompt's "it
+touches entity" was inaccurate; it never writes entity_id, and preservation is achieved
+upstream in finalize. Flagged here per Law "deviations must cite why".
+
+Validation. Supabase local Docker stack is broken this session → used a THROWAWAY
+plain-postgres cluster (PG17 initdb, --auth=trust, unix socket). (a) Full migration
+loads clean into the throwaway cluster with minimal stub tables/roles: both functions
+created, EXIT=0, no parse/plan errors. (b) pgTAP-style suite
+(tests/pgtap/finalize_link_entity.sql via scripts/run-finalize-entity-pgtap.sh) slices
+the REAL keel_resolve_finalize_entity DDL verbatim out of the migration and runs 6
+assertions against fixtures mirroring the live Fidelity data — all 6 pass: LLC-brokerage
+(mask 6027) inherits Business, cash-management (mask 6691) inherits Personal, a new
+LLC-named account → Business heuristic, a generic account → Personal default, an
+unmatched "Limited Liability Company" → Business heuristic, "My Business Savings" →
+Business heuristic. (pgTAP extension absent in vanilla PG17 → runner loads a tiny
+plan/is/finish TAP shim so the same file runs; falls through to the real extension when
+present.) Root `pnpm vitest run`: 924 pass; the only 2 failing files
+(worker/index.test.ts, worker/receipt-extract.test.ts) are PRE-EXISTING — they import
+the gitignored vendor bundle supabase/functions/_shared/vendor/keel-domain.mjs that only
+scripts/build-functions.mjs generates; none of my changes touch worker/_shared/vendor
+(same pre-existing failure the prior NOTES entry documents). `cd apps/web && pnpm build`
+green (ESLint clean).
+
+---
+
 ## 2026-07-19 — fix(recurring): review P1/P2 — supersede across normalizer bump + stop PayPal over-suppression
 
 Review of the B→A→C recurring fix surfaced two defects; fixed on this branch.
