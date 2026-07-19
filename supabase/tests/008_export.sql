@@ -119,8 +119,12 @@ insert into excluded_export_tables(table_name) values ('recurring_detection_clai
 -- each to expected_export_tables when its layer ships.
 -- (documents / document_versions / document_attachments moved to INCLUDE by
 -- WS-J's receipts export layer, 20260718171000_receipts_export.sql.)
+--   statement_outbox: internal statement_extract delivery ledger (Slice 5,
+--     20260720210000) shipped without its export layer; Slice 6 wires the
+--     confirm-upload writer + INCLUDE entry + keel_export grant together. No
+--     keel_export SELECT grant, so assertion 4 already proves it is not exported.
 insert into excluded_export_tables(table_name) values
-  ('household_notes'), ('household_tasks');
+  ('household_notes'), ('household_tasks'), ('statement_outbox');
 
 select has_role('keel_export', 'dedicated export role exists');
 select ok(

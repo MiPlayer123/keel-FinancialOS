@@ -77,14 +77,16 @@ create index if not exists statement_outbox_pending_idx
 -- ---------------------------------------------------------------------------
 -- RLS + grants. Mirrors statement_drafts (20260720180000). The outbox is an
 -- internal queue-delivery ledger: keel_api writes it (in the confirm-upload
--- txn, Slice 6), keel_worker reads/updates it (the sweeper), keel_export reads.
--- No end-user role touches it directly.
+-- txn, Slice 6), keel_worker reads/updates it (the sweeper). No end-user role
+-- touches it directly, and keel_export is NOT granted here — the export layer
+-- wires in Slice 6 (same deferred-export precedent as household_notes/
+-- household_tasks). Until then the outbox stays EXCLUDE in the export manifest
+-- so the completeness guard classifies it honestly instead of silently.
 -- ---------------------------------------------------------------------------
 alter table public.statement_outbox enable row level security;
 
 grant select, insert, update on public.statement_outbox to keel_api;
 grant select, update on public.statement_outbox to keel_worker;
-grant select on public.statement_outbox to keel_export;
 
 do $$
 begin
@@ -97,11 +99,6 @@ begin
                  and tablename='statement_outbox' and policyname='statement_outbox_worker_all') then
     create policy statement_outbox_worker_all on public.statement_outbox
       for all to keel_worker using (true) with check (true);
-  end if;
-  if not exists (select 1 from pg_policies where schemaname='public'
-                 and tablename='statement_outbox' and policyname='statement_outbox_export') then
-    create policy statement_outbox_export on public.statement_outbox
-      for select to keel_export using (true);
   end if;
 end
 $$;
@@ -237,10 +234,13 @@ end
 $$;
 
 -- ---------------------------------------------------------------------------
--- Export INCLUDE [A11]: the outbox is a public household table, so it must be
--- reachable by the exporter. keel_export already has SELECT + an RLS select
--- policy above; the packages/exports manifest INCLUDE list is extended in the
--- TypeScript layer (Slice 6 wires the confirm-upload writer + the manifest
--- entry together). This migration grants the DB-side access so the table is not
--- invisible to a full export once populated.
+-- Export [A11/Law 6]: the outbox is a public household table, but its export
+-- layer is DEFERRED to Slice 6 (which wires the confirm-upload writer + the
+-- manifest INCLUDE entry + the keel_export grant/RLS together). Until then it is
+-- classified EXCLUDE in packages/exports (manifest.ts) and listed in
+-- excluded_export_tables in supabase/tests/008_export.sql — honestly excluded
+-- rather than silently unclassified — and keel_export has NO grant on it, so the
+-- "zero SELECT on every non-included table" guard stays green. This mirrors the
+-- household_notes/household_tasks deferred-export precedent (flip to INCLUDE +
+-- grant when the Slice 6 layer ships).
 -- ---------------------------------------------------------------------------
