@@ -32,11 +32,13 @@ export function isAutoCategorized(t: CategorySourceLike): boolean {
 
 /**
  * True when a human has looked at and confirmed this categorization —
- * source 'user', or a split (built only via the audited set-splits command).
+ * source 'user', a split (built only via the audited set-splits command), or
+ * 'transfer_confirm' (a Transfers In/Out leg categorization written when the
+ * user confirmed a transfer — an audited human decision, 20260720150000).
  * Not the logical negation of isAutoCategorized: an untouched Uncategorized
  * row is neither auto nor reviewed.
  */
 export function isReviewedCategory(t: CategorySourceLike): boolean {
   if (t.splits && t.splits.length > 0) return true;
-  return t.categorySource === 'user';
+  return t.categorySource === 'user' || t.categorySource === 'transfer_confirm';
 }
