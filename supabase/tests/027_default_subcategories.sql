@@ -11,13 +11,14 @@ values ('d0240000-0000-4000-8000-000000000001',
         '00000000-0000-4000-8000-00000000a001',
         'Subcategory Seed Probe', 'personal');
 
--- T1: the top-level taxonomy still seeds (20 rows: 19 categories + Opening
--- Balances) and the subcategory layer lands on top of it.
+-- T1: the top-level taxonomy still seeds (21 rows: 19 expense/income categories
+-- + Opening Balances + the income-kind "Transfers In" added by 20260719020000)
+-- and the subcategory layer lands on top of it.
 select is(
   (select count(*)::int from public.ledger_accounts
     where entity_id = 'd0240000-0000-4000-8000-000000000001'
       and parent_ledger_account_id is null),
-  20, 'fresh entity gets the 20 top-level seeded ledger accounts');
+  21, 'fresh entity gets the 21 top-level seeded ledger accounts');
 select is(
   (select count(*)::int from public.ledger_accounts
     where entity_id = 'd0240000-0000-4000-8000-000000000001'
@@ -60,7 +61,7 @@ select public.keel_seed_entity_categories(
 select is(
   (select count(*)::int from public.ledger_accounts
     where entity_id = 'd0240000-0000-4000-8000-000000000001'),
-  73, 'double-apply adds no rows (pfc_key dedupe)');
+  74, 'double-apply adds no rows (pfc_key dedupe)');
 
 -- T5: an archived seeded sub is NOT resurrected by a re-run, and a re-run
 -- does not re-insert it under its canonical name either.
