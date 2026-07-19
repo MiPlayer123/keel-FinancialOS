@@ -5166,3 +5166,34 @@ Rebased onto origin/main (was 5386ea0; main advanced by PR #81 connection-entity
 1fc4778 — PR #80 categorization was already in the merge-base). Only conflict:
 NOTES.md (union). pgTAP 033 does not collide (main goes to 032). Migration
 timestamps 030000/031000 do not collide with main's 040000.
+
+## 2026-07-19 — Distinguish paychecks (payroll) from other recurring income
+Migration 20260719090000_recurring_paycheck_classification.sql (applied live, verified).
+- keel_recurring_classification: INFLOW series now split into 'paycheck' (payroll/
+  wages) vs 'income' (dividends/interest/other). Deterministic, Law 1. formulaVersion
+  -> recurring-classification-v3-paycheck. Rule is keyed off counterparty_key payroll
+  token because the live data shows Plaid pfc_primary = INCOME for BOTH payroll and
+  dividends (KEEL denormalizes only pfc_primary, not the detailed INCOME_WAGES sub-
+  label), so PFC alone cannot discriminate. PFC is kept only as a negative guard
+  (TRANSFER_IN/OUT still routes to 'excluded' first). Live proof: 6 deeptune/rillavoice
+  payroll -> paycheck, "dividend received ... spaxx" -> income; outflows unchanged.
+- detected_paycheck_dismissals (soft-state, append-only; UPDATE/DELETE blocked) +
+  paychecks.dismiss_detected command (keel_cmd_dismiss_detected_paycheck, audited,
+  idempotent by employer_key+occurrence_date) + keel_list_detected_paycheck_dismissals
+  read. DECLINE hides one occurrence, never mutes the employer/series (latest detected
+  deposit still prefills). Export chain extended (Law 6).
+- Wired command/query through contracts (DismissDetectedPaycheckPayloadSchema), authz
+  (partner write / viewer read), api COMMAND_TO_PROC + QUERY_TO_PROC.
+- Recurring page: income lane cards get a "Paycheck" badge + "Tracked on Paychecks ->"
+  link when bucket='paycheck'; other inflows show "Recurring income". isIncomeSeries()
+  now treats 'paycheck' as income (else paychecks would fall to the expense lane).
+- Paychecks page: "Detected paychecks" now filters to bucket='paycheck' only (the
+  dividend disappears) and excludes declined occurrences; per-card Decline button.
+- Review page: payroll suggestions marked with the same "Paycheck" badge.
+- Deviation from plan: rule is token-primary, PFC-negative-guard (not "prefer PFC")
+  because live pfc_primary is non-discriminating (INCOME for payroll AND dividends)
+  and the detailed sub-label is not stored — justified above.
+- pnpm build (web) green; pnpm -r test green (ledger still 100%); pgTAP 030 extended
+  (needs local stack to run — validated the assertions' SQL against live, rolled back).
+- NOT deployed: edge functions (vendor bundle regenerated locally). Orchestrator to
+  deploy: node scripts/build-functions.mjs && supabase functions deploy api worker.

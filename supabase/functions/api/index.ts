@@ -85,6 +85,7 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'paychecks.edit': 'keel_paycheck_edit',
   'paychecks.reverse': 'keel_paycheck_reverse',
   'paychecks.restore': 'keel_paycheck_restore',
+  'paychecks.dismiss_detected': 'keel_cmd_dismiss_detected_paycheck',
   'reimbursements.create_claim': 'keel_reimbursement_create_claim',
   'reimbursements.settle': 'keel_reimbursement_settle',
   'reimbursements.reverse_settlement': 'keel_reimbursement_reverse_settlement',
@@ -122,6 +123,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'recurring.classification': 'keel_recurring_classification',
   'recurring.schedule_links': 'keel_list_recurring_schedule_links',
   'paychecks.list': 'keel_list_paychecks',
+  'paychecks.detected_dismissals': 'keel_list_detected_paycheck_dismissals',
   'reimbursements.list': 'keel_list_reimbursements',
   'statements.list': 'keel_list_statements',
   'statements.cadence': 'keel_statement_cadence',
@@ -2472,6 +2474,7 @@ export default {
         query.query === 'recurring.classification' ||
         query.query === 'recurring.schedule_links' ||
         query.query === 'paychecks.list' ||
+        query.query === 'paychecks.detected_dismissals' ||
         query.query === 'reimbursements.list' ||
         query.query === 'statements.list' ||
         query.query === 'statements.cadence'

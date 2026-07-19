@@ -139,6 +139,15 @@ export const RecurringUnlinkSchedulePayloadSchema = z.object({
   reason: z.string().max(500).optional(),
 }).strict();
 
+// Decline (dismiss) one DETECTED-paycheck occurrence: hides that occurrence on
+// the Paychecks page while keeping the employer + latest detected deposit as
+// the prefill template (it never mutes the series). Soft-state, append-only,
+// idempotent by (series, occurrence_date). Class-B user fact (suggest→approve).
+export const DismissDetectedPaycheckPayloadSchema = z.object({
+  seriesId: RecurringSeriesIdSchema,
+  occurrenceDate: IsoDateSchema,
+}).strict();
+
 const PaycheckComponentSchema = z.object({
   key: z.string().min(1).max(100),
   kind: z.enum([
@@ -420,6 +429,7 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'paychecks.edit': EditPaycheckPayloadSchema,
   'paychecks.reverse': PaycheckStatusPayloadSchema,
   'paychecks.restore': PaycheckStatusPayloadSchema,
+  'paychecks.dismiss_detected': DismissDetectedPaycheckPayloadSchema,
   'reimbursements.create_claim':CreateReimbursementClaimPayloadSchema,
   'reimbursements.settle':SettleReimbursementPayloadSchema,
   'reimbursements.reverse_settlement':ReverseSettlementPayloadSchema,
