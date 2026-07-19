@@ -4,6 +4,93 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-19 — scope decision: Transfers Out only ever reclassifies TWO-SIDED card payments
+
+Founder policy answer on payments to UNCONNECTED cards (the ~$36k Citibank
+one-sided outflows with no opposite leg in KEEL): **"LEAVE AS-IS FOR NOW"** — keep
+counting them as loan-payment expense until those cards are connected. The
+mechanism must ONLY reclassify a card payment as a transfer when KEEL can see
+BOTH legs.
+
+Adjusted the in-flight `transfers-out-card-payments` work accordingly:
+- KEPT: seed of the expense-kind "Transfers Out" category + backfill
+  (`20260720140000` §1/§2) — needed by Slice B.
+- KEPT: `keel_txn_is_transfer_category` gains `transfers_out`; `keel_cash_flow` /
+  `keel_cash_flow_monthly` formula-version bumps (`20260720140000` §3) — so a
+  debit that IS categorized Transfers Out (via a confirmed two-sided link, or a
+  manual action) drops out of spend.
+- KEPT: `20260720160000` — card-payment transfer DETECTOR tier (depository
+  outflow ↔ credit-card inflow, exact amount, ≤7d). Only pairs where BOTH legs
+  exist (connected cards). Dry-run: 0 new pairs on the live household (existing
+  tiers already caught them); it is slower-feed safety infra, can only ADD
+  correct pairs.
+- KEPT: Slice D client/server surface parity (`spending.ts` / `spending.test.ts`)
+  — `loan_payments` removed from the CLIENT money-movement exclusion so the
+  client matches the server, which already counts `loan_payments` as spend
+  (verified: `keel_txn_is_transfer_category` never references `loan_payments`).
+  Net effect: the unconnected-Citi payoffs KEEP counting as expense on both
+  sides. They were previously HIDDEN client-side and COUNTED server-side; Slice D
+  makes the client stop hiding what the server already counts. No dollars
+  reclassified — just client/server agreement.
+- **DROPPED (deviation, justified by the founder directive above):** the
+  card-payment PROPOSAL tier in `keel_detect_category_suggestions` and the new
+  `card_payment` suggestion source (was `20260720140000` §2b/§3). That suggester
+  flagged one-sided unconnected-card outflows as Transfers Out on a memo/PFC
+  signal — exactly the aggressive behavior the founder declined. Removed from the
+  migration; `keel_detect_category_suggestions` is left as `20260719020000` left
+  it, and the `category_suggestions.source` CHECK stays `('pfc','rule')`. Also
+  reverted the web plumbing for that source (`keel-api.ts` `CategorySuggestionRow`
+  union + `review/page.tsx` `card_payment` reason branch).
+
+Blast radius after the drop: **~0 Transfers Out suggestions** until the founder
+connects those cards. No code path auto-suggests `transfers_out` for a one-sided
+outflow anymore (grep-verified). The only routes to a Transfers Out
+categorization are Slice B (a CONFIRMED two-sided card-payment link) and a manual
+user categorization.
+
+Open gap surfaced: Slice B (confirm-time leg categorization + backfill of the ~60
+existing confirmed links) does NOT appear to have been built yet in this
+worktree — no migration touches `keel_link_and_confirm_transfer` to set the
+outflow leg to Transfers Out / inflow leg to Transfers In. The "Transfers Out"
+category seeded here is its landing home; the confirm hook itself still needs
+building.
+
+Verification: `spending.test.ts` 9/9 pass; `apps/web pnpm build` clean (lint +
+typecheck); migration `20260720140000` re-read end-to-end, no suggester residue.
+
+### Slice B now built (`20260720150000_transfer_confirm_categorizes_legs.sql`)
+Closed the open gap above. On CONFIRM (via `keel_decide_transfer`, which
+`keel_link_and_confirm_transfer` delegates to) and on
+`keel_book_transfer_counterparty`, a shared helper
+`keel_transfer_categorize_legs` writes an overlay (source `transfer_confirm`) —
+outflow leg → Transfers Out, inflow leg → Transfers In — resolved on each leg's
+own entity. It NEVER overwrites an existing overlay (Law 9). `keel_undo_transfer`
+restores priors via `keel_transfer_restore_legs`, which DELETES only the
+`transfer_confirm` overlays it wrote (their pre-confirm state was "no overlay",
+so deletion is the exact inverse); a user overlay is untouched. Both sides
+audited (`transfers.categorize_leg` / `transfers.restore_leg`). One audited
+backfill categorizes the 60 existing confirmed links' legs (dry-run confirmed
+`transfers_out`/`transfers_in` resolve for all 60 once `20260720140000` seeds the
+category — timestamp order guarantees it). `keel_detect_category_suggestions`
+gains a `targets` suppression predicate: never suggest for a transaction already
+in an ACTIVE transfer_link (kills the competing income-side `transfers_in` PFC
+suggestion on a link leg). Web: `categorySource` union + `review-state.ts` treat
+`transfer_confirm` as reviewed (settled, not "auto"). Tests: `034_*` (confirm
+sets both legs, undo restores, Law-9 user-overlay guard, suppression) +
+`review-state.test.ts` (11/11). Dependency: Slice B migration must apply AFTER
+Slice A (`140000 < 150000`, guaranteed).
+
+### Slice C detector tier (`20260720160000`) + test 033 dry-runs
+Tier 3 in `keel_detect_transfers`: depository outflow ↔ credit-card inflow, exact
+opposite amount, ≤7d (safe — liability↔depository exact shape can't collide with
+the round-dollar P2P false positives). Accepts both `credit card` (live) and
+`credit_card` (seed) subtype spellings. Live dry-run: 0 new pairs (existing tiers
+already caught the connected-card pairs). Test `033_*` proves the seed, the
+cash-flow `transfers_out` exclusion (one-sided, no link needed), the NEGATIVE
+guard (a mortgage stays spend / not a transfer category), and the ≤7d card tier.
+
+---
+
 ## 2026-07-19 — fix(plaid): Fidelity investments never consented (ADDITIONAL_CONSENT_REQUIRED)
 
 Root cause (confirmed via Plaid dashboard Activity log): `/investments/holdings/get`

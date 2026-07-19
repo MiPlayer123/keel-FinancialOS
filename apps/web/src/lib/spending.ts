@@ -2,34 +2,46 @@ import type { RichTransactionRow } from '@/lib/keel-api';
 import type { CategorySpend } from '@/components/keel/charts';
 
 /**
- * Stable pfc_keys (subcategories migration) for the two seeded buckets that are
- * money-movement, not spending: "Loan Payments" (credit-card / loan payoffs)
- * and "Transfers". pfc_key is rename-proof — the display name is user-editable.
+ * Stable pfc_keys (subcategories migration) for the seeded TRANSFER buckets that
+ * are money-movement, not spending: "Transfers" (expense), "Transfers In"
+ * (income) and "Transfers Out" (expense, 20260720140000 — an own-card payoff
+ * debit). pfc_key is rename-proof — the display name is user-editable.
+ *
+ * IMPORTANT (20260720140000, SLICE D): "Loan Payments" is NO LONGER excluded.
+ * A real recurring debt payment (mortgage, car, student loan) IS spending, and
+ * the server (keel_txn_is_transfer_category / keel_cash_flow) only excludes the
+ * transfer categories — never loan_payments. The one money-movement case that
+ * used to hide inside loan_payments — an own-credit-card payoff — now routes to
+ * its own "Transfers Out" category (a suggest→approve suggestion), so it is
+ * excluded HERE via the `transfers_` family without also dropping genuine loan
+ * payments. This keeps client SPENDING and server cash-flow in agreement.
  */
-const DEBT_TRANSFER_PFC_KEYS = new Set(['loan_payments', 'transfers']);
+const DEBT_TRANSFER_PFC_KEYS = new Set(['transfers']);
 
 /**
- * Seeded subcategories carry prefixed pfc_keys (e.g. `loan_payments_mortgage`,
- * `transfers_internal`). A transaction filed under a sub is just as much
- * money-movement as one filed under the parent, so the exclusion covers the
- * whole family: exact parent key OR any key under its prefix.
+ * Seeded subcategories and the sign-split transfer categories carry prefixed
+ * pfc_keys (`transfers_internal`, `transfers_in`, `transfers_out`). A row filed
+ * under any is money-movement, so the exclusion covers the whole `transfers_`
+ * family: exact parent key OR any key under its prefix.
  */
-const DEBT_TRANSFER_PFC_PREFIXES = ['loan_payments_', 'transfers_'] as const;
+const DEBT_TRANSFER_PFC_PREFIXES = ['transfers_'] as const;
 
-/** Rename-proof pfc_key check: exact parent bucket or any seeded sub under it. */
+/** Rename-proof pfc_key check: exact transfer bucket or any seeded sub under it. */
 function isDebtTransferPfcKey(pfcKey: string): boolean {
   if (DEBT_TRANSFER_PFC_KEYS.has(pfcKey)) return true;
   return DEBT_TRANSFER_PFC_PREFIXES.some((prefix) => pfcKey.startsWith(prefix));
 }
 
 /**
- * Same two buckets by seeded display name, for shapes that carry a category
+ * Same transfer buckets by seeded display name, for shapes that carry a category
  * name but no pfc_key (e.g. `budgets.list` rows). Exported so every surface
  * (budgets, rebalance) shares ONE definition rather than drifting copies.
+ * Loan payments are intentionally absent (see DEBT_TRANSFER_PFC_KEYS).
  */
 export const DEBT_TRANSFER_CATEGORY_NAMES: ReadonlySet<string> = new Set([
-  'loan payments',
   'transfers',
+  'transfers in',
+  'transfers out',
 ]);
 
 /** Shared name-based check for shapes without pfc_key (budgets.list rows). */
