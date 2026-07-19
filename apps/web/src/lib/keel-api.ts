@@ -1532,12 +1532,17 @@ export type RecurringSeriesRow = {
 // shown on the Recurring page marked as a paycheck AND the only inflow class the
 // Paychecks page's "detected paychecks" section surfaces. Non-payroll inflows
 // (dividends, interest, other) stay 'income'.
+// 'recurring' = a generic recurring OUTFLOW (classifier v4, 20260719210000):
+// the dominant PFC is a habitual-spend primary (rideshare, groceries, ...),
+// OTHER, unknown, or null — a claim of cadence only, never of kind. Replaces
+// the old fall-through to 'subscription' (GAP-2, e2e validation 2026-07-19).
 export type RecurringBucket =
   | 'income'
   | 'paycheck'
   | 'subscription'
   | 'utility'
   | 'bill'
+  | 'recurring'
   | 'excluded';
 export type RecurringClassificationRow = {
   seriesId: string;

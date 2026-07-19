@@ -36,6 +36,7 @@ import {
   type CategoryRow,
   type CategorySuggestionRow,
   type QueryResult,
+  type RecurringBucket,
   type RecurringClassificationRow,
   type RecurringSeriesRow,
   type RichTransactionRow,
@@ -49,6 +50,7 @@ import {
   transferReasonLine,
 } from '@/lib/recurring-evidence';
 import { groupTransfersByAccountPair } from '@/lib/transfer-grouping';
+import { RECURRING_BUCKET_BADGE_LABELS } from '@/lib/recurring-bucket';
 import { merchantDisplayName } from '@/lib/merchant-name';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -118,8 +120,8 @@ function ReviewBody() {
       });
   }, [householdId]);
 
-  const paycheckSeriesIds = useMemo(
-    () => new Set(classification.filter((c) => c.bucket === 'paycheck').map((c) => c.seriesId)),
+  const bucketBySeries = useMemo(
+    () => new Map(classification.map((c) => [c.seriesId, c.bucket])),
     [classification],
   );
 
@@ -366,7 +368,7 @@ function ReviewBody() {
             <SuggestionCard
               key={series.seriesId}
               series={series}
-              isPaycheck={paycheckSeriesIds.has(series.seriesId)}
+              bucket={bucketBySeries.get(series.seriesId) ?? null}
               householdId={householdId}
               userId={userId}
               onRemove={() => removeRecurring([series.seriesId])}
@@ -1195,15 +1197,18 @@ function CategorizationCard({
 
 function SuggestionCard({
   series,
-  isPaycheck,
+  bucket,
   householdId,
   userId,
   onRemove,
   onDone,
 }: {
   series: RecurringSeriesRow;
-  /** Payroll/wages (deterministic classifier); marked as a Paycheck here too. */
-  isPaycheck: boolean;
+  /** Deterministic classifier bucket (same as the Recurring page); null while
+   *  classification hasn't loaded. Paychecks get the Banknote badge, outflows
+   *  get their bucket label ("Recurring" = generic — cadence evidenced, kind
+   *  not, classifier v4). */
+  bucket: RecurringBucket | null;
   householdId: string;
   userId: string | null;
   /** Optimistic removal (F-003); returns a restore for the failure path. */
@@ -1269,10 +1274,17 @@ function SuggestionCard({
             <p className="truncate font-medium" title={series.counterpartyKey}>
               {merchantDisplayName(series.counterpartyKey.toUpperCase())}
             </p>
-            {isPaycheck ? (
+            {bucket === 'paycheck' ? (
               <Badge className="gap-1">
                 <Banknote className="size-3" />
                 Paycheck
+              </Badge>
+            ) : series.sign === 'outflow' ? (
+              /* The classifier's bucket, adjacent to the name it qualifies
+                 (Law 8). "Recurring" is the neutral generic and the honest
+                 placeholder while classification hasn't loaded. */
+              <Badge variant="secondary">
+                {RECURRING_BUCKET_BADGE_LABELS[bucket ?? 'recurring']}
               </Badge>
             ) : (
               <Badge variant="secondary" className="capitalize">
