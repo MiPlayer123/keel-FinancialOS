@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { computeHoldingValueMinor } from './holdings-math';
+import { computeHoldingValueMinor, formatGainBpsLabel } from './holdings-math';
 
 describe('computeHoldingValueMinor', () => {
   it('computes whole shares exactly', () => {
@@ -39,5 +39,42 @@ describe('computeHoldingValueMinor', () => {
 
   it('allows a zero price (e.g. a worthless or unpriced position)', () => {
     expect(computeHoldingValueMinor('5', '0')).toBe('0');
+  });
+});
+
+describe('formatGainBpsLabel', () => {
+  it('formats a positive gain with a leading plus and one decimal', () => {
+    // 2500 bps = +25.0%
+    expect(formatGainBpsLabel('2500')).toBe('+25.0%');
+  });
+
+  it('formats a loss with a U+2212 minus (never an ASCII hyphen)', () => {
+    // −1234 bps = −12.3% (truncated toward zero, matching percentDeltaLabel)
+    expect(formatGainBpsLabel('-1234')).toBe('−12.3%');
+    expect(formatGainBpsLabel('-1234')).toContain('−');
+    expect(formatGainBpsLabel('-1234')).not.toContain('-');
+  });
+
+  it('truncates toward zero at one decimal (no rounding surprises)', () => {
+    // 1256 bps = 12.56% -> tenths=125 -> 12.5% (truncated, not rounded to 12.6)
+    expect(formatGainBpsLabel('1256')).toBe('+12.5%');
+  });
+
+  it('renders exact zero as a plain 0.0% (no sign)', () => {
+    expect(formatGainBpsLabel('0')).toBe('0.0%');
+  });
+
+  it('keeps a tiny negative sign (−0.0%), never flipping to +0.0%', () => {
+    // −4 bps -> tenths=0 but sign comes from the value itself
+    expect(formatGainBpsLabel('-4')).toBe('−0.0%');
+  });
+
+  it('passes null through as null (missing/zero basis has no defined return)', () => {
+    expect(formatGainBpsLabel(null)).toBeNull();
+  });
+
+  it('rejects a non-integer string defensively', () => {
+    expect(formatGainBpsLabel('12.5')).toBeNull();
+    expect(formatGainBpsLabel('abc')).toBeNull();
   });
 });

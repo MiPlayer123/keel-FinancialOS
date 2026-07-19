@@ -252,8 +252,132 @@ select is(
   'overview surfaces the one investment account');
 select is(
   (public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->>'formulaVersion'),
-  'investments-overview-v1',
+  'investments-overview-v2',
   'overview carries a formula version (reproducible numbers)');
+
+-- ---------------------------------------------------------------------------
+-- Investment depth v1: per-holding cost basis + unrealized gain/loss +
+-- portfolio totals. At this point the only holding is the plaid VTI with a
+-- NULL cost basis, so it must be EXCLUDED from the aggregates and its per-row
+-- gain/bps must be JSON null (never fabricated to 0).
+-- ---------------------------------------------------------------------------
+-- The single null-basis holding: gain and bps are JSON null (not 0).
+select is(
+  (select h->>'unrealizedGainMinor' from jsonb_array_elements(
+     public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->'holdings') h
+    where h->>'symbol' = 'VTI'),
+  null,
+  'null-basis holding reports unrealizedGainMinor as JSON null');
+select is(
+  (select h->>'unrealizedGainBps' from jsonb_array_elements(
+     public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->'holdings') h
+    where h->>'symbol' = 'VTI'),
+  null,
+  'null-basis holding reports unrealizedGainBps as JSON null');
+-- The null-basis row is excluded from BOTH sums: gain/cost totals are 0.
+select is(
+  (public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->>'totalUnrealizedGainMinor'),
+  '0',
+  'null-basis holding is excluded from the total unrealized gain');
+select is(
+  (public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->>'totalCostBasisMinor'),
+  '0',
+  'null-basis holding is excluded from the total cost basis');
+-- With-basis count is one LESS than the total count (surfaced exclusion, Law 9).
+select is(
+  (public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->>'holdingsWithBasisCount')::int,
+  0,
+  'with-basis count excludes the null-basis holding');
+select is(
+  (public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->>'holdingsCount')::int,
+  1,
+  'holdings count includes the null-basis holding');
+select ok(
+  (public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->>'holdingsWithBasisCount')::int
+    < (public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->>'holdingsCount')::int,
+  'a null-basis holding leaves with-basis count strictly below total count');
+
+-- Add three WITH-basis holdings on the same account/day:
+--   GAINR: value 1_500_000, cost 1_200_000  -> gain +300000, bps +2500
+--   LOSSR: value  800_000,  cost 1_000_000  -> gain -200000  (a real loss)
+--   ZEROB: value    5_000,  cost 0          -> bps NULL (no divide-by-zero)
+insert into public.holdings
+  (household_id, account_id, as_of, symbol, name, qty, price_minor, value_minor, cost_basis_minor, currency, source)
+values
+  ('00000000-0000-4000-8000-00000000a001', 'de000000-0000-4000-8000-000000000021',
+   current_date, 'GAINR', 'Gain Fixture', 1, 1500000, 1500000, 1200000, 'USD', 'manual'),
+  ('00000000-0000-4000-8000-00000000a001', 'de000000-0000-4000-8000-000000000021',
+   current_date, 'LOSSR', 'Loss Fixture', 1, 800000, 800000, 1000000, 'USD', 'manual'),
+  ('00000000-0000-4000-8000-00000000a001', 'de000000-0000-4000-8000-000000000021',
+   current_date, 'ZEROB', 'Zero-Basis Fixture', 1, 5000, 5000, 0, 'USD', 'manual');
+
+-- Known value+cost -> known gain and bps.
+select is(
+  (select h->>'unrealizedGainMinor' from jsonb_array_elements(
+     public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->'holdings') h
+    where h->>'symbol' = 'GAINR'),
+  '300000',
+  'GAINR: unrealizedGainMinor = value − cost = 300000');
+select is(
+  (select h->>'unrealizedGainBps' from jsonb_array_elements(
+     public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->'holdings') h
+    where h->>'symbol' = 'GAINR'),
+  '2500',
+  'GAINR: unrealizedGainBps = 2500 (25%)');
+-- A LOSS row (value < cost) -> NEGATIVE gain.
+select is(
+  (select h->>'unrealizedGainMinor' from jsonb_array_elements(
+     public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->'holdings') h
+    where h->>'symbol' = 'LOSSR'),
+  '-200000',
+  'LOSSR: unrealizedGainMinor is negative for a loss');
+select is(
+  (select h->>'unrealizedGainBps' from jsonb_array_elements(
+     public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->'holdings') h
+    where h->>'symbol' = 'LOSSR'),
+  '-2000',
+  'LOSSR: unrealizedGainBps is negative (−2000 = −20%)');
+-- cost_basis = 0 -> bps NULL (no divide-by-zero raise), but gain is still defined.
+select lives_ok(
+  $$select public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')$$,
+  'a zero cost-basis holding does not raise a divide-by-zero');
+select is(
+  (select h->>'unrealizedGainBps' from jsonb_array_elements(
+     public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->'holdings') h
+    where h->>'symbol' = 'ZEROB'),
+  null,
+  'ZEROB: zero cost basis yields NULL bps (guarded divide-by-zero)');
+select is(
+  (select h->>'unrealizedGainMinor' from jsonb_array_elements(
+     public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->'holdings') h
+    where h->>'symbol' = 'ZEROB'),
+  '5000',
+  'ZEROB: gain is still defined for a zero-basis holding (value − 0)');
+
+-- Aggregates now cover the three with-basis rows (VTI still excluded, null basis).
+-- cost = 1_200_000 + 1_000_000 + 0 = 2_200_000; gain = 300000 − 200000 + 5000 = 105000.
+select is(
+  (public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->>'totalCostBasisMinor'),
+  '2200000',
+  'total cost basis sums the with-basis subset only');
+select is(
+  (public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->>'totalUnrealizedGainMinor'),
+  '105000',
+  'total unrealized gain sums the with-basis subset only');
+select is(
+  (public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->>'holdingsWithBasisCount')::int,
+  3,
+  'with-basis count is the three cost-carrying holdings');
+select is(
+  (public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->>'holdingsCount')::int,
+  4,
+  'holdings count includes the null-basis VTI too');
+
+-- Clean up the depth-v1 fixtures so downstream assertions (Finding 6, which
+-- counts VTI rows) see the pre-existing holdings only.
+delete from public.holdings
+ where account_id = 'de000000-0000-4000-8000-000000000021'
+   and symbol in ('GAINR', 'LOSSR', 'ZEROB');
 
 -- Finding 7: totals are grouped by currency; USD headline is USD-only, and a
 -- per-currency array carries the rest honestly (no fabricated FX). The one

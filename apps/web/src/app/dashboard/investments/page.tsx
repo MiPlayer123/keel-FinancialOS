@@ -13,6 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { formatGainBpsLabel } from '@/lib/holdings-math';
 import {
   fetchInvestmentsOverview,
   fetchInvestmentsValueDaily,
@@ -107,6 +108,24 @@ export default function InvestmentsPage() {
   // Non-USD balance groups to render alongside the USD headline (Finding 7).
   const nonUsdBalances = (overview?.balancesByCurrency ?? []).filter((b) => b.currency !== 'USD');
 
+  // Overall unrealized-return % over the WITH-BASIS subset (Law 4: BigInt-only,
+  // no floats). bps = round(gain × 10000 / cost); null when no cost basis is
+  // reported (never a fabricated 0% / 100%). Mirrors the per-holding server bps.
+  const totalGainLabel = useMemo(() => {
+    if (!overview || overview.holdingsWithBasisCount === 0) return null;
+    const cost = BigInt(overview.totalCostBasisMinor || '0');
+    if (cost === 0n) return null;
+    const gain = BigInt(overview.totalUnrealizedGainMinor || '0');
+    // Round half away from zero in integer math to match the server's round().
+    const half = cost / 2n;
+    const bps = gain >= 0n ? (gain * 10000n + half) / cost : (gain * 10000n - half) / cost;
+    return formatGainBpsLabel(bps.toString());
+  }, [overview]);
+  // Surfaced exclusion (Law 9): how many holdings actually carry a cost basis.
+  const withBasis = overview?.holdingsWithBasisCount ?? 0;
+  const holdingsCount = overview?.holdingsCount ?? 0;
+  const hasPartialBasis = withBasis < holdingsCount;
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -163,7 +182,7 @@ export default function InvestmentsPage() {
       ) : (
         <>
           {/* Totals */}
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -206,6 +225,53 @@ export default function InvestmentsPage() {
                 <p className="mt-1 text-xs text-muted-foreground">
                   A breakdown of what&apos;s inside your balances, not a separate total.
                 </p>
+              </CardContent>
+            </Card>
+            {/* Unrealized gain/loss over the with-basis subset. Law 8: red only on
+                a negative amount, never green on a gain. Law 9: the N-of-M coverage
+                line is PROMINENT (not a footnote) so an excluded subset can't hide. */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  Unrealized gain / loss
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {withBasis > 0 ? (
+                  <>
+                    <div className="flex items-baseline gap-2">
+                      <Money
+                        amountMinor={overview.totalUnrealizedGainMinor}
+                        currency={currency}
+                        signed
+                        className="text-2xl font-semibold"
+                      />
+                      {totalGainLabel ? (
+                        <span className="text-sm font-medium text-muted-foreground tabular-nums">
+                          {totalGainLabel}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Cost{' '}
+                      <Money
+                        amountMinor={overview.totalCostBasisMinor}
+                        currency={currency}
+                        className="text-xs"
+                      />
+                    </p>
+                    {hasPartialBasis ? (
+                      <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-foreground">
+                        <AlertTriangle className="size-3.5 shrink-0 text-muted-foreground" />
+                        Cost basis for {withBasis} of {holdingsCount} holdings
+                      </p>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Cost basis not reported for any holdings yet.
+                  </p>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -355,6 +421,29 @@ export default function InvestmentsPage() {
                                 className="text-xs"
                               />
                             </p>
+                            {/* Unrealized gain/loss. Law 8: red only when negative
+                                (the <Money signed /> handles it); a positive gain is
+                                plain, NEVER green. Law 9: an unreported basis is shown
+                                as such, never fabricated to $0 / 0% / 100%. */}
+                            {row.unrealizedGainMinor === null ? (
+                              <p className="text-xs italic text-muted-foreground">
+                                Cost basis not reported
+                              </p>
+                            ) : (
+                              <p className="flex items-center justify-end gap-1.5 text-xs text-muted-foreground">
+                                <Money
+                                  amountMinor={row.unrealizedGainMinor}
+                                  currency={row.currency}
+                                  signed
+                                  className="text-xs"
+                                />
+                                {formatGainBpsLabel(row.unrealizedGainBps) ? (
+                                  <span className="tabular-nums">
+                                    {formatGainBpsLabel(row.unrealizedGainBps)}
+                                  </span>
+                                ) : null}
+                              </p>
+                            )}
                           </div>
                         </div>
                       ))}
