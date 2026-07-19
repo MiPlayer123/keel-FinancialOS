@@ -386,22 +386,37 @@ export const DecideCategorySuggestionPayloadSchema = z.object({
 }).strict();
 
 /**
- * Attach-only documents (receipts/statements) — no auto-extract/match (that
- * fuller pipeline is deferred, see docs/research/RECEIPTS-2026-07-16.md).
- * The upload URL itself is minted by a bespoke route, not a command (nothing
- * durable is written until the object actually exists in Storage); this
- * command is the durable, audited step: verify the uploaded object
- * server-side (size/mime/hash) and record it, optionally attaching it to
- * exactly one target in the same call.
+ * Confirm-upload is a DISCRIMINATED UNION on `mode` [A3, statement-ingestion-v2
+ * §3]. The upload URL itself is minted by a bespoke route, not a command
+ * (nothing durable is written until the object exists in Storage); confirm is
+ * the durable, audited step that verifies the uploaded object server-side
+ * (size/mime/hash) and records it. The two modes are mutually exclusive by
+ * construction so an attach can NEVER accidentally spawn an ingest draft and an
+ * ingest can never silently attach to a target:
+ *
+ *   mode:'attach'  → targetType + targetId REQUIRED; records the version and
+ *                    attaches it to exactly one existing target. No draft, no
+ *                    account. This is the unchanged receipts/statement-detail
+ *                    AttachmentsSection path.
+ *   mode:'ingest'  → accountId REQUIRED (Law: ingest always targets an account
+ *                    [A3]); creates a statement_draft + transactional-outbox row
+ *                    and enqueues extraction. NO attachment, no target.
+ *
+ * Legacy callers that omit `mode` are treated as 'attach' by the server for
+ * backward compatibility (they already send targetType/targetId); new callers
+ * SHOULD send `mode` explicitly.
  */
-export const ConfirmDocumentUploadPayloadSchema = z
+export const AttachDocumentUploadPayloadSchema = z
   .object({
+    mode: z.literal('attach'),
     documentId: DocumentIdSchema,
     entityId: EntityIdSchema,
     kind: DocumentKindSchema,
     storageBucket: z.enum(['receipts', 'statements']),
     storagePath: z.string().min(1).max(1024),
     originalFilename: z.string().min(1).max(255),
+    // Target is optional (an unattached receipt in the bulk-upload inbox has
+    // neither) but present-or-absent as a PAIR; never an account (that is ingest).
     targetType: DocumentTargetTypeSchema.optional(),
     targetId: z.uuid().optional(),
   })
@@ -415,6 +430,28 @@ export const ConfirmDocumentUploadPayloadSchema = z
       });
     }
   });
+
+/**
+ * Statement ingest upload [A3]. Always kind:'statement', always an account,
+ * never a target. Produces a draft the user reviews + token-approves (Slice 7).
+ */
+export const UploadStatementPayloadSchema = z
+  .object({
+    mode: z.literal('ingest'),
+    documentId: DocumentIdSchema,
+    entityId: EntityIdSchema,
+    kind: z.literal('statement'),
+    storageBucket: z.literal('statements'),
+    storagePath: z.string().min(1).max(1024),
+    originalFilename: z.string().min(1).max(255),
+    accountId: AccountIdSchema,
+  })
+  .strict();
+
+export const ConfirmDocumentUploadPayloadSchema = z.discriminatedUnion('mode', [
+  AttachDocumentUploadPayloadSchema,
+  UploadStatementPayloadSchema,
+]);
 
 /** Detach = undo (Law 2); the document and its versions are untouched. */
 export const DetachDocumentPayloadSchema = z.object({

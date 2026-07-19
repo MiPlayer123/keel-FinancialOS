@@ -102,6 +102,12 @@ insert into expected_export_tables(table_name,allowed_columns,omitted_columns) v
  ('document_attachments',array['id','household_id','document_id','canonical_transaction_id','paycheck_id','reimbursement_claim_id','statement_id','attached_by','attached_at','detached_by','detached_at'],'{}'),
  ('document_extractions',array['id','household_id','document_version_id','status','extractor','extractor_version','merchant','amount_minor','currency','txn_date','confidence','raw_evidence','error_code','created_at'],'{}'),
  ('document_transaction_matches',array['id','household_id','document_version_id','canonical_transaction_id','status','score','reason_codes','suggested_by','attachment_id','decided_by','decided_at','created_at'],'{}');
+-- SLICE 6 (statement-ingestion-v2.md §5/§8/§12): statement_outbox export layer
+-- lands here (its table + sweeper shipped Slice 5 with export deferred). The
+-- confirm-upload writer + INCLUDE entry + keel_export grant/RLS + this expected
+-- row all ship together, so it moves out of excluded_export_tables below.
+insert into expected_export_tables(table_name,allowed_columns,omitted_columns) values
+ ('statement_outbox',array['id','household_id','document_version_id','account_id','status','enqueue_count','last_enqueued_at','delivered_at','created_at'],'{}');
 
 create temporary table excluded_export_tables(table_name text primary key) on commit drop;
 insert into excluded_export_tables(table_name) values
@@ -119,12 +125,11 @@ insert into excluded_export_tables(table_name) values ('recurring_detection_clai
 -- each to expected_export_tables when its layer ships.
 -- (documents / document_versions / document_attachments moved to INCLUDE by
 -- WS-J's receipts export layer, 20260718171000_receipts_export.sql.)
---   statement_outbox: internal statement_extract delivery ledger (Slice 5,
---     20260720210000) shipped without its export layer; Slice 6 wires the
---     confirm-upload writer + INCLUDE entry + keel_export grant together. No
---     keel_export SELECT grant, so assertion 4 already proves it is not exported.
+-- (statement_outbox moved to INCLUDE by Slice 6's export layer,
+--   20260720220000_statement_ingest_begin.sql — confirm-upload writer + INCLUDE
+--   entry + keel_export grant/RLS + keel_export_household rewrap together.)
 insert into excluded_export_tables(table_name) values
-  ('household_notes'), ('household_tasks'), ('statement_outbox');
+  ('household_notes'), ('household_tasks');
 
 select has_role('keel_export', 'dedicated export role exists');
 select ok(
@@ -135,8 +140,8 @@ select ok(
 select is(
   (select count(*)::int from expected_export_tables
     where has_table_privilege('keel_export', format('public.%I', table_name), 'SELECT')),
-  78,
-  'keel_export can SELECT all 78 included tables'
+  79,
+  'keel_export can SELECT all 79 included tables'
 );
 select is(
   (select count(*)::int
@@ -267,8 +272,8 @@ reset role;
 select is(
   (select count(*)::int from jsonb_object_keys(
     public.keel_export_household('00000000-0000-4000-8000-00000000a001')->'tables')),
-  78,
-  'snapshot contains all 78 included table arrays'
+  79,
+  'snapshot contains all 79 included table arrays'
 );
 select is(
   (select count(*)::int from excluded_export_tables e

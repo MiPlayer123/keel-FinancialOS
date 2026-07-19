@@ -3,8 +3,8 @@ import { EXCLUDE, INCLUDE } from '../src/index.js';
 
 describe('export manifest', () => {
   it('classifies each manifest public-table decision exactly once', () => {
-    expect(INCLUDE).toHaveLength(84);
-    expect(EXCLUDE.filter((entry) => entry.schema === 'public')).toHaveLength(17);
+    expect(INCLUDE).toHaveLength(85);
+    expect(EXCLUDE.filter((entry) => entry.schema === 'public')).toHaveLength(16);
     const decisions = [
       ...INCLUDE.map((entry) => entry.table),
       ...EXCLUDE.filter((entry) => entry.schema === 'public').map((entry) => entry.table),
