@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatGainBpsLabel } from '@/lib/holdings-math';
+import { presentAccountHoldings } from '@/lib/holdings-presentation';
 import {
   fetchInvestmentsOverview,
   fetchInvestmentsValueDaily,
@@ -64,18 +65,21 @@ export default function InvestmentsPage() {
     load();
   }, [load]);
 
-  // Group holdings by account for the household-wide table.
-  const holdingsByAccount = useMemo(() => {
-    const groups = new Map<string, { accountName: string; rows: InvestmentHoldingRow[] }>();
+  // Group holdings rows by account. The Holdings card iterates the ACCOUNTS
+  // (not just accounts that happen to have rows) so a cash-only account and a
+  // brokerage awaiting its institution's async data both get an honest
+  // per-account presentation instead of vanishing.
+  const rowsByAccount = useMemo(() => {
+    const groups = new Map<string, InvestmentHoldingRow[]>();
     for (const row of overview?.holdings ?? []) {
       const existing = groups.get(row.accountId);
       if (existing) {
-        existing.rows.push(row);
+        existing.push(row);
       } else {
-        groups.set(row.accountId, { accountName: row.accountName, rows: [row] });
+        groups.set(row.accountId, [row]);
       }
     }
-    return [...groups.entries()].map(([accountId, g]) => ({ accountId, ...g }));
+    return groups;
   }, [overview]);
 
   const allocationItems: CategorySpend[] = useMemo(
@@ -367,28 +371,100 @@ export default function InvestmentsPage() {
             </CardContent>
           </Card>
 
-          {/* Household holdings, grouped by account */}
-          {holdingsByAccount.length > 0 ? (
+          {/* Household holdings, per account (2026-07-19 backlog Item 2):
+              every investment account gets a presentation — listed positions,
+              a cash-only line (all-money-market accounts, e.g. an all-SPAXX
+              brokerage), or an honest "not reported yet" state for
+              institutions that publish investment data asynchronously. */}
+          {overview.accounts.length > 0 ? (
             <Card>
               <CardHeader>
                 <CardTitle className="text-sm font-medium text-muted-foreground">Holdings</CardTitle>
               </CardHeader>
               <CardContent className="space-y-5">
-                {holdingsByAccount.map((group) => {
+                {overview.accounts.map((account) => {
+                  const rows = rowsByAccount.get(account.accountId) ?? [];
+                  // Positions sum for the derived-cash line. Cross-currency
+                  // sums are impossible today (the Plaid mapper is USD-only
+                  // and manual holdings inherit the account currency); the
+                  // guard keeps it that way rather than assuming it.
+                  const sameCurrency = rows.every((r) => r.currency === account.currency);
+                  const positionsValueMinor =
+                    rows.length > 0
+                      ? rows
+                          .reduce((acc, r) => acc + BigInt(r.valueMinor || '0'), 0n)
+                          .toString()
+                      : null;
+                  const presentation = presentAccountHoldings({
+                    isManual: account.isManual,
+                    subtype: account.subtype,
+                    currency: account.currency,
+                    currentMinor: account.currentMinor,
+                    holdingsProviderCount: account.holdingsProviderCount,
+                    holdingsCashEquivalentCount: account.holdingsCashEquivalentCount,
+                    positionsValueMinor,
+                  });
+                  const derivedCashMinor =
+                    presentation.kind === 'positions' && sameCurrency
+                      ? presentation.derivedCashMinor
+                      : null;
                   // Sum per currency so a mixed-currency account never sums
-                  // apples to oranges under one (wrong) currency label.
+                  // apples to oranges under one (wrong) currency label. The
+                  // derived cash line is included: positions + cash then ties
+                  // back to the account balance (the authoritative number).
                   const totalsByCurrency = new Map<string, bigint>();
-                  for (const r of group.rows) {
+                  for (const r of rows) {
                     totalsByCurrency.set(
                       r.currency,
                       (totalsByCurrency.get(r.currency) ?? 0n) + BigInt(r.valueMinor || '0'),
                     );
                   }
+                  if (derivedCashMinor !== null) {
+                    totalsByCurrency.set(
+                      account.currency,
+                      (totalsByCurrency.get(account.currency) ?? 0n) + BigInt(derivedCashMinor),
+                    );
+                  }
                   const groupTotals = [...totalsByCurrency.entries()];
                   return (
-                    <div key={group.accountId} className="space-y-2">
-                      <p className="text-xs font-medium text-muted-foreground">{group.accountName}</p>
-                      {group.rows.map((row) => (
+                    <div key={account.accountId} className="space-y-2">
+                      <p className="text-xs font-medium text-muted-foreground">{account.name}</p>
+                      {presentation.kind === 'cash_only' ? (
+                        <div className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium">Cash (money market)</p>
+                            <p className="truncate text-xs text-muted-foreground">
+                              From the account balance — held in cash-equivalents, reported as
+                              cash rather than as positions
+                            </p>
+                          </div>
+                          <Money
+                            amountMinor={presentation.cashMinor}
+                            currency={account.currency}
+                            className="shrink-0 text-sm font-medium"
+                          />
+                        </div>
+                      ) : null}
+                      {presentation.kind === 'awaiting_provider' ? (
+                        <div className="rounded-lg border border-dashed px-3 py-3">
+                          <p className="text-sm font-medium">No positions reported yet</p>
+                          <p className="mt-0.5 text-xs text-muted-foreground">
+                            Balances are current. Some institutions publish holdings and
+                            investment activity asynchronously after linking — positions appear
+                            here once your institution makes them available.
+                          </p>
+                        </div>
+                      ) : null}
+                      {presentation.kind === 'manual_empty' ? (
+                        <div className="rounded-lg border border-dashed px-3 py-3">
+                          <p className="text-sm font-medium">No holdings added yet</p>
+                          <p className="mt-0.5 text-xs text-muted-foreground">
+                            Use the account&apos;s Holding button above to track positions — a
+                            breakdown of the balance, not a separate total.
+                          </p>
+                        </div>
+                      ) : null}
+                      {rows.map((row) => (
                         <div
                           key={row.holdingId}
                           className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2"
@@ -447,20 +523,41 @@ export default function InvestmentsPage() {
                           </div>
                         </div>
                       ))}
-                      <div className="space-y-1 border-t pt-2 text-sm">
-                        {groupTotals.map(([cur, total], idx) => (
-                          <div key={cur} className="flex items-center justify-between">
-                            <span className="text-muted-foreground">
-                              {idx === 0 ? 'Total' : ''}
-                            </span>
-                            <Money
-                              amountMinor={total.toString()}
-                              currency={cur}
-                              className="font-medium"
-                            />
+                      {/* Cash / money-market remainder alongside listed
+                          positions — DERIVED (balance − positions) and labeled
+                          as such (Law 9), shown only when the sync reported
+                          cash-equivalents or the account is a cash sweep. */}
+                      {derivedCashMinor !== null ? (
+                        <div className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium">Cash (money market)</p>
+                            <p className="truncate text-xs text-muted-foreground">
+                              Derived from the account balance minus listed positions
+                            </p>
                           </div>
-                        ))}
-                      </div>
+                          <Money
+                            amountMinor={derivedCashMinor}
+                            currency={account.currency}
+                            className="shrink-0 text-sm font-medium"
+                          />
+                        </div>
+                      ) : null}
+                      {rows.length > 0 ? (
+                        <div className="space-y-1 border-t pt-2 text-sm">
+                          {groupTotals.map(([cur, total], idx) => (
+                            <div key={cur} className="flex items-center justify-between">
+                              <span className="text-muted-foreground">
+                                {idx === 0 ? 'Total' : ''}
+                              </span>
+                              <Money
+                                amountMinor={total.toString()}
+                                currency={cur}
+                                className="font-medium"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })}

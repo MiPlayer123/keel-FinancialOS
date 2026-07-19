@@ -254,6 +254,16 @@ export type InvestmentAccountRow = {
   currentMinor: string;
   availableMinor: string | null;
   balanceAsOf: string | null;
+  /** Holdings-sync stats (investments-overview-v3): how many holdings the
+   *  provider reported for this account at the last holdings sync (BEFORE the
+   *  mapper's skips) and how many of those were skipped as cash-equivalent
+   *  (money market sweep). All null until a sync has captured them — null
+   *  means "unknown", never a fabricated 0 (Law 9). Lets the UI distinguish
+   *  an all-cash account from one whose institution hasn't published
+   *  positions yet. */
+  holdingsProviderCount: number | null;
+  holdingsCashEquivalentCount: number | null;
+  holdingsSyncedAt: string | null;
 };
 
 export type InvestmentHoldingRow = {
@@ -318,7 +328,16 @@ export async function fetchInvestmentsOverview(householdId: string): Promise<Inv
     householdId,
   });
   return {
-    accounts: Array.isArray(data.accounts) ? data.accounts : [],
+    // Normalize the v3 stat fields (an older server payload omits them):
+    // undefined → null so the UI's "unknown" branch is deterministic.
+    accounts: Array.isArray(data.accounts)
+      ? data.accounts.map((a) => ({
+          ...a,
+          holdingsProviderCount: a.holdingsProviderCount ?? null,
+          holdingsCashEquivalentCount: a.holdingsCashEquivalentCount ?? null,
+          holdingsSyncedAt: a.holdingsSyncedAt ?? null,
+        }))
+      : [],
     holdings: Array.isArray(data.holdings) ? data.holdings : [],
     allocation: Array.isArray(data.allocation) ? data.allocation : [],
     holdingsErrors: Array.isArray(data.holdingsErrors) ? data.holdingsErrors : [],
