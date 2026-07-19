@@ -46,6 +46,7 @@ import {
   type FinancialContextSnapshot,
 } from '../_shared/vendor/keel-domain.mjs';
 import { json, mapDbError, toSnakeKeys } from '../_shared/http.ts';
+import { decideStatementPromotion } from '../_shared/statement-sniff.ts';
 import { decryptToken, encryptToken, type EncryptedRecord } from '../_shared/credential-crypto.ts';
 import { currentKekVersion, getKek } from '../_shared/credential-kek.ts';
 import {
@@ -54,14 +55,51 @@ import {
   ProviderBudgetExhaustedError,
 } from '../_shared/plaid-client.ts';
 
-const DOCUMENT_MIME_ALLOWLIST = new Set([
+// Per-kind upload allowlists (statement ingestion SLICE 4 — [A9]). The
+// client-declared MIME is only a coarse gate at upload-url time; for
+// statements the AUTHORITATIVE check is the byte-level content sniff in
+// /documents/confirm-upload (Law 5 — a statement file may never be trusted to
+// describe itself). receipt is UNCHANGED (image + pdf). statement adds the
+// machine formats plus application/octet-stream (the empty MIME claim many
+// browsers send for .csv/.ofx/.qfx), which is accepted ONLY when the sniff
+// positively identifies csv/ofx/pdf.
+const RECEIPT_MIME_ALLOWLIST = new Set([
   'image/jpeg',
   'image/png',
   'image/webp',
   'application/pdf',
 ]);
+const STATEMENT_MIME_ALLOWLIST = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'application/pdf',
+  'text/csv',
+  'application/vnd.ms-excel',
+  'application/x-ofx',
+  'application/octet-stream',
+]);
+const documentMimeAllowlistFor = (kind: string): Set<string> =>
+  kind === 'statement' ? STATEMENT_MIME_ALLOWLIST : RECEIPT_MIME_ALLOWLIST;
 const DOCUMENT_MAX_BYTES = 10 * 1024 * 1024;
 const DOCUMENT_SIGNED_URL_TTL_S = 300;
+
+// Statement uploads land in `quarantine` first (INFRA.md §10) and are copied
+// into the canonical `statements` bucket only after confirm-upload sniffs +
+// validates the bytes. receipts continue to land directly in `receipts`.
+const quarantineBucketFor = (kind: string): 'quarantine' | 'receipts' =>
+  kind === 'statement' ? 'quarantine' : 'receipts';
+const canonicalBucketFor = (kind: string): 'statements' | 'receipts' =>
+  kind === 'statement' ? 'statements' : 'receipts';
+
+// Statement originals are potentially-hostile ingested files (Law 5). Even the
+// validated ones (a real PDF/CSV/OFX) must never be served INLINE — a browser
+// rendering a statement inline is an attack surface. Force a download so the
+// bytes are handed to the user as an opaque attachment, never executed in the
+// page. `download: true` makes Supabase mint a signed URL whose response sets
+// `Content-Disposition: attachment`. receipts keep inline preview (images).
+const forceAttachmentBucket = (bucket: string): boolean =>
+  bucket === 'statements' || bucket === 'quarantine';
 
 const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
@@ -2147,7 +2185,7 @@ export default {
         !kind.success ||
         !originalFilename ||
         !mimeType ||
-        !DOCUMENT_MIME_ALLOWLIST.has(mimeType)
+        !documentMimeAllowlistFor(kind.data).has(mimeType)
       ) {
         return json(400, {
           code: 'invalid_command',
@@ -2168,16 +2206,26 @@ export default {
       }
 
       const documentId = crypto.randomUUID();
-      const storageBucket = kind.data === 'receipt' ? 'receipts' : 'statements';
+      // Statement uploads land in `quarantine` first; receipts land directly in
+      // `receipts` (INFRA.md §10). The signed upload URL targets the QUARANTINE
+      // bucket for statements; confirm-upload sniffs the bytes and only then
+      // copies them immutably into the canonical `statements` bucket.
+      const uploadBucket = quarantineBucketFor(kind.data);
+      const canonicalBucket = canonicalBucketFor(kind.data);
       const storagePath = `${householdId.data}/${documentId}/${crypto.randomUUID()}`;
       const { data: signed, error: signError } = await ctx.supabaseAdmin.storage
-        .from(storageBucket)
+        .from(uploadBucket)
         .createSignedUploadUrl(storagePath);
       if (signError || !signed) return internalFailure();
 
       return json(200, {
         documentId,
-        storageBucket,
+        // `storageBucket` remains the CANONICAL bucket the caller should echo to
+        // confirm-upload (so the existing kind↔bucket contract holds). The
+        // upload itself goes to `uploadBucket` (quarantine for statements).
+        storageBucket: canonicalBucket,
+        uploadBucket,
+        canonicalBucket,
         storagePath,
         uploadUrl: signed.signedUrl,
         token: signed.token,
@@ -2246,10 +2294,12 @@ export default {
 
       // Postgres cannot reach Storage — download the object the browser just
       // uploaded and compute its real size/hash here, server-side, before any
-      // of it is trusted. The client-declared mimeType is checked but the
-      // byte size is the one Storage itself reports.
+      // of it is trusted (Law 5). For a statement the browser uploaded to the
+      // `quarantine` bucket; for a receipt it uploaded straight to `receipts`.
+      // Download from whichever it actually landed in.
+      const uploadBucket = quarantineBucketFor(kind.data);
       const { data: fileData, error: downloadError } = await ctx.supabaseAdmin.storage
-        .from(storageBucket)
+        .from(uploadBucket)
         .download(storagePath);
       if (downloadError || !fileData) {
         return json(404, { code: 'not_found', message: 'Uploaded object not found.', details: {} });
@@ -2261,23 +2311,73 @@ export default {
           details: {},
         });
       }
-      const mimeType = fileData.type || 'application/octet-stream';
-      if (!DOCUMENT_MIME_ALLOWLIST.has(mimeType)) {
+      const declaredMime = fileData.type || 'application/octet-stream';
+      const bytes = new Uint8Array(await fileData.arrayBuffer());
+      const contentSha256 = await sha256Hex(bytes);
+
+      // Content sniff + promote (Law 5, Law 9). We trust the BYTES, never the
+      // extension or client MIME. A statement that does not positively sniff to
+      // pdf/ofx/csv (or a matching image) stays in quarantine and is rejected;
+      // it is never copied to the canonical `statements` bucket and never
+      // served inline.
+      let mimeType = declaredMime;
+      if (kind.data === 'statement') {
+        const promotion = decideStatementPromotion(bytes, declaredMime);
+        if (!promotion.promote) {
+          // Hostile / unrecognized: leave the original inert in quarantine.
+          return json(422, {
+            code: 'invalid_command',
+            message: 'Statement file failed content validation.',
+            details: { reason: promotion.reason },
+          });
+        }
+        // Promote the EXACT bytes to the canonical bucket, immutably. The
+        // sniffed kind normalizes the stored MIME so downstream (Slice 5
+        // worker routing) reads a trustworthy type, not the client's claim.
+        mimeType =
+          promotion.sniffedKind === 'pdf'
+            ? 'application/pdf'
+            : promotion.sniffedKind === 'ofx'
+              ? 'application/x-ofx'
+              : promotion.sniffedKind === 'csv'
+                ? 'text/csv'
+                : declaredMime;
+        const { error: promoteError } = await ctx.supabaseAdmin.storage
+          .from('statements')
+          .upload(storagePath, bytes, {
+            contentType: mimeType,
+            // Immutable original (Law 9): a statement object is written once.
+            // upsert:false makes a re-confirm of the same path a Storage
+            // conflict rather than an overwrite; the RPC below is idempotent on
+            // (household, document_id) so a legitimate retry still succeeds
+            // even when the object already exists (handled below).
+            upsert: false,
+          });
+        if (promoteError) {
+          // Duplicate object (idempotent retry) is fine — the canonical bytes
+          // are already there. Any other Storage error is a real failure.
+          const alreadyExists =
+            typeof (promoteError as { message?: string }).message === 'string' &&
+            /exist|duplicate|conflict|resource already/i.test(
+              (promoteError as { message?: string }).message ?? '',
+            );
+          if (!alreadyExists) return internalFailure();
+        }
+      } else if (!RECEIPT_MIME_ALLOWLIST.has(mimeType)) {
         return json(422, {
           code: 'invalid_command',
           message: `Unsupported file type: ${mimeType}`,
           details: {},
         });
       }
-      const bytes = new Uint8Array(await fileData.arrayBuffer());
-      const contentSha256 = await sha256Hex(bytes);
 
       const { data, error } = await ctx.supabaseAdmin.rpc('keel_documents_confirm_upload', {
         p_household_id: householdId.data,
         p_entity_id: entityId.data,
         p_document_id: documentId.data,
         p_kind: kind.data,
-        p_storage_bucket: storageBucket,
+        // Record the CANONICAL bucket (statements/receipts) — never quarantine.
+        p_storage_bucket: canonicalBucketFor(kind.data),
         p_storage_path: storagePath,
         p_content_sha256: contentSha256,
         p_mime_type: mimeType,
@@ -2347,7 +2447,11 @@ export default {
           }
           const { data: signed } = await ctx.supabaseAdmin.storage
             .from(bucket)
-            .createSignedUrl(objectPath, DOCUMENT_SIGNED_URL_TTL_S);
+            .createSignedUrl(
+              objectPath,
+              DOCUMENT_SIGNED_URL_TTL_S,
+              forceAttachmentBucket(bucket) ? { download: true } : undefined,
+            );
           return { ...row, url: signed?.signedUrl ?? null };
         }),
       );
@@ -2386,7 +2490,11 @@ export default {
           }
           const { data: signed } = await ctx.supabaseAdmin.storage
             .from(bucket)
-            .createSignedUrl(objectPath, DOCUMENT_SIGNED_URL_TTL_S);
+            .createSignedUrl(
+              objectPath,
+              DOCUMENT_SIGNED_URL_TTL_S,
+              forceAttachmentBucket(bucket) ? { download: true } : undefined,
+            );
           return { ...row, url: signed?.signedUrl ?? null };
         }),
       );

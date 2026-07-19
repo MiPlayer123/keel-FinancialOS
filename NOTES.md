@@ -71,6 +71,65 @@ Slice 6's confirm-upload publishes it).
   The end-to-end enqueue→worker path is proven by a manual-enqueue integration
   path (the dispatch branch + idempotent handler); sweeper DB behaviour applied
   by the orchestrator after review.
+## 2026-07-19 — SLICE 4 (statement-ingestion-v2 §6 [A9]): Storage widen + quarantine + per-kind content sniff
+
+Migration `20260720200000_statement_storage_quarantine.sql` (NOT applied to live — orchestrator
+applies after adversarial review). Cites CLAUDE.md Law 5 (all ingested statement bytes are
+data-tier; the file may never be trusted to describe itself — no extension/client-MIME trust), Law 9
+(source preservation — the promoted original is written once, immutably, via `document_versions` +
+the existing `keel_forbid_mutation` discipline, untouched), Law 12 (secret boundary — the sniffer
+never logs or echoes file bytes; reasons are short machine codes), INFRA.md §10 (private buckets;
+quarantine → validate → immutable version).
+
+What changed:
+- **Bucket allowlist widened** (`statements`): + `text/csv`, `application/vnd.ms-excel`,
+  `application/x-ofx`, `application/octet-stream`. Idempotent `update` (array literal, converges on
+  re-apply). The widened list only lets bytes LAND; it is NOT the trust boundary.
+- **New private `quarantine` bucket** (INFRA.md §10), same 10MB limit + same widened allowlist.
+  Guarded `insert … on conflict do update` (converges on re-apply).
+- **Per-kind allowlist** in `api/index.ts`: `RECEIPT_MIME_ALLOWLIST` (unchanged: jpeg/png/webp/pdf)
+  vs `STATEMENT_MIME_ALLOWLIST` (adds csv/ms-excel/x-ofx/octet-stream). `DOCUMENT_MIME_ALLOWLIST`
+  replaced by `documentMimeAllowlistFor(kind)`.
+- **Content sniffer** `supabase/functions/_shared/statement-sniff.ts` (pure; bytes in, verdict out;
+  no IO/throw): PDF via `%PDF` magic; OFX/QFX via `OFXHEADER`/`<OFX>`/`<?OFX` marker in a bounded
+  printable-text prefix; CSV via a printable-text + delimited-tabular structural probe (comma /
+  semicolon / tab / pipe). `decideStatementPromotion(bytes, declaredMime)` is the confirm-upload
+  boundary: (a) a file that sniffs to none of pdf/ofx/csv is REJECTED; (b) `application/octet-stream`
+  promotes ONLY on a positive sniff (never the MIME claim); (c) a concrete MIME that DISAGREES with
+  the sniffed kind is rejected (trust the bytes); (d) images require matching image magic so a
+  `.png`-named PDF/executable cannot ride the image path. Coarse size floor/ceiling enforced here;
+  the full row/field/page/token limits live in the Slice 1/5 parser+worker.
+- **Quarantine → promote flow**: `/documents/upload-url` mints the signed upload URL against
+  `quarantine` for statements (receipts still upload straight to `receipts`), and returns both the
+  `uploadBucket` and the `canonicalBucket`; the echoed `storageBucket` stays the canonical value so
+  the existing kind↔bucket contract is unchanged. `/documents/confirm-upload` downloads from
+  quarantine, sniffs, and only on a PASS copies the EXACT bytes into `statements`
+  (`upsert:false` = write-once; a duplicate-object error on legitimate idempotent retry is
+  tolerated because the RPC is idempotent on (household, document_id)). A reject leaves the inert
+  original in quarantine and returns 422 — it is never promoted, never recorded as canonical.
+- **Never inline**: `/documents/list` + `/receipts/inbox` mint statement (and quarantine) signed
+  read URLs with `{ download: true }` → `Content-Disposition: attachment`. A hostile/validated
+  statement original is handed to the user as an opaque download, never rendered in the page.
+
+**Deviation / simplification (justified):** INFRA §10 describes the type/size validation happening in
+a *worker* (step 3) after the file enters quarantine (step 2). This slice performs the sniff+validate
+synchronously in `confirm-upload` (the edge function already downloads the bytes there to compute the
+content hash — the object is in hand, so a second async hop would only add a window in which an
+unvalidated object sits promotable). The KEY property INFRA §10 protects — an unvalidated/hostile file
+is never treated as canonical and never served inline — holds: nothing is copied to `statements`
+until the sniff passes, and originals are download-only. The Slice 5 worker still owns the *parsing*
+limits (rows/fields/pages/tokens); this boundary owns only reject-obviously-bad + promote.
+`connection_credentials` soft-delete rule is untouched (no deletes here); rejected quarantine objects
+are left inert (a later janitor can age them out — flagged for a future slice, not this one).
+
+Tests: `supabase/functions/_shared/statement-sniff.test.ts` — 23 Deno tests, all pass. PDF (incl.
+truncated-but-past-floor), OFX 1.x SGML + 2.x XML, comma/semicolon/header-only CSV positives; empty,
+truncated, ELF/MZ executables, free prose, `.csv`-named PDF, `.csv`-named executable, `.png`-named
+PDF negatives; octet-stream passes ONLY when sniffed; MIME-content mismatch and out-of-allowlist MIME
+rejected. Edge-function `build-functions.mjs` / full `deno check` could not run in this isolated
+worktree (no `node_modules` materialized — pre-existing env limitation, missing `@noble/hashes` and
+unbuilt vendor bundle affect main too); the sniffer module + its tests `deno check` clean and the
+api/index.ts changes introduce no new syntax and only local-file imports + existing SDK options.
 
 ---
 
