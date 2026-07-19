@@ -5197,3 +5197,32 @@ Migration 20260719090000_recurring_paycheck_classification.sql (applied live, ve
   (needs local stack to run — validated the assertions' SQL against live, rolled back).
 - NOT deployed: edge functions (vendor bundle regenerated locally). Orchestrator to
   deploy: node scripts/build-functions.mjs && supabase functions deploy api worker.
+
+## 2026-07-19 — GAP-2: recurring outflow classifier maps the full PFC taxonomy
+Migration 20260719210000_recurring_outflow_bucket_taxonomy.sql (NOT applied — PR #97,
+orchestrator applies after review).
+- keel_recurring_classification v4: the outflow branch mapped only 7 PFC primaries and
+  fell through `else 'subscription'` — with a null/unmapped dominant PFC everything
+  claimed "subscription" with zero evidence (BC-v2.1 §9.1 explicit ownership). Live
+  proof (read-only): recurring_occurrences.matched_txn_id is null household-wide, so
+  ALL 7 founder outflow series (incl. a rideshare P2P and a grocery store) hit the
+  fall-through. v4 maps every Plaid primary deterministically (Law 1): BANK_FEES joins
+  'bill'; TRANSPORTATION/FOOD_AND_DRINK/GENERAL_MERCHANDISE/PERSONAL_CARE/TRAVEL/
+  HOME_IMPROVEMENT + anomalous (INCOME, LOAN_DISBURSEMENTS) + OTHER/null/unknown route
+  to a new neutral 'recurring' bucket (cadence evidenced, kind not). formulaVersion ->
+  recurring-classification-v4-outflow-buckets (Law 9).
+- UI: RecurringBucket gains 'recurring'; Recurring page group + `?? 'recurring'`
+  fallback; outflow badges on Recurring/Review pages show the bucket (neutral
+  secondary, Law 8) instead of the sign. lib/recurring-bucket.ts is the executable TS
+  mirror of the SQL CASE (same pattern as stepScheduleDue) with fixture tests.
+- pgTAP 030 extended (TRANSPORTATION->recurring, null-PFC->recurring, ENTERTAINMENT->
+  subscription, LOAN_PAYMENTS->bill; formulaVersion assert bumped to v4). Needs local
+  stack to run; this task was live-read-only, so the CASE was validated on live via a
+  pure VALUES-driven SELECT (all 21 fixtures exact) + a SELECT-only before/after
+  simulation (7 outflow series subscription->recurring; inflows byte-identical).
+- Deviation note: the confirmed music-streaming series also moves to 'Recurring'
+  (its dominant PFC is null too) — honest per no-evidence-no-claim; it regains
+  "Subscription" once occurrence matching supplies ENTERTAINMENT.
+- Found while validating (separate gap, not fixed here): zero matched occurrences
+  household-wide means the classifier runs evidence-blind for every series —
+  occurrence->txn matching needs its own follow-up.

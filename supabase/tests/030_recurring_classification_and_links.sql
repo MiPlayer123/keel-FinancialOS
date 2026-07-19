@@ -86,7 +86,7 @@ select is(
   'excluded','a P2P (TRANSFER_IN) inflow series is excluded, not shown as income');
 select is(
   (public.keel_recurring_classification('00000000-0000-4000-8000-00000000a001')->>'formulaVersion'),
-  'recurring-classification-v3-paycheck','classification formula version bumped to v3 (paycheck)');
+  'recurring-classification-v4-outflow-buckets','classification formula version bumped to v4 (outflow buckets)');
 
 -- 20260719090000: PAYCHECK vs plain-INCOME split. A non-payroll inflow series
 -- (a money-market dividend — no payroll token, carries a 'dividend' term) stays
@@ -107,6 +107,72 @@ set local role authenticated; set local request.jwt.claims='{"sub":"00000000-000
 select is(
   (select r->>'bucket' from jsonb_array_elements(public.keel_recurring_classification('00000000-0000-4000-8000-00000000a001')->'rows') r where r->>'seriesId'='d9000000-0000-4000-8000-000000000404'),
   'income','a dividend inflow (no payroll token) stays plain income, not paycheck');
+
+-- ---------------------------------------------------------------------------
+-- 20260719210000 (GAP-2): full outflow PFC taxonomy + neutral 'recurring'.
+-- The old classifier fell through `else 'subscription'` — a recurring rideshare
+-- (TRANSPORTATION) or a series with NO matched occurrences (null dominant PFC)
+-- wore the subscription label with zero evidence. Fixtures (all fictional):
+--   …405 outflow, matched txn PFC TRANSPORTATION  -> 'recurring'
+--   …406 outflow, matched txn PFC ENTERTAINMENT   -> 'subscription'
+--   …407 outflow, matched txn PFC LOAN_PAYMENTS   -> 'bill'
+--   …408 outflow, NO matched txn (null PFC)       -> 'recurring'
+-- (RENT_AND_UTILITIES -> 'utility' is the …401 fixture above.)
+-- ---------------------------------------------------------------------------
+reset role;
+insert into public.canonical_transactions(id,household_id,entity_id,account_id,status,source,description,effective_date,economic_event_key) values
+('d9000000-0000-4000-8000-000000000004','00000000-0000-4000-8000-00000000a001','00000000-0000-4000-8000-00000000a101','00000000-0000-4000-8000-00000000a401','posted','sync','City Rideshare','2026-05-12','pgtap:f028:ride'),
+('d9000000-0000-4000-8000-000000000005','00000000-0000-4000-8000-00000000a001','00000000-0000-4000-8000-00000000a101','00000000-0000-4000-8000-00000000a401','posted','sync','StreamFlix','2026-05-13','pgtap:f028:stream'),
+('d9000000-0000-4000-8000-000000000006','00000000-0000-4000-8000-00000000a001','00000000-0000-4000-8000-00000000a101','00000000-0000-4000-8000-00000000a401','posted','sync','AutoLoan Servicing','2026-05-14','pgtap:f028:loan');
+insert into public.normalized_source_records(id,raw_event_id,household_id,account_id,provider_transaction_id,amount_minor,currency,effective_date,description,pending,pfc_primary) values
+('d9000000-0000-4000-8000-000000000204','d9000000-0000-4000-8000-000000000101','00000000-0000-4000-8000-00000000a001','00000000-0000-4000-8000-00000000a401','pgtap-f028-ride-txn',-1850,'USD','2026-05-12','City Rideshare',false,'TRANSPORTATION'),
+('d9000000-0000-4000-8000-000000000205','d9000000-0000-4000-8000-000000000101','00000000-0000-4000-8000-00000000a001','00000000-0000-4000-8000-00000000a401','pgtap-f028-stream-txn',-1299,'USD','2026-05-13','StreamFlix',false,'ENTERTAINMENT'),
+('d9000000-0000-4000-8000-000000000206','d9000000-0000-4000-8000-000000000101','00000000-0000-4000-8000-00000000a001','00000000-0000-4000-8000-00000000a401','pgtap-f028-loan-txn',-35000,'USD','2026-05-14','AutoLoan Servicing',false,'LOAN_PAYMENTS');
+insert into public.transaction_source_links(canonical_transaction_id,normalized_source_record_id) values
+('d9000000-0000-4000-8000-000000000004','d9000000-0000-4000-8000-000000000204'),
+('d9000000-0000-4000-8000-000000000005','d9000000-0000-4000-8000-000000000205'),
+('d9000000-0000-4000-8000-000000000006','d9000000-0000-4000-8000-000000000206');
+insert into public.recurring_series(id,household_id,series_key,account_id,ledger_account_id,counterparty_key,currency,sign,status,current_candidate_version_id) values
+('d9000000-0000-4000-8000-000000000405','00000000-0000-4000-8000-00000000a001','pgtap-gap2-ride','00000000-0000-4000-8000-00000000a401','00000000-0000-4000-8000-00000000a301','City Rideshare','USD','outflow','confirmed',null),
+('d9000000-0000-4000-8000-000000000406','00000000-0000-4000-8000-00000000a001','pgtap-gap2-stream','00000000-0000-4000-8000-00000000a401','00000000-0000-4000-8000-00000000a301','StreamFlix','USD','outflow','confirmed',null),
+('d9000000-0000-4000-8000-000000000407','00000000-0000-4000-8000-00000000a001','pgtap-gap2-loan','00000000-0000-4000-8000-00000000a401','00000000-0000-4000-8000-00000000a301','AutoLoan Servicing','USD','outflow','confirmed',null),
+('d9000000-0000-4000-8000-000000000408','00000000-0000-4000-8000-00000000a001','pgtap-gap2-nopfc','00000000-0000-4000-8000-00000000a401','00000000-0000-4000-8000-00000000a301','Corner Grocer','USD','outflow','suggested',null);
+insert into public.recurring_candidate_versions(id,household_id,series_id,detector_run_id,candidate_hash,input_fingerprint,detector_version,confidence_version,normalizer_version,as_of,score_bps,evidence,candidate) values
+('d9000000-0000-4000-8000-000000000505','00000000-0000-4000-8000-00000000a001','d9000000-0000-4000-8000-000000000405','d9000000-0000-4000-8000-000000000301',repeat('1',64),repeat('1',32),'v1','v1','v1','2026-05-20',9000,
+  jsonb_build_array(jsonb_build_object('x',1),jsonb_build_object('x',1),jsonb_build_object('x',1)),'{}'::jsonb),
+('d9000000-0000-4000-8000-000000000506','00000000-0000-4000-8000-00000000a001','d9000000-0000-4000-8000-000000000406','d9000000-0000-4000-8000-000000000301',repeat('2',64),repeat('2',32),'v1','v1','v1','2026-05-20',9000,
+  jsonb_build_array(jsonb_build_object('x',1),jsonb_build_object('x',1),jsonb_build_object('x',1)),'{}'::jsonb),
+('d9000000-0000-4000-8000-000000000507','00000000-0000-4000-8000-00000000a001','d9000000-0000-4000-8000-000000000407','d9000000-0000-4000-8000-000000000301',repeat('3',64),repeat('3',32),'v1','v1','v1','2026-05-20',9000,
+  jsonb_build_array(jsonb_build_object('x',1),jsonb_build_object('x',1),jsonb_build_object('x',1)),'{}'::jsonb),
+('d9000000-0000-4000-8000-000000000508','00000000-0000-4000-8000-00000000a001','d9000000-0000-4000-8000-000000000408','d9000000-0000-4000-8000-000000000301',repeat('5',64),repeat('5',32),'v1','v1','v1','2026-05-20',9000,
+  jsonb_build_array(jsonb_build_object('x',1),jsonb_build_object('x',1),jsonb_build_object('x',1)),'{}'::jsonb);
+update public.recurring_series set current_candidate_version_id='d9000000-0000-4000-8000-000000000505' where id='d9000000-0000-4000-8000-000000000405';
+update public.recurring_series set current_candidate_version_id='d9000000-0000-4000-8000-000000000506' where id='d9000000-0000-4000-8000-000000000406';
+update public.recurring_series set current_candidate_version_id='d9000000-0000-4000-8000-000000000507' where id='d9000000-0000-4000-8000-000000000407';
+update public.recurring_series set current_candidate_version_id='d9000000-0000-4000-8000-000000000508' where id='d9000000-0000-4000-8000-000000000408';
+insert into public.recurring_occurrences(household_id,id,series_id,candidate_version_id,occurrence_key,expected_date,expected_amount_minor,currency,amount_kind,status,matched_txn_id,score_bps,evidence,input_fingerprint,detector_version,confidence_version,as_of) values
+('00000000-0000-4000-8000-00000000a001','d9000000-0000-4000-8000-000000000605','d9000000-0000-4000-8000-000000000405','d9000000-0000-4000-8000-000000000505',repeat('1',24),'2026-05-12',1850,'USD','fixed','matched','d9000000-0000-4000-8000-000000000004',9000,
+  jsonb_build_array(jsonb_build_object('x',1),jsonb_build_object('x',1),jsonb_build_object('x',1)),repeat('1',24),'v1','v1','2026-05-20'),
+('00000000-0000-4000-8000-00000000a001','d9000000-0000-4000-8000-000000000606','d9000000-0000-4000-8000-000000000406','d9000000-0000-4000-8000-000000000506',repeat('2',24),'2026-05-13',1299,'USD','fixed','matched','d9000000-0000-4000-8000-000000000005',9000,
+  jsonb_build_array(jsonb_build_object('x',1),jsonb_build_object('x',1),jsonb_build_object('x',1)),repeat('2',24),'v1','v1','2026-05-20'),
+('00000000-0000-4000-8000-00000000a001','d9000000-0000-4000-8000-000000000607','d9000000-0000-4000-8000-000000000407','d9000000-0000-4000-8000-000000000507',repeat('3',24),'2026-05-14',35000,'USD','fixed','matched','d9000000-0000-4000-8000-000000000006',9000,
+  jsonb_build_array(jsonb_build_object('x',1),jsonb_build_object('x',1),jsonb_build_object('x',1)),repeat('3',24),'v1','v1','2026-05-20'),
+-- …408: expected only, matched_txn_id null — the classifier sees NO PFC at all.
+('00000000-0000-4000-8000-00000000a001','d9000000-0000-4000-8000-000000000608','d9000000-0000-4000-8000-000000000408','d9000000-0000-4000-8000-000000000508',repeat('5',24),'2026-06-05',4200,'USD','fixed','expected',null,9000,
+  jsonb_build_array(jsonb_build_object('x',1),jsonb_build_object('x',1),jsonb_build_object('x',1)),repeat('5',24),'v1','v1','2026-05-20');
+set local role authenticated; set local request.jwt.claims='{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
+select is(
+  (select r->>'bucket' from jsonb_array_elements(public.keel_recurring_classification('00000000-0000-4000-8000-00000000a001')->'rows') r where r->>'seriesId'='d9000000-0000-4000-8000-000000000405'),
+  'recurring','a recurring rideshare (TRANSPORTATION) is a generic recurring expense, not a subscription');
+select is(
+  (select r->>'bucket' from jsonb_array_elements(public.keel_recurring_classification('00000000-0000-4000-8000-00000000a001')->'rows') r where r->>'seriesId'='d9000000-0000-4000-8000-000000000406'),
+  'subscription','ENTERTAINMENT still classifies as subscription');
+select is(
+  (select r->>'bucket' from jsonb_array_elements(public.keel_recurring_classification('00000000-0000-4000-8000-00000000a001')->'rows') r where r->>'seriesId'='d9000000-0000-4000-8000-000000000407'),
+  'bill','LOAN_PAYMENTS still classifies as bill');
+select is(
+  (select r->>'bucket' from jsonb_array_elements(public.keel_recurring_classification('00000000-0000-4000-8000-00000000a001')->'rows') r where r->>'seriesId'='d9000000-0000-4000-8000-000000000408'),
+  'recurring','an outflow with no matched occurrences (null dominant PFC) is recurring, never claimed as subscription');
 
 -- Decline (dismiss) one detected-paycheck occurrence: soft-state, idempotent,
 -- and it does NOT mute the series (the paycheck series itself is untouched).
