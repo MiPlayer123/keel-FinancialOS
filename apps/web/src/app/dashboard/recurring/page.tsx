@@ -71,7 +71,7 @@ export default function RecurringPage() {
     <>
       <PageHeader
         title="Recurring"
-        description="Subscriptions and bills KEEL has detected — confirm, pause or stop tracking them."
+        description="Subscriptions, bills, and recurring income KEEL has detected — confirm, pause or stop tracking them."
       />
       <div className="p-6">
         <RecurringBody />
@@ -268,65 +268,162 @@ function RecurringBody() {
         ledgerKinds={ledgerKinds}
       />
 
-      {suggested.length > 0 ? (
-        <SeriesSection
-          title="Suggested"
-          hint="Detected from your transaction history — nothing is tracked until you confirm."
-          rows={suggested}
-          bucketBySeries={bucketBySeries}
-          linkBySeries={linkBySeries}
-          schedules={schedules}
-          linkedScheduleIds={linkedScheduleIds}
-          accountName={accountName}
-          householdId={householdId}
-          userId={userId}
-          onDone={() => void refetch()}
-          onLinksChanged={reloadLinks}
-        />
-      ) : null}
+      {/* B: two clearly separated lanes — outflow subscriptions/bills, and
+          recurring income (paychecks etc.). Non-paycheck inflows (cashback,
+          Venmo) are suppressed at detection (C) and never reach either lane. */}
+      <RecurringLanes
+        lane="expense"
+        heading="Subscriptions & bills"
+        suggested={suggested}
+        active={active}
+        paused={paused}
+        bucketBySeries={bucketBySeries}
+        linkBySeries={linkBySeries}
+        schedules={schedules}
+        linkedScheduleIds={linkedScheduleIds}
+        accountName={accountName}
+        householdId={householdId}
+        userId={userId}
+        onDone={() => void refetch()}
+        onLinksChanged={reloadLinks}
+      />
 
-      {active.length > 0 ? (
-        <SeriesSection
-          title="Active"
-          rows={active}
-          bucketBySeries={bucketBySeries}
-          linkBySeries={linkBySeries}
-          schedules={schedules}
-          linkedScheduleIds={linkedScheduleIds}
-          accountName={accountName}
-          householdId={householdId}
-          userId={userId}
-          onDone={() => void refetch()}
-          onLinksChanged={reloadLinks}
-        />
-      ) : null}
+      <RecurringLanes
+        lane="income"
+        heading="Recurring income"
+        suggested={suggested}
+        active={active}
+        paused={paused}
+        bucketBySeries={bucketBySeries}
+        linkBySeries={linkBySeries}
+        schedules={schedules}
+        linkedScheduleIds={linkedScheduleIds}
+        accountName={accountName}
+        householdId={householdId}
+        userId={userId}
+        onDone={() => void refetch()}
+        onLinksChanged={reloadLinks}
+      />
+    </div>
+  );
+}
 
-      {paused.length > 0 ? (
-        <SeriesSection
-          title="Paused"
-          rows={paused}
-          bucketBySeries={bucketBySeries}
-          linkBySeries={linkBySeries}
-          schedules={schedules}
-          linkedScheduleIds={linkedScheduleIds}
-          accountName={accountName}
-          householdId={householdId}
-          userId={userId}
-          onDone={() => void refetch()}
-          onLinksChanged={reloadLinks}
-        />
+// B: one lane (expense or income) rendered across the three statuses. A lane with
+// no series in it renders nothing (its heading never appears empty).
+function RecurringLanes({
+  lane,
+  heading,
+  suggested,
+  active,
+  paused,
+  bucketBySeries,
+  linkBySeries,
+  schedules,
+  linkedScheduleIds,
+  accountName,
+  householdId,
+  userId,
+  onDone,
+  onLinksChanged,
+}: {
+  lane: 'expense' | 'income';
+  heading: string;
+  suggested: RecurringSeriesRow[];
+  active: RecurringSeriesRow[];
+  paused: RecurringSeriesRow[];
+  bucketBySeries: Map<string, RecurringBucket>;
+  linkBySeries: Map<string, RecurringScheduleLink>;
+  schedules: ScheduleRow[];
+  linkedScheduleIds: Set<string>;
+  accountName: (id: string) => string;
+  householdId: string;
+  userId: string | null;
+  onDone: () => void;
+  onLinksChanged: () => void;
+}) {
+  const inLane = (rows: RecurringSeriesRow[]) =>
+    rows.filter((s) =>
+      isExcludedSeries(s, bucketBySeries)
+        ? false
+        : lane === 'income'
+          ? isIncomeSeries(s, bucketBySeries)
+          : !isIncomeSeries(s, bucketBySeries),
+    );
+  const laneSuggested = inLane(suggested);
+  const laneActive = inLane(active);
+  const lanePaused = inLane(paused);
+  if (laneSuggested.length === 0 && laneActive.length === 0 && lanePaused.length === 0) {
+    return null;
+  }
+
+  const suggestHint =
+    lane === 'income'
+      ? 'Detected recurring income (paychecks, transfers in) — confirm to track it.'
+      : 'Detected from your transaction history — nothing is tracked until you confirm.';
+
+  const shared = {
+    bucketBySeries,
+    linkBySeries,
+    schedules,
+    linkedScheduleIds,
+    accountName,
+    householdId,
+    userId,
+    onDone,
+    onLinksChanged,
+    lane,
+  } as const;
+
+  return (
+    <div className="space-y-6">
+      <h2 className="text-base font-semibold">{heading}</h2>
+      {laneSuggested.length > 0 ? (
+        <SeriesSection title="Suggested" hint={suggestHint} rows={laneSuggested} {...shared} />
+      ) : null}
+      {laneActive.length > 0 ? (
+        <SeriesSection title="Active" rows={laneActive} {...shared} />
+      ) : null}
+      {lanePaused.length > 0 ? (
+        <SeriesSection title="Paused" rows={lanePaused} {...shared} />
       ) : null}
     </div>
   );
 }
 
-const BUCKET_ORDER: RecurringBucket[] = ['income', 'bill', 'utility', 'subscription'];
+// Outflow buckets only — the "Subscriptions & Bills" surface. Income is a
+// separate lane (see B, docs/RECURRING-RESEARCH.md): paychecks and other
+// recurring inflows are not subscriptions and must not sit in this list.
+const EXPENSE_BUCKET_ORDER: RecurringBucket[] = ['bill', 'utility', 'subscription'];
 const BUCKET_LABELS: Record<RecurringBucket, string> = {
   income: 'Income',
   bill: 'Bills',
   utility: 'Utilities',
   subscription: 'Subscriptions',
+  excluded: 'Excluded',
 };
+
+// C: a series classified 'excluded' (personal P2P transfer) is offered on
+// neither lane — it is not a subscription/bill and not income.
+function isExcludedSeries(
+  s: RecurringSeriesRow,
+  bucketBySeries: Map<string, RecurringBucket>,
+): boolean {
+  return bucketBySeries.get(s.seriesId) === 'excluded';
+}
+
+// B: a series is "income" when its classification bucket is income, or (for
+// legacy/unclassified candidates) when its sign is inflow. Everything else is an
+// outflow subscription/bill. Cashback/Venmo inflows are suppressed at detection
+// now (C), so this lane holds genuine recurring income (paychecks, transfers in).
+function isIncomeSeries(
+  s: RecurringSeriesRow,
+  bucketBySeries: Map<string, RecurringBucket>,
+): boolean {
+  if (isExcludedSeries(s, bucketBySeries)) return false;
+  const bucket = bucketBySeries.get(s.seriesId);
+  if (bucket) return bucket === 'income';
+  return s.sign === 'inflow';
+}
 
 function SeriesSection({
   title,
@@ -341,6 +438,9 @@ function SeriesSection({
   userId,
   onDone,
   onLinksChanged,
+  // B: when 'income', render inflow series under a single Income lane (no
+  // subscription sub-buckets); when 'expense', render only outflow buckets.
+  lane,
 }: {
   title: string;
   hint?: string;
@@ -354,23 +454,38 @@ function SeriesSection({
   userId: string | null;
   onDone: () => void;
   onLinksChanged: () => void;
+  lane: 'expense' | 'income';
 }) {
-  // F-028: group rows by classification bucket (income/bill/utility/subscription).
-  const groups = useMemo(() => {
+  // Group by classification bucket, but only within this lane. Income rows never
+  // appear in the expense lane and vice versa.
+  const groups = useMemo<{ bucket: RecurringBucket; rows: RecurringSeriesRow[] }[]>(() => {
+    const laneRows = rows.filter((s) =>
+      isExcludedSeries(s, bucketBySeries)
+        ? false
+        : lane === 'income'
+          ? isIncomeSeries(s, bucketBySeries)
+          : !isIncomeSeries(s, bucketBySeries),
+    );
+    if (lane === 'income') {
+      // One flat Income group — no subscription sub-headings on the income lane.
+      return laneRows.length > 0 ? [{ bucket: 'income', rows: laneRows }] : [];
+    }
     const byBucket = new Map<RecurringBucket, RecurringSeriesRow[]>();
-    for (const s of rows) {
-      const bucket = bucketBySeries.get(s.seriesId) ?? (s.sign === 'inflow' ? 'income' : 'subscription');
+    for (const s of laneRows) {
+      const bucket = bucketBySeries.get(s.seriesId) ?? 'subscription';
       const list = byBucket.get(bucket) ?? [];
       list.push(s);
       byBucket.set(bucket, list);
     }
-    return BUCKET_ORDER.filter((b) => byBucket.has(b)).map((b) => ({
+    return EXPENSE_BUCKET_ORDER.filter((b) => byBucket.has(b)).map((b) => ({
       bucket: b,
       rows: byBucket.get(b) ?? [],
     }));
-  }, [rows, bucketBySeries]);
+  }, [rows, bucketBySeries, lane]);
 
-  const showBucketHeadings = groups.length > 1;
+  if (groups.length === 0) return null;
+
+  const showBucketHeadings = lane === 'expense' && groups.length > 1;
 
   return (
     <section className="space-y-3">

@@ -57,6 +57,34 @@ select is(
   (select r->>'bucket' from jsonb_array_elements(public.keel_recurring_classification('00000000-0000-4000-8000-00000000a001')->'rows') r where r->>'seriesId'='d9000000-0000-4000-8000-000000000402'),
   'income','inflow series classifies as income');
 
+-- C (migration 20260719010000): a personal P2P inflow series whose matched
+-- transaction carries Plaid TRANSFER_IN classifies as 'excluded' — NOT income —
+-- so the Recurring page offers it on neither lane. Same shape as the utility
+-- fixture, a fresh '…403/203/603' set carrying pfc_primary = TRANSFER_IN.
+reset role;
+insert into public.canonical_transactions(id,household_id,entity_id,account_id,status,source,description,effective_date,economic_event_key) values
+('d9000000-0000-4000-8000-000000000003','00000000-0000-4000-8000-00000000a001','00000000-0000-4000-8000-00000000a101','00000000-0000-4000-8000-00000000a401','posted','sync','Venmo payment from Casey','2026-05-10','pgtap:f028:p2p');
+insert into public.normalized_source_records(id,raw_event_id,household_id,account_id,provider_transaction_id,amount_minor,currency,effective_date,description,pending,pfc_primary) values
+('d9000000-0000-4000-8000-000000000203','d9000000-0000-4000-8000-000000000101','00000000-0000-4000-8000-00000000a001','00000000-0000-4000-8000-00000000a401','pgtap-f028-p2p-txn',5000,'USD','2026-05-10','Venmo payment from Casey',false,'TRANSFER_IN');
+insert into public.transaction_source_links(canonical_transaction_id,normalized_source_record_id) values
+('d9000000-0000-4000-8000-000000000003','d9000000-0000-4000-8000-000000000203');
+insert into public.recurring_series(id,household_id,series_key,account_id,ledger_account_id,counterparty_key,currency,sign,status,current_candidate_version_id) values
+('d9000000-0000-4000-8000-000000000403','00000000-0000-4000-8000-00000000a001','pgtap-f028-p2p','00000000-0000-4000-8000-00000000a401','00000000-0000-4000-8000-00000000a301','Venmo payment from casey','USD','inflow','confirmed',null);
+insert into public.recurring_candidate_versions(id,household_id,series_id,detector_run_id,candidate_hash,input_fingerprint,detector_version,confidence_version,normalizer_version,as_of,score_bps,evidence,candidate) values
+('d9000000-0000-4000-8000-000000000503','00000000-0000-4000-8000-00000000a001','d9000000-0000-4000-8000-000000000403','d9000000-0000-4000-8000-000000000301',repeat('9',64),repeat('7',32),'v1','v1','v1','2026-05-20',9000,
+  jsonb_build_array(jsonb_build_object('x',1),jsonb_build_object('x',1),jsonb_build_object('x',1)),'{}'::jsonb);
+update public.recurring_series set current_candidate_version_id='d9000000-0000-4000-8000-000000000503' where id='d9000000-0000-4000-8000-000000000403';
+insert into public.recurring_occurrences(household_id,id,series_id,candidate_version_id,occurrence_key,expected_date,expected_amount_minor,currency,amount_kind,status,matched_txn_id,score_bps,evidence,input_fingerprint,detector_version,confidence_version,as_of) values
+('00000000-0000-4000-8000-00000000a001','d9000000-0000-4000-8000-000000000603','d9000000-0000-4000-8000-000000000403','d9000000-0000-4000-8000-000000000503',repeat('e',24),'2026-05-10',5000,'USD','fixed','matched','d9000000-0000-4000-8000-000000000003',9000,
+  jsonb_build_array(jsonb_build_object('txnId','d9000000-0000-4000-8000-000000000003'),jsonb_build_object('txnId','d9000000-0000-4000-8000-000000000003'),jsonb_build_object('txnId','d9000000-0000-4000-8000-000000000003')),repeat('b',24),'v1','v1','2026-05-20');
+set local role authenticated; set local request.jwt.claims='{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
+select is(
+  (select r->>'bucket' from jsonb_array_elements(public.keel_recurring_classification('00000000-0000-4000-8000-00000000a001')->'rows') r where r->>'seriesId'='d9000000-0000-4000-8000-000000000403'),
+  'excluded','a P2P (TRANSFER_IN) inflow series is excluded, not shown as income');
+select is(
+  (public.keel_recurring_classification('00000000-0000-4000-8000-00000000a001')->>'formulaVersion'),
+  'recurring-classification-v2','classification formula version bumped to v2');
+
 -- Create a matching manual schedule (a monthly bill, negative amount).
 select lives_ok($$select public.keel_schedule_save('00000000-0000-4000-8000-00000000a001',null,'00000000-0000-4000-8000-00000000a401','Utility Co bill',-5000,null,'monthly','2026-06-15',null)$$,'schedule created');
 

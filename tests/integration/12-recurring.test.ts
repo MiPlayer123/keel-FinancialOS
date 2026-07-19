@@ -101,7 +101,7 @@ describe('suggest-only detector worker', () => {
       amountKind: 'fixed',
       representativeAmountMinor: '-250000',
       requiresApproval: true,
-      detectorVersion: 'recurring-grid-v1',
+      detectorVersion: 'recurring-grid-v2',
       confidenceVersion: 'recurring-score-bps-v1',
       occurrences: [],
     });

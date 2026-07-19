@@ -4,6 +4,52 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-19 — fix(recurring): review P1/P2 — supersede across normalizer bump + stop PayPal over-suppression
+
+Review of the B→A→C recurring fix surfaced two defects; fixed on this branch.
+
+P1 (blocking) — twin-series duplication on the normalizer bump. `NORMALIZER_VERSION`
+was embedded in the group/series_key composition in packages/detectors/src/detect.ts
+(~line 364, flowing into seriesKey ~line 379). This PR is the first-ever normalizer
+bump (v1→v2), so v2 re-detection produced a DIFFERENT series_key than v1; the upsert
+`ON CONFLICT (household_id, series_key) DO NOTHING` then inserted a NEW Suggested
+series instead of superseding, so every already-CONFIRMED series (e.g. an approved
+Spotify) reappeared as a duplicate twin and double-counted in projections. Fix
+(approach a): removed `NORMALIZER_VERSION` from the key composition, keeping it ONLY
+in inputFingerprint (~line 426) and the per-series normalizerVersion field (~line 429)
+— exactly how DETECTOR_VERSION/CONFIDENCE_VERSION were already handled. v2 re-detection
+now reuses the same series_key → new candidate version under the existing series (the
+intended supersession path); confirmed series untouched. Suppression (C) logic
+unchanged — only the KEY composition changed. Regression test added
+(packages/detectors/test/detect.test.ts, "keeps series_key STABLE across a
+normalizer-version bump (no twin series)"): asserts the emitted seriesKey equals
+fingerprint of the group+cadence+anchor+amount composition WITHOUT any normalizer
+token, so bumping NORMALIZER_VERSION cannot change it.
+
+P2 — PayPal over-suppression. packages/detectors/src/normalize.ts P2P_PATTERNS
+included bare `\bpaypal\b` / `\bpay\s*pal\b`, which suppressed REAL PayPal-billed
+merchant subscriptions whose bank memos lead with the rail token ("PAYPAL *SPOTIFY",
+"PP*NYTIMES"). Venmo/Zelle/Cash App/Square Cash are pure P2P (kept); PayPal is a mixed
+rail. Fix: dropped PayPal from hard P2P suppression entirely (safe default). The A
+quality gate still rejects irregular personal PayPal transfers. Updated the C classifier
+test (PayPal now → null) and added a detection-level test proving a clean monthly
+PayPal-billed subscription fires. Decision documented in a normalize.ts comment.
+
+P2 (cosmetic) FIX 3 — SKIPPED. `keel_list_recurring`'s top-level `formulaVersion`
+label is still 'recurring-grid-v1' (from main's 20260712120000_recurring.sql). Bumping
+it to v2 would require reproducing that ~115-line read proc (intricate nested jsonb
+aggregation + status-lifecycle + occurrence joins + ownership/grant guards) via
+CREATE OR REPLACE solely to change one cosmetic string — meaningful transcription
+risk for a purely cosmetic label. Per the review's own guidance ("prefer skipping if
+it means touching a proc you can't cleanly reproduce"), skipped. The authoritative
+per-series detectorVersion is already correct (recurring-grid-v2) on every candidate
+row; only the envelope label lags. No SQL touched → no pgTAP run required this pass.
+
+Verify: `cd apps/web && pnpm build` EXIT=0; root `pnpm vitest run` 931 passed (77 files);
+detector suite 92 passed. No migration/SQL changed.
+
+---
+
 ## 2026-07-19 — fix(recurring): drain the recurring_detection queue so detection actually runs
 
 Production bug: recurring detection had never produced a candidate for the real
@@ -4792,3 +4838,44 @@ stays BigInt-on-minor-units in the existing helpers).
   worker edge-fn tests initially failed only because the generated
   `_shared/vendor/keel-domain.mjs` bundle wasn't built in the fresh worktree —
   unrelated to this change, which touches no function files).
+## Recurring false-positive fix — path B→A→C (docs/RECURRING-RESEARCH.md), 2026-07-19
+Kills the three reported false positives (cashback, mixed-in paychecks, random Venmo) while
+keeping the deterministic grid detector (Law 1/9). Suggest-only throughout (Law 10 class B);
+suppression is suggestion-only, data stays in the ledger + export (Law 6).
+
+- **B (presentation, apps/web/src/app/dashboard/recurring/page.tsx):** split the one recurring
+  list into two lanes — "Subscriptions & bills" (outflows) and "Recurring income" (inflows/
+  income-bucket), each still grouped by status (Suggested/Active/Paved). Paychecks are real
+  recurring; B just routes them to income instead of the subscription list. New RecurringLanes
+  wrapper + lane-aware SeriesSection; isIncomeSeries/isExcludedSeries helpers.
+- **A (the real fix, packages/detectors/src/detect.ts):** quality gate before a Fit becomes a
+  candidate — (1) coverage floor matchedSlots/totalSlots >= 3/5 (0.60), (2) interval regularity
+  max period-gap <= 2 (one skipped period, cadence-relative via slot indexes). Integer math only
+  (no float on the gate). DETECTOR_VERSION 'recurring-grid-v1' → 'recurring-grid-v2'; the version
+  is part of inputFingerprint so v2 re-emits fresh candidate versions on the nightly re-detect and
+  supersedes v1 per-series (candidate versioning is free-text per-row; nothing is orphaned).
+  - Threshold judgment call (owner may tune): coverage 0.60 + maxGap 2 lets an every-other-month
+    fixed 3-occurrence series through (coverage 3/5, gaps [2,2]); all THREE reported false positives
+    die on coverage/gap regardless. Documented inline in detect.ts.
+- **C (suppression, packages/detectors/src/normalize.ts + migration 20260719010000):** deterministic
+  deny-list of personal P2P rails (Venmo/Zelle/Cash App/PayPal) and reward/cashback/refund/rebate/
+  statement-credit strings, applied at detection so they never become candidates — works for CSV/QIF/
+  manual imports too (no PFC needed). NORMALIZER_VERSION 'counterparty-v1' → 'counterparty-v2' (part of
+  grouping key + fingerprint). SQL half (migration FILE ONLY, not applied to any remote DB): extend
+  keel_recurring_classification to route Plaid TRANSFER_IN/TRANSFER_OUT to a new 'excluded' bucket
+  (defense-in-depth for legacy v1 rows); formulaVersion → recurring-classification-v2. No table/column
+  change → no 008 allowlist / export change. CREATE OR REPLACE (same signature), ownership+grants
+  re-asserted.
+
+Tests: packages/detectors/test/detect.test.ts — new A suite (irregular Jan/Jun/Nov rejected, irregular
+cashback-like rejected, random-Venmo-like rejected; clean monthly + biweekly paycheck + skipped-month
+rent still fire) and C suite (Venmo-person + cashback series not offered; real merchant still fires).
+pgTAP 030 gains an excluded-bucket + formulaVersion-v2 behavioral assertion. Root `pnpm vitest run`
+929 passed; `supabase test db` Result: PASS (31 files, 787 tests) on a throwaway local stack;
+`cd apps/web && pnpm build` exit 0.
+
+Pre-existing (NOT mine): packages/detectors' 100%-coverage gate was already red at baseline on
+timeline.ts (99.76/97.73); my changes nudged it to 99.78/97.82. detect.ts/normalize.ts are 100%.
+Also left keel_list_recurring's cosmetic top-level formulaVersion label 'recurring-grid-v1' untouched
+(a different read proc a parallel branch may own; the authoritative per-series detectorVersion comes
+from the candidate row and is now v2).
