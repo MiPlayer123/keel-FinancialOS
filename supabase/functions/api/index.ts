@@ -107,6 +107,10 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'documents.delete': 'keel_cmd_documents_delete',
   'receipts.decide_match': 'keel_cmd_receipts_decide_match',
   'receipts.detach_match': 'keel_cmd_receipts_detach_match',
+  'budgets.set_total': 'keel_cmd_budgets_set_total',
+  'budgets.set_target': 'keel_cmd_budgets_set_target',
+  'budgets.remove_target': 'keel_cmd_budgets_remove_target',
+  'budgets.set_expected_income': 'keel_cmd_budgets_set_expected_income',
 };
 
 const QUERY_TO_PROC: Record<string, string> = {
@@ -138,6 +142,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'notes_tasks.list': 'keel_list_notes_tasks',
   'rules.list': 'keel_list_rules',
   'budgets.list': 'keel_list_budgets',
+  'budgets.month': 'keel_budget_month',
   'tags.list': 'keel_list_tags',
   'schedules.list': 'keel_list_schedules',
   'goals.list': 'keel_list_goals',
@@ -2534,7 +2539,7 @@ export default {
         const db = body as { days?: unknown };
         const days = typeof db.days === 'number' ? Math.trunc(db.days) : 30;
         rpcArgs.p_days = Math.min(Math.max(days, 1), 120);
-      } else if (query.query === 'budgets.list') {
+      } else if (query.query === 'budgets.list' || query.query === 'budgets.month') {
         const db = body as { month?: unknown };
         if (db.month !== undefined && isoDate(db.month) === null) {
           return json(400, { code: 'invalid_command', message: 'Invalid month.', details: {} });

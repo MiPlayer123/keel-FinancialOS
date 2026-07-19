@@ -54,6 +54,10 @@ describe('action vocabulary', () => {
       'documents.delete',
       'receipts.decide_match',
       'receipts.detach_match',
+      'budgets.set_total',
+      'budgets.set_target',
+      'budgets.remove_target',
+      'budgets.set_expected_income',
       'ledger.trial_balance',
       'transactions.list',
       'recurring.list',
@@ -66,6 +70,7 @@ describe('action vocabulary', () => {
       'statements.cadence',
       'documents.list_for_target',
       'receipts.inbox',
+      'budgets.month',
       'audit.read',
       'admin.export_all',
     ]);
