@@ -1,4 +1,4 @@
--- 20260720220000_rich_readmodel_custom_category_pfc_key.sql
+-- 20260720221000_rich_readmodel_custom_category_pfc_key.sql
 -- Fix: keel_list_transactions_rich reported categoryPfcKey from the posting
 -- offset even when a custom-category overlay (pfc_key IS NULL) was present,
 -- making custom-categorized transactions read as "uncategorized" on the Review
@@ -59,7 +59,7 @@ begin
         'categoryKind',
           case when offs.n = 1 then coalesce(catov.kind::text, offs.one_kind) end,
         'categoryPfcKey',
-          -- FIX (20260720220000): a user-created custom category has pfc_key=null.
+          -- FIX (20260720221000): a user-created custom category has pfc_key=null.
           -- The old coalesce fell through to the ORIGINAL posting offset's key,
           -- so a txn overlaid to a custom category leaked 'uncategorized_*' and
           -- read as uncategorized despite a real category NAME. Resolve pfc_key
