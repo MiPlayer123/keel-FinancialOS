@@ -48,6 +48,8 @@ export function NetWorthHero({
   fallbackNetMinor,
   fallbackAsOf,
   actions,
+  entityScoped = false,
+  scopeLabel,
 }: {
   householdId: string | null;
   /** Trial-balance net worth (all currencies summed) — shown while the trend
@@ -57,12 +59,26 @@ export function NetWorthHero({
   fallbackAsOf?: string | null;
   /** Optional page actions rendered in the hero's top-right corner. */
   actions?: React.ReactNode;
+  /** Entity-lens mode (persona theme #2): the passed `fallbackNetMinor` is one
+   *  entity's net worth, not the household's. The daily trend read model
+   *  (`dashboard.net_worth_daily`) is household-wide and can't be decomposed
+   *  per entity client-side without a backend param, so in this mode the hero
+   *  suppresses the trend/Δ entirely and shows just the scoped number — never
+   *  a household trend next to an entity total, which would contradict each
+   *  other (Law 9). */
+  entityScoped?: boolean;
+  /** Short scope note under the number when entity-scoped, e.g. "Acme LLC only". */
+  scopeLabel?: string;
 }) {
   // Stable for the whole mount so the query key never churns mid-session.
   const [from] = useState(() => isoDaysAgo(TREND_FETCH_DAYS));
-  const trend = useKeelQueryEnvelope<DailyBalanceRow>('dashboard.net_worth_daily', householdId, {
-    from,
-  });
+  // Skip the household-wide trend fetch when entity-scoped — passing a null
+  // householdId disables the query, so we never fetch a series we won't show.
+  const trend = useKeelQueryEnvelope<DailyBalanceRow>(
+    'dashboard.net_worth_daily',
+    entityScoped ? null : householdId,
+    { from },
+  );
   const [selectedKey, setSelectedKey] = useState('90d');
 
   // The daily series is per-currency; the hero plots the dominant one (same
@@ -136,7 +152,12 @@ export function NetWorthHero({
               <p className="text-xs text-muted-foreground">
                 As of {asOfLabel(asOf)}
                 {multiCurrency ? ' · dominant currency only' : ''}
+                {entityScoped && scopeLabel != null && scopeLabel !== ''
+                  ? ` · ${scopeLabel}`
+                  : ''}
               </p>
+            ) : entityScoped && scopeLabel != null && scopeLabel !== '' ? (
+              <p className="text-xs text-muted-foreground">{scopeLabel}</p>
             ) : null}
           </div>
           {actions !== undefined ? (

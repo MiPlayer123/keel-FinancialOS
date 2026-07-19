@@ -18,6 +18,7 @@ import { toast } from 'sonner';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { useHousehold } from '@/components/keel/household-context';
+import { useEntityLens, lensAccountIdSet } from '@/components/keel/entity-lens-context';
 import {
   useKeelInvalidate,
   useKeelQuery,
@@ -140,6 +141,10 @@ function amountMatches(amountMinor: string, q: string): boolean {
 
 function LedgerTable() {
   const { householdId, userId, ready } = useHousehold();
+  // Global entity lens (persona theme #2): narrows the register to the accounts
+  // of the selected entity. Always null for a single-entity household, so this
+  // page is unchanged for them. A VIEW filter only — no transaction is edited.
+  const { entityId: entityLens } = useEntityLens();
   const router = useRouter();
   const searchParams = useSearchParams();
   const { rows, loading, error } = useKeelQuery<RichTransactionRow>(
@@ -257,12 +262,22 @@ function LedgerTable() {
     return m;
   }, [rows]);
 
+  // Account ids inside the current entity lens (null = blended, no restriction).
+  // RichTransactionRow has no entity_id, so we resolve it through the account
+  // list this page already loads — the same account→entity mapping the Accounts
+  // page and Reports scope use. Rows on accounts outside the lens drop out.
+  const lensAccountIds = useMemo(
+    () => lensAccountIdSet(entityLens, accounts),
+    [entityLens, accounts],
+  );
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     const [from, to] = customRange
       ? ([customRange.from, customRange.to] as const)
       : presetRange(datePreset);
     const out = rows.filter((t) => {
+      if (lensAccountIds !== null && !lensAccountIds.has(t.accountId)) return false;
       if (from && t.effectiveDate < from) return false;
       if (to && t.effectiveDate > to) return false;
       if (accountFilter !== 'all' && t.accountId !== accountFilter) return false;
@@ -325,6 +340,7 @@ function LedgerTable() {
     tagFilter,
     reconciledFilter,
     sort,
+    lensAccountIds,
   ]);
 
   const totals = useMemo(() => {

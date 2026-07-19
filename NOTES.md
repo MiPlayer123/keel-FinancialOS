@@ -4705,3 +4705,90 @@ applies at merge.
   (formulaVersion cash-flow-v3-transfer-and-settlement-excluded). Monthly variant
   was only ever defined in dashboard_trends (already had transfer exclusion) — my
   recreation preserved it. pgTAP 028 formula-version assertion updated.
+
+---
+
+## Global entity lens / switcher (persona theme #2) — VIEW-only surfacing
+
+Surfaced the already-modeled entity system as a persistent "current entity
+lens" ("I'm working in my LLC now"). UI/view-only: no migration, ledger proc,
+read-model signature, or money calculation was touched (verified: `git status`
+shows zero `supabase/functions` or `supabase/migrations` changes; all math
+stays BigInt-on-minor-units in the existing helpers).
+
+### What was built
+- `components/keel/entity-lens-context.tsx` — `EntityLensProvider` + `useEntityLens()`,
+  mirroring `household-context.tsx`. Persists per-household in localStorage
+  (`keel-entity-lens:<householdId>`), optimistic restore reconciled against the
+  real `entities.list`. `entityId === null` = "All entities" (blended). Exposes
+  `multiEntity` (household has >1 entity) which gates BOTH rendering the switcher
+  AND applying any filter — a single-entity household is ALWAYS blended even if a
+  stale saved id lingers. Also exports pure `lensAccountIdSet(entityId, accounts)`
+  → the one choke point returning the in-lens account-id Set (or null =
+  unrestricted), reused by ledger + dashboard so filter semantics stay identical.
+- `components/keel/entity-lens-switcher.tsx` — the control. Real Base-UI `<Select>`
+  (keyboard + SR accessible, `aria-label`), self-hides when `!multiEntity`.
+  Financial-calm: neutral tokens, no color (it qualifies no money). Provider
+  wired in `dashboard/layout.tsx` inside HouseholdProvider, outside AppShell.
+- Placed in `app-shell.tsx`: full-width in the expanded desktop sidebar (hidden
+  in the 64px collapsed rail — no room for a labelled control); in the mobile top
+  bar inside a `min-w-9` wrapper that preserves the logo-centering spacer when the
+  switcher self-hides.
+
+### Which views respect the lens
+- **Accounts** (`accounts/page.tsx`): a concrete lens filters `enriched` to that
+  entity and shows the plain type-grouped layout; blended+multi-entity keeps the
+  existing WS-G `EntityGroupedAccounts` per-entity breakdown; single-entity keeps
+  the plain layout. NetWorthHero is entity-scoped so its number == sum of rows
+  shown.
+- **Transactions/Ledger** (`ledger/page.tsx`): `filtered` gains a lens predicate
+  via `lensAccountIdSet` over the account list the page already loads
+  (RichTransactionRow has no entity_id, so the account→entity map resolves it —
+  same mapping Reports scope uses). Blended = unrestricted.
+- **Dashboard** (`page.tsx`): decomposable widgets are scoped client-side — net
+  worth (accounts filtered), Spending mix, Insights, Recent transactions (all run
+  on lens-scoped `lensTxns`), Accounts summary. NetWorthHero entity-scoped.
+- **NetWorthHero** (`net-worth-hero.tsx`): new `entityScoped`/`scopeLabel` props.
+  When `entityScoped`, it passes `householdId=null` to its OWN internal
+  `dashboard.net_worth_daily` query (disabling the fetch — no signature change),
+  suppresses the household-wide trend/Δ, and shows just the scoped fallback number
+  with a "<Entity> only" note. Rationale: the daily net-worth series is a
+  pre-summed household read model that can't be decomposed per entity client-side;
+  showing a household trend next to an entity total would contradict itself (Law 9).
+
+### Client-side-filter / hidden-widget decisions (documented per constraint)
+- Dashboard **Cash flow**, **Cash flow by month**, **Needs-attention**,
+  **Upcoming recurring**, **Projected cash**, **Free-to-spend** are backed by
+  household-wide PRE-AGGREGATED read models (`dashboard.cash_flow_monthly`,
+  cash-flow forecast, review/recurring state) with no entity/scope param. They
+  can't be split per entity client-side without a backend change (which the
+  constraint forbids). Under an active lens they are HIDDEN rather than shown with
+  a household number that would contradict the scoped hero. Blended view is
+  unchanged (no regression). If per-entity cash flow is wanted later, add an
+  `entityId` param to those read models (backend work, out of scope here).
+- **Reports** left AS-IS: it already has a fully-working URL-driven entity scope
+  (`report-scope.ts` `scope.entityId`, its own scope-bar select). Syncing it to
+  the global lens would mean pushing the lens into the URL on mount, fighting the
+  page's URL-canonical/bookmarkable design and churning history. Judged not-clean;
+  per the task's "else leave Reports as-is and note it", left untouched. Reports
+  remains independently entity-filterable via its own bar.
+
+### Correctness / no money-math change
+- Lens is a pure VIEW filter over account ids; every total recomputes over
+  exactly the visible rows (scoped net worth = Σ that entity's accounts, and it
+  says "<Entity> only"), so nothing is hidden from a total that claims to include
+  it and nothing double-counts. Cross-entity transfers: each leg posts to an
+  account owned by one entity, so under a lens you see only the leg on an in-lens
+  account (honest — the other leg belongs to the other entity's books); blended
+  shows both, unchanged, and confirmed transfers stay excluded from cash/spending
+  by the existing read-model logic (untouched).
+- Single-entity household: `multiEntity` false everywhere → no switcher, no
+  filter, byte-identical behavior to before.
+
+### Verification
+- `cd apps/web && pnpm build` → EXIT=0 (ESLint clean; the only warnings are
+  pre-existing in files not touched here).
+- `pnpm vitest run`: 918/918 pass after `node scripts/build-functions.mjs` (2
+  worker edge-fn tests initially failed only because the generated
+  `_shared/vendor/keel-domain.mjs` bundle wasn't built in the fresh worktree —
+  unrelated to this change, which touches no function files).

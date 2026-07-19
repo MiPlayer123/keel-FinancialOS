@@ -7,6 +7,7 @@ import { Wallet, ChevronRight } from 'lucide-react';
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
+import { useEntityLens } from '@/components/keel/entity-lens-context';
 import { useKeelQuery } from '@/lib/use-keel-query';
 import {
   fetchAccounts,
@@ -68,6 +69,11 @@ function sumMinor(rows: Enriched[]): string {
 
 function AccountsBody() {
   const { householdId, ready } = useHousehold();
+  // Global entity lens (persona theme #2): null = "All entities" (blended,
+  // pre-lens behavior). A concrete id narrows this page — and the net-worth
+  // hero — to that entity's accounts only, client-side. `entityLens` is always
+  // null for a single-entity household, so nothing below changes for them.
+  const { entityId: entityLens, entity: lensEntity } = useEntityLens();
   const balances = useKeelQuery<TrialBalanceRow>('ledger.trial_balance', householdId);
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
   const [kinds, setKinds] = useState<Map<string, string> | null>(null);
@@ -181,22 +187,37 @@ function AccountsBody() {
     );
   }
 
-  const assets = enriched.filter((a) => a.kind === 'asset');
-  const liabilities = enriched.filter((a) => a.kind === 'liability');
-  const other = enriched.filter((a) => a.kind !== 'asset' && a.kind !== 'liability');
-  const netMinor = enriched.reduce((acc, r) => acc + BigInt(r.balanceMinor || '0'), 0n).toString();
+  // Entity lens (persona theme #2): when a specific entity is selected, this
+  // page shows exactly that entity's accounts, grouped by type. It's a VIEW
+  // filter — the hidden accounts aren't erased, they're just out of the lens,
+  // and the net-worth hero below scopes to match so its number equals the sum
+  // of the rows shown (no phantom money, no double-count).
+  const lensRows = entityLens === null ? enriched : enriched.filter((a) => a.entityId === entityLens);
 
-  // F-023: entity grouping renders ONLY for multi-entity households — a
-  // single-entity household sees exactly the pre-slice layout below.
+  const assets = lensRows.filter((a) => a.kind === 'asset');
+  const liabilities = lensRows.filter((a) => a.kind === 'liability');
+  const other = lensRows.filter((a) => a.kind !== 'asset' && a.kind !== 'liability');
+  const netMinor = lensRows.reduce((acc, r) => acc + BigInt(r.balanceMinor || '0'), 0n).toString();
+
+  // F-023: entity grouping renders ONLY for a blended, multi-entity household —
+  // a single-entity household (entities.length <= 1) and a lensed view (one
+  // entity already chosen) both see the plain type-grouped layout.
   const multiEntity = entities.length > 1;
+  const lensActive = entityLens !== null;
 
   return (
     <div className="space-y-8">
-      {/* Fused hero (C11): number + Δ + % + window + chart as one unit. */}
+      {/* Fused hero (C11): number + Δ + % + window + chart as one unit. When a
+          lens is active the hero is entity-scoped: it drops the household-wide
+          trend series (which can't be decomposed per entity client-side) and
+          shows the lensed net worth from the rows above — the number always
+          matches what's on screen (Law 9). */}
       <NetWorthHero
         householdId={householdId}
         fallbackNetMinor={netMinor}
         fallbackAsOf={balances.asOf}
+        entityScoped={lensActive}
+        {...(lensActive && lensEntity ? { scopeLabel: `${lensEntity.name} only` } : {})}
         actions={
           <>
             <RecordTransferDialog
@@ -216,7 +237,7 @@ function AccountsBody() {
         }
       />
 
-      {multiEntity ? (
+      {multiEntity && !lensActive ? (
         <EntityGroupedAccounts entities={entities} rows={enriched} />
       ) : (
         <>
