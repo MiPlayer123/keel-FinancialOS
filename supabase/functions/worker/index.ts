@@ -29,7 +29,7 @@ import {
 import { json, mapDbError } from '../_shared/http.ts';
 import { decryptToken, type EncryptedRecord } from '../_shared/credential-crypto.ts';
 import { getKek } from '../_shared/credential-kek.ts';
-import { looksLikeInvestmentAccount } from '../_shared/investment-subtype.ts';
+import { isHoldingsSyncEligibleSubtype } from '../_shared/investment-subtype.ts';
 import {
   createPlaidClient,
   PlaidClientError,
@@ -1008,23 +1008,28 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
       results.push({ connectionId: c.id, accounts: applied });
 
       // Investment-account detection (F-013): decide by Plaid account `type`
-      // (authoritative) UNIONed with the DB subtype keyword match. A
-      // brokerage cash-management account can arrive as type 'investment' with
-      // a subtype the keyword list misses ('cash management'), so `type` is
-      // the primary signal; subtype keywords catch anything the DB knows about
-      // that the current accountsGet page didn't classify as investment.
+      // (authoritative) UNIONed with the DB subtype match. A brokerage
+      // cash-management account can arrive as type 'investment' with a
+      // depository-style subtype ('cash management'), so `type` is the
+      // primary signal; the canonical subtype tier catches anything the DB
+      // knows about that the current accountsGet page didn't classify as
+      // investment. isHoldingsSyncEligibleSubtype deliberately EXCLUDES
+      // 'cash management' — a depository cash-management account alone must
+      // never trigger an Investments call (it errors on items without the
+      // product; display surfaces still include it via
+      // keel_is_investment_subtype).
       const investmentRefs = new Set<string>();
       for (const acct of body.accounts ?? []) {
         if (
           typeof acct.account_id === 'string' &&
           (acct.type === 'investment' ||
-            (typeof acct.subtype === 'string' && looksLikeInvestmentAccount(acct.subtype)))
+            (typeof acct.subtype === 'string' && isHoldingsSyncEligibleSubtype(acct.subtype)))
         ) {
           investmentRefs.add(acct.account_id);
         }
       }
       const dbInvestmentRefs = ((dbAccts ?? []) as Array<{ external_ref: string | null; subtype: string | null }>)
-        .filter((a) => typeof a.subtype === 'string' && looksLikeInvestmentAccount(a.subtype))
+        .filter((a) => typeof a.subtype === 'string' && isHoldingsSyncEligibleSubtype(a.subtype))
         .map((a) => a.external_ref)
         .filter((r): r is string => typeof r === 'string');
       for (const ref of dbInvestmentRefs) investmentRefs.add(ref);
@@ -1058,6 +1063,32 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
                 : -1
             } mapped=${mapped.holdings.length} skipped=${mapped.skipped.length}`,
           );
+          // Per-account provider stats (Item 2, migration 20260719210000):
+          // rows Plaid reported BEFORE the mapper's skips, and how many were
+          // skipped as cash-equivalent (SPAXX/money market). Persisted so the
+          // UI can distinguish "all my positions are cash" (present cash from
+          // the balance) from "the institution hasn't published positions
+          // yet" (honest empty state) — both otherwise land as zero holdings
+          // rows. Accounts Plaid returned nothing for get an explicit 0.
+          const accountStats = new Map<
+            string,
+            { providerCount: number; cashEquivalentCount: number }
+          >();
+          const statFor = (ref: string) => {
+            let s = accountStats.get(ref);
+            if (!s) {
+              s = { providerCount: 0, cashEquivalentCount: 0 };
+              accountStats.set(ref, s);
+            }
+            return s;
+          };
+          for (const h of mapped.holdings) statFor(h.accountExternalRef).providerCount += 1;
+          for (const s of mapped.skipped) {
+            const stat = statFor(s.accountExternalRef);
+            stat.providerCount += 1;
+            if (s.reason === 'cash_equivalent') stat.cashEquivalentCount += 1;
+          }
+          for (const ref of investmentRefs) if (!accountStats.has(ref)) statFor(ref);
           // supabase .rpc() resolves { data, error } and does NOT throw on a DB
           // error, so EVERY new RPC's `error` must be inspected — otherwise a
           // failed clear/snapshot is silently reported as a successful sync.
@@ -1065,6 +1096,11 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
             p_household_id: c.household_id,
             p_connection_id: c.id,
             p_holdings: mapped.holdings,
+            p_account_stats: [...accountStats.entries()].map(([externalRef, s]) => ({
+              externalRef,
+              providerCount: s.providerCount,
+              cashEquivalentCount: s.cashEquivalentCount,
+            })),
           });
           if (syncErr) throw new Error(syncErr.message ?? 'holdings sync failed');
           const { error: clearErr } = await admin.rpc('keel_worker_clear_holdings_error', {

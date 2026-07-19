@@ -1,8 +1,45 @@
 import { describe, expect, it } from 'vitest';
 
-import { looksLikeInvestmentAccount, looksLikeRetirementAccount } from './investment-subtype';
+import {
+  PLAID_INVESTMENT_SUBTYPES,
+  isCashManagementSubtype,
+  isHoldingsSyncEligibleSubtype,
+  isPlaidInvestmentSubtype,
+  looksLikeInvestmentAccount,
+  looksLikeRetirementAccount,
+} from './investment-subtype';
 
-describe('looksLikeInvestmentAccount', () => {
+describe('looksLikeInvestmentAccount (display tier)', () => {
+  it('matches EVERY published Plaid investment subtype exactly', () => {
+    for (const subtype of PLAID_INVESTMENT_SUBTYPES) {
+      expect(looksLikeInvestmentAccount(subtype), subtype).toBe(true);
+      expect(isPlaidInvestmentSubtype(subtype), subtype).toBe(true);
+    }
+  });
+
+  it('covers the subtypes the old keyword list missed', () => {
+    for (const subtype of [
+      'crypto exchange',
+      'trust',
+      '401a',
+      '457b',
+      'sep ira',
+      'simple ira',
+      'tfsa',
+      'rrsp',
+      'education savings account',
+      'thrift savings plan',
+      'ugma',
+      'utma',
+      'keogh',
+      'sarsep',
+      'profit sharing plan',
+      'non-custodial wallet',
+    ]) {
+      expect(looksLikeInvestmentAccount(subtype), subtype).toBe(true);
+    }
+  });
+
   it('matches common Plaid investment subtypes', () => {
     expect(looksLikeInvestmentAccount('brokerage')).toBe(true);
     expect(looksLikeInvestmentAccount('ira')).toBe(true);
@@ -12,6 +49,15 @@ describe('looksLikeInvestmentAccount', () => {
     expect(looksLikeInvestmentAccount('non-taxable brokerage account')).toBe(true);
   });
 
+  it('includes cash management at the DISPLAY tier only (20260718122000 ruling)', () => {
+    expect(looksLikeInvestmentAccount('cash management')).toBe(true);
+    expect(isCashManagementSubtype('cash management')).toBe(true);
+    expect(isCashManagementSubtype('brokerage')).toBe(false);
+    // …but a depository cash-management account must never by itself make a
+    // connection eligible for a Plaid Investments call.
+    expect(isHoldingsSyncEligibleSubtype('cash management')).toBe(false);
+  });
+
   it('matches the manual account subtype', () => {
     expect(looksLikeInvestmentAccount('investment')).toBe(true);
   });
@@ -19,13 +65,47 @@ describe('looksLikeInvestmentAccount', () => {
   it('is case-insensitive', () => {
     expect(looksLikeInvestmentAccount('IRA')).toBe(true);
     expect(looksLikeInvestmentAccount('Brokerage')).toBe(true);
+    expect(looksLikeInvestmentAccount('Crypto Exchange')).toBe(true);
   });
 
   it('does not match everyday account types', () => {
-    expect(looksLikeInvestmentAccount('checking')).toBe(false);
-    expect(looksLikeInvestmentAccount('savings')).toBe(false);
-    expect(looksLikeInvestmentAccount('credit card')).toBe(false);
-    expect(looksLikeInvestmentAccount('cash')).toBe(false);
+    for (const subtype of [
+      'checking',
+      'savings',
+      'credit card',
+      'cash',
+      'cd',
+      'money market',
+      'paypal',
+      'prepaid',
+      'mortgage',
+      'student',
+      'auto',
+      // 'other' is ambiguous across Plaid types when only the subtype is
+      // stored — deliberately unclassified (the worker catches live
+      // type=investment accounts via Plaid's `type` field instead).
+      'other',
+    ]) {
+      expect(looksLikeInvestmentAccount(subtype), subtype).toBe(false);
+    }
+  });
+});
+
+describe('isHoldingsSyncEligibleSubtype (provider-call tier)', () => {
+  it('matches every published Plaid investment subtype', () => {
+    for (const subtype of PLAID_INVESTMENT_SUBTYPES) {
+      expect(isHoldingsSyncEligibleSubtype(subtype), subtype).toBe(true);
+    }
+  });
+
+  it('is exactly the display tier minus cash management', () => {
+    for (const subtype of ['brokerage', 'investment', 'sep ira', 'crypto exchange', 'checking']) {
+      expect(isHoldingsSyncEligibleSubtype(subtype), subtype).toBe(
+        looksLikeInvestmentAccount(subtype),
+      );
+    }
+    expect(looksLikeInvestmentAccount('cash management')).toBe(true);
+    expect(isHoldingsSyncEligibleSubtype('cash management')).toBe(false);
   });
 });
 
