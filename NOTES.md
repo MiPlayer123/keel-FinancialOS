@@ -5865,3 +5865,37 @@ CSV/OFX text inert data-tier; stored verbatim, never a tool/fetch/RPC trigger).
   branches (TextDecoder never throws on bytes and strips BOM itself; BigInt guarded by a digit-run
   check) rather than leaving dead code — documented inline. Pre-existing root lint/typecheck failures
   on main (transfer-grouping.test, receipt-cases Math.round, contracts zod) are untouched by this slice.
+
+## 2026-07-19 — cash-flow v6: overlay-classified income/expense (Law 9 single source of truth)
+- Migration 20260720220000_cash_flow_overlay_classified.sql. keel_cash_flow ->
+  'cash-flow-v6-overlay-classified'; keel_cash_flow_monthly ->
+  'cash-flow-monthly-v5-overlay-classified'.
+- WHY: v5 classified each txn by its OFFSET posting's raw ledger-account kind
+  (income/expense), while keel_budget_month classifies by the EFFECTIVE overlay
+  category. A reimbursement payback the user tagged INTO a spend category netted
+  correctly in budget but still counted as gross INCOME in cash-flow — gross
+  income AND gross spend both inflated, net correct. v6 reuses budget's exact
+  overlay resolution (overlay kind when single-offset & overlay exists, else the
+  per-split offset kind), so cash-flow and budget share ONE classification
+  compiler (Law 9). Signed so a bank-inflow overlaid to expense contributes
+  NEGATIVE outflow (reduces that spend); a bank-outflow overlaid to income
+  reduces inflow.
+- Exclusions (confirmed-transfer legs, keel_is_non_income_settlement,
+  keel_txn_is_transfer_category) kept FIRST and byte-identical to v5.
+- Split-aware (offn>1 -> per-split offset kind, no overlay collapse), BIGINT, no
+  floats. Generated from live defs (pg_get_functiondef) to avoid drift.
+- Live validation (household a1ba3759-b7a7-4880-93e2-49eb6f91636c), READ-ONLY:
+  * NET invariant: all-history net5 = net6 = 7,835,485 (diff 0); 2026 YTD net
+    3,435,624 unchanged.
+  * 2026 YTD gross: inflow 6,043,183 -> 3,671,574; outflow 2,607,559 -> 235,950
+    (both -2,371,609, the in-window paybacks).
+  * The 789 income-posting->expense-overlay txns ($178,767.79) confirmed exactly;
+    735 ($82,743.76) survive exclusions and now reduce outflow; the 11 reverse
+    txns (-$2,678.66, expense-posting->income-overlay) now reduce inflow.
+  * Genuine income (effective-income, no payback) preserved: $36,715.74 = v6
+    inflow. Monthly variant sums to the same annual totals.
+- Ownership/grants re-asserted exactly as 20260719020000/20260720140000
+  (keel_api owns keel_cash_flow; postgres owns keel_cash_flow_monthly). No
+  schema/DTO change (Law 6 export unaffected). keel_cash_flow_forecast is
+  balance/recurring-projection based, NOT a posting income/expense split — left
+  untouched.
