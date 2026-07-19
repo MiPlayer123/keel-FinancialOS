@@ -385,6 +385,35 @@ export type ConnectionRow = {
  * reauth failure) shouldn't leave "Fix balance" permanently disabled. */
 const CONTINUATION_STALE_AFTER_MS = 15 * 60 * 1000;
 
+/**
+ * Pure decision for whether a connection is actively syncing, extracted so it
+ * can be unit-tested without a Supabase round-trip.
+ *
+ * Only an ACTIVE connection can be mid-sync. A `disconnected` (or
+ * `reauth_required` / `linking`) connection can still carry a leftover
+ * generation mismatch — e.g. Fidelity was left at desired 57 vs committed 56
+ * when a sync got interrupted by the disconnect — which must NOT read as
+ * "syncing": with the connection no longer active nothing will ever advance
+ * `sync_committed_generation`, so it would otherwise show "Syncing…" forever
+ * and keep "Fix balance" / "Sync now" disabled on a dead connection.
+ */
+export function computeIsSyncing(input: {
+  status: string;
+  syncDesiredGeneration: number;
+  syncCommittedGeneration: number;
+  syncContinuationPending: boolean;
+  syncContinuationMarkedAt: string | null;
+  now?: number;
+}): boolean {
+  if (input.status !== 'active') return false;
+  const now = input.now ?? Date.now();
+  const continuationFresh =
+    input.syncContinuationPending &&
+    input.syncContinuationMarkedAt !== null &&
+    now - new Date(input.syncContinuationMarkedAt).getTime() < CONTINUATION_STALE_AFTER_MS;
+  return input.syncDesiredGeneration !== input.syncCommittedGeneration || continuationFresh;
+}
+
 export async function fetchConnections(householdId: string): Promise<ConnectionRow[]> {
   const { data, error } = await getSupabaseBrowserClient()
     .from('connections')
@@ -407,21 +436,22 @@ export async function fetchConnections(householdId: string): Promise<ConnectionR
     sync_continuation_marked_at: string | null;
   };
   const now = Date.now();
-  return ((data as Row[] | null) ?? []).map((r) => {
-    const continuationFresh =
-      r.sync_continuation_pending &&
-      r.sync_continuation_marked_at !== null &&
-      now - new Date(r.sync_continuation_marked_at).getTime() < CONTINUATION_STALE_AFTER_MS;
-    return {
-      id: r.id,
-      provider: r.provider,
+  return ((data as Row[] | null) ?? []).map((r) => ({
+    id: r.id,
+    provider: r.provider,
+    status: r.status,
+    displayName: r.display_name,
+    institutionId: r.institution_id,
+    lastSuccessfulSyncAt: r.last_successful_sync_at,
+    isSyncing: computeIsSyncing({
       status: r.status,
-      displayName: r.display_name,
-      institutionId: r.institution_id,
-      lastSuccessfulSyncAt: r.last_successful_sync_at,
-      isSyncing: r.sync_desired_generation !== r.sync_committed_generation || continuationFresh,
-    };
-  });
+      syncDesiredGeneration: r.sync_desired_generation,
+      syncCommittedGeneration: r.sync_committed_generation,
+      syncContinuationPending: r.sync_continuation_pending,
+      syncContinuationMarkedAt: r.sync_continuation_marked_at,
+      now,
+    }),
+  }));
 }
 
 /** Trigger an immediate sync for one connection (also drained by the 3-min cron). */
