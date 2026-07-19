@@ -421,6 +421,7 @@ export async function fetchConnections(householdId: string): Promise<ConnectionR
       'id, provider, status, display_name, institution_id, last_successful_sync_at, sync_desired_generation, sync_committed_generation, sync_continuation_pending, sync_continuation_marked_at',
     )
     .eq('household_id', householdId)
+    .is('archived_at', null)
     .order('created_at', { ascending: false });
   if (error) throw error;
   type Row = {
