@@ -430,8 +430,8 @@ create temp table _tk as select public.keel_approval_token_issue(
 -- reaches materialize.
 select throws_ok($$select public.keel_cmd_statements_approve_draft(
   gen_random_uuid(),'gate:tamper','{}'::jsonb,'00000000-0000-4000-8000-00000000a001',
-  jsonb_build_object('draftId',(select id from public.statement_drafts where document_version_id='00000000-0000-4000-8000-00000000d101'),
-    'approvalTokenId',(select (out->>'tokenId')::uuid from _tk),'balanceCheck','strict',
+  jsonb_build_object('draft_id',(select id from public.statement_drafts where document_version_id='00000000-0000-4000-8000-00000000d101'),
+    'approval_token_id',(select (out->>'tokenId')::uuid from _tk),'balance_check','strict',
     'statement',jsonb_build_object('period_start','2026-06-01','period_end','2026-06-30',
       'opening_minor','10000','ending_minor','99999','currency','USD',
       'lines',jsonb_build_array(jsonb_build_object('line_key','deposit','date','2026-06-15','amount_minor','2000','description','DEPOSIT')))))$$,
@@ -448,8 +448,8 @@ select is((select status::text from public.statement_drafts where document_versi
 -- a document_attachment links the source file.
 select lives_ok($$select public.keel_cmd_statements_approve_draft(
   gen_random_uuid(),'gate:happy','{}'::jsonb,'00000000-0000-4000-8000-00000000a001',
-  jsonb_build_object('draftId',(select id from public.statement_drafts where document_version_id='00000000-0000-4000-8000-00000000d101'),
-    'approvalTokenId',(select (out->>'tokenId')::uuid from _tk),'balanceCheck','strict',
+  jsonb_build_object('draft_id',(select id from public.statement_drafts where document_version_id='00000000-0000-4000-8000-00000000d101'),
+    'approval_token_id',(select (out->>'tokenId')::uuid from _tk),'balance_check','strict',
     'statement',jsonb_build_object('period_start','2026-06-01','period_end','2026-06-30',
       'opening_minor','10000','ending_minor','12000','currency','USD',
       'lines',jsonb_build_array(jsonb_build_object('line_key','deposit','date','2026-06-15','amount_minor','2000','description','DEPOSIT')))))$$,
@@ -468,8 +468,8 @@ select is((select source_hash from public.statements where source_hash=repeat('c
 -- already approved (terminal), so this also proves the terminal lock.
 select throws_ok($$select public.keel_cmd_statements_approve_draft(
   gen_random_uuid(),'gate:replay','{}'::jsonb,'00000000-0000-4000-8000-00000000a001',
-  jsonb_build_object('draftId',(select id from public.statement_drafts where document_version_id='00000000-0000-4000-8000-00000000d101'),
-    'approvalTokenId',(select (out->>'tokenId')::uuid from _tk),'balanceCheck','strict',
+  jsonb_build_object('draft_id',(select id from public.statement_drafts where document_version_id='00000000-0000-4000-8000-00000000d101'),
+    'approval_token_id',(select (out->>'tokenId')::uuid from _tk),'balance_check','strict',
     'statement',jsonb_build_object('period_start','2026-06-01','period_end','2026-06-30',
       'opening_minor','10000','ending_minor','12000','currency','USD',
       'lines',jsonb_build_array(jsonb_build_object('line_key','deposit','date','2026-06-15','amount_minor','2000','description','DEPOSIT')))))$$,
@@ -495,8 +495,8 @@ create temp table _tkv as select public.keel_approval_token_issue(
   '{}'::jsonb,'00000000-0000-4000-8000-00000000a401','statement_draft',null,2,'statement-close-v1',900) as out;
 select throws_ok($$select public.keel_cmd_statements_approve_draft(
   gen_random_uuid(),'gate:wrongver','{}'::jsonb,'00000000-0000-4000-8000-00000000a001',
-  jsonb_build_object('draftId',(select id from public.statement_drafts where document_version_id='00000000-0000-4000-8000-00000000d102'),
-    'approvalTokenId',(select (out->>'tokenId')::uuid from _tkv),'balanceCheck','strict',
+  jsonb_build_object('draft_id',(select id from public.statement_drafts where document_version_id='00000000-0000-4000-8000-00000000d102'),
+    'approval_token_id',(select (out->>'tokenId')::uuid from _tkv),'balance_check','strict',
     'statement',jsonb_build_object('period_start','2026-06-01','period_end','2026-06-30','opening_minor','0','ending_minor','0','currency','USD','lines','[]'::jsonb)))$$,
   'P0009',null,'approve rejects a token with the wrong proposal_version');
 -- Expired token (1s TTL, sleep past it) -> reject at approve.
@@ -509,8 +509,8 @@ set local role authenticated;
 set local request.jwt.claims = '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
 select throws_ok($$select public.keel_cmd_statements_approve_draft(
   gen_random_uuid(),'gate:expired','{}'::jsonb,'00000000-0000-4000-8000-00000000a001',
-  jsonb_build_object('draftId',(select id from public.statement_drafts where document_version_id='00000000-0000-4000-8000-00000000d102'),
-    'approvalTokenId',(select (out->>'tokenId')::uuid from _tke),'balanceCheck','strict',
+  jsonb_build_object('draft_id',(select id from public.statement_drafts where document_version_id='00000000-0000-4000-8000-00000000d102'),
+    'approval_token_id',(select (out->>'tokenId')::uuid from _tke),'balance_check','strict',
     'statement',jsonb_build_object('period_start','2026-06-01','period_end','2026-06-30','opening_minor','0','ending_minor','0','currency','USD','lines','[]'::jsonb)))$$,
   'P0009',null,'approve rejects an expired token');
 select is((select status::text from public.statement_drafts where document_version_id='00000000-0000-4000-8000-00000000d102'),
@@ -536,7 +536,7 @@ set local role authenticated;
 set local request.jwt.claims = '{"sub":"00000000-0000-4000-8000-000000000002","role":"authenticated"}';
 select lives_ok($$select public.keel_cmd_statements_dismiss_draft(
   gen_random_uuid(),'dismiss:1','{}'::jsonb,'00000000-0000-4000-8000-00000000a001',
-  jsonb_build_object('draftId',(select id from public.statement_drafts where document_version_id='00000000-0000-4000-8000-00000000d201')))$$,
+  jsonb_build_object('draft_id',(select id from public.statement_drafts where document_version_id='00000000-0000-4000-8000-00000000d201')))$$,
   'dismiss flips an extracted draft to dismissed');
 select is((select status::text from public.statement_drafts where document_version_id='00000000-0000-4000-8000-00000000d201'),
   'dismissed','draft is dismissed');
@@ -553,7 +553,7 @@ set local role authenticated;
 set local request.jwt.claims = '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
 select throws_ok($$select public.keel_cmd_statements_dismiss_draft(
   gen_random_uuid(),'dismiss:scope','{}'::jsonb,'00000000-0000-4000-8000-00000000a001',
-  jsonb_build_object('draftId',(select id from public.statement_drafts where document_version_id='00000000-0000-4000-8000-00000000d301')))$$,
+  jsonb_build_object('draft_id',(select id from public.statement_drafts where document_version_id='00000000-0000-4000-8000-00000000d301')))$$,
   'P0006',null,'user1 cannot dismiss a draft on an account they cannot write (account scope)');
 reset role;
 

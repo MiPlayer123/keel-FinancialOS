@@ -571,14 +571,14 @@ begin
   end if;
 
   if jsonb_typeof(p_payload) <> 'object'
-     or (p_payload - 'draftId') <> '{}'::jsonb
-     or coalesce(p_payload->>'draftId', '') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' then
+     or (p_payload - 'draft_id') <> '{}'::jsonb
+     or coalesce(p_payload->>'draft_id', '') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' then
     raise exception 'KEEL_INVALID_COMMAND: malformed dismiss payload' using errcode = 'P0009';
   end if;
 
   select * into v_draft
     from public.statement_drafts
-   where household_id = p_household_id and id = (p_payload->>'draftId')::uuid
+   where household_id = p_household_id and id = (p_payload->>'draft_id')::uuid
    for update;
   if not found or not public.keel_recurring_account_access(p_household_id, v_draft.account_id, true) then
     raise exception 'KEEL_SCOPE_VIOLATION: draft not found' using errcode = 'P0006';
@@ -663,22 +663,22 @@ begin
 
   -- The command envelope: draftId + approvalTokenId + balanceCheck + statement.
   if jsonb_typeof(p_payload) <> 'object'
-     or (p_payload - 'draftId' - 'approvalTokenId' - 'balanceCheck' - 'statement') <> '{}'::jsonb
-     or coalesce(p_payload->>'draftId', '') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
-     or coalesce(p_payload->>'approvalTokenId', '') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
-     or coalesce(p_payload->>'balanceCheck', '') not in ('strict', 'anchor')
+     or (p_payload - 'draft_id' - 'approval_token_id' - 'balance_check' - 'statement') <> '{}'::jsonb
+     or coalesce(p_payload->>'draft_id', '') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+     or coalesce(p_payload->>'approval_token_id', '') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+     or coalesce(p_payload->>'balance_check', '') not in ('strict', 'anchor')
      or jsonb_typeof(p_payload->'statement') <> 'object' then
     raise exception 'KEEL_INVALID_COMMAND: malformed approve payload' using errcode = 'P0009';
   end if;
 
-  v_token_id := (p_payload->>'approvalTokenId')::uuid;
-  v_balance_check := p_payload->>'balanceCheck';
+  v_token_id := (p_payload->>'approval_token_id')::uuid;
+  v_balance_check := p_payload->>'balance_check';
   v_body := p_payload->'statement';
 
   -- Resolve the draft (locked) and its account scope.
   select * into v_draft
     from public.statement_drafts
-   where household_id = p_household_id and id = (p_payload->>'draftId')::uuid
+   where household_id = p_household_id and id = (p_payload->>'draft_id')::uuid
    for update;
   if not found or not public.keel_recurring_account_access(p_household_id, v_draft.account_id, true) then
     raise exception 'KEEL_SCOPE_VIOLATION: draft not found' using errcode = 'P0006';
