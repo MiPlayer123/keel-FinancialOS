@@ -5010,3 +5010,110 @@ Local throwaway stack: supabase start → db reset → test db = Result: PASS
 (after build-functions.mjs generates the gitignored vendor bundle; the 2 suites
 that fail without it are pre-existing artifact-missing failures, not this change).
 apps/web pnpm build green (ESLint).
+
+---
+## 2026-07-19 — Recurring detection: exclude transfers/P2P/uncategorized-inflow + reap stale suggestions
+
+Problem: user still saw person-name inflows ("Austin Y Feng", "Brianna Wang" —
+Venmo from people) and card payments ("Electronic Payment") as recurring. The
+detector reads DESCRIPTIONS; those P2P rows carry NO Plaid transfer signal and NO
+rail keyword, so the prior regularity-gate / keyword-suppression work could not
+catch them. But the categorization fix (20260719020000) now puts the signal in
+the CATEGORY overlay: Plaid TRANSFER_IN/OUT/LOAN_PAYMENTS → 'transfers'/
+'transfers_in', ambiguous person-name Venmo (Plaid OTHER_OTHER) sit in
+'other_income'; genuine payroll is 'income'.
+
+Migrations (FILE ONLY — never applied to any DB; range 20260719030000–039999):
+- 20260719030000_recurring_series_status_withdrawn_enum.sql — ALTER TYPE adds
+  'withdrawn' to recurring_series_status AND recurring_transition. OWN migration:
+  ALTER TYPE ... ADD VALUE cannot be used in the same txn that later references
+  it (the manual apply path runs each file in its own --single-transaction psql,
+  so this commits before 031000 uses it).
+- 20260719031000_recurring_exclude_transfers_and_reap_stale.sql —
+  TASK 1 (reader): keel_recurring_read_txns (create-or-replace, same sig) adds a
+  NOT EXISTS exclusion on the EFFECTIVE category (overlay tc→ledger_accounts.
+  pfc_key wins over the single offset posting, same resolution as
+  keel_txn_is_transfer_category / rich read model): excludes eff_pfc IN
+  ('transfers','transfers_in','other_income','uncategorized_income'). That set =
+  transfers BOTH directions + inflow catch-alls (the three non-'transfers' keys
+  are income-kind by construction, so they only ever apply to inflows — the
+  task's "INFLOW other_income/uncategorized_income" reduces to a flat key set,
+  deterministic, no name/sign heuristics). asset|liability widening + single-
+  real-account guard preserved verbatim.
+  TASK 2 (reap): keel_recurring_reap_stale_suggestions(household, run_id,
+  emitted_series_ids[]) — keel_api-owned SECURITY DEFINER (keel_api holds
+  UPDATE(status); keel_worker does NOT — that is why the reap is a separate
+  keel_api proc, not folded into the worker-owned upsert). Marks every
+  'suggested' series NOT in emitted_series_ids as 'withdrawn', appends a
+  'withdrawn' status_event (append-only timeline preserved) + audit_log. NEVER
+  touches confirmed/rejected/paused/cancelled. Idempotent: command_id =
+  md5('recurring-withdraw-stale:'||run||':'||series)::uuid → status_event insert
+  is ON CONFLICT DO NOTHING and the status UPDATE fires only while still
+  'suggested'. keel_recurring_upsert_candidates re-suggestion predicate gains
+  'withdrawn' (so a later run that re-detects flips it back to 'suggested' and
+  re-points its candidate). keel_list_recurring gains `status <> 'withdrawn'`
+  so a retracted suggestion never reaches the client (web RecurringSeriesRow
+  union unchanged).
+
+Worker wiring: processRecurringDetection now reads the upsert result
+({runId, candidates:[{seriesId}]}) and calls keel_recurring_reap_stale_
+suggestions with runId + the emitted seriesIds AFTER the upsert. Reap failure is
+logged non-fatally (candidates are already durably upserted).
+
+Live read-only verification (founder household, 2026-07-19, SELECT only):
+- RILLAVOICE INC PAYROLL (26×) and DEEPTUNE PAYROLL (19×) are effective 'income'
+  → KEPT (real payroll survives).
+- "Austin yang", "Brianna Wang", "Zelle payment from …" inflows are effective
+  'other_income' → DROPPED. Transfers ('transfers'/'transfers_in') → DROPPED.
+- Simulated over the reader's single-real-account guard: 1046 of 1348 candidate-
+  eligible rows drop (the P2P noise), 302 remain (real merchants + payroll).
+HONEST SIDE EFFECT: a few one-off reimbursements ("Wagoo Inc PAY…", "DEEPTUNE
+INC. BREX REIMB", "RILLAVOICE INC BVC") also sit in 'other_income' and are
+excluded — but each occurs ONCE, below the detector's >=3-occurrence bar, so no
+recurring series is lost. A genuinely-recurring inflow Plaid can only tag
+OTHER_OTHER (parked in other_income) would be excluded until the user categorizes
+it 'income' — correct suggest→approve (ownership explicit, never inferred).
+
+Validation (local Supabase docker BROKEN this session — realtime crash-loop; did
+NOT use supabase start): throwaway PG17 cluster (initdb, random port), pgTAP 1.3.3
+loaded from source-generated sql/pgtap.sql, both migrations replayed with
+check_function_bodies=on (all bodies parse/resolve; ownership+grants+the
+ownership-sanity DO block pass). Ran an adapted pgTAP harness exercising the NEW
+logic against a minimal schema mirroring the real tables: 19/19 assertions PASS —
+payroll+subscription KEPT; venmo/transfers_in-overlay/transfers-out EXCLUDED;
+overlay wins over offset; reap withdraws only the stale suggested-not-emitted
+series; confirmed/rejected untouched; reap idempotent; emitted series NOT reaped;
+withdrawn hidden from list. Committed pgTAP test 033 exercises the same through
+the real command-core (confirm/reject) for CI. apps/web pnpm build green (ESLint,
+EXIT 0). node scripts/build-functions.mjs green (worker TS bundles). Root pnpm
+vitest run: 931 pass (77 files).
+
+Orchestrator at merge: apply BOTH migrations to cloud in order (30000 first, its
+own txn; then 31000) via the psql --single-transaction path; redeploy the worker
+edge function (build-functions.mjs + functions deploy api worker). Then trigger a
+re-detection for the household (POST /worker/drain {"queue":"recurring_detection"}
+after enqueue, or wait for keel-drain-recurring-detection */15). The re-run
+produces the smaller correct candidate set AND reaps the 34 lingering suggested
+false-positives → Review shows payroll + real subscriptions only. Enum value
+added: yes ('withdrawn' on both recurring_series_status and recurring_transition).
+
+Review follow-ups (2026-07-19, post-APPROVE):
+- FIX 1 (P2 re-runnability, DONE): keel_recurring_reap_stale_suggestions in
+  20260719031000 was `create function` — changed to `create or replace function`
+  so the migration replays cleanly like every other object in the file. Signature
+  and body otherwise byte-identical.
+- FIX 2 (P2 defense-in-depth, SKIPPED w/ reason): the missing `when 'withdrawn'
+  then 'withdrawn'` arm in the `v_status := case v_latest_transition` block lives
+  in keel_recurring_transition_core, defined ONLY in main's 20260712120000_
+  recurring.sql, which this branch does NOT touch. The path is unreachable (a
+  'withdrawn' transition is a system reap, never a user transition fed through
+  transition_core; falls through to else→'suggested' harmlessly). Adding the arm
+  would require re-creating that large proc from main into a new branch migration
+  purely for an unreachable path — not worth the transcription risk per the
+  reviewer's own SKIP guidance. Left for a future migration that legitimately
+  modifies transition_core.
+
+Rebased onto origin/main (was 5386ea0; main advanced by PR #81 connection-entity
+1fc4778 — PR #80 categorization was already in the merge-base). Only conflict:
+NOTES.md (union). pgTAP 033 does not collide (main goes to 032). Migration
+timestamps 030000/031000 do not collide with main's 040000.
