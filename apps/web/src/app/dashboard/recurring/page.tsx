@@ -43,6 +43,7 @@ import {
   annualizedEstimate,
   type RecurringCommand,
 } from '@/lib/recurring';
+import { RECURRING_BUCKET_BADGE_LABELS } from '@/lib/recurring-bucket';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -394,13 +395,16 @@ function RecurringLanes({
 // Outflow buckets only — the "Subscriptions & Bills" surface. Income is a
 // separate lane (see B, docs/RECURRING-RESEARCH.md): paychecks and other
 // recurring inflows are not subscriptions and must not sit in this list.
-const EXPENSE_BUCKET_ORDER: RecurringBucket[] = ['bill', 'utility', 'subscription'];
+// 'recurring' (classifier v4) = generic recurring expense — cadence evidenced,
+// kind not — grouped last, after the kinds KEEL can actually vouch for.
+const EXPENSE_BUCKET_ORDER: RecurringBucket[] = ['bill', 'utility', 'subscription', 'recurring'];
 const BUCKET_LABELS: Record<RecurringBucket, string> = {
   income: 'Income',
   paycheck: 'Paychecks',
   bill: 'Bills',
   utility: 'Utilities',
   subscription: 'Subscriptions',
+  recurring: 'Recurring',
   excluded: 'Excluded',
 };
 
@@ -476,7 +480,9 @@ function SeriesSection({
     }
     const byBucket = new Map<RecurringBucket, RecurringSeriesRow[]>();
     for (const s of laneRows) {
-      const bucket = bucketBySeries.get(s.seriesId) ?? 'subscription';
+      // Unclassified (no classification row yet) is a *generic* recurring
+      // expense, never a claimed "subscription" (GAP-2: no evidence, no claim).
+      const bucket = bucketBySeries.get(s.seriesId) ?? 'recurring';
       const list = byBucket.get(bucket) ?? [];
       list.push(s);
       byBucket.set(bucket, list);
@@ -640,8 +646,12 @@ function SeriesCard({
                 Recurring income
               </Badge>
             ) : (
-              <Badge variant="secondary" className="capitalize">
-                {series.sign}
+              /* Outflow: the classifier's bucket, adjacent to the name it
+                 qualifies (Law 8). "Recurring" is the neutral generic —
+                 cadence evidenced, kind not (classifier v4) — and also the
+                 honest placeholder while classification hasn't loaded. */
+              <Badge variant="secondary">
+                {RECURRING_BUCKET_BADGE_LABELS[bucket ?? 'recurring']}
               </Badge>
             )}
           </div>
