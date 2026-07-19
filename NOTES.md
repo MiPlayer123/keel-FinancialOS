@@ -5300,3 +5300,51 @@ orchestrator applies after review).
 - Found while validating (separate gap, not fixed here): zero matched occurrences
   household-wide means the classifier runs evidence-blind for every series —
   occurrence->txn matching needs its own follow-up.
+## 2026-07-19 — Investments: canonical subtype list + cash-only/awaiting-provider holdings UX
+Migration 20260719210000_investments_subtype_canon_and_cash_presentation.sql (NOT applied —
+orchestrator applies after review). Branch feat/investments-subtype-canon-cash-ui.
+- Item 1 (subtype canon): keel_is_investment_subtype was a 14-keyword substring match; the
+  web and worker mirrors were the same list minus 'cash management'. Now ONE canonical
+  policy in three mirrors (apps/web/src/lib/investment-subtype.ts,
+  supabase/functions/_shared/investment-subtype.ts, SQL helper): exact match against the
+  full published Plaid investment subtype set (49 values: crypto exchange, trust, 401a,
+  457b, sep/simple ira, tfsa/rrsp/resp/lif/lira/…, education savings account, thrift
+  savings plan, ugma/utma, keogh, sarsep, gic, sipp, non-custodial wallet, …) ∪ the old
+  keyword fallback (manual/free-text subtypes) ∪ 'cash management' at the DISPLAY tier
+  only. Strict superset of the old predicate — nothing previously classified drops off.
+- Two deliberate tiers, not drift: isHoldingsSyncEligibleSubtype (worker provider-call
+  tier) excludes 'cash management' — a depository cash-management account alone must not
+  trigger /investments/holdings/get (errors on items without the product; the worker's
+  primary signal remains live Plaid type='investment'). Display tier includes it
+  (20260718122000 ruling preserved).
+- Deviation: Plaid subtype 'other' is NOT classified as investment. Only the subtype is
+  stored (not Plaid type), and 'other' exists under multiple Plaid types — matching it
+  would drag non-investment accounts onto investment surfaces. Worker still catches live
+  type=investment 'other' accounts via the type union. Flagged here per protocol.
+- Item 2 (cash-only vs awaiting-provider): the holdings mapper deliberately skips
+  cash-equivalent securities (SPAXX, reason 'cash_equivalent'), so an all-cash brokerage
+  and a brokerage whose institution hasn't published Investments yet (Fidelity is async)
+  were indistinguishable (both zero rows, blank UI). keel_worker_sync_holdings gains an
+  optional p_account_stats jsonb (old 3-arg signature DROPPED to avoid an ambiguous
+  overload; PostgREST named-arg calls from the not-yet-redeployed worker still resolve);
+  it persists accounts.holdings_provider_count / holdings_cash_equivalent_count /
+  holdings_synced_at (null = unknown, never fabricated 0 — Law 9). Overview read model
+  emits them per account (formulaVersion investments-overview-v3); value_daily bumped to
+  investments-value-daily-v2 (broadened subtype set can change its inputs).
+- Investments page Holdings card now iterates ACCOUNTS: listed positions (+ a derived
+  "Cash (money market)" remainder = balance − positions, labeled derived, only with cash
+  evidence and never negative); cash-only accounts show the balance as cash; connected
+  accounts with nothing reported show "No positions reported yet" (async-institution
+  copy); manual accounts get an add-holdings nudge. Gain/loss totals card + N-of-M basis
+  coverage untouched. Decision logic is a pure lib (holdings-presentation.ts, unit-tested)
+  — cash-management subtype alone is enough for the cash presentation, so the founder's
+  individual (SPAXX) account presents correctly even before the stats-carrying sync runs.
+- Tests: web vitest (subtype canon + presentation, 21 tests) green; full pnpm test green
+  (79 files / 962 + deno); apps/web pnpm build (ESLint gate) green. pgTAP 024 extended
+  (classifier canon, 4-arg proc shape, stats persistence + no-clobber) — needs local
+  stack; classifier SQL validated read-only against live. Root pnpm lint/typecheck have
+  29 PRE-EXISTING failures on main (untouched files: transfer-grouping.test, packages/ai,
+  contracts zod uuid deprecation, documents) — unchanged by this work.
+- NOT deployed: migration (orchestrator), edge functions (worker calls the 4-arg proc —
+  deploy AFTER the migration: node scripts/build-functions.mjs && supabase functions
+  deploy api worker).

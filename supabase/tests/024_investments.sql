@@ -39,14 +39,47 @@ select ok(
   'service_role can execute the ingest proc');
 
 -- ---------------------------------------------------------------------------
--- Subtype classifier: keyword set incl. the cash-management broadening.
+-- Subtype classifier (canonical, 20260719210000): full Plaid investment
+-- subtype set ∪ keyword fallback ∪ the cash-management broadening. Mirrors
+-- apps/web/src/lib/investment-subtype.ts and _shared/investment-subtype.ts.
 -- ---------------------------------------------------------------------------
 select ok(public.keel_is_investment_subtype('brokerage'), 'brokerage is investment');
 select ok(public.keel_is_investment_subtype('401k'), '401k is investment');
 select ok(public.keel_is_investment_subtype('cash management'),
   'cash management is investment (broadened)');
+-- Exact Plaid subtypes the old keyword list missed.
+select ok(public.keel_is_investment_subtype('crypto exchange'), 'crypto exchange is investment');
+select ok(public.keel_is_investment_subtype('trust'), 'trust is investment');
+select ok(public.keel_is_investment_subtype('401a'), '401a is investment');
+select ok(public.keel_is_investment_subtype('457b'), '457b is investment');
+select ok(public.keel_is_investment_subtype('sep ira'), 'sep ira is investment');
+select ok(public.keel_is_investment_subtype('tfsa'), 'tfsa is investment');
+select ok(public.keel_is_investment_subtype('education savings account'),
+  'education savings account is investment');
+select ok(public.keel_is_investment_subtype('thrift savings plan'),
+  'thrift savings plan is investment');
+select ok(public.keel_is_investment_subtype('ugma'), 'ugma is investment');
+select ok(public.keel_is_investment_subtype('HSA'), 'classifier is case-insensitive');
 select ok(not public.keel_is_investment_subtype('checking'), 'checking is not investment');
+select ok(not public.keel_is_investment_subtype('money market'),
+  'depository money market is not investment');
+select ok(not public.keel_is_investment_subtype('other'),
+  'subtype-only other stays unclassified (ambiguous across Plaid types)');
 select ok(not public.keel_is_investment_subtype(null), 'null subtype is not investment');
+
+-- Holdings-sync stats plumbing (Item 2, 20260719210000): the 3-arg
+-- keel_worker_sync_holdings signature was DROPPED (no ambiguous overload);
+-- the 4-arg shape with the optional per-account stats payload replaces it.
+select has_function('public','keel_worker_sync_holdings',
+  array['uuid','uuid','jsonb','jsonb'], 'sync-holdings proc has the stats param');
+select hasnt_function('public','keel_worker_sync_holdings',
+  array['uuid','uuid','jsonb'], 'old 3-arg sync-holdings signature is gone');
+select has_column('public','accounts','holdings_provider_count',
+  'accounts carries the provider holdings count');
+select has_column('public','accounts','holdings_cash_equivalent_count',
+  'accounts carries the cash-equivalent skip count');
+select has_column('public','accounts','holdings_synced_at',
+  'accounts carries holdings-synced-at');
 
 -- ---------------------------------------------------------------------------
 -- Fixtures: a plaid brokerage connection + investment account on alpha.
@@ -252,8 +285,16 @@ select is(
   'overview surfaces the one investment account');
 select is(
   (public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->>'formulaVersion'),
-  'investments-overview-v2',
+  'investments-overview-v3',
   'overview carries a formula version (reproducible numbers)');
+-- v3 stat fields exist per account and are JSON null until a sync reports
+-- them (Law 9: unknown is null, never a fabricated 0).
+select is(
+  (select a->>'holdingsProviderCount' from jsonb_array_elements(
+     public.keel_investments_overview('00000000-0000-4000-8000-00000000a001')->'accounts') a
+    where a->>'accountId' = 'de000000-0000-4000-8000-000000000021'),
+  null,
+  'holdingsProviderCount is JSON null before any holdings sync reports it');
 
 -- ---------------------------------------------------------------------------
 -- Investment depth v1: per-holding cost basis + unrealized gain/loss +
@@ -516,6 +557,47 @@ select is(
       and p.ledger_account_id = 'de000000-0000-4000-8000-000000000011'),
   15000::bigint,
   'restatement reverses the old amount and posts the corrected one');
+
+-- ---------------------------------------------------------------------------
+-- Item 2 (20260719210000): per-account holdings-sync stats. A sync whose
+-- provider reported one all-cash-equivalent holding (all-SPAXX brokerage)
+-- persists providerCount=1 / cashEquivalentCount=1 on the account — the
+-- stored fact that lets the UI present the balance as cash instead of an
+-- empty portfolio. Runs LAST: the empty p_holdings full-replace removes the
+-- plaid VTI row, which earlier sections still need.
+-- ---------------------------------------------------------------------------
+select lives_ok($$
+  select public.keel_worker_sync_holdings(
+    '00000000-0000-4000-8000-00000000a001', 'de000000-0000-4000-8000-000000000001',
+    '[]'::jsonb,
+    '[{"externalRef":"pgtap:inv:acct","providerCount":1,"cashEquivalentCount":1}]'::jsonb)
+$$, 'sync-holdings accepts the per-account stats payload');
+select is(
+  (select holdings_provider_count from public.accounts
+    where id = 'de000000-0000-4000-8000-000000000021'),
+  1,
+  'provider holdings count persisted on the account');
+select is(
+  (select holdings_cash_equivalent_count from public.accounts
+    where id = 'de000000-0000-4000-8000-000000000021'),
+  1,
+  'cash-equivalent skip count persisted on the account');
+select isnt(
+  (select holdings_synced_at from public.accounts
+    where id = 'de000000-0000-4000-8000-000000000021'),
+  null,
+  'holdings_synced_at stamped with the stats');
+-- Omitting the stats payload leaves the stored stats untouched (no reset).
+select lives_ok($$
+  select public.keel_worker_sync_holdings(
+    '00000000-0000-4000-8000-00000000a001', 'de000000-0000-4000-8000-000000000001',
+    '[]'::jsonb)
+$$, 'sync-holdings still accepts calls without a stats payload');
+select is(
+  (select holdings_provider_count from public.accounts
+    where id = 'de000000-0000-4000-8000-000000000021'),
+  1,
+  'a stats-less sync does not clobber the stored stats');
 
 select * from finish();
 rollback;
