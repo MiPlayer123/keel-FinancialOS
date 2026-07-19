@@ -161,7 +161,13 @@ $rgrants$;
 revoke all on function public.keel_resolve_finalize_entity(uuid, uuid, text, text, text, text, uuid, uuid)
   from public, anon, authenticated;
 grant execute on function public.keel_resolve_finalize_entity(uuid, uuid, text, text, text, text, uuid, uuid)
-  to service_role;
+  to service_role, keel_api;
+-- keel_api must hold EXECUTE: keel_finalize_link is a SECURITY DEFINER function
+-- owned by keel_api and it calls this resolver, so at runtime the resolver is
+-- invoked as keel_api. Without this grant the whole link/reconnect finalize
+-- fails with permission denied. (The resolver could not be re-owned to keel_api
+-- via ALTER FUNCTION here — insufficient_privilege on the cloud role — so an
+-- explicit grant is the correct fix.)
 
 create or replace function public.keel_finalize_link(
   p_attempt_id uuid,
