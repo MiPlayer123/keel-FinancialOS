@@ -5524,3 +5524,50 @@ orchestrator applies after review). Branch feat/investments-subtype-canon-cash-u
 - NOT deployed: migration (orchestrator), edge functions (worker calls the 4-arg proc —
   deploy AFTER the migration: node scripts/build-functions.mjs && supabase functions
   deploy api worker).
+
+## Statement Ingestion SLICE 1 — pure parsers + types + IO-port + capability CI (2026-07-19)
+Plan: docs/harness/plans/statement-ingestion-v2.md SLICE 1 (§1 capability boundary [A1],
+§2 red-team [A2], §7 pure packages). Pure TS only — no DB/SQL. Laws cited: 1 (deterministic
+parsers, LLM never here), 4 (money = BIGINT minor units via STRING math, no floats), 5 (all
+CSV/OFX text inert data-tier; stored verbatim, never a tool/fetch/RPC trigger).
+- Files: packages/documents/src/statement/{types,money,csv,ofx,payment-matcher,index}.ts;
+  scripts/check-capability-boundary.mjs (+ .d.mts); wired into .github/workflows/ci.yml harness
+  gates step + root `check:capability-boundary` script. Package gains @keel/test-fixtures +
+  fast-check devDeps (RED_TEAM_STRINGS + fuzz).
+- Money string-math (money.ts): parse cleans symbol/commas/parens/sign, splits on '.', pads or
+  TRUNCATES-toward-zero the fraction as TEXT, concatenates digit runs, one BigInt() at the end.
+  No Number/parseFloat/×100 in the value path. Per-currency scale (JPY/KRW=0, BHD/KWD=3, default
+  2). Round-trip property (parse∘format) proven; property test asserts amounts stay integer
+  strings across random/fuzz input.
+- CSV (RFC-4180): quotes, embedded commas/newlines, doubled quotes, BOM (TextDecoder strips it),
+  CRLF/LF; header-alias mapper (Date/Posted/Transaction Date; single Amount OR Debit+Credit split
+  with debit=outflow/credit=inflow; Description/Memo/Payee; Currency); per-field row/col/byte-offset
+  provenance; rejects >5000 data rows BEFORE building the line array; period = min/max line date;
+  balances null when absent.
+- OFX (ofx.ts): ENTITY-FREE by construction — scanOfxSafety rejects DOCTYPE/DTD, <!ENTITY,
+  numeric char refs, and any non-builtin &name; (blocks external-entity + billion-laughs) → inert
+  record with null_reason 'hostile'. Tolerant 1.x SGML (leaf tags) + 2.x XML tokenizer. Bank/card:
+  STMTRS/CCSTMTRS → BANKTRANLIST/STMTTRN (DTPOSTED,TRNAMT,NAME/MEMO,FITID) + LEDGERBAL→ending,
+  ACCTID→accountHint, kindHint bank|card. Investment: INVSTMTRS → INVPOSLIST (POSSTOCK/POSMF/…) +
+  SECLIST → holdings with CUSIP/ISIN/ticker; qty is a decimal string (NOT money, never summed).
+  All money via the same string→minor path; OFX element-path provenance.
+- payment-matcher.ts: PURE mirror of exact-only card-payment match (SQL comes in a later slice).
+  |ending| exact only, forward window [periodEnd, +35d] inclusive, eligibility + never-resurrect-
+  rejected, single survivor → suggest(score 100), ≥2 → ABSTAIN 'ambiguous' (never auto-confirm),
+  deterministic ranking (transfer-link → nearest date → lowest id).
+- Capability boundary: scripts/check-capability-boundary.mjs FAILS if any file under
+  packages/documents/src/statement/ (or *matcher*/extraction-core) references
+  supabase|createClient|.rpc(|.from(|.storage|fetch(|@supabase. Golden-negative test proves it
+  fires on a planted violation; a no-IO-import test proves the statement sources import only sibling
+  ./ modules. (The gate caught a real `Array.from(` → rewrote to spread.)
+- Red-team (test/fixtures/statement-cases.ts, CI-blocking): CSV formula-injection headers (=cmd,@SUM)
+  + RED_TEAM_STRINGS in headers/descriptions; debit/credit columns with payloads; OFX NAME/MEMO/SECNAME
+  carrying RED_TEAM_STRINGS — asserted stored VERBATIM as inert strings; the module structurally
+  cannot reach IO (proven by the boundary gate + no-IO-import test). Fuzz/property tests over malformed
+  CSV/OFX (never throw, never leak a float).
+- Results: 149 tests pass; documents package coverage 100% stmts/branches/functions/lines (the
+  package enforces 100% via vitest thresholds); package typecheck clean; all NEW files lint clean.
+  Deviation-adjacent note: reached 100% branch coverage by removing genuinely-unreachable defensive
+  branches (TextDecoder never throws on bytes and strips BOM itself; BigInt guarded by a digit-run
+  check) rather than leaving dead code — documented inline. Pre-existing root lint/typecheck failures
+  on main (transfer-grouping.test, receipt-cases Math.round, contracts zod) are untouched by this slice.

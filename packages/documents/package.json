@@ -11,6 +11,8 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@keel/test-fixtures": "workspace:*",
+    "fast-check": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

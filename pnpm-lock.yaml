@@ -218,6 +218,12 @@ importers:
 
   packages/documents:
     devDependencies:
+      '@keel/test-fixtures':
+        specifier: workspace:*
+        version: link:../test-fixtures
+      fast-check:
+        specifier: 'catalog:'
+        version: 4.9.0
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
