@@ -1,7 +1,23 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { FileCheck2, Plus, Trash2, Loader2, ChevronRight, LockOpen, CalendarClock } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  FileCheck2,
+  Plus,
+  Trash2,
+  Loader2,
+  ChevronRight,
+  LockOpen,
+  CalendarClock,
+  Upload,
+  FileText,
+  Sparkles,
+  Cpu,
+  ShieldCheck,
+  AlertTriangle,
+  X,
+  TrendingUp,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
@@ -10,16 +26,31 @@ import { useHousehold } from '@/components/keel/household-context';
 import { useKeelQuery } from '@/lib/use-keel-query';
 import {
   fetchAccounts,
+  fetchEntities,
   fetchStatementCadence,
+  fetchStatementDrafts,
+  fetchStatementDraftDetail,
   setStatementCadence,
+  uploadStatement,
+  issueStatementDraftApproval,
+  approveStatementDraft,
+  dismissStatementDraft,
+  type StatementDraftDetail,
   keelCommand,
   keelQuery,
   newId,
+  STATEMENT_UPLOAD_ACCEPT,
   type AccountRow,
   type RichTransactionRow,
   type StatementCadenceRow,
+  type StatementDraftRow,
   type StatementRow,
 } from '@/lib/keel-api';
+import {
+  buildStatementBody,
+  runIssueThenApprove,
+  type ApproveFormInput,
+} from '@/lib/statement-approve';
 import { sha256Hex, parseSignedDollars, minorToDollars } from '@/lib/hash';
 import { shortDateWithYear } from '@/lib/relative-date';
 import { AttachmentsSection } from '@/components/keel/attachments-section';
@@ -65,8 +96,12 @@ function StatementsBody() {
     householdId,
   );
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
+  const [entityId, setEntityId] = useState<string | null>(null);
   const [cadence, setCadence] = useState<StatementCadenceRow[]>([]);
+  const [drafts, setDrafts] = useState<StatementDraftRow[] | null>(null);
   const [creating, setCreating] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [reviewDraft, setReviewDraft] = useState<StatementDraftRow | null>(null);
   const [openDetail, setOpenDetail] = useState<string | null>(null);
 
   const reloadCadence = () => {
@@ -77,6 +112,18 @@ function StatementsBody() {
         setCadence([]);
       });
   };
+
+  const reloadDrafts = useCallback(() => {
+    if (!householdId) {
+      setDrafts(null);
+      return;
+    }
+    void fetchStatementDrafts(householdId)
+      .then(setDrafts)
+      .catch(() => {
+        setDrafts([]);
+      });
+  }, [householdId]);
 
   useEffect(() => {
     if (!householdId) return;
@@ -90,6 +137,15 @@ function StatementsBody() {
       .catch(() => {
         setCadence([]);
       });
+    // Resolve a default entity for uploads (household's first/personal books).
+    void fetchEntities(householdId)
+      .then((entities) => {
+        setEntityId((current) => current ?? entities[0]?.entityId ?? null);
+      })
+      .catch(() => {
+        /* upload stays disabled without an entity */
+      });
+    reloadDrafts();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadCadence is stable per householdId
   }, [householdId]);
 
@@ -120,21 +176,41 @@ function StatementsBody() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          A statement is the bank&apos;s own record for a period. Enter one and KEEL
-          checks it line-by-line against your ledger.
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="max-w-xl text-sm text-muted-foreground">
+          A statement is the bank&apos;s own record for a period. Upload the PDF/CSV/OFX
+          and KEEL reads it, or enter one by hand — then reconcile it line-by-line
+          against your ledger.
         </p>
-        <Button
-          size="sm"
-          onClick={() => {
-            setCreating(true);
-          }}
-        >
-          <Plus className="size-4" />
-          New statement
-        </Button>
+        <div className="flex items-center gap-2">
+          <StatementUploadButton
+            disabled={uploading || !householdId || !entityId || accounts.length === 0}
+            onClick={() => {
+              setUploading(true);
+            }}
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setCreating(true);
+            }}
+          >
+            <Plus className="size-4" />
+            New statement
+          </Button>
+        </div>
       </div>
+
+      <StatementDraftsSection
+        drafts={drafts}
+        householdId={householdId}
+        userId={userId}
+        onReview={(d) => {
+          setReviewDraft(d);
+        }}
+        onChanged={reloadDrafts}
+      />
 
       <StatementCadenceSection
         cadence={cadence}
@@ -185,7 +261,56 @@ function StatementsBody() {
           void refetch();
         }}
       />
+
+      <UploadStatementDialog
+        open={uploading}
+        accounts={accounts}
+        householdId={householdId}
+        entityId={entityId}
+        onClose={() => {
+          setUploading(false);
+        }}
+        onUploaded={() => {
+          setUploading(false);
+          reloadDrafts();
+        }}
+      />
+
+      {reviewDraft ? (
+        <ReviewDraftDialog
+          draft={reviewDraft}
+          account={accounts.find((a) => a.id === reviewDraft.accountId) ?? null}
+          householdId={householdId}
+          userId={userId}
+          onClose={() => {
+            setReviewDraft(null);
+          }}
+          onApproved={() => {
+            setReviewDraft(null);
+            reloadDrafts();
+            void refetch();
+          }}
+        />
+      ) : null}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Upload button — hover affordance mirrors the receipts hub.
+// ---------------------------------------------------------------------------
+function StatementUploadButton({
+  disabled,
+  onClick,
+}: {
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Button size="sm" disabled={disabled} onClick={onClick}>
+      <Upload className="size-4" />
+      Upload statement
+    </Button>
   );
 }
 
@@ -1238,6 +1363,833 @@ function CloseStatementDialog({
           >
             {busy ? <Loader2 className="size-4 animate-spin" /> : <FileCheck2 className="size-4" />}
             Close &amp; lock period
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SLICE 7: Upload statement (ingest mode) — REQUIRED account picker (entity-
+// aware), .pdf/.csv/.ofx/.qfx, mode:'ingest'. A duplicate re-upload surfaces as
+// "already uploaded" with a link to the existing draft, never an error [A4].
+// ---------------------------------------------------------------------------
+const STATEMENT_MAX_BYTES = 10 * 1024 * 1024;
+
+function UploadStatementDialog({
+  open,
+  accounts,
+  householdId,
+  entityId,
+  onClose,
+  onUploaded,
+}: {
+  open: boolean;
+  accounts: AccountRow[];
+  householdId: string | null;
+  entityId: string | null;
+  onClose: () => void;
+  onUploaded: () => void;
+}) {
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [dupe, setDupe] = useState<{ draftId: string | null } | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Account picker is entity-aware: group by entity when the household has more
+  // than one set of books, so a personal card and an LLC account never blur.
+  const byEntity = useMemo(() => {
+    const groups = new Map<string, AccountRow[]>();
+    for (const a of accounts) {
+      const list = groups.get(a.entityId) ?? [];
+      list.push(a);
+      groups.set(a.entityId, list);
+    }
+    return groups;
+  }, [accounts]);
+
+  function reset() {
+    setAccountId(null);
+    setFile(null);
+    setDupe(null);
+  }
+
+  async function submit() {
+    if (!householdId || !entityId || !accountId || !file) return;
+    if (file.size <= 0 || file.size > STATEMENT_MAX_BYTES) {
+      toast.error('File is empty or over the 10MB limit.');
+      return;
+    }
+    setBusy(true);
+    setDupe(null);
+    try {
+      const result = await uploadStatement({ householdId, entityId, accountId, file });
+      if (result.duplicate) {
+        // Not an error — the same bytes for this account already exist.
+        setDupe({ draftId: result.draftId });
+        toast.info('This statement was already uploaded.');
+        return;
+      }
+      toast.success('Statement uploaded — reading it now.');
+      reset();
+      onUploaded();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not upload the statement.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) {
+          reset();
+          onClose();
+        }
+      }}
+    >
+      <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Upload statement</DialogTitle>
+          <DialogDescription>
+            Pick the account this statement belongs to, then choose the file. KEEL
+            reads it and prepares a draft for you to review before anything is written.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Account</Label>
+            <Select
+              value={accountId ?? undefined}
+              items={Object.fromEntries(accounts.map((a) => [a.id, a.name]))}
+              onValueChange={(v) => {
+                setAccountId(v);
+              }}
+            >
+              <SelectTrigger className="w-full" disabled={busy}>
+                <SelectValue placeholder="Pick the account" />
+              </SelectTrigger>
+              <SelectContent>
+                {Array.from(byEntity.values()).flatMap((list) =>
+                  list.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>
+                      {a.name}
+                    </SelectItem>
+                  )),
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Statement file</Label>
+            <input
+              ref={inputRef}
+              type="file"
+              className="sr-only"
+              accept={STATEMENT_UPLOAD_ACCEPT}
+              disabled={busy}
+              onChange={(e) => {
+                setFile(e.target.files?.[0] ?? null);
+                setDupe(null);
+              }}
+            />
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => {
+                  inputRef.current?.click();
+                }}
+              >
+                <FileText className="size-4" />
+                Choose file
+              </Button>
+              <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground" title={file?.name}>
+                {file ? file.name : 'PDF, CSV, OFX or QFX'}
+              </span>
+            </div>
+          </div>
+
+          {dupe ? (
+            <div className="rounded-md border border-border bg-secondary/30 px-3 py-2 text-sm">
+              This file is already uploaded for this account. Its draft is in the
+              list below{dupe.draftId ? ' — review it there.' : '.'}
+            </div>
+          ) : null}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" disabled={busy} onClick={onClose}>
+            {dupe ? 'Done' : 'Cancel'}
+          </Button>
+          <Button
+            disabled={busy || !accountId || !file || dupe !== null}
+            onClick={() => {
+              void submit();
+            }}
+          >
+            {busy ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
+            Upload
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SLICE 7: Drafts inbox — filename, account, extractor badge (deterministic
+// CSV/OFX vs AI + confidence), extracted period/opening/ending, line count, the
+// ledger-delta preview (discrepancy vs ledger at period_end), account-hint
+// mismatch. Actions: Review & approve / Dismiss.
+// ---------------------------------------------------------------------------
+
+/** Deterministic parsers (CSV/OFX) vs the AI extractor — the trust signal a
+ *  reviewer needs before approving. */
+function isDeterministicExtractor(extractor: string | null): boolean {
+  if (!extractor) return false;
+  const e = extractor.toLowerCase();
+  return e.includes('csv') || e.includes('ofx') || e.includes('deterministic');
+}
+
+function ExtractorBadge({ extraction }: { extraction: StatementDraftRow['extraction'] }) {
+  if (!extraction) return null;
+  const deterministic = isDeterministicExtractor(extraction.extractor);
+  // Math.round is lint-banned (money allocation rule); confidence is a 0–1 ratio,
+  // so a truncated integer percent is fine for the badge.
+  const pct =
+    extraction.confidence !== null ? Math.trunc(extraction.confidence * 100) : null;
+  return deterministic ? (
+    <Badge variant="secondary" className="gap-1 text-[11px] font-normal">
+      <ShieldCheck className="size-3" />
+      Deterministic
+    </Badge>
+  ) : (
+    <Badge variant="secondary" className="gap-1 text-[11px] font-normal">
+      <Cpu className="size-3" />
+      AI read{pct !== null ? ` · ${String(pct)}%` : ''}
+    </Badge>
+  );
+}
+
+function StatementDraftsSection({
+  drafts,
+  householdId,
+  userId,
+  onReview,
+  onChanged,
+}: {
+  drafts: StatementDraftRow[] | null;
+  householdId: string | null;
+  userId: string | null;
+  onReview: (draft: StatementDraftRow) => void;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+
+  // Only live drafts belong in the inbox; approved/dismissed are terminal.
+  const live = useMemo(
+    () => (drafts ?? []).filter((d) => d.status !== 'approved' && d.status !== 'dismissed'),
+    [drafts],
+  );
+
+  async function dismiss(draftId: string) {
+    if (!householdId || !userId) return;
+    setBusy(draftId);
+    try {
+      await dismissStatementDraft({ householdId, userId, draftId });
+      toast.success('Draft dismissed.');
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not dismiss the draft.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (drafts === null || live.length === 0) return null;
+
+  return (
+    <section className="space-y-2">
+      <div className="flex items-baseline gap-2">
+        <h2 className="text-sm font-semibold">Uploaded — needs review</h2>
+        <span className="text-xs text-muted-foreground">{live.length}</span>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        KEEL read these. Review the exact statement it will write, then approve — nothing
+        is recorded until you do.
+      </p>
+      <div className="space-y-2">
+        {live.map((d) => (
+          <DraftCard
+            key={d.draftId}
+            draft={d}
+            busy={busy === d.draftId}
+            onReview={() => {
+              onReview(d);
+            }}
+            onDismiss={() => {
+              void dismiss(d.draftId);
+            }}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DraftCard({
+  draft,
+  busy,
+  onReview,
+  onDismiss,
+}: {
+  draft: StatementDraftRow;
+  busy: boolean;
+  onReview: () => void;
+  onDismiss: () => void;
+}) {
+  const ex = draft.extraction;
+  const reading = ex === null || ex.status === 'pending';
+  // Narrowed views: `failedEx` is set only on a read failure, `extractedEx` only
+  // on a successful read — each is non-null in its own JSX branch, so no
+  // redundant null checks downstream.
+  const failedEx = ex !== null && ex.status === 'failed' ? ex : null;
+  const extractedEx = ex !== null && ex.status === 'extracted' ? ex : null;
+  const currency = (ex !== null ? ex.currency : null) ?? draft.accountCurrency;
+
+  // Account-hint mismatch: the extractor guessed a currency that differs from
+  // the account it was uploaded to. Surface it — don't silently coerce.
+  const currencyMismatch =
+    ex !== null && ex.currency !== null && ex.currency !== draft.accountCurrency;
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-3 text-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 space-y-1.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <FileText className="size-4 shrink-0 text-muted-foreground" />
+            {draft.url ? (
+              <a
+                href={draft.url}
+                target="_blank"
+                rel="noreferrer"
+                className="min-w-0 truncate font-medium hover:underline"
+                title={draft.originalFilename}
+              >
+                {draft.originalFilename}
+              </a>
+            ) : (
+              <span className="min-w-0 truncate font-medium" title={draft.originalFilename}>
+                {draft.originalFilename}
+              </span>
+            )}
+            <ExtractorBadge extraction={ex} />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {draft.accountName}
+            {ex !== null && ex.holdingCount > 0 ? (
+              <>
+                {' · '}
+                <span className="inline-flex items-center gap-1">
+                  <TrendingUp className="size-3" />
+                  {ex.holdingCount} holding{ex.holdingCount === 1 ? '' : 's'}
+                </span>
+              </>
+            ) : null}
+          </p>
+
+          {reading ? (
+            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="size-3 animate-spin" /> Reading statement…
+            </p>
+          ) : failedEx ? (
+            <p className="text-xs text-keel-negative">
+              Could not read this statement automatically
+              {failedEx.errorCode !== null ? ` (${failedEx.errorCode})` : ''}. You can still enter
+              it by hand.
+            </p>
+          ) : extractedEx ? (
+            <div className="mt-1 space-y-1 rounded-md border border-border/60 bg-muted/30 px-2.5 py-1.5">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
+                {extractedEx.periodStart !== null && extractedEx.periodEnd !== null ? (
+                  <span className="font-mono text-muted-foreground">
+                    {extractedEx.periodStart} → {extractedEx.periodEnd}
+                  </span>
+                ) : null}
+                <span className="text-muted-foreground">
+                  {extractedEx.lineCount} line{extractedEx.lineCount === 1 ? '' : 's'}
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5">
+                {extractedEx.openingMinor !== null ? (
+                  <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    Opening <Money amountMinor={extractedEx.openingMinor} currency={currency} className="text-xs" />
+                  </span>
+                ) : null}
+                {extractedEx.endingMinor !== null ? (
+                  <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    Ending <Money amountMinor={extractedEx.endingMinor} currency={currency} className="text-xs" />
+                  </span>
+                ) : null}
+              </div>
+              {draft.discrepancyMinor !== null ? (
+                <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Sparkles className="size-3 shrink-0" />
+                  {draft.discrepancyMinor === '0' ? (
+                    <span>Matches your ledger at period end.</span>
+                  ) : (
+                    <span className="flex items-center gap-1">
+                      Ledger differs by
+                      <Money amountMinor={draft.discrepancyMinor} currency={currency} signed className="text-xs" />
+                    </span>
+                  )}
+                </p>
+              ) : null}
+              {currencyMismatch ? (
+                <p className="flex items-center gap-1.5 text-xs text-keel-negative">
+                  <AlertTriangle className="size-3 shrink-0" />
+                  Read as {extractedEx.currency}, but the account is {draft.accountCurrency}.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="flex shrink-0 gap-2">
+          <Button
+            type="button"
+            size="sm"
+            disabled={busy || reading}
+            onClick={onReview}
+          >
+            Review &amp; approve
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={onDismiss}
+            aria-label="Dismiss draft"
+          >
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <X className="size-3.5" />}
+            Dismiss
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SLICE 7 — THE GATE (Law 11). Review a draft in a prefilled, fully-editable
+// form, then approve. On confirm the client builds ONE statement body and hands
+// the SAME object to issue (mint the token) AND approve_draft (redeem+write) via
+// runIssueThenApprove — the client half of "exact bytes approved = exact bytes
+// executed". Currency comes from the ACCOUNT, never hardcoded USD [A6]. Zero
+// lines are supported for anchor/valuation statements [A6].
+// ---------------------------------------------------------------------------
+
+type ReviewLine = { date: string; amount: string; description: string };
+
+const ANCHOR_REASONS = {
+  investment_valuation: 'Investment valuation',
+  market_value: 'Market value',
+  no_transaction_detail: 'No transaction detail',
+} as const;
+
+function ReviewDraftDialog({
+  draft,
+  account,
+  householdId,
+  userId,
+  onClose,
+  onApproved,
+}: {
+  draft: StatementDraftRow;
+  account: AccountRow | null;
+  householdId: string | null;
+  userId: string | null;
+  onClose: () => void;
+  onApproved: () => void;
+}) {
+  // Currency is the ACCOUNT's, never USD [A6]. Fall back to the draft row's
+  // recorded account currency if the account object hasn't loaded.
+  const currency = account?.currency ?? draft.accountCurrency;
+
+  const [detail, setDetail] = useState<StatementDraftDetail | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [periodStart, setPeriodStart] = useState('');
+  const [periodEnd, setPeriodEnd] = useState('');
+  const [opening, setOpening] = useState('');
+  const [ending, setEnding] = useState('');
+  const [lines, setLines] = useState<ReviewLine[]>([]);
+  const [balanceCheck, setBalanceCheck] = useState<'strict' | 'anchor'>('strict');
+  const [anchorReason, setAnchorReason] =
+    useState<keyof typeof ANCHOR_REASONS>('investment_valuation');
+  const [anchorGap, setAnchorGap] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [tokenExpired, setTokenExpired] = useState(false);
+
+  // Prefill from the extraction (every field stays editable).
+  useEffect(() => {
+    let active = true;
+    if (!householdId) return;
+    setDetail(null);
+    setLoadError(false);
+    void fetchStatementDraftDetail(householdId, draft.draftId)
+      .then((d) => {
+        if (!active) return;
+        setDetail(d);
+        const ex = d.extraction;
+        setPeriodStart(ex?.periodStart ?? '');
+        setPeriodEnd(ex?.periodEnd ?? '');
+        setOpening(ex?.openingMinor != null ? minorToDollars(ex.openingMinor) : '');
+        setEnding(ex?.endingMinor != null ? minorToDollars(ex.endingMinor) : '');
+        setLines(
+          d.lines.map((l) => ({
+            date: l.date ?? '',
+            amount: minorToDollars(l.amountMinor),
+            description: l.description ?? '',
+          })),
+        );
+        // An investment draft with holdings but no lines defaults to anchor.
+        if (d.lines.length === 0 && d.holdings.length > 0) setBalanceCheck('anchor');
+      })
+      .catch(() => {
+        if (active) setLoadError(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [householdId, draft.draftId]);
+
+  const form: ApproveFormInput = useMemo(
+    () => ({
+      periodStart,
+      periodEnd,
+      opening,
+      ending,
+      currency,
+      lines,
+      balanceCheck,
+      ...(balanceCheck === 'anchor'
+        ? { anchorReason, anchorGapExplanation: anchorGap }
+        : {}),
+    }),
+    [periodStart, periodEnd, opening, ending, currency, lines, balanceCheck, anchorReason, anchorGap],
+  );
+
+  // Live validation using the SAME builder the submit path uses (single source
+  // of truth for the client-side gate).
+  const built = useMemo(() => buildStatementBody(form), [form]);
+
+  function setLine(i: number, patch: Partial<ReviewLine>) {
+    setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
+  }
+
+  async function approve() {
+    if (!householdId || !userId || !built.ok) return;
+    setBusy(true);
+    setTokenExpired(false);
+    try {
+      // THE GATE: issue a token for THIS body, then approve with THE SAME body.
+      await runIssueThenApprove({
+        householdId,
+        userId,
+        draftId: draft.draftId,
+        balanceCheck,
+        body: built.body,
+        deps: {
+          issue: (input) =>
+            issueStatementDraftApproval(input).then((r) => ({
+              tokenId: r.tokenId,
+              expiresAt: r.expiresAt,
+            })),
+          approve: (input) => approveStatementDraft(input),
+        },
+      });
+      toast.success('Statement approved and recorded.');
+      onApproved();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not approve the statement.';
+      // A stale/expired approval token: offer a clean re-try (re-issue).
+      if (/EXPIRED|expired|already redeemed|P0007/.test(message)) {
+        setTokenExpired(true);
+        toast.error('The approval window expired — review again and re-approve.');
+      } else {
+        toast.error(message);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const holdings = detail?.holdings ?? [];
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => {
+        if (!o) onClose();
+      }}
+    >
+      <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Review &amp; approve statement</DialogTitle>
+          <DialogDescription>
+            This is the exact statement KEEL will record for{' '}
+            <span className="font-medium text-foreground">{draft.accountName}</span>. Everything
+            is editable — approve only what you have checked.
+          </DialogDescription>
+        </DialogHeader>
+
+        {detail === null && !loadError ? (
+          <div className="space-y-2">
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-24 w-full" />
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {loadError ? (
+              <p className="rounded-md border border-keel-negative/40 bg-keel-negative/5 px-3 py-2 text-sm text-keel-negative">
+                Couldn&apos;t load the read details. You can still enter the statement by hand.
+              </p>
+            ) : null}
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="rv-start">Period start</Label>
+                <Input
+                  id="rv-start"
+                  type="date"
+                  value={periodStart}
+                  onChange={(e) => {
+                    setPeriodStart(e.target.value);
+                  }}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="rv-end">Period end</Label>
+                <Input
+                  id="rv-end"
+                  type="date"
+                  value={periodEnd}
+                  onChange={(e) => {
+                    setPeriodEnd(e.target.value);
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="rv-opening">Opening balance ({currency})</Label>
+                <Input
+                  id="rv-opening"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={opening}
+                  onChange={(e) => {
+                    setOpening(e.target.value);
+                  }}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="rv-ending">Ending balance ({currency})</Label>
+                <Input
+                  id="rv-ending"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={ending}
+                  onChange={(e) => {
+                    setEnding(e.target.value);
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Reconciliation mode</Label>
+              <Select
+                value={balanceCheck}
+                items={{ strict: 'Strict (opening + lines = ending)', anchor: 'Anchor (balance only)' }}
+                onValueChange={(v) => {
+                  if (v === 'strict' || v === 'anchor') setBalanceCheck(v);
+                }}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="strict">Strict (opening + lines = ending)</SelectItem>
+                  <SelectItem value="anchor">Anchor (balance only — no line equation)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {balanceCheck === 'anchor' ? (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label>Anchor reason</Label>
+                  <Select
+                    value={anchorReason}
+                    items={ANCHOR_REASONS}
+                    onValueChange={(v) => {
+                      if (v) setAnchorReason(v);
+                    }}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(Object.keys(ANCHOR_REASONS) as (keyof typeof ANCHOR_REASONS)[]).map((r) => (
+                        <SelectItem key={r} value={r}>
+                          {ANCHOR_REASONS[r]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="rv-gap">Why the balance differs</Label>
+                  <Input
+                    id="rv-gap"
+                    placeholder="e.g. market moves, no per-trade detail"
+                    maxLength={1000}
+                    value={anchorGap}
+                    onChange={(e) => {
+                      setAnchorGap(e.target.value);
+                    }}
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>Statement lines</Label>
+                {lines.length === 0 ? (
+                  <span className="text-xs text-muted-foreground">
+                    No lines{balanceCheck === 'anchor' ? ' (anchor)' : ''}
+                  </span>
+                ) : null}
+              </div>
+              {lines.map((l, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <Input
+                    type="date"
+                    className="w-36 shrink-0"
+                    value={l.date}
+                    onChange={(e) => {
+                      setLine(i, { date: e.target.value });
+                    }}
+                  />
+                  <Input
+                    placeholder="Description"
+                    value={l.description}
+                    maxLength={500}
+                    onChange={(e) => {
+                      setLine(i, { description: e.target.value });
+                    }}
+                  />
+                  <Input
+                    className="w-28 shrink-0"
+                    inputMode="decimal"
+                    placeholder="-12.34"
+                    value={l.amount}
+                    onChange={(e) => {
+                      setLine(i, { amount: e.target.value });
+                    }}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Remove line"
+                    onClick={() => {
+                      setLines((prev) => prev.filter((_, idx) => idx !== i));
+                    }}
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                </div>
+              ))}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setLines((prev) => [...prev, { date: '', amount: '', description: '' }]);
+                }}
+              >
+                <Plus className="size-4" />
+                Add line
+              </Button>
+            </div>
+
+            {holdings.length > 0 ? (
+              <div className="space-y-1.5">
+                <Label className="flex items-center gap-1.5">
+                  <TrendingUp className="size-4" /> Holdings read from this statement
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Preview only — applying holdings to your portfolio comes in a later step.
+                </p>
+                <div className="overflow-hidden rounded-md border border-border">
+                  {holdings.map((h, i) => (
+                    <div
+                      key={`${h.symbol ?? h.cusip ?? 'h'}-${String(i)}`}
+                      className={`flex items-center gap-3 px-3 py-2 text-sm ${
+                        i > 0 ? 'border-t border-border' : ''
+                      }`}
+                    >
+                      <span className="w-20 shrink-0 truncate font-mono text-xs">
+                        {h.symbol ?? h.cusip ?? h.isin ?? '—'}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-muted-foreground" title={h.name ?? ''}>
+                        {h.name ?? ''}
+                      </span>
+                      {h.qty ? <span className="shrink-0 text-xs text-muted-foreground">{h.qty}</span> : null}
+                      {h.valueMinor ? (
+                        <Money amountMinor={h.valueMinor} currency={h.currency ?? currency} className="shrink-0 text-sm" />
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="rounded-md border border-border bg-secondary/30 px-3 py-2 text-sm">
+              {built.ok ? (
+                <span className="flex items-center gap-1.5">
+                  <ShieldCheck className="size-4" /> Ready to approve — this is what will be written.
+                </span>
+              ) : (
+                <span className="text-muted-foreground">{built.error}</span>
+              )}
+            </div>
+
+            {tokenExpired ? (
+              <p className="text-xs text-muted-foreground">
+                The previous approval token expired. Re-approve to mint a fresh one.
+              </p>
+            ) : null}
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button disabled={busy || !built.ok} onClick={() => void approve()}>
+            {busy ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
+            Approve &amp; record
           </Button>
         </DialogFooter>
       </DialogContent>
