@@ -1,0 +1,31 @@
+-- fix(recurring) 3/3: grant keel_worker UPDATE(status) on recurring_series.
+--
+-- Latent grant gap found on live while validating the reap pipeline
+-- (20260719082000/083000). The detector's upsert
+-- keel_recurring_upsert_candidates is SECURITY DEFINER owned by *keel_worker*
+-- (NOT keel_api). When a fresh detection inserts a new candidate version for a
+-- series that already exists in status suggested/rejected/withdrawn, it restores
+-- the materialized status to 'suggested':
+--
+--     if v_inserted then
+--       if v_series.status in ('suggested','rejected','withdrawn') then
+--         update public.recurring_series
+--            set current_candidate_version_id = ..., status = 'suggested', updated_at = now()
+--          where household_id = ... and id = ...;
+--
+-- keel_worker held UPDATE only on (current_candidate_version_id, updated_at), so
+-- that branch failed with "permission denied for table recurring_series" the
+-- moment a real re-detection inserted a new candidate version for an existing
+-- series — which is exactly what the forced clean re-detection does. The whole
+-- detection job then retried forever and no reap ran. (The sibling reap grant in
+-- 20260719082000 targeted keel_api, the reap's owner; this is the upsert's
+-- owner — a different role.)
+--
+-- Grant is a strict, minimal ADDITION: keel_worker already INSERTs all columns
+-- and UPDATEs current_candidate_version_id/updated_at on this table. Adding
+-- UPDATE(status) lets the documented re-suggest path (20260719031000) actually
+-- run. Confirmed/paused/cancelled series are untouched by that branch, so this
+-- cannot un-confirm a user's confirmed series; rejected series only re-suggest
+-- when re-detected, and P2P/transfer junk is already excluded from the reader.
+
+grant update (status) on public.recurring_series to keel_worker;
