@@ -65,6 +65,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { parseSignedDollars } from '@/lib/hash';
+import { entityLabel, hasMultipleEntities, scopeToEntity } from '@/lib/category-picker';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useEffect } from 'react';
 
@@ -1262,7 +1263,16 @@ function AddScheduleDialog({
   const [busy, setBusy] = useState(false);
 
   const kind = direction === 'bill' ? 'expense' : 'income';
-  const categoryOptions = categories.filter((c) => c.kind === kind);
+  // Entity-scope to the chosen account's entity (D-060): a schedule posts into
+  // that account's entity, so its category must belong to the same entity.
+  // Scoping collapses the identical-name Personal/Business duplication; the
+  // label disambiguates if an account isn't chosen yet (multi-entity).
+  const accountEntityId = accounts.find((a) => a.id === accountId)?.entityId ?? null;
+  const categoryOptions = scopeToEntity(categories, accountEntityId).filter(
+    (c) => c.kind === kind,
+  );
+  const showEntity = hasMultipleEntities(categoryOptions);
+  const catLabel = (c: CategoryRow) => entityLabel(c.name, c.entityName, showEntity);
 
   async function save() {
     if (!accountId || !categoryId) return;
@@ -1378,7 +1388,9 @@ function AddScheduleDialog({
             <Label>Category</Label>
             <Select
               value={categoryId ?? undefined}
-              items={Object.fromEntries(categoryOptions.map((c) => [c.ledgerAccountId, c.name]))}
+              items={Object.fromEntries(
+                categoryOptions.map((c) => [c.ledgerAccountId, catLabel(c)]),
+              )}
               onValueChange={(v) => {
                 setCategoryId(v);
               }}
@@ -1389,7 +1401,11 @@ function AddScheduleDialog({
               <SelectContent>
                 {categoryOptions.map((c) => (
                   <SelectItem key={c.ledgerAccountId} value={c.ledgerAccountId}>
-                    {c.parentLedgerAccountId ? <span className="pl-3">{c.name}</span> : c.name}
+                    {c.parentLedgerAccountId ? (
+                      <span className="pl-3">{catLabel(c)}</span>
+                    ) : (
+                      catLabel(c)
+                    )}
                   </SelectItem>
                 ))}
               </SelectContent>

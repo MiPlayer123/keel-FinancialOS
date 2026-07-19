@@ -48,18 +48,32 @@ export function AddBudgetCategoryPicker({
     [categories],
   );
 
-  // Label children with their parent so "Groceries" under "Food" reads clearly.
+  // Budgeting is a household-wide, cross-entity view: the SAME category name
+  // exists once per entity, so when more than one entity is represented the
+  // picker must disambiguate by entity or the rows read as duplicates (D-060,
+  // founder feedback). Single-entity households stay clean (no suffix).
+  const showEntity = useMemo(() => {
+    const seen = new Set<string>();
+    for (const c of categories) if (c.entityName) seen.add(c.entityName);
+    return seen.size > 1;
+  }, [categories]);
+
+  // Label children with their parent so "Groceries" under "Food" reads clearly,
+  // then suffix the entity when needed to disambiguate identical names.
   const options = useMemo(
     () =>
       [...categories]
-        .map((c) => ({
-          row: c,
-          label: c.parentLedgerAccountId
+        .map((c) => {
+          const base = c.parentLedgerAccountId
             ? `${nameById.get(c.parentLedgerAccountId) ?? ''} › ${c.categoryName}`
-            : c.categoryName,
-        }))
+            : c.categoryName;
+          return {
+            row: c,
+            label: showEntity && c.entityName ? `${base} · ${c.entityName}` : base,
+          };
+        })
         .sort((a, b) => a.label.localeCompare(b.label)),
-    [categories, nameById],
+    [categories, nameById, showEntity],
   );
 
   async function pick(row: BudgetRow) {

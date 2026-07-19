@@ -36,6 +36,7 @@ import {
   type TagRow,
 } from '@/lib/keel-api';
 import { merchantDisplayName } from '@/lib/merchant-name';
+import { entityLabel, hasMultipleEntities } from '@/lib/category-picker';
 import { resolveEditingAfterSave } from '@/lib/txn-edit-guard';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
 import { ImportCsvDialog } from '@/components/keel/import-csv-dialog';
@@ -927,6 +928,17 @@ function BulkBar({
   onClear: () => void;
 }) {
   const [catId, setCatId] = useState<string | null>(null);
+  // A bulk selection can span accounts in DIFFERENT entities, and the same
+  // category name exists once per entity — so this cross-entity picker must
+  // disambiguate identical names by their owning entity (D-060), the same way
+  // the per-row picker collapses to a single entity. The server skips any txn
+  // whose entity doesn't match the picked category.
+  const showEntity = useMemo(() => hasMultipleEntities(categories), [categories]);
+  const catLabel = useCallback(
+    (c: CategoryRow) =>
+      entityLabel(c.name, c.entityName, showEntity) + (c.kind === 'income' ? ' (income)' : ''),
+    [showEntity],
+  );
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-secondary/40 px-4 py-2.5">
       <span className="text-sm font-medium">
@@ -934,12 +946,7 @@ function BulkBar({
       </span>
       <Select
         value={catId ?? undefined}
-        items={Object.fromEntries(
-          categories.map((c) => [
-            c.ledgerAccountId,
-            c.kind === 'income' ? `${c.name} (income)` : c.name,
-          ]),
-        )}
+        items={Object.fromEntries(categories.map((c) => [c.ledgerAccountId, catLabel(c)]))}
         onValueChange={(v) => {
           setCatId(v);
         }}
@@ -950,10 +957,7 @@ function BulkBar({
         <SelectContent>
           {categories.map((c) => (
             <SelectItem key={c.ledgerAccountId} value={c.ledgerAccountId}>
-              <span className={c.parentLedgerAccountId ? 'pl-3' : ''}>
-                {c.name}
-                {c.kind === 'income' ? ' (income)' : ''}
-              </span>
+              <span className={c.parentLedgerAccountId ? 'pl-3' : ''}>{catLabel(c)}</span>
             </SelectItem>
           ))}
         </SelectContent>

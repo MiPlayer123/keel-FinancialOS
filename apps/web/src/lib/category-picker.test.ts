@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  entityLabel,
   groupForPicker,
   hasExactName,
+  hasMultipleEntities,
   inferKindFromAmount,
   matchesQuery,
   normalizeSearch,
@@ -10,6 +12,7 @@ import {
   parseRecents,
   pushRecent,
   recentCategoriesKey,
+  scopeToEntity,
 } from './category-picker';
 import type { CategoryRow } from './keel-api';
 
@@ -18,12 +21,15 @@ function cat(
   name: string,
   kind: 'income' | 'expense',
   parent: string | null = null,
+  entityId = 'entity-1',
+  entityName: string | null = null,
 ): CategoryRow {
   return {
     ledgerAccountId: id,
     name,
     kind,
-    entityId: 'entity-1',
+    entityId,
+    entityName,
     parentLedgerAccountId: parent,
   };
 }
@@ -168,5 +174,92 @@ describe('recents', () => {
       'd',
       'e',
     ]);
+  });
+});
+
+describe('scopeToEntity (D-060 entity scoping)', () => {
+  // The founder's household: same category name exists once per entity.
+  const personalLodging = cat('p-lodging', 'Lodging', 'expense', null, 'ent-personal', 'Personal');
+  const businessLodging = cat('b-lodging', 'Lodging', 'expense', null, 'ent-business', 'Business (LLC)');
+  const personalRent = cat('p-rent', 'Rent', 'expense', null, 'ent-personal', 'Personal');
+  const all = [personalLodging, businessLodging, personalRent];
+
+  it('keeps only the given entity — the "duplicate" collapses to one', () => {
+    const scoped = scopeToEntity(all, 'ent-personal');
+    expect(scoped.map((c) => c.ledgerAccountId)).toEqual(['p-lodging', 'p-rent']);
+    // Exactly ONE "Lodging" survives — no double-show for a scoped transaction.
+    expect(scoped.filter((c) => c.name === 'Lodging')).toHaveLength(1);
+  });
+
+  it('passes the full list through when the entity is unknown (null/undefined)', () => {
+    expect(scopeToEntity(all, null)).toHaveLength(3);
+    expect(scopeToEntity(all, undefined)).toHaveLength(3);
+  });
+
+  it('returns a fresh array (never mutates the input)', () => {
+    const out = scopeToEntity(all, null);
+    expect(out).not.toBe(all);
+    expect(out).toEqual(all);
+  });
+});
+
+describe('hasMultipleEntities', () => {
+  it('is false for a single entity (or an already-scoped list)', () => {
+    expect(hasMultipleEntities([cat('a', 'Rent', 'expense')])).toBe(false);
+    expect(
+      hasMultipleEntities([
+        cat('a', 'Rent', 'expense', null, 'e1'),
+        cat('b', 'Food', 'expense', null, 'e1'),
+      ]),
+    ).toBe(false);
+  });
+
+  it('is true once two entities are present', () => {
+    expect(
+      hasMultipleEntities([
+        cat('a', 'Rent', 'expense', null, 'e1'),
+        cat('b', 'Rent', 'expense', null, 'e2'),
+      ]),
+    ).toBe(true);
+  });
+
+  it('is false for an empty list', () => {
+    expect(hasMultipleEntities([])).toBe(false);
+  });
+});
+
+describe('entityLabel (disambiguation on cross-entity views)', () => {
+  it('suffixes the entity only when the picker spans entities', () => {
+    expect(entityLabel('Lodging', 'Personal', true)).toBe('Lodging · Personal');
+    expect(entityLabel('Lodging', 'Personal', false)).toBe('Lodging');
+  });
+
+  it('never suffixes when the entity name is missing/empty (pre-migration)', () => {
+    expect(entityLabel('Lodging', null, true)).toBe('Lodging');
+    expect(entityLabel('Lodging', undefined, true)).toBe('Lodging');
+    expect(entityLabel('Lodging', '', true)).toBe('Lodging');
+  });
+
+  it('turns two identical names into two distinct labels (no double-show)', () => {
+    const labels = [
+      entityLabel('Lodging', 'Personal', true),
+      entityLabel('Lodging', 'Business (LLC)', true),
+    ];
+    expect(new Set(labels).size).toBe(2);
+  });
+});
+
+describe('scope + group integration (founder scenario end-to-end)', () => {
+  it('an entity-scoped picker shows each category exactly once', () => {
+    const all = [
+      cat('p-lodging', 'Lodging', 'expense', null, 'ent-personal', 'Personal'),
+      cat('b-lodging', 'Lodging', 'expense', null, 'ent-business', 'Business (LLC)'),
+      cat('p-vac', 'Vacation', 'expense', null, 'ent-personal', 'Personal'),
+      cat('b-vac', 'Vacation', 'expense', null, 'ent-business', 'Business (LLC)'),
+    ];
+    const scoped = scopeToEntity(all, 'ent-personal');
+    const groups = groupForPicker(scoped, '', 'expense');
+    const names = groups.flatMap((g) => g.entries.map((e) => e.row.name));
+    expect(names.sort()).toEqual(['Lodging', 'Vacation']);
   });
 });

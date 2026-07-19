@@ -701,6 +701,13 @@ export type RichTransactionRow = {
   accountId: string;
   accountName: string;
   /**
+   * The owning account's entity (absent pre-migration). Categories are scoped
+   * per entity and the categorize / set-splits procs reject a cross-entity
+   * category, so the row's category picker entity-scopes to THIS entity: a
+   * Personal-account transaction only offers Personal categories.
+   */
+  entityId?: string | null;
+  /**
    * Masked account-number suffix (e.g. "1234" for "••1234"), teardown C6.
    * Absent/null pre-migration and for accounts linked before the mask
    * migration shipped (see 20260717220000_account_mask.sql) — the account
@@ -858,6 +865,14 @@ export type CategoryRow = {
   name: string;
   kind: 'income' | 'expense';
   entityId: string;
+  /**
+   * Human-readable owning-entity name ("Personal" / "Business (LLC)"). Absent
+   * pre-migration. Categories are scoped per entity, so identically-named
+   * categories exist once per entity — this label disambiguates them on
+   * cross-entity views (Add-category budgeting picker) where entity-scoping
+   * isn't possible. Data-tier string, only displayed (Law 5).
+   */
+  entityName?: string | null;
   /** Parent category for one-level nesting (absent pre-migration). */
   parentLedgerAccountId?: string | null;
   /** Seeded system category (renameable but key-stable). */
@@ -1106,6 +1121,13 @@ export type BudgetRow = {
   categoryLedgerAccountId: string;
   categoryName: string;
   currency: string;
+  /**
+   * Owning-entity name, when known (the Add-category picker carries it so a
+   * cross-entity budgeting view can disambiguate identically-named categories).
+   * Absent on the server budgets read model; populated client-side from the
+   * category taxonomy where it matters.
+   */
+  entityName?: string | null;
   /** Parent category for one-level nesting (absent pre-migration). */
   parentLedgerAccountId?: string | null;
   budgetMinor: string | null;

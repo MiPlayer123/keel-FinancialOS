@@ -119,6 +119,9 @@ function BudgetsBody() {
       categoryLedgerAccountId: c.ledgerAccountId,
       categoryName: c.name,
       currency: 'USD',
+      // Carry the entity so the (cross-entity) budgeting picker can label
+      // identically-named categories from Personal vs Business (D-060).
+      entityName: c.entityName ?? null,
       parentLedgerAccountId: c.parentLedgerAccountId ?? null,
       budgetMinor: null,
       spentMinor: '0',
