@@ -51,3 +51,26 @@ export {
   RecordedReceiptExtractor,
   type CloudVisionConfig,
 } from './receipt-provider.js';
+export {
+  buildStatementExtractionPrompt,
+  coerceStatementFields,
+  inertStatementRecord,
+  STATEMENT_PROMPT_VERSION,
+  type StatementDocument,
+  type StatementExtractionResult,
+  type StatementExtractor,
+} from './statement.js';
+export {
+  CloudStatementExtractor,
+  RecordedStatementExtractor,
+  type CloudStatementConfig,
+} from './statement-provider.js';
+export type {
+  FieldProvenance,
+  NullReason,
+  StatementExtractionFields,
+  StatementExtractionRecord,
+  StatementHoldingRecord,
+  StatementKindHint,
+  StatementLineRecord,
+} from '@keel/documents/statement';

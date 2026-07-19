@@ -43,6 +43,10 @@ export const WRITE_ACTIONS = [
   'documents.delete',
   'receipts.decide_match',
   'receipts.detach_match',
+  'budgets.set_total',
+  'budgets.set_target',
+  'budgets.remove_target',
+  'budgets.set_expected_income',
 ] as const satisfies readonly CommandName[];
 
 export const EXPORT_ACTIONS = ['admin.export_all'] as const satisfies readonly CommandName[];
@@ -61,6 +65,7 @@ export const READ_ACTIONS = [
   'statements.cadence',
   'documents.list_for_target',
   'receipts.inbox',
+  'budgets.month',
   'audit.read',
   ...EXPORT_ACTIONS,
 ] as const;
@@ -111,6 +116,11 @@ export const ACTION_MINIMUM_ROLES = {
   'documents.delete': 'partner',
   'receipts.decide_match': 'partner',
   'receipts.detach_match': 'partner',
+  'budgets.set_total': 'partner',
+  'budgets.set_target': 'partner',
+  'budgets.remove_target': 'partner',
+  'budgets.set_expected_income': 'partner',
+  'budgets.month': 'viewer',
   'ledger.trial_balance': 'viewer',
   'transactions.list': 'viewer',
   'recurring.list': 'viewer',

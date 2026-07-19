@@ -444,6 +444,68 @@ export const DetachReceiptMatchPayloadSchema = z.object({
   matchId: z.string().uuid(),
 }).strict();
 
+// ---------------------------------------------------------------------------
+// Budgeting v2 (SLICE B2) — planned total + opt-in category targets.
+// Money rides the wire as minor-unit STRINGS (Law 4); percents are integer
+// basis points (0..10000, 10000 = 100%). Amount-vs-percent exclusivity is a
+// discriminated union so exactly one value shape is ever accepted, matching the
+// budget_targets value-shape CHECK. `month` is any civil date; the proc
+// truncates it to the first of the month (v1 keel_set_budget tolerance).
+// ---------------------------------------------------------------------------
+
+/** Integer basis points in [0, 10000]. 10000 bp = 100%. No floats (Law 4). */
+export const BasisPointsSchema = z.number().int().min(0).max(10_000);
+
+/** Non-negative minor-unit amount as a decimal string. */
+const NonNegativeMinorSchema = MinorUnitsStringSchema.regex(/^\d+$/u, 'budget amounts are non-negative');
+
+/** budgets.set_total — the plan total for a month (amount OR % of expected income). */
+export const SetBudgetTotalPayloadSchema = z.discriminatedUnion('basis', [
+  z.object({
+    month: IsoDateSchema,
+    basis: z.literal('amount'),
+    amountMinor: NonNegativeMinorSchema,
+    currency: CurrencyCodeSchema.optional(),
+  }).strict(),
+  z.object({
+    month: IsoDateSchema,
+    basis: z.literal('percent_of_income'),
+    percentBp: BasisPointsSchema,
+    currency: CurrencyCodeSchema.optional(),
+  }).strict(),
+]);
+
+/** budgets.set_target — one category target (amount OR % of the plan total). */
+export const SetBudgetTargetPayloadSchema = z.discriminatedUnion('kind', [
+  z.object({
+    month: IsoDateSchema,
+    categoryLedgerAccountId: LedgerAccountIdSchema,
+    kind: z.literal('amount'),
+    amountMinor: NonNegativeMinorSchema,
+    rollover: z.boolean().optional(),
+  }).strict(),
+  z.object({
+    month: IsoDateSchema,
+    categoryLedgerAccountId: LedgerAccountIdSchema,
+    kind: z.literal('percent_of_total'),
+    percentBp: BasisPointsSchema,
+    rollover: z.boolean().optional(),
+  }).strict(),
+]);
+
+/** budgets.remove_target — soft removal (end-date); never a DELETE. */
+export const RemoveBudgetTargetPayloadSchema = z.object({
+  month: IsoDateSchema,
+  categoryLedgerAccountId: LedgerAccountIdSchema,
+}).strict();
+
+/** budgets.set_expected_income — user-confirmed expected income for a month. */
+export const SetExpectedIncomePayloadSchema = z.object({
+  month: IsoDateSchema,
+  amountMinor: NonNegativeMinorSchema,
+  currency: CurrencyCodeSchema.optional(),
+}).strict();
+
 export const COMMAND_PAYLOAD_SCHEMAS = {
   'accounts.create': CreateAccountPayloadSchema,
   'ingest.record_raw_event': RecordRawEventPayloadSchema,
@@ -484,6 +546,10 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'documents.delete': DeleteDocumentPayloadSchema,
   'receipts.decide_match': DecideReceiptMatchPayloadSchema,
   'receipts.detach_match': DetachReceiptMatchPayloadSchema,
+  'budgets.set_total': SetBudgetTotalPayloadSchema,
+  'budgets.set_target': SetBudgetTargetPayloadSchema,
+  'budgets.remove_target': RemoveBudgetTargetPayloadSchema,
+  'budgets.set_expected_income': SetExpectedIncomePayloadSchema,
 } as const;
 export type CommandProcedureName = keyof typeof COMMAND_PAYLOAD_SCHEMAS;
 /**

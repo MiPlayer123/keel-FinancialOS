@@ -170,6 +170,10 @@ importers:
         version: 5.9.3
 
   packages/ai:
+    dependencies:
+      '@keel/documents':
+        specifier: workspace:*
+        version: link:../documents
     devDependencies:
       typescript:
         specifier: 'catalog:'

@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import { Wand2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { setBudget, type BudgetRow, type RichTransactionRow } from '@/lib/keel-api';
+import { setBudgetTarget, type BudgetRow, type RichTransactionRow } from '@/lib/keel-api';
 import { isDebtOrTransferLike } from '@/lib/spending';
 import { useKeelQuerySilent } from '@/lib/use-keel-query';
 import { Money } from '@/components/keel/money';
@@ -107,8 +107,14 @@ type RebalanceResult = {
  *    until it is exhausted, so the total is preserved to the minor unit —
  *    never merely bounded by "≤".
  */
-function rebalance(candidates: Candidate[]): RebalanceResult {
-  const totalCurrent = candidates.reduce((a, c) => a + c.current, 0n);
+function rebalance(candidates: Candidate[], targetTotal?: bigint): RebalanceResult {
+  // Fit either an explicit plan total (B3: "redistribute to fit the total") or,
+  // absent one, the current sum of budgets (the original behavior). When a plan
+  // total is given, the ceiling the proposals must land on is that total.
+  const totalCurrent =
+    targetTotal !== undefined && targetTotal > 0n
+      ? targetTotal
+      : candidates.reduce((a, c) => a + c.current, 0n);
   const totalRaw = candidates.reduce((a, c) => a + c.raw, 0n);
 
   if (totalRaw <= totalCurrent) {
@@ -158,14 +164,19 @@ function rebalance(candidates: Candidate[]): RebalanceResult {
 
 export function RebalanceBudgetsDialog({
   householdId,
+  userId,
   monthIso,
   rows,
+  totalMinor,
   onDone,
 }: {
   householdId: string;
+  userId: string;
   monthIso: string;
-  /** Currently-budgeted categories only (budgetMinor !== null). */
+  /** Amount-target categories only (percent targets are steered by the total). */
   rows: BudgetRow[];
+  /** Plan total to fit; when 0/absent the dialog fits the current budget sum. */
+  totalMinor?: string;
   onDone: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -198,8 +209,9 @@ export function RebalanceBudgetsDialog({
       ...c,
       raw: proposeRawMinor(actuals.get(c.id) ?? 0n),
     }));
-    return { candidates: withRaw, ...rebalance(withRaw) };
-  }, [txns, candidates, monthIso]);
+    const target = totalMinor !== undefined ? BigInt(totalMinor) : undefined;
+    return { candidates: withRaw, ...rebalance(withRaw, target) };
+  }, [txns, candidates, monthIso, totalMinor]);
 
   const changed = useMemo(
     () =>
@@ -219,10 +231,12 @@ export function RebalanceBudgetsDialog({
     let failed = 0;
     for (const c of changed) {
       try {
-        await setBudget({
+        await setBudgetTarget({
           householdId,
-          categoryLedgerAccountId: c.id,
+          userId,
           monthIso,
+          categoryLedgerAccountId: c.id,
+          kind: 'amount',
           amountMinor: c.proposed.toString(),
         });
         applied++;
@@ -265,8 +279,11 @@ export function RebalanceBudgetsDialog({
             <DialogTitle>Rebalance budgets</DialogTitle>
             <DialogDescription>
               A suggestion, not a write: proposed budgets are the last 3 full months&apos;
-              average actual spend per category, rounded up to the dollar. Nothing changes
-              until you apply it.
+              average actual spend per category, rounded up to the dollar and fit to
+              {totalMinor !== undefined && BigInt(totalMinor) > 0n
+                ? ' your plan total'
+                : ' your current budget total'}
+              . Nothing changes until you apply it.
             </DialogDescription>
           </DialogHeader>
 
@@ -331,8 +348,8 @@ export function RebalanceBudgetsDialog({
               {result && result.unallocatedMinor > 0n ? (
                 <p className="text-xs text-muted-foreground">
                   <Money amountMinor={result.unallocatedMinor.toString()} className="text-xs" />{' '}
-                  of the current total stays unallocated — proposals came in under budget and
-                  headroom isn&apos;t redistributed.
+                  stays as Left to budget — proposals came in under the total and headroom
+                  isn&apos;t redistributed.
                 </p>
               ) : null}
               {progress ? (

@@ -126,6 +126,48 @@ describe('command envelope', () => {
    expect(parseCommandPayload('reconciliations.close',{statementId:uuid,items:[{lineId:uuid,resolution:'matched_transaction',transactionId:uuid,explanation:'matched'}],adjustments:[]})).toMatchObject({statementId:uuid});
    expect(parseCommandPayload('reconciliations.reopen',{sessionId:uuid,reason:'correction'})).toMatchObject({sessionId:uuid});
   });
+  it('parses typed budgeting-v2 total/target/income payloads with amount⇄percent exclusivity', () => {
+    // total: amount OR percent_of_income, exactly one value
+    expect(parseCommandPayload('budgets.set_total', {
+      month: '2026-07-01', basis: 'amount', amountMinor: '300000',
+    })).toMatchObject({ amountMinor: '300000' });
+    expect(parseCommandPayload('budgets.set_total', {
+      month: '2026-07-01', basis: 'percent_of_income', percentBp: 5000,
+    })).toMatchObject({ percentBp: 5000 });
+    // wrong value for the basis is rejected (strict discriminated union)
+    expect(() => parseCommandPayload('budgets.set_total', {
+      month: '2026-07-01', basis: 'amount', percentBp: 5000,
+    })).toThrow();
+    expect(() => parseCommandPayload('budgets.set_total', {
+      month: '2026-07-01', basis: 'percent_of_income', percentBp: 10001,
+    })).toThrow();
+    expect(() => parseCommandPayload('budgets.set_total', {
+      month: '2026-07-01', basis: 'amount', amountMinor: '-1',
+    })).toThrow();
+
+    // target: amount OR percent_of_total, exactly one value + a category
+    expect(parseCommandPayload('budgets.set_target', {
+      month: '2026-07-01', categoryLedgerAccountId: uuid, kind: 'amount', amountMinor: '50000', rollover: true,
+    })).toMatchObject({ kind: 'amount', amountMinor: '50000' });
+    expect(parseCommandPayload('budgets.set_target', {
+      month: '2026-07-01', categoryLedgerAccountId: uuid, kind: 'percent_of_total', percentBp: 2500,
+    })).toMatchObject({ percentBp: 2500 });
+    expect(() => parseCommandPayload('budgets.set_target', {
+      month: '2026-07-01', categoryLedgerAccountId: uuid, kind: 'percent_of_total', amountMinor: '1',
+    })).toThrow();
+    // non-integer bp rejected (no floats — Law 4)
+    expect(() => parseCommandPayload('budgets.set_target', {
+      month: '2026-07-01', categoryLedgerAccountId: uuid, kind: 'percent_of_total', percentBp: 25.5,
+    })).toThrow();
+
+    expect(parseCommandPayload('budgets.remove_target', {
+      month: '2026-07-01', categoryLedgerAccountId: uuid,
+    })).toMatchObject({ categoryLedgerAccountId: uuid });
+    expect(parseCommandPayload('budgets.set_expected_income', {
+      month: '2026-07-01', amountMinor: '400000',
+    })).toMatchObject({ amountMinor: '400000' });
+  });
+
   it('rejects agent actors without onBehalfOf (Law 2: attribution)', () => {
     expect(
       CommandEnvelopeSchema.safeParse({
