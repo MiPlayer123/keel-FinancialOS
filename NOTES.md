@@ -4,6 +4,80 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-19 — SLICE 3 (statement-ingestion-v2 §5): extraction staging + tenant content registry + token-bound draft approval + anchor mode
+
+Migrations `20260720180000_statement_extraction.sql` + `20260720190000_statement_anchor_mode.sql`
+(NOT applied to live — orchestrator applies after adversarial review). Built ON TOP of the live
+Slice-0 primitive. Cites CLAUDE.md Laws 5 (data-tier isolation: raw_evidence + all extracted
+strings inert), 9 (source-preservation/idempotent/explicit-ownership: append-only immutable
+extractions, replay-idempotent persist, extraction is a SUGGESTION promoted only by explicit
+approval), 11 (approval tokens bind exact payload — THE GATE), 7 (one authorization compiler —
+account-scoped `keel_recurring_account_access(...,false)`), 2 (soft-delete: dismiss is a status
+flip, terminal-state-lock trigger). BC-v2.1 §9.1 (reproducible numbers: per-field provenance +
+discrepancy preview), §179 (anchor-mode valuation provenance).
+
+Deliverables:
+- 5 tables: `statement_extractions` (+ composite tenant FK, append-only), `statement_extraction_lines`
+  (typed BIGINT + per-field provenance, line_no<=5000), `statement_extraction_holdings`
+  (CUSIP/ISIN carried), `document_hashes` (tenant content registry [A4], pk(household,sha)),
+  `statement_drafts` (document_version unique, account NOT NULL, source_hash server-bound,
+  terminal-lock trigger).
+- Procs: `keel_worker_persist_statement_extraction` (definer owned by keel_worker, service_role
+  only; atomic parent+children; money strings ::bigint; on-conflict no-op replay; line_no>5000
+  rejected BEFORE building arrays; flips draft pending->extracted|failed);
+  `keel_list_statement_drafts` (viewer; account-scoped [A10]; discrepancy preview = ledger balance
+  at period_end − extracted ending, reproduced from the same period-bounded journal-posting sum
+  keel_reconciliation_close uses); `keel_cmd_statements_dismiss_draft`;
+  `keel_cmd_statements_approve_draft` — THE TOKEN-BOUND COMMAND.
+- THE GATE (advisory A): `keel_cmd_statements_approve_draft` builds ONE local `v_payload` (the
+  server-normalized statement body) and passes THE SAME variable to BOTH
+  `keel_approval_token_redeem(...)` AND `keel_statement_validate_and_materialize(...)` inside one
+  transaction. There is no second payload variable in scope — redeem-body-A / materialize-body-B is
+  impossible by construction. pgTAP tests 24-27 prove a tampered body (token approved body A,
+  client submits body B) fails at redeem (hash mismatch), no statement written, token not consumed,
+  draft left extracted. `source_hash` is bound from the SERVER `document_versions.content_sha256`
+  for the draft's version, NEVER the client payload; `account_id` is forced to the DRAFT's account.
+  Any client `source_hash`/`account_id`/`balance_check` in the body is stripped and re-bound before
+  hashing, so a client can approve only the true source.
+
+**Contract amendment (BC-v2.1 §179 + gate 8):** `CreateStatementPayloadSchema.lines` and
+`CloseReconciliationPayloadSchema.items` relaxed min1 -> min0; a `balance_check` ('strict'|'anchor')
+enum + `anchor_reason`/`anchor_gap_explanation` added to the statement body. Rationale: an
+investment/valuation statement's ending is a mark-to-market valuation, not opening plus a line sum,
+so it has zero per-line ledger detail (zero lines) and cannot satisfy the strict opening+Σ=ending
+identity. Anchor mode is permitted ONLY for investment/valuation account subtypes (brokerage /
+retirement / cash management), requires a typed `anchor_reason` + a stored `anchor_gap_explanation`
+(gate-8 provenance), and records the balances without the sum identity. Strict statements MUST carry
+neither anchor field (a table CHECK + the materialize both enforce this). The manual
+`keel_statement_create` path defaults to strict and is otherwise unchanged (byte-identical).
+
+**Empty-array NULL-bypass fix [A6]:** the shared `keel_statement_validate_and_materialize` computed
+`sum(...)` with no coalesce; an empty lines array made sum NULL, so `opening+NULL<>ending` was NULL
+(never true) and the reconcile check silently passed. With lines now min0, that bypass would become
+reachable, so the amended helper uses `coalesce(sum(...),0)` — an empty array contributes 0 and a
+zero-line STRICT statement with opening<>ending is now correctly rejected (pgTAP test 18).
+
+**Deviation-adjacent notes:** (1) the `document_hashes` registry and the discriminated
+attach-vs-ingest confirm-upload wiring [A3] land in Slice 4/6 (storage + confirm-upload); this slice
+ships the registry TABLE + the server-bound source_hash discipline the approval depends on. (2) The
+`statements` export projection is enriched twice (once by each migration's rename-then-wrap) because
+the two migrations layer independently — the outer layer's `jsonb_set('{tables,statements}',...)`
+replaces the key with the anchor-column-bearing projection; deliberate, follows the established
+receipts/approval-token export chain. (3) Integration harness (`26-statement-drafts.test.ts`) is a
+Slice-10 deliverable requiring a live Supabase stack; this slice's behaviors are proven against the
+EXACT shipping SQL by `tests/pgtap/statement_extraction.sql` (44 assertions, throwaway-Postgres
+runner applying the real migrations) — same rigor as the Slice-0 pgTAP.
+
+Tests: pgTAP 44/44 (persist idempotent replay + no child dup; line_no>5000 pre-reject; tenant
+isolation on persist; account-scope isolation on drafts list; zero-line strict NULL-bypass dead;
+anchor subtype gate + reason/gap requirement; THE GATE tamper/replay/wrong-version/expired; source_hash
+server-bound; draft terminal-lock + no-delete; extraction immutability; dismiss reversible +
+account-scoped). Exports 100% coverage incl. new statement-extraction export test (CSV/JSON/round-trip/
+secret-scan on all 5 tables). contracts+authz+exports vitest green; `apps/web pnpm build` (ESLint) clean;
+edge functions bundle clean.
+
+---
+
 ## 2026-07-19 — SLICE 0 (statement-ingestion-v2): approval-token SQL primitive + one shared statement validate/materialize
 
 Migration `20260720100000_approval_tokens.sql` (NOT applied to live — orchestrator
