@@ -41,6 +41,7 @@ import {
   askKeel,
   categorizeTransaction,
   createCategory,
+  detachDocument,
   getAiProfile,
   keelCommand,
   newId,
@@ -822,7 +823,7 @@ function AppliedActionsList({ actions }: { actions: AgentAppliedAction[] }) {
 }
 
 function AppliedActionRow({ action }: { action: AgentAppliedAction }) {
-  const { householdId } = useHousehold();
+  const { householdId, userId } = useHousehold();
   const [state, setState] = useState<'idle' | 'undoing' | 'undone'>('idle');
   const canUndo = action.undo !== undefined && householdId !== null;
 
@@ -837,6 +838,8 @@ function AppliedActionRow({ action }: { action: AgentAppliedAction }) {
         await unarchiveNote({ householdId, noteId: u.noteId });
       } else if (u.op === 'edit_note' && u.noteId) {
         await saveNote({ householdId, noteId: u.noteId, body: u.body ?? '', pinned: u.pinned ?? false });
+      } else if (u.op === 'detach_document' && u.attachmentId && userId) {
+        await detachDocument({ householdId, userId, attachmentId: u.attachmentId, reason: 'Undone from assistant' });
       } else if (u.op === 'set_task_status' && u.taskId && u.status) {
         await setTaskStatus({ householdId, taskId: u.taskId, status: u.status });
       } else if (u.op === 'edit_task' && u.taskId) {

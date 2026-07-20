@@ -451,9 +451,10 @@ export const makeExecuteReadTool = (deps: ReadToolDeps) => async (call: ToolCall
 
 /** How the UI reverses an applied action (mirrors @keel/ai AppliedActionUndo). */
 export interface AppliedActionUndo {
-  readonly op: 'archive_note' | 'unarchive_note' | 'edit_note' | 'set_task_status' | 'edit_task';
+  readonly op: 'archive_note' | 'unarchive_note' | 'edit_note' | 'set_task_status' | 'edit_task' | 'detach_document';
   readonly noteId?: string;
   readonly taskId?: string;
+  readonly attachmentId?: string;
   readonly body?: string;
   readonly pinned?: boolean;
   readonly status?: 'open' | 'done' | 'dismissed';
@@ -479,10 +480,22 @@ export interface ProposedAction {
   readonly payload: Record<string, unknown>;
 }
 
+/**
+ * Injected, narrowly-scoped capability: upload THIS turn's attached image as a
+ * receipt and attach it to a transaction (needs the service-role storage +
+ * confirm proc, which the agent tool executor deliberately does NOT get in
+ * general). Present only when a receipt-compatible image was attached this turn.
+ */
+export type AttachReceiptFn = (input: { transactionId: string }) => Promise<
+  | { readonly ok: true; readonly attachmentId: string; readonly documentId: string }
+  | { readonly ok: false; readonly error: string }
+>;
+
 interface WriteExecCtx {
   readonly householdId: string;
   readonly todayIso: string;
   readonly rpc: (proc: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
+  readonly attachReceipt?: AttachReceiptFn;
 }
 
 type WriteExecResult =
@@ -1225,6 +1238,47 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       });
     },
   },
+  // --- Attach the uploaded image as a receipt on a transaction (Class A auto,
+  // reversible via detach). Only works when the user attached a receipt-
+  // compatible image (JPEG/PNG/WebP/PDF) this turn. ---
+  {
+    name: 'attach_receipt_to_transaction',
+    description:
+      'Attach the image the user uploaded THIS turn to a transaction as a receipt. Only call this when the user attached an image and asked to file/attach it. Find the transactionId with search_transactions/list_transactions. Applied immediately and undoable (detaches).',
+    action: 'documents.attach_receipt',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['transactionId'],
+      properties: {
+        transactionId: { type: 'string', description: 'The transaction id (uuid) to attach the receipt to.' },
+      },
+    },
+    execute: async (args, ctx) => {
+      const txId = noteId(args['transactionId']);
+      if (txId === null) return { ok: false, error: 'invalid_arguments', detail: 'transactionId must be a uuid' };
+      if (!ctx.attachReceipt) {
+        return {
+          ok: false,
+          error: 'no_image',
+          detail:
+            'No receipt-compatible image is attached this turn. Ask the user to attach a JPEG, PNG, WebP, or PDF receipt (GIFs are not accepted as receipts).',
+        };
+      }
+      const res = await ctx.attachReceipt({ transactionId: txId });
+      if (!res.ok) return { ok: false, error: res.error };
+      return {
+        ok: true,
+        modelResult: { ok: true, attachmentId: res.attachmentId },
+        applied: {
+          kind: 'documents.attach_receipt',
+          summary: 'Attached the receipt to a transaction',
+          ref: res.attachmentId,
+          undo: { op: 'detach_document', attachmentId: res.attachmentId },
+        },
+      };
+    },
+  },
 ];
 
 const WRITE_TOOL_BY_NAME: Readonly<Record<string, WriteToolSpec>> = Object.fromEntries(
@@ -1247,6 +1301,8 @@ export interface AgentToolDeps extends ReadToolDeps {
   readonly onApplied: (action: AppliedAction) => void;
   /** Called for each staged Class-B proposal (collected for the record). */
   readonly onProposed: (action: ProposedAction) => void;
+  /** Scoped receipt-attach capability; present only when a compatible image was attached. */
+  readonly attachReceipt?: AttachReceiptFn;
 }
 
 /**
@@ -1273,6 +1329,7 @@ export const makeExecuteAgentTool = (deps: AgentToolDeps) => {
       householdId: deps.householdId,
       todayIso: deps.todayIso,
       rpc: deps.rpc,
+      ...(deps.attachReceipt ? { attachReceipt: deps.attachReceipt } : {}),
     });
     if (!res.ok) {
       return JSON.stringify({ error: res.error, ...(res.detail ? { detail: res.detail } : {}) });

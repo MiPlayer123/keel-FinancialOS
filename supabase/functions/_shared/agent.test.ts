@@ -471,3 +471,60 @@ Deno.test('reverse-reimbursement proposals require a reason and stage nothing wh
   const missing = JSON.parse(await ok(call('propose_reverse_reimbursement_settlement', { settlementId: CLAIM_ID })));
   assert(missing.error === 'invalid_arguments');
 });
+
+// ---------------------------------------------------------------------------
+// Receipt attach (Class A auto+undo; scoped capability injected)
+// ---------------------------------------------------------------------------
+
+const ATT_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+
+Deno.test('attach_receipt is in the catalog', () => {
+  assert(agentToolDefinitions().map((d) => d.name).includes('attach_receipt_to_transaction'));
+});
+
+Deno.test('attach_receipt with no image capability returns no_image, applies nothing', async () => {
+  const applied: AppliedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls: [] }), applied));
+  const out = JSON.parse(await exec(call('attach_receipt_to_transaction', { transactionId: NOTE_ID })));
+  assert(out.error === 'no_image');
+  assert(applied.length === 0);
+});
+
+Deno.test('attach_receipt applies and records a detach-undo', async () => {
+  const applied: AppliedAction[] = [];
+  const exec = makeExecuteAgentTool({
+    ...agentDeps(allow, noteRpc({ calls: [] }), applied),
+    attachReceipt: (_i: { transactionId: string }) => Promise.resolve({ ok: true as const, attachmentId: ATT_ID, documentId: 'd1' }),
+  });
+  const out = JSON.parse(await exec(call('attach_receipt_to_transaction', { transactionId: NOTE_ID })));
+  assert(out.ok === true && out.attachmentId === ATT_ID);
+  assert(applied[0]!.kind === 'documents.attach_receipt');
+  assert(applied[0]!.undo?.op === 'detach_document');
+  assert(applied[0]!.undo?.attachmentId === ATT_ID);
+});
+
+Deno.test('attach_receipt surfaces a capability failure (e.g. wrong-household txn)', async () => {
+  const applied: AppliedAction[] = [];
+  const exec = makeExecuteAgentTool({
+    ...agentDeps(allow, noteRpc({ calls: [] }), applied),
+    attachReceipt: () => Promise.resolve({ ok: false as const, error: 'transaction_not_found' }),
+  });
+  const out = JSON.parse(await exec(call('attach_receipt_to_transaction', { transactionId: NOTE_ID })));
+  assert(out.error === 'transaction_not_found');
+  assert(applied.length === 0);
+});
+
+Deno.test('attach_receipt denied by authz never runs the capability', async () => {
+  let called = false;
+  const applied: AppliedAction[] = [];
+  const exec = makeExecuteAgentTool({
+    ...agentDeps(deny, noteRpc({ calls: [] }), applied),
+    attachReceipt: () => {
+      called = true;
+      return Promise.resolve({ ok: true as const, attachmentId: ATT_ID, documentId: 'd1' });
+    },
+  });
+  const out = JSON.parse(await exec(call('attach_receipt_to_transaction', { transactionId: NOTE_ID })));
+  assert(out.error === 'not_authorized');
+  assert(called === false);
+});

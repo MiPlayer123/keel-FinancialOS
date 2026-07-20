@@ -134,6 +134,17 @@ export const AGENT_WRITE_ACTIONS = [
   // context into every member's agent session, so writing it is partner-tier —
   // a viewer must not be able to plant instructions in a partner/owner's agent.
   'ai_profile.save',
+  // AI-agent batch 2 write actions (RESTORED — dropped by a concurrent merge
+  // 526164b but still referenced by the shipped agent tools). Recategorize +
+  // category create/rename are Class B; tasks are Class A (notes sibling).
+  'transactions.categorize',
+  'categories.create',
+  'categories.rename',
+  'tasks.save',
+  'tasks.set_status',
+  // Attach a user-uploaded image as a receipt on a transaction (Class A,
+  // reversible via detach, non-ledger).
+  'documents.attach_receipt',
 ] as const;
 
 export const ACTIONS = [...WRITE_ACTIONS, ...READ_ACTIONS, ...AGENT_WRITE_ACTIONS] as const;
@@ -250,6 +261,12 @@ export const ACTION_MINIMUM_ROLES = {
   'notes.archive': 'partner',
   'notes.unarchive': 'partner',
   'ai_profile.save': 'partner',
+  'transactions.categorize': 'partner',
+  'categories.create': 'partner',
+  'categories.rename': 'partner',
+  'tasks.save': 'partner',
+  'tasks.set_status': 'partner',
+  'documents.attach_receipt': 'partner',
   'admin.export_all': 'owner',
 } as const satisfies Readonly<Record<Action, MinimumRole>>;
 

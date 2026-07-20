@@ -125,6 +125,13 @@ describe('action vocabulary', () => {
       'notes.unarchive',
       'ai_profile.save',
       // AI-agent batch 2 write actions (Law 10 Class B — suggest→approve).
+      'transactions.categorize',
+      'categories.create',
+      'categories.rename',
+      'tasks.save',
+      'tasks.set_status',
+      // AI-agent receipt attach (Class A — reversible document link).
+      'documents.attach_receipt',
     ]);
   });
 
