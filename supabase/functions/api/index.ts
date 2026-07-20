@@ -135,6 +135,8 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'paychecks.dismiss_detected': 'keel_cmd_dismiss_detected_paycheck',
   'paychecks.save_template': 'keel_cmd_paycheck_save_template',
   'paychecks.set_series_settings': 'keel_cmd_paycheck_set_series_settings',
+  'paychecks.apply_template': 'keel_cmd_paycheck_apply_template',
+  'paychecks.unapply': 'keel_cmd_paycheck_unapply',
   'reimbursements.create_claim': 'keel_reimbursement_create_claim',
   'reimbursements.settle': 'keel_reimbursement_settle',
   'reimbursements.reverse_settlement': 'keel_reimbursement_reverse_settlement',
@@ -2849,6 +2851,58 @@ export default {
         {
           p_household_id: householdId.data,
           p_statement_id: statementIdRaw,
+        },
+      );
+      if (error) return mapDbError(error);
+      return json(200, data);
+    }
+
+    if (path === '/paychecks/issue-apply-token') {
+      // SLICE D: mint an approval token bound to the EXACT server-COMPUTED apply
+      // payload the paychecks.apply_template command will redeem (Law 11 gate). The
+      // client names ONLY series/deposit/template/version — the split-leg amounts
+      // are COMPUTED server-side (the §D4 math set_splits does NOT do) inside
+      // keel_cmd_paycheck_issue_apply_token via the SAME normalizer
+      // (keel_paycheck_apply_payload) the apply command rebuilds, so issue-hash ==
+      // redeem-hash by construction. authz gates at partner (same class-B floor as
+      // paychecks.apply_template).
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const seriesId = input['seriesId'];
+      const depositTxnId = input['depositTxnId'];
+      const templateId = input['templateId'];
+      const templateVersion = input['templateVersion'];
+      if (
+        !householdId.success ||
+        typeof seriesId !== 'string' || !uuidRe.test(seriesId) ||
+        typeof depositTxnId !== 'string' || !uuidRe.test(depositTxnId) ||
+        typeof templateId !== 'string' || !uuidRe.test(templateId) ||
+        typeof templateVersion !== 'number' || !Number.isInteger(templateVersion) || templateVersion <= 0
+      ) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Issue-apply-token request failed validation.',
+          details: {},
+        });
+      }
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'paychecks.apply_template', {
+        householdId: householdId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+      const { data, error } = await ctx.supabase.rpc(
+        'keel_cmd_paycheck_issue_apply_token',
+        {
+          p_household_id: householdId.data,
+          p_series_id: seriesId,
+          p_deposit_txn_id: depositTxnId,
+          p_template_id: templateId,
+          p_template_version: templateVersion,
         },
       );
       if (error) return mapDbError(error);
