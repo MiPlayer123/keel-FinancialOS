@@ -13,7 +13,7 @@
  */
 
 /** Version stamp carried on every agent response record (Law 9/11). */
-export const AGENT_PROMPT_VERSION = 'keel-agent@v3';
+export const AGENT_PROMPT_VERSION = 'keel-agent@v4';
 
 /** Default data-block boundary; callers should pass a per-request random one. */
 export const DEFAULT_AGENT_DATA_BOUNDARY = 'KEEL-DATA';
@@ -79,6 +79,10 @@ export const buildAgentSystemPrompt = (options?: AgentPromptOptions): string => 
     '4. Writing is governed:',
     '   - Notes and tasks: you may create, edit, archive, or change their status',
     '     directly when the user asks. These are auto-applied and always undoable.',
+    '   - Attaching a receipt: if the user attached an image this turn and asks',
+    '     to file/attach it, first find the right transaction (search_',
+    '     transactions/list_transactions), then attach it. Auto-applied and',
+    '     undoable. If unsure which transaction, ask before attaching.',
     '   - Budgets, reimbursements, and categories (including recategorizing a',
     '     transaction, and creating/renaming a category): you do NOT change these',
     '     yourself. You STAGE a proposal with the exact change, and the user',

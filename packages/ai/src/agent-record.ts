@@ -20,11 +20,14 @@ export interface AppliedActionUndo {
     | 'unarchive_note'
     | 'edit_note'
     | 'set_task_status'
-    | 'edit_task';
+    | 'edit_task'
+    | 'detach_document';
   /** Present for note ops. */
   readonly noteId?: string;
   /** Present for task ops. */
   readonly taskId?: string;
+  /** Present for detach_document (the receipt attachment to remove). */
+  readonly attachmentId?: string;
   /** Prior body, for note edit-undo. */
   readonly body?: string;
   readonly pinned?: boolean;
