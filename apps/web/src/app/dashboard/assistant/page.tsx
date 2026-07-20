@@ -610,15 +610,19 @@ function ProposedActionsList({ actions }: { actions: AgentProposedAction[] }) {
 function ProposedActionCard({ action }: { action: AgentProposedAction }) {
   const { householdId, userId } = useHousehold();
   const [state, setState] = useState<'idle' | 'approving' | 'approved' | 'rejected'>('idle');
+  // Stable per proposal: a double-submit that races the state guard replays
+  // idempotently server-side (keel_idempotency_check) instead of applying twice.
+  const commandId = useMemo(() => newId(), []);
+  const eventKey = useMemo(() => `${action.command}:${newId()}`, [action.command]);
 
   async function approve() {
     if (householdId === null || userId === null || state !== 'idle') return;
     setState('approving');
     try {
       await keelCommand({
-        commandId: newId(),
+        commandId,
         command: action.command,
-        economicEventKey: `${action.command}:${newId()}`,
+        economicEventKey: eventKey,
         actor: { kind: 'user', userId },
         householdId,
         payload: action.payload,
@@ -649,6 +653,21 @@ function ProposedActionCard({ action }: { action: AgentProposedAction }) {
             </Badge>
           </div>
           <p className="text-sm text-foreground">{action.summary}</p>
+          {/* The EXACT payload that will be committed on approve (Law 11) — so
+              the user verifies the bound values, not just the summary. */}
+          <details className="mt-2">
+            <summary className="cursor-pointer text-[11px] text-muted-foreground">
+              Exactly what will change
+            </summary>
+            <div className="mt-1 flex flex-col gap-0.5 rounded border bg-background/50 px-2 py-1 text-[11px] text-muted-foreground">
+              {Object.entries(action.payload).map(([k, v]) => (
+                <div key={k} className="flex gap-2">
+                  <span className="shrink-0 font-medium">{k}:</span>
+                  <span className="truncate break-all">{String(v)}</span>
+                </div>
+              ))}
+            </div>
+          </details>
         </div>
         {state === 'approved' ? (
           <p className="mt-2 text-sm text-muted-foreground">Applied. You can review it on the Budgets page.</p>

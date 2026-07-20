@@ -140,11 +140,16 @@ Deno.test('large results are bounded so context cannot be blown', async () => {
 const NOTE_ID = '11111111-1111-1111-1111-111111111111';
 
 /** Route rpc by proc name; records every call for assertions. */
-const noteRpc = (opts: { calls: { proc: string; args: Record<string, unknown> }[]; listRows?: unknown[] }) =>
+const noteRpc = (opts: {
+  calls: { proc: string; args: Record<string, unknown> }[];
+  listRows?: unknown[];
+  catRows?: unknown[];
+}) =>
   (proc: string, args: Record<string, unknown>) => {
     opts.calls.push({ proc, args });
     if (proc === 'keel_note_save') return Promise.resolve({ data: NOTE_ID, error: null });
     if (proc === 'keel_list_notes_tasks') return Promise.resolve({ data: { rows: opts.listRows ?? [] }, error: null });
+    if (proc === 'keel_list_categories') return Promise.resolve({ data: opts.catRows ?? [], error: null });
     return Promise.resolve({ data: null, error: null });
   };
 
@@ -257,13 +262,17 @@ Deno.test('propose_budget_target stages an exact command payload, never applies'
   const calls: { proc: string; args: Record<string, unknown> }[] = [];
   const applied: AppliedAction[] = [];
   const proposed: ProposedAction[] = [];
-  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls }), applied, proposed));
+  const catRows = [{ ledgerAccountId: CAT_ID, name: 'Groceries', kind: 'expense' }];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls, catRows }), applied, proposed));
   const out = JSON.parse(
-    await exec(call('propose_budget_target', { categoryLedgerAccountId: CAT_ID, amountMinor: '60000', categoryName: 'Groceries' })),
+    // The model claims "Dining" but the id is the Groceries category — the
+    // server must use the RESOLVED name, not the model's label (Law 11).
+    await exec(call('propose_budget_target', { categoryLedgerAccountId: CAT_ID, amountMinor: '60000', categoryName: 'Dining' })),
   );
   assert(out.proposed === true);
   assert(applied.length === 0, 'a proposal must never apply');
-  assert(calls.length === 0, 'a proposal must not call any proc');
+  // Only the category-resolution read ran; NO write proc.
+  assert(calls.every((c) => c.proc === 'keel_list_categories'), 'a proposal must not call a write proc');
   assert(proposed.length === 1);
   const p = proposed[0]!;
   assert(p.command === 'budgets.set_target');
@@ -271,6 +280,17 @@ Deno.test('propose_budget_target stages an exact command payload, never applies'
   assert(p.payload.kind === 'amount');
   assert(p.payload.amountMinor === '60000');
   assert(typeof p.payload.month === 'string' && (p.payload.month as string).endsWith('-01'));
+  // Summary reflects the REAL category, not the model's mislabel.
+  assert(p.summary.includes('Groceries'), 'summary must use the resolved category name');
+  assert(!p.summary.includes('Dining'), 'summary must not trust the model label');
+});
+
+Deno.test('propose_budget_target rejects an id that is not a live category', async () => {
+  const proposed: ProposedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls: [], catRows: [] }), [], proposed));
+  const out = JSON.parse(await exec(call('propose_budget_target', { categoryLedgerAccountId: CAT_ID, amountMinor: '60000' })));
+  assert(out.error === 'invalid_arguments');
+  assert(proposed.length === 0);
 });
 
 Deno.test('propose_budget_target requires exactly one of amountMinor / percentBp', async () => {

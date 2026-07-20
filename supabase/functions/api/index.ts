@@ -491,12 +491,17 @@ export default {
         const accounts = ((accountsRes.data ?? []) as { name?: string; subtype?: string }[])
           .map((a) => ({ name: a.name ?? '', subtype: a.subtype ?? 'account' }))
           .filter((a) => a.name.length > 0);
-        derivedContext = buildDerivedContext({
-          accounts,
-          entities,
-          budgetsMonth: todayIso.slice(0, 7),
-          hasBudget: Array.isArray(targetsRes.data) && targetsRes.data.length > 0,
-        });
+        derivedContext = buildDerivedContext(
+          {
+            accounts,
+            entities,
+            budgetsMonth: todayIso.slice(0, 7),
+            hasBudget: Array.isArray(targetsRes.data) && targetsRes.data.length > 0,
+          },
+          // Same boundary the system prompt declares: account/entity names are
+          // data-tier (may be provider-sourced) and must be spotlighted (Law 5).
+          dataBoundary,
+        );
       } catch {
         // Personal context is optional; never fail the request over it.
       }
@@ -613,6 +618,19 @@ export default {
         });
         if (error) return mapDbError(error);
         return json(200, { profileText: typeof data === 'string' ? data : '' });
+      }
+      // Saving the shared profile is partner-tier (Law 7): it becomes trusted
+      // prompt context in every member's agent session, so a viewer must not
+      // write it. Fail-closed compiler, same as every other write.
+      const profileAuthzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const profileDecision = authorize(profileAuthzCtx, 'ai_profile.save', {
+        kind: 'household',
+        householdId: householdId.data,
+      });
+      if (!profileDecision.allowed) {
+        return profileDecision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: profileDecision.reason, details: {} });
       }
       const profileText = input['profileText'];
       if (typeof profileText !== 'string' || profileText.length > 4000) {

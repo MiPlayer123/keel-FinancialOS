@@ -517,6 +517,26 @@ const displayMinor = (minor: string): string => {
   return Number.isFinite(n) ? `$${(n / 100).toFixed(2)}` : `${minor} (minor units)`;
 };
 
+/**
+ * Resolve a category ledger-account id to its REAL name server-side (Law 11:
+ * the approval summary must reflect the bound payload, not a model-supplied
+ * label). Returns null when the id is not a category in this household — which
+ * also validates the id before it becomes a proposal.
+ */
+const resolveCategoryName = async (
+  rpc: (proc: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>,
+  householdId: string,
+  categoryLedgerAccountId: string,
+): Promise<string | null> => {
+  const { data, error } = await rpc('keel_list_categories', { p_household_id: householdId });
+  if (error) return null;
+  const rows = (Array.isArray(data)
+    ? data
+    : (((data as { rows?: unknown[] } | null)?.rows) ?? [])) as Record<string, unknown>[];
+  const match = rows.find((r) => r['ledgerAccountId'] === categoryLedgerAccountId);
+  return match && typeof match['name'] === 'string' ? (match['name'] as string) : null;
+};
+
 const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
   {
     name: 'create_note',
@@ -676,17 +696,19 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
         rollover: { type: 'boolean' },
       },
     },
-    execute: (args, ctx) => {
+    execute: async (args, ctx) => {
       const cat = noteId(args['categoryLedgerAccountId']);
-      if (cat === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'categoryLedgerAccountId must be a uuid' });
+      if (cat === null) return { ok: false, error: 'invalid_arguments', detail: 'categoryLedgerAccountId must be a uuid' };
       const month = isoDate(args['month']) ?? currentMonthIso(ctx.todayIso);
       const amount = minorDigits(args['amountMinor']);
       const pct = basisPoints(args['percentBp']);
       if ((amount === null) === (pct === null)) {
-        return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'provide exactly one of amountMinor or percentBp' });
+        return { ok: false, error: 'invalid_arguments', detail: 'provide exactly one of amountMinor or percentBp' };
       }
+      // Resolve + validate the real category (Law 11: summary must match payload).
+      const name = await resolveCategoryName(ctx.rpc, ctx.householdId, cat);
+      if (name === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live budget category in this household' };
       const rollover = args['rollover'] === true;
-      const name = typeof args['categoryName'] === 'string' && args['categoryName'].length > 0 ? args['categoryName'] : 'category';
       const payload: Record<string, unknown> =
         amount !== null
           ? { month, categoryLedgerAccountId: cat, kind: 'amount', amountMinor: amount, ...(rollover ? { rollover } : {}) }
@@ -695,7 +717,7 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
         amount !== null
           ? `Set ${name} budget to ${displayMinor(amount)} for ${month.slice(0, 7)}`
           : `Set ${name} budget to ${((pct as number) / 100).toString()}% of total for ${month.slice(0, 7)}`;
-      return Promise.resolve({ ok: true, modelResult: { ok: true, proposed: true }, proposed: { kind: 'budgets.set_target', command: 'budgets.set_target', summary, payload } });
+      return { ok: true, modelResult: { ok: true, proposed: true }, proposed: { kind: 'budgets.set_target', command: 'budgets.set_target', summary, payload } };
     },
   },
   {
@@ -773,12 +795,13 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
         month: { type: 'string', description: 'First-of-month ISO date; defaults to current month.' },
       },
     },
-    execute: (args, ctx) => {
+    execute: async (args, ctx) => {
       const cat = noteId(args['categoryLedgerAccountId']);
-      if (cat === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'categoryLedgerAccountId must be a uuid' });
+      if (cat === null) return { ok: false, error: 'invalid_arguments', detail: 'categoryLedgerAccountId must be a uuid' };
       const month = isoDate(args['month']) ?? currentMonthIso(ctx.todayIso);
-      const name = typeof args['categoryName'] === 'string' && args['categoryName'].length > 0 ? args['categoryName'] : 'category';
-      return Promise.resolve({
+      const name = await resolveCategoryName(ctx.rpc, ctx.householdId, cat);
+      if (name === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live budget category in this household' };
+      return {
         ok: true,
         modelResult: { ok: true, proposed: true },
         proposed: {
@@ -787,7 +810,7 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
           summary: `Remove the ${name} budget target for ${month.slice(0, 7)}`,
           payload: { month, categoryLedgerAccountId: cat },
         },
-      });
+      };
     },
   },
   // --- Reimbursements: Class B (suggest→approve). Log that a counterparty owes
