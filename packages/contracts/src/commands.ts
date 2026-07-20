@@ -239,6 +239,28 @@ export const SetPaycheckSeriesSettingsPayloadSchema = z.object({
   autonomy: z.enum(['off', 'suggest', 'auto_with_log']),
 }).strict();
 
+// SLICE D — apply a template to a deposit (class B, TOKEN-BOUND, Law 11). The
+// client names only series/deposit/template/version + the redeemed token; the
+// SERVER computes the split legs (the §D4 math set_splits does NOT do) and books
+// them via keel_cmd_set_splits (Law 7 — ONE booking compiler). approvalTokenId
+// binds the exact computed payload (the SLICE 0 HARD GATE); the issue side
+// (/paychecks/issue-apply-token) reconstructs the SAME server payload by calling
+// the SAME normalizer, so issue-hash == redeem-hash by construction.
+export const ApplyPaycheckTemplatePayloadSchema = z.object({
+  seriesId: RecurringSeriesIdSchema,
+  depositTxnId: CanonicalTransactionIdSchema,
+  templateId: PaycheckTemplateIdSchema,
+  templateVersion: z.number().int().gt(0),
+  approvalTokenId: ApprovalTokenIdSchema,
+}).strict();
+
+// SLICE D — undo a template application (Law 2: reversible correction, not a
+// delete). Reverses the booking via the SAME set_splits correction path + the
+// paycheck record. Names the paycheck the application produced.
+export const UnapplyPaycheckPayloadSchema = z.object({
+  paycheckId: PaycheckIdSchema,
+}).strict();
+
 export const CreateReimbursementClaimPayloadSchema=z.object({
   originalTransactionId:CanonicalTransactionIdSchema,counterpartyName:z.string().min(1).max(200),
   kind:z.enum(['friend','employer','client','insurance','household']),
@@ -632,6 +654,8 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'paychecks.dismiss_detected': DismissDetectedPaycheckPayloadSchema,
   'paychecks.save_template': SavePaycheckTemplatePayloadSchema,
   'paychecks.set_series_settings': SetPaycheckSeriesSettingsPayloadSchema,
+  'paychecks.apply_template': ApplyPaycheckTemplatePayloadSchema,
+  'paychecks.unapply': UnapplyPaycheckPayloadSchema,
   'reimbursements.create_claim':CreateReimbursementClaimPayloadSchema,
   'reimbursements.settle':SettleReimbursementPayloadSchema,
   'reimbursements.reverse_settlement':ReverseSettlementPayloadSchema,

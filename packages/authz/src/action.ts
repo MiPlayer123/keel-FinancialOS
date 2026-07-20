@@ -22,6 +22,8 @@ export const WRITE_ACTIONS = [
   'paychecks.dismiss_detected',
   'paychecks.save_template',
   'paychecks.set_series_settings',
+  'paychecks.apply_template',
+  'paychecks.unapply',
   'reimbursements.create_claim',
   'reimbursements.settle',
   'reimbursements.reverse_settlement',
@@ -158,6 +160,10 @@ export const ACTION_MINIMUM_ROLES = {
   // this package-authz floor is bypassable via a direct RPC.
   'paychecks.save_template': 'partner',
   'paychecks.set_series_settings': 'owner',
+  // apply/unapply are class-B suggest→approve financial writes (they book real
+  // income via set_splits); partner floor, same as paychecks.create.
+  'paychecks.apply_template': 'partner',
+  'paychecks.unapply': 'partner',
   'reimbursements.create_claim':'partner',
   'reimbursements.settle':'partner',
   'reimbursements.reverse_settlement':'partner',

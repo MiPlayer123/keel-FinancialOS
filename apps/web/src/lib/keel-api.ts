@@ -3266,3 +3266,60 @@ export async function setPaycheckSeriesSettings(input: {
     },
   });
 }
+
+/**
+ * SLICE D — apply a paycheck template to a deposit (class B, TOKEN-BOUND, Law 11).
+ * Two-step issue→apply, mirroring applyStatementHoldings: (a) issue an approval
+ * token bound to the EXACT server-computed split payload; (b) apply with the
+ * redeemed token — the server re-computes the SAME payload (the §D4 math) and
+ * books it via set_splits (Law 7). The client never supplies the leg amounts.
+ */
+export async function applyPaycheckTemplate(input: {
+  householdId: string;
+  userId: string;
+  seriesId: string;
+  depositTxnId: string;
+  templateId: string;
+  templateVersion: number;
+}): Promise<CommandResult> {
+  const issued = await invoke<{ tokenId: string; payloadSha256: string; expiresAt: string }>(
+    'api/paychecks/issue-apply-token',
+    {
+      householdId: input.householdId,
+      seriesId: input.seriesId,
+      depositTxnId: input.depositTxnId,
+      templateId: input.templateId,
+      templateVersion: input.templateVersion,
+    },
+  );
+  return keelCommand({
+    commandId: newId(),
+    command: 'paychecks.apply_template',
+    economicEventKey: `paychecks.apply_template:${input.seriesId}:${input.depositTxnId}:${issued.tokenId}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: {
+      seriesId: input.seriesId,
+      depositTxnId: input.depositTxnId,
+      templateId: input.templateId,
+      templateVersion: input.templateVersion,
+      approvalTokenId: issued.tokenId,
+    },
+  });
+}
+
+/** SLICE D — undo a template application (reverse booking + paycheck, Law 2). */
+export async function unapplyPaycheck(input: {
+  householdId: string;
+  userId: string;
+  paycheckId: string;
+}): Promise<CommandResult> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'paychecks.unapply',
+    economicEventKey: `paychecks.unapply:${input.paycheckId}:${newId()}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: { paycheckId: input.paycheckId },
+  });
+}

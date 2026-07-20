@@ -35,6 +35,8 @@ describe('action vocabulary', () => {
       'paychecks.dismiss_detected',
       'paychecks.save_template',
       'paychecks.set_series_settings',
+      'paychecks.apply_template',
+      'paychecks.unapply',
       'reimbursements.create_claim',
       'reimbursements.settle',
       'reimbursements.reverse_settlement',
@@ -111,6 +113,7 @@ describe('action vocabulary', () => {
       'notes.save',
       'notes.archive',
       'notes.unarchive',
+      'ai_profile.save',
     ]);
   });
 
@@ -161,6 +164,8 @@ describe('action vocabulary', () => {
     }
     expect(ACTION_MINIMUM_ROLES['paychecks.set_series_settings']).toBe('owner');
     expect(ACTION_MINIMUM_ROLES['paychecks.save_template']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['paychecks.apply_template']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['paychecks.unapply']).toBe('partner');
 
     expect(EXPORT_ACTIONS).toEqual(['admin.export_all']);
     expect(ACTION_MINIMUM_ROLES['admin.export_all']).toBe('owner');
