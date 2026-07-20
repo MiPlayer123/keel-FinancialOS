@@ -132,6 +132,11 @@ function GoalsBody() {
     () => accounts.filter((a) => ledgerKinds.get(a.ledgerAccountId) === 'liability'),
     [accounts, ledgerKinds],
   );
+  // Asset accounts only — a balance-tracked savings goal accumulates in an asset.
+  const assetAccounts = useMemo(
+    () => accounts.filter((a) => ledgerKinds.get(a.ledgerAccountId) === 'asset'),
+    [accounts, ledgerKinds],
+  );
 
   if (!ready || (goals === null && available)) {
     return (
@@ -210,6 +215,7 @@ function GoalsBody() {
         householdId={householdId}
         accounts={accounts}
         liabilityAccounts={liabilityAccounts}
+        assetAccounts={assetAccounts}
         balances={balances}
         onClose={() => {
           setAdding(false);
@@ -236,13 +242,17 @@ function GoalCard({
   const [busy, setBusy] = useState<'add' | 'withdraw' | 'status' | null>(null);
 
   const isDebt = goal.kind === 'debt';
+  // A savings goal that tracks a linked account balance derives progress from
+  // the ledger (like debt) — no manual contributions, so no Add/Withdraw.
+  const isTracked = goal.tracking === 'account_balance';
+  const isDerived = isDebt || isTracked;
   const saved = BigInt((isDebt ? goal.paidMinor : goal.savedMinor) || '0');
   const target = BigInt(goal.targetMinor || '1');
   const pct = Number((saved * 100n) / target);
   const remaining = target - saved;
 
   const monthly = useMemo(() => {
-    if (isDebt || !goal.targetDate || remaining <= 0n) return null;
+    if (isDerived || !goal.targetDate || remaining <= 0n) return null;
     const months = monthsUntil(goal.targetDate);
     // Ceiling division keeps the plan honest (Law 4 — integer math).
     return ((remaining + BigInt(months) - 1n) / BigInt(months)).toString();
@@ -315,6 +325,12 @@ function GoalCard({
                 <Money amountMinor={goal.currentBalanceMinor ?? '0'} currency={goal.currency} className="text-xs" />
               </p>
             ) : null}
+            {isTracked ? (
+              <p className="text-xs text-muted-foreground">
+                Account balance:{' '}
+                <Money amountMinor={goal.trackedBalanceMinor ?? goal.savedMinor} currency={goal.currency} className="text-xs" />
+              </p>
+            ) : null}
           </div>
           <span className="flex shrink-0 items-center gap-1">
             {goal.status === 'reached' ? <Badge variant="secondary">Reached</Badge> : null}
@@ -351,7 +367,7 @@ function GoalCard({
           </p>
         ) : null}
 
-        {isDebt && goal.status !== 'archived' ? (
+        {isDerived && goal.status !== 'archived' ? (
           <p className="text-xs text-muted-foreground">
             Progress updates automatically as the account balance changes.
           </p>
@@ -364,7 +380,7 @@ function GoalCard({
           />
         ) : null}
 
-        {goal.status !== 'archived' && !isDebt ? (
+        {goal.status !== 'archived' && !isDerived ? (
           <div className="flex items-center gap-2">
             <Input
               inputMode="decimal"
@@ -606,6 +622,7 @@ function GoalDialog({
   householdId,
   accounts,
   liabilityAccounts,
+  assetAccounts,
   balances,
   onClose,
   onSaved,
@@ -614,11 +631,15 @@ function GoalDialog({
   householdId: string | null;
   accounts: AccountRow[];
   liabilityAccounts: AccountRow[];
+  assetAccounts: AccountRow[];
   balances: Map<string, string>;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [kind, setKind] = useState<'savings' | 'debt'>('savings');
+  // Savings tracking mode: 'manual' (earmark by hand) or 'account_balance'
+  // (progress follows a linked account's balance automatically).
+  const [tracking, setTracking] = useState<'manual' | 'account_balance'>('manual');
   const [name, setName] = useState('');
   const [target, setTarget] = useState('');
   const [targetTouched, setTargetTouched] = useState(false);
@@ -626,10 +647,13 @@ function GoalDialog({
   const [accountId, setAccountId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const accountChoices = kind === 'debt' ? liabilityAccounts : accounts;
+  // Tracked savings goals must live in an asset account (required); manual
+  // savings may optionally note where the money sits.
+  const savingsAccountChoices = tracking === 'account_balance' ? assetAccounts : accounts;
 
   function resetForm() {
     setKind('savings');
+    setTracking('manual');
     setName('');
     setTarget('');
     setTargetTouched(false);
@@ -639,9 +663,15 @@ function GoalDialog({
 
   function pickKind(next: 'savings' | 'debt') {
     setKind(next);
+    setTracking('manual');
     setAccountId(null);
     setTargetTouched(false);
     if (next === 'savings') setTarget('');
+  }
+
+  function pickTracking(next: 'manual' | 'account_balance') {
+    setTracking(next);
+    setAccountId(null);
   }
 
   function pickAccount(id: string | null) {
@@ -658,6 +688,10 @@ function GoalDialog({
     if (!householdId) return;
     if (kind === 'debt' && !accountId) {
       toast.error('Choose the liability account to pay down.');
+      return;
+    }
+    if (kind === 'savings' && tracking === 'account_balance' && !accountId) {
+      toast.error('Choose the account whose balance this goal tracks.');
       return;
     }
     const minor = parseSignedDollars(target);
@@ -684,8 +718,15 @@ function GoalDialog({
         targetDate: targetDate || null,
         accountId,
         kind,
+        tracking: kind === 'savings' ? tracking : 'manual',
       });
-      toast.success(kind === 'debt' ? 'Debt goal created.' : 'Goal created — start earmarking.');
+      toast.success(
+        kind === 'debt'
+          ? 'Debt goal created.'
+          : tracking === 'account_balance'
+            ? 'Goal created — progress tracks your account.'
+            : 'Goal created — start earmarking.',
+      );
       resetForm();
       onSaved();
     } catch (err) {
@@ -708,7 +749,9 @@ function GoalDialog({
           <DialogDescription>
             {kind === 'debt'
               ? "Debt goals track themselves — progress comes straight from the account's balance."
-              : "Earmarks are bookkeeping, not transfers — your balances never change, KEEL just tracks what's spoken for."}
+              : tracking === 'account_balance'
+                ? "Progress follows the linked account's balance automatically — nothing to enter by hand."
+                : "Earmarks are bookkeeping, not transfers — your balances never change, KEEL just tracks what's spoken for."}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -739,6 +782,40 @@ function GoalDialog({
               </Button>
             </div>
           </div>
+          {kind === 'savings' ? (
+            <div className="space-y-1.5">
+              <Label>Track progress by</Label>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant={tracking === 'manual' ? 'default' : 'outline'}
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => {
+                    pickTracking('manual');
+                  }}
+                >
+                  Earmark by hand
+                </Button>
+                <Button
+                  type="button"
+                  variant={tracking === 'account_balance' ? 'default' : 'outline'}
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => {
+                    pickTracking('account_balance');
+                  }}
+                >
+                  An account balance
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {tracking === 'account_balance'
+                  ? 'Progress = the linked account’s balance, updated automatically.'
+                  : 'You add and withdraw earmarks yourself as you set money aside.'}
+              </p>
+            </div>
+          ) : null}
           <div className="space-y-1.5">
             <Label htmlFor="goal-name">Name</Label>
             <Input
@@ -807,25 +884,38 @@ function GoalDialog({
           </div>
           {kind === 'savings' ? (
           <div className="space-y-1.5">
-            <Label>Lives in (optional)</Label>
+            <Label>
+              {tracking === 'account_balance' ? 'Account to track' : 'Lives in (optional)'}
+            </Label>
             <Select
               value={accountId ?? undefined}
-              items={Object.fromEntries(accountChoices.map((a) => [a.id, a.name]))}
+              items={Object.fromEntries(savingsAccountChoices.map((a) => [a.id, a.name]))}
               onValueChange={(v) => {
                 setAccountId(v);
               }}
             >
               <SelectTrigger className="w-full">
-                <SelectValue placeholder="Account the money sits in" />
+                <SelectValue
+                  placeholder={
+                    tracking === 'account_balance'
+                      ? 'Savings or asset account'
+                      : 'Account the money sits in'
+                  }
+                />
               </SelectTrigger>
               <SelectContent>
-                {accounts.map((a) => (
+                {savingsAccountChoices.map((a) => (
                   <SelectItem key={a.id} value={a.id}>
                     {a.name}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {tracking === 'account_balance' && assetAccounts.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                No asset accounts found — connect a checking or savings account first.
+              </p>
+            ) : null}
           </div>
           ) : null}
         </div>
@@ -838,7 +928,8 @@ function GoalDialog({
               busy ||
               name.trim().length === 0 ||
               !target.trim() ||
-              (kind === 'debt' && !accountId)
+              (kind === 'debt' && !accountId) ||
+              (kind === 'savings' && tracking === 'account_balance' && !accountId)
             }
             onClick={() => {
               void save();

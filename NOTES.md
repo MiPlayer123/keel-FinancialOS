@@ -4,6 +4,108 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-20 — feat(goals): savings goals that TRACK a linked account balance (Monarch/Copilot-style auto-progress)
+
+**Framing.** The task title read "build a goals capability," but a full goals
+feature ALREADY exists on main: `savings_goals` + `goal_contributions` tables,
+`keel_goal_save` / `keel_goal_contribute` / `keel_goal_set_status` /
+`keel_list_goals` procs, `/api/goals/{save,contribute,set-status}` routes, a
+rich `/dashboard/goals` page (savings + debt kinds, progress bars, add/withdraw,
+archive/restore, on-track monthly-needed math, a Class-C payoff simulator),
+export-chain registration (Law 6) and audit/RLS. So "build goals" = already done.
+
+**The real gap (why the founder says "I just don't have anything to put in
+here").** Read-only SELECT on founder household a1ba3759-… → **0 goals**. And
+structurally: a **savings** goal's progress is `Σ goal_contributions` — purely
+hand-entered Add/Withdraw. The optional linked account ("Lives in") is captured
+but **completely ignored** for progress; it's decorative. So a founder with a
+real savings account would have to hand-type every dollar to see any progress —
+"nothing to put in here." Meanwhile **debt** goals ALREADY derive progress
+deterministically from the ledger balance of their linked account
+(`keel_list_goals` lateral join on `journal_postings`, Law 9). Monarch/Copilot's
+signature move — link a savings account, progress tracks its balance
+automatically — is exactly the missing bridge on the asset side.
+
+**Decision (smallest correct, builds ON not beside).** Add a **tracking mode**
+to savings goals, mirroring the debt-goal ledger-derivation that already ships:
+- `savings_goals.tracking public.goal_tracking not null default 'manual'`
+  (enum `manual` | `account_balance`). Debt goals are always `manual` here
+  (their derivation is the debt path; the column just isn't consulted).
+- `tracking = 'manual'` (existing behavior, unchanged): progress =
+  Σ contributions. Add/Withdraw still work.
+- `tracking = 'account_balance'` (NEW): progress = current ASSET balance
+  magnitude of the linked account, derived at read time from `journal_postings`
+  — the asset mirror of the debt path. `savedMinor` becomes derived (Law 9,
+  reproducible), NOT stored, NOT a parallel earmark ledger (Law 1). Requires an
+  `account_id`; contributions are REFUSED (like debt) because there is exactly
+  one source of truth — the account balance.
+- Reaching flips `status` to `reached` on read (derived), same as debt.
+
+Why an asset uses `+Σ postings` while a liability uses `-Σ postings`: KEEL's
+balance convention is debit-positive (`keel_apply_account_balance`). An asset's
+usable magnitude is `greatest(Σ postings, 0)`; a liability's owed magnitude is
+`greatest(-Σ postings, 0)`. I branch on `ledger_accounts.kind` so a goal tracking
+a normal asset (checking/savings) reads its positive balance.
+
+**Touch points (all mirror existing goal spine):**
+1. migration `20260724000000_goal_track_account_balance.sql` — enum, column,
+   `keel_goal_save` gains `p_tracking` (signature change → drop+recreate, grants
+   restated), `keel_goal_contribute` refuses `account_balance`, `keel_list_goals`
+   derives `savedMinor` for `account_balance` goals from the ledger + emits a
+   `trackedBalanceMinor` field, `keel_goal_set_status` recompute branch, export
+   chain new link (`_pre_goal_tracking`), ownership hardening with the
+   grant/revoke-CREATE guard the worktree rules require.
+2. `apps/web/src/lib/keel-api.ts` — `GoalRow.tracking`, `saveGoal` passes
+   `tracking`.
+3. `/dashboard/goals/page.tsx` — savings sub-choice "Track an account balance"
+   vs "Track manually"; tracked goals show live balance + hide Add/Withdraw +
+   an "updates automatically" note (same affordance debt goals already have).
+4. `tests/integration/*-goals.test.ts` — create→progress→reached/archive across
+   all three modes (manual, account_balance asset, debt), idempotency of save,
+   contribution-refusal on tracked goals, household scope isolation.
+
+**Contracts/authz note.** Goals do NOT use the `/commands` envelope spine — they
+predate it and route through bespoke `/api/goals/*` → SECURITY DEFINER RPC (same
+pattern as notes/tasks). I follow the EXISTING goal pattern rather than
+retrofitting the envelope, to build ON the shipped feature (task directive).
+`goals.list` authz action already exists (viewer). No new authz action needed;
+writes are gated inside the definer procs by `household_memberships` (the
+established goal-write authorization, matching notes/tasks).
+
+**Verification (all green).**
+- `cd apps/web && pnpm build` — clean (ESLint gate passes; /dashboard/goals
+  builds at 10.6 kB). `node scripts/build-functions.mjs` — edge bundle clean.
+- Package tests: `@keel/contracts` 46/46, `@keel/authz` 144/144.
+- **Migration proven against a REAL throwaway Postgres 17** (scratch cluster,
+  trust auth, torn down after): loaded minimal prereqs + prior goal-fn
+  signatures, then applied `20260724000000` — applies cleanly, all 5 functions +
+  enum + column + export chain + ownership created. Functional assertions:
+  (1) tracked savings goal → `savedMinor` = `trackedBalanceMinor` = ledger
+  balance ($500), `status=reached` vs $400 target — DERIVED, not stored;
+  (2) balance ↓ to $200 → `savedMinor→20000`, `status→active` on read (reactive,
+  reproducible); (3) contribute REFUSED (`KEEL_TRACKED_GOAL_NO_CONTRIB`);
+  (4) asset-only + account-required guards fire; (5) manual savings goals still
+  accumulate from contributions; (6) audit rows carry the tracking mode;
+  (7) export re-emits `savings_goals` WITH the `tracking` field (Law 6),
+  new wrapper owned by `keel_export`, prior link renamed, goal procs owned by
+  `keel_api`. Derivation expression cross-checked READ-ONLY on live founder
+  household: `greatest(Σ postings,0)` for assets matches
+  `keel_apply_account_balance`'s debit-positive convention (line 66:
+  `case when kind='liability' then -current else current end`) — Law 9
+  reproducible, consistent with the debt-goal path already shipped.
+- Integration test `tests/integration/45-goal-track-account-balance.test.ts`
+  added (mirrors existing goal/command test style). NOT runnable in the worktree
+  (needs `supabase start` + Docker, which this worktree doesn't do); for CI /
+  the orchestrator to run against the stack once the migration is applied.
+
+**Migration to apply (orchestrator):**
+`supabase/migrations/20260724000000_goal_track_account_balance.sql` — timestamped
+after 20260723020000 per the worktree rule; includes the
+`grant create on schema public to keel_api/keel_export … revoke` wrappers around
+every `owner to` to avoid the live "permission denied for schema public" drift.
+
+---
+
 ## 2026-07-20 — feat(recurring): semi-monthly cadence detection fix + editable cadence
 
 Founder feedback: his Deeptune payroll pays on the **15th and the last calendar

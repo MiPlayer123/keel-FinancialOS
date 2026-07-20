@@ -1544,12 +1544,24 @@ export type GoalRow = {
   status: 'active' | 'reached' | 'archived';
   /** 'savings' (default) or 'debt'. */
   kind: 'savings' | 'debt';
-  /** Σ contributions (earmarked, never posted — money doesn't move). Debt goals: always '0'. */
+  /**
+   * Savings goals only. 'manual': progress = Σ contributions. 'account_balance':
+   * progress is DERIVED from the linked account's ledger balance (contributions
+   * refused). Debt goals are always 'manual' here.
+   */
+  tracking: 'manual' | 'account_balance';
+  /**
+   * Progress in minor units. manual savings: Σ contributions. account_balance
+   * savings: derived asset balance of the linked account. Debt goals: always '0'
+   * (see paidMinor).
+   */
   savedMinor: string;
   /** Debt goals only: start_balance_minor - current balance magnitude, floored at 0 — derived from the ledger. */
   paidMinor?: string;
   /** Debt goals only: current liability balance magnitude, live from journal_postings. */
   currentBalanceMinor?: string;
+  /** account_balance savings goals only: the linked account's current asset balance, live from journal_postings. */
+  trackedBalanceMinor?: string;
 };
 
 export async function fetchGoals(householdId: string): Promise<GoalRow[]> {
@@ -1566,6 +1578,7 @@ export async function saveGoal(input: {
   targetDate: string | null;
   accountId: string | null;
   kind?: 'savings' | 'debt';
+  tracking?: 'manual' | 'account_balance';
 }): Promise<{ goalId?: string }> {
   return invoke('api/goals/save', {
     householdId: input.householdId,
@@ -1575,6 +1588,7 @@ export async function saveGoal(input: {
     targetDate: input.targetDate,
     accountId: input.accountId,
     kind: input.kind ?? 'savings',
+    tracking: input.tracking ?? 'manual',
   });
 }
 
