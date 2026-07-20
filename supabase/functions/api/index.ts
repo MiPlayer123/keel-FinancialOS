@@ -1642,6 +1642,10 @@ export default {
         const frequency = input['frequency'];
         const nextDueDate = input['nextDueDate'];
         const autoEnterDays = input['autoEnterDays'] ?? null;
+        const anchorDay = input['anchorDay'] ?? null;
+        const anchorDay2 = input['anchorDay2'] ?? null;
+        const isValidAnchor = (a: unknown) =>
+          a === null || (typeof a === 'number' && Number.isInteger(a) && a >= 1 && a <= 31);
         if (
           (scheduleId !== null &&
             (typeof scheduleId !== 'string' || !uuidReSched.test(scheduleId))) ||
@@ -1659,7 +1663,9 @@ export default {
           typeof nextDueDate !== 'string' ||
           !dateRe.test(nextDueDate) ||
           (autoEnterDays !== null &&
-            (typeof autoEnterDays !== 'number' || !Number.isInteger(autoEnterDays)))
+            (typeof autoEnterDays !== 'number' || !Number.isInteger(autoEnterDays))) ||
+          !isValidAnchor(anchorDay) ||
+          !isValidAnchor(anchorDay2)
         ) {
           return json(400, {
             code: 'invalid_command',
@@ -1677,6 +1683,8 @@ export default {
           p_frequency: frequency,
           p_next_due_date: nextDueDate,
           p_auto_enter_days: autoEnterDays,
+          p_anchor_day: anchorDay,
+          p_anchor_day_2: anchorDay2,
         });
         if (error) return mapDbError(error);
         return json(200, { scheduleId: data });

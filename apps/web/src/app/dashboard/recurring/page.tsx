@@ -936,7 +936,7 @@ function ProjectedCash({
           deltaByDate.set(due, (deltaByDate.get(due) ?? 0n) + BigInt(sc.amountMinor || '0'));
         }
         if (sc.frequency === 'once') break;
-        due = stepScheduleDue(due, sc.frequency, sc.anchorDay);
+        due = stepScheduleDue(due, sc.frequency, sc.anchorDay, sc.anchorDay2);
         guard += 1;
       }
     }
@@ -996,6 +996,7 @@ const FREQUENCY_LABELS: Record<ScheduleRow['frequency'], string> = {
   once: 'One time',
   weekly: 'Weekly',
   biweekly: 'Every 2 weeks',
+  semimonthly: 'Twice a month (15th & 30th)',
   monthly: 'Monthly',
   quarterly: 'Quarterly',
   semiannual: 'Every 6 months',
@@ -1260,6 +1261,9 @@ function AddScheduleDialog({
   const [frequency, setFrequency] = useState<ScheduleRow['frequency']>('monthly');
   const [nextDue, setNextDue] = useState(() => todayIso());
   const [dueEarly, setDueEarly] = useState<'0' | '3' | '7'>('3');
+  // Two days-of-month for the 'semimonthly' frequency (defaults 15th & 30th).
+  const [semiDay1, setSemiDay1] = useState('15');
+  const [semiDay2, setSemiDay2] = useState('30');
   const [busy, setBusy] = useState(false);
 
   const kind = direction === 'bill' ? 'expense' : 'income';
@@ -1281,6 +1285,26 @@ function AddScheduleDialog({
       toast.error('Enter a positive amount.');
       return;
     }
+    let anchorDay: number | null = null;
+    let anchorDay2: number | null = null;
+    if (frequency === 'semimonthly') {
+      const d1 = Number(semiDay1);
+      const d2 = Number(semiDay2);
+      if (
+        !Number.isInteger(d1) ||
+        !Number.isInteger(d2) ||
+        d1 < 1 ||
+        d1 > 31 ||
+        d2 < 1 ||
+        d2 > 31 ||
+        d1 === d2
+      ) {
+        toast.error('Pick two different days of the month between 1 and 31.');
+        return;
+      }
+      anchorDay = Math.min(d1, d2);
+      anchorDay2 = Math.max(d1, d2);
+    }
     setBusy(true);
     try {
       await saveSchedule({
@@ -1292,6 +1316,8 @@ function AddScheduleDialog({
         frequency,
         nextDueDate: nextDue,
         autoEnterDays: Number(dueEarly),
+        anchorDay,
+        anchorDay2,
       });
       toast.success('Scheduled. It shows as due ahead of time and projects into your cash curve.');
       setDescription('');
@@ -1464,6 +1490,40 @@ function AddScheduleDialog({
               </Select>
             </div>
           </div>
+          {frequency === 'semimonthly' ? (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="sched-semi-day1">First day of month</Label>
+                <Input
+                  id="sched-semi-day1"
+                  type="number"
+                  min={1}
+                  max={31}
+                  value={semiDay1}
+                  onChange={(e) => {
+                    setSemiDay1(e.target.value);
+                  }}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="sched-semi-day2">Second day of month</Label>
+                <Input
+                  id="sched-semi-day2"
+                  type="number"
+                  min={1}
+                  max={31}
+                  value={semiDay2}
+                  onChange={(e) => {
+                    setSemiDay2(e.target.value);
+                  }}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground sm:col-span-2">
+                Enters twice a month on these days. A day past a short month
+                (e.g. the 30th) lands on that month&apos;s last day (Feb 28/29).
+              </p>
+            </div>
+          ) : null}
         </div>
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={onClose}>

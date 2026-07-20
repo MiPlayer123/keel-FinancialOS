@@ -6,7 +6,62 @@ import {
   annualizedEstimate,
   annualizedMinor,
   inferCadence,
+  stepScheduleDue,
 } from './recurring';
+
+describe('stepScheduleDue', () => {
+  it('steps weekly / biweekly by fixed day counts', () => {
+    expect(stepScheduleDue('2026-01-01', 'weekly', 1)).toBe('2026-01-08');
+    expect(stepScheduleDue('2026-01-01', 'biweekly', 1)).toBe('2026-01-15');
+  });
+
+  it('steps monthly anchored to the declared day, recovering after a short month', () => {
+    // Jan 31 -> Feb 28 (clamped) -> Mar 31 (recovered): the anchor-day fix.
+    expect(stepScheduleDue('2026-01-31', 'monthly', 31)).toBe('2026-02-28');
+    expect(stepScheduleDue('2026-02-28', 'monthly', 31)).toBe('2026-03-31');
+  });
+
+  it("'once' never advances", () => {
+    expect(stepScheduleDue('2026-01-15', 'once', 15)).toBe('2026-01-15');
+  });
+
+  describe('semimonthly (two anchor days per month)', () => {
+    it('walks a [15, 30] schedule Jan 15 -> Jan 30 -> Feb 15 -> Feb 28 -> Mar 15 -> Mar 30', () => {
+      // The exact sequence the migration header promises. Feb 30 clamps to the
+      // last day of February (28 in 2026) via the same least/min clamp.
+      expect(stepScheduleDue('2026-01-15', 'semimonthly', 15, 30)).toBe('2026-01-30');
+      expect(stepScheduleDue('2026-01-30', 'semimonthly', 15, 30)).toBe('2026-02-15');
+      expect(stepScheduleDue('2026-02-15', 'semimonthly', 15, 30)).toBe('2026-02-28');
+      // From the clamped Feb 28 (its "30th"), roll forward to Mar 15 — NOT
+      // back to Feb 28: the larger anchor is treated as reached.
+      expect(stepScheduleDue('2026-02-28', 'semimonthly', 15, 30)).toBe('2026-03-15');
+      expect(stepScheduleDue('2026-03-15', 'semimonthly', 15, 30)).toBe('2026-03-30');
+    });
+
+    it('clamps the 30th to Feb 29 in a leap year (2028)', () => {
+      expect(stepScheduleDue('2028-02-15', 'semimonthly', 15, 30)).toBe('2028-02-29');
+      expect(stepScheduleDue('2028-02-29', 'semimonthly', 15, 30)).toBe('2028-03-15');
+    });
+
+    it('is order-independent in its two anchor args (normalizes internally)', () => {
+      // Passing (30, 15) must behave identically to (15, 30).
+      expect(stepScheduleDue('2026-01-15', 'semimonthly', 30, 15)).toBe('2026-01-30');
+      expect(stepScheduleDue('2026-01-30', 'semimonthly', 30, 15)).toBe('2026-02-15');
+    });
+
+    it('rolls across a year boundary (Dec 30 -> Jan 15)', () => {
+      expect(stepScheduleDue('2026-12-15', 'semimonthly', 15, 30)).toBe('2026-12-30');
+      expect(stepScheduleDue('2026-12-30', 'semimonthly', 15, 30)).toBe('2027-01-15');
+    });
+
+    it('handles a first/last day pair [1, 31] with month-end clamping', () => {
+      expect(stepScheduleDue('2026-01-01', 'semimonthly', 1, 31)).toBe('2026-01-31');
+      expect(stepScheduleDue('2026-01-31', 'semimonthly', 1, 31)).toBe('2026-02-01');
+      expect(stepScheduleDue('2026-02-01', 'semimonthly', 1, 31)).toBe('2026-02-28');
+      expect(stepScheduleDue('2026-02-28', 'semimonthly', 1, 31)).toBe('2026-03-01');
+    });
+  });
+});
 
 describe('inferCadence', () => {
   it('returns null for fewer than two dated occurrences', () => {

@@ -99,11 +99,21 @@ export function changedToday(series: RecurringSeriesRow, todayIso: string): bool
  * again — instead of Postgres's naive interval addition, which would clamp
  * to the 28th forever. Falls back to the source date's own day when
  * anchorDay is null (legacy rows before the anchor_day backfill).
+ *
+ * Semi-monthly ('semimonthly') carries TWO anchor days (anchorDay <
+ * anchorDay2, normalized at save time — default 15th & 30th). Stepping targets
+ * the NEXT of the two: this month's LARGER anchor when we're strictly before
+ * it (clamped to month length), else next month's SMALLER anchor. The same
+ * Math.min(anchor, lastDay) clamp the monthly branch uses means a "30th"
+ * anchor lands on Feb 28/29 and recovers to Mar 30 (Jan 15/30 -> Feb 15/28 ->
+ * Mar 15/30). MUST stay in lockstep with the SQL keel_schedule_advance
+ * semimonthly branch.
  */
 export function stepScheduleDue(
   dateIso: string,
   frequency: ScheduleRow['frequency'],
   anchorDay: number | null,
+  anchorDay2: number | null = null,
 ): string {
   const [y = 0, m = 0, d = 0] = dateIso.split('-').map(Number);
   const anchor = anchorDay ?? d;
@@ -114,6 +124,13 @@ export function stepScheduleDue(
   const addMonths = (n: number) => {
     const lastDay = new Date(Date.UTC(y, m - 1 + n + 1, 0)).getUTCDate();
     const dt = new Date(Date.UTC(y, m - 1 + n, Math.min(anchor, lastDay)));
+    return dt.toISOString().slice(0, 10);
+  };
+  // Day-of-month `dayOfMonth`, clamped to `monthOffset` months from the source
+  // month's start, as an ISO date string.
+  const dayInMonth = (monthOffset: number, dayOfMonth: number) => {
+    const lastDay = new Date(Date.UTC(y, m - 1 + monthOffset + 1, 0)).getUTCDate();
+    const dt = new Date(Date.UTC(y, m - 1 + monthOffset, Math.min(dayOfMonth, lastDay)));
     return dt.toISOString().slice(0, 10);
   };
   switch (frequency) {
@@ -129,6 +146,15 @@ export function stepScheduleDue(
       return addMonths(6);
     case 'annual':
       return addMonths(12);
+    case 'semimonthly': {
+      const a1 = Math.min(anchorDay ?? d, anchorDay2 ?? d);
+      const a2 = Math.max(anchorDay ?? d, anchorDay2 ?? d);
+      const thisLarger = dayInMonth(0, a2);
+      // Strictly before this month's larger anchor -> that's next; else roll to
+      // next month's smaller anchor. Compares clamped dates, so a 30-anchor
+      // sitting on Feb 28 counts as "at" its larger anchor and rolls forward.
+      return dateIso < thisLarger ? thisLarger : dayInMonth(1, a1);
+    }
     case 'once':
       return dateIso;
   }

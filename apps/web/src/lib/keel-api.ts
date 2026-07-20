@@ -1592,10 +1592,20 @@ export type ScheduleRow = {
   currency: string;
   categoryLedgerAccountId: string | null;
   categoryName: string | null;
-  frequency: 'once' | 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'semiannual' | 'annual';
+  frequency:
+    | 'once'
+    | 'weekly'
+    | 'biweekly'
+    | 'semimonthly'
+    | 'monthly'
+    | 'quarterly'
+    | 'semiannual'
+    | 'annual';
   nextDueDate: string;
   autoEnterDays: number | null;
   anchorDay: number | null;
+  /** Second day-of-month for 'semimonthly' schedules (null otherwise). */
+  anchorDay2: number | null;
   status: 'active' | 'paused';
 };
 
@@ -1618,6 +1628,9 @@ export async function saveSchedule(input: {
   frequency: ScheduleRow['frequency'];
   nextDueDate: string;
   autoEnterDays: number | null;
+  /** First & second day-of-month for 'semimonthly'; null for every other freq. */
+  anchorDay?: number | null;
+  anchorDay2?: number | null;
 }): Promise<{ scheduleId?: string }> {
   return invoke('api/schedules/save', {
     householdId: input.householdId,
@@ -1629,6 +1642,8 @@ export async function saveSchedule(input: {
     frequency: input.frequency,
     nextDueDate: input.nextDueDate,
     autoEnterDays: input.autoEnterDays,
+    anchorDay: input.anchorDay ?? null,
+    anchorDay2: input.anchorDay2 ?? null,
   });
 }
 

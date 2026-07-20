@@ -1,0 +1,24 @@
+-- Semi-monthly (twice a month) scheduled income/bills — PART 1 of 2: enum only.
+--
+-- ⚑ HUMAN APPLY NOTE (ops fact — migrations go straight to the live cloud
+-- project). This file adds a value to the schedule_frequency enum. Postgres
+-- forbids using an enum value in the SAME transaction that ADDs it, and the
+-- repo's standard apply is `psql --single-transaction`. So this ADD VALUE
+-- MUST run in ITS OWN, NON-transactional psql invocation, BEFORE the
+-- companion migration 20260719120100_schedule_semimonthly.sql (which uses the
+-- value in a CHECK-free plpgsql branch and column comments).
+--
+-- Apply order (from CLAUDE.md ops facts):
+--   source supabase/.env.remote
+--   # 1. THIS FILE — no --single-transaction (ADD VALUE must auto-commit):
+--   psql "postgresql://postgres@db.<ref>.supabase.co:5432/postgres" \
+--     -v ON_ERROR_STOP=1 -f supabase/migrations/20260719120000_schedule_semimonthly_enum.sql
+--   # 2. THEN the companion file, the usual way:
+--   psql "postgresql://postgres@db.<ref>.supabase.co:5432/postgres" \
+--     -v ON_ERROR_STOP=1 --single-transaction \
+--     -f supabase/migrations/20260719120100_schedule_semimonthly.sql
+--
+-- IF NOT EXISTS makes the ADD idempotent (re-applying is a no-op), so a
+-- rerun after the companion is already live does not error.
+
+alter type public.schedule_frequency add value if not exists 'semimonthly';
