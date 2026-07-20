@@ -3163,3 +3163,86 @@ export async function dismissStatementDraft(input: {
     payload: { draftId: input.draftId },
   });
 }
+
+// ---- Paycheck split templates (SLICE C) — authoring mutators ---------------
+// paycheck-split-templates-v2.md §D3/§4. The read model types + fetcher
+// (PaycheckTemplate / PaycheckTemplateLine / PaycheckSeriesSettings /
+// PaycheckTemplatesResult / fetchPaycheckTemplates) already exist above (SLICE
+// B). These two mutators author a new immutable template version and set the
+// per-series autonomy grant.
+
+/** A template line as authored in the editor (wire shape — amounts are strings). */
+export type SavePaycheckTemplateLine = {
+  lineKey: string;
+  kind: string;
+  role: 'earning' | 'tax' | 'pretax_transfer' | 'posttax_deduction' | 'net_deposit';
+  amountKind: 'fixed_minor' | 'percent_of_gross_bps' | 'remainder';
+  amountMinor?: string;
+  bps?: number;
+  categoryLedgerAccountId?: string;
+  destinationAccountId?: string;
+  position: number;
+};
+
+/**
+ * Author a NEW immutable template version + point the series at it (a change is
+ * always a new version — Law 2/9). Does NOT change autonomy (that is the
+ * OWNER-only grant below). The DB enforces exactly-one-remainder, ΣP<10000,
+ * same-entity category, and manual-asset destination (§D2/§D3).
+ */
+export async function savePaycheckTemplate(input: {
+  householdId: string;
+  userId: string;
+  seriesId: string;
+  employerId: string;
+  bookingEnabled: boolean;
+  lines: SavePaycheckTemplateLine[];
+}): Promise<CommandResult> {
+  const commandId = newId();
+  return keelCommand({
+    commandId,
+    command: 'paychecks.save_template',
+    economicEventKey: `paychecks.save_template:${input.seriesId}:${commandId}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: {
+      seriesId: input.seriesId,
+      employerId: input.employerId,
+      bookingEnabled: input.bookingEnabled,
+      lines: input.lines,
+    },
+  });
+}
+
+/**
+ * Set the per-series autonomy grant (Off / Suggest / Auto-apply-with-undo) +
+ * active template + booking + income category. OWNER-only (autonomy is a policy
+ * change — enforced in authz AND by keel_assert_member_owner in the DB).
+ */
+export async function setPaycheckSeriesSettings(input: {
+  householdId: string;
+  userId: string;
+  seriesId: string;
+  employerId: string;
+  activeTemplateId: string | null;
+  bookingEnabled: boolean;
+  incomeCategoryLedgerAccountId: string | null;
+  autonomy: 'off' | 'suggest' | 'auto_with_log';
+}): Promise<CommandResult> {
+  const commandId = newId();
+  return keelCommand({
+    commandId,
+    command: 'paychecks.set_series_settings',
+    economicEventKey: `paychecks.set_series_settings:${input.seriesId}:${commandId}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: {
+      seriesId: input.seriesId,
+      employerId: input.employerId,
+      activeTemplateId: input.activeTemplateId,
+      bookingEnabled: input.bookingEnabled,
+      incomeCategoryLedgerAccountId: input.incomeCategoryLedgerAccountId,
+      autonomy: input.autonomy,
+    },
+  });
+}

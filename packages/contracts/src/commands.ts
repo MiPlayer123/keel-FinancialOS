@@ -14,6 +14,8 @@ import {
   RawProviderEventIdSchema,
   RecurringSeriesIdSchema,
   PaycheckIdSchema,
+  PaycheckTemplateIdSchema,
+  EmployerIdSchema,
   ReimbursementClaimIdSchema,
   SettlementIdSchema,
   StatementIdSchema,
@@ -187,6 +189,54 @@ const PaycheckStatusPayloadSchema = z.object({
 export const EditPaycheckPayloadSchema = CreatePaycheckPayloadSchema.extend({
   paycheckId: PaycheckIdSchema,
   reason: z.string().min(1).max(500).optional(),
+}).strict();
+
+// Paycheck split templates SLICE C (paycheck-split-templates-v2.md §D2/§D3, §3).
+// A single ordered template line. amount_kind ↔ amount column coherence + the
+// role/kind coherence + scope (same-entity category, manual-asset destination)
+// are re-validated in the DB command (keel_cmd_paycheck_save_template) — the
+// authorization compiler is the DB, not this schema (Law 7). This schema is the
+// shape gate; it deliberately does NOT try to express the cross-line invariants
+// (exactly-one-remainder, ΣP<10000) that only the whole array + live data can
+// decide.
+const PaycheckTemplateLineSchema = z.object({
+  lineKey: z.string().min(1).max(100),
+  kind: z.enum([
+    'gross_salary', 'bonus', 'commission', 'reimbursement',
+    'federal_withholding', 'state_withholding', 'local_withholding', 'fica_withholding',
+    'benefit', 'retirement_401k', 'employer_match', 'hsa', 'fsa', 'espp',
+    'rsu_withholding', 'garnishment', 'direct_deposit',
+  ]),
+  role: z.enum(['earning', 'tax', 'pretax_transfer', 'posttax_deduction', 'net_deposit']),
+  amountKind: z.enum(['fixed_minor', 'percent_of_gross_bps', 'remainder']),
+  amountMinor: MinorUnitsStringSchema.regex(/^\d+$/u, 'template amounts are non-negative').optional(),
+  bps: z.number().int().gt(0).lt(10000).optional(),
+  categoryLedgerAccountId: LedgerAccountIdSchema.optional(),
+  destinationAccountId: AccountIdSchema.optional(),
+  position: z.number().int().gte(0),
+}).strict();
+
+// Author a NEW immutable template version + upsert the series pointer (autonomy
+// is NOT touched here — it is the OWNER-only grant below). The DB command runs
+// the full cross-line validation (§D3).
+export const SavePaycheckTemplatePayloadSchema = z.object({
+  seriesId: RecurringSeriesIdSchema,
+  employerId: EmployerIdSchema,
+  bookingEnabled: z.boolean(),
+  lines: z.array(PaycheckTemplateLineSchema).min(2).max(100),
+}).strict();
+
+// The per-series AUTONOMY GRANT (a policy change → OWNER only; enforced both
+// here in authz AND by keel_assert_member_owner in the DB, since package authz
+// alone is bypassable — §3/[AMENDED 6]). auto_with_log requires an active
+// template (re-checked in the DB via the Slice-B CHECK).
+export const SetPaycheckSeriesSettingsPayloadSchema = z.object({
+  seriesId: RecurringSeriesIdSchema,
+  employerId: EmployerIdSchema,
+  activeTemplateId: PaycheckTemplateIdSchema.nullable(),
+  bookingEnabled: z.boolean(),
+  incomeCategoryLedgerAccountId: LedgerAccountIdSchema.nullable(),
+  autonomy: z.enum(['off', 'suggest', 'auto_with_log']),
 }).strict();
 
 export const CreateReimbursementClaimPayloadSchema=z.object({
@@ -580,6 +630,8 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'paychecks.reverse': PaycheckStatusPayloadSchema,
   'paychecks.restore': PaycheckStatusPayloadSchema,
   'paychecks.dismiss_detected': DismissDetectedPaycheckPayloadSchema,
+  'paychecks.save_template': SavePaycheckTemplatePayloadSchema,
+  'paychecks.set_series_settings': SetPaycheckSeriesSettingsPayloadSchema,
   'reimbursements.create_claim':CreateReimbursementClaimPayloadSchema,
   'reimbursements.settle':SettleReimbursementPayloadSchema,
   'reimbursements.reverse_settlement':ReverseSettlementPayloadSchema,
