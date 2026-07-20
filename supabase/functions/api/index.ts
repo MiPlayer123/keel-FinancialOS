@@ -48,7 +48,12 @@ import {
   type HouseholdExport,
 } from '../_shared/vendor/keel-domain.mjs';
 import { json, mapDbError, toSnakeKeys } from '../_shared/http.ts';
-import { agentToolDefinitions, makeExecuteAgentTool, type AppliedAction } from '../_shared/agent.ts';
+import {
+  agentToolDefinitions,
+  makeExecuteAgentTool,
+  type AppliedAction,
+  type ProposedAction,
+} from '../_shared/agent.ts';
 import { decideStatementPromotion } from '../_shared/statement-sniff.ts';
 import { decryptToken, encryptToken, type EncryptedRecord } from '../_shared/credential-crypto.ts';
 import { currentKekVersion, getKek } from '../_shared/credential-kek.ts';
@@ -473,6 +478,7 @@ export default {
       // the UI can show what changed + offer undo (Law 2). Budgets/reimbursements
       // are Class B (proposals) and land in later slices.
       const appliedActions: AppliedAction[] = [];
+      const proposedActions: ProposedAction[] = [];
       const executeTool = makeExecuteAgentTool({
         authorize,
         authzCtx,
@@ -480,6 +486,7 @@ export default {
         rpc: (proc, args) => ctx.supabase.rpc(proc, args),
         todayIso,
         onApplied: (action) => appliedActions.push(action),
+        onProposed: (action) => proposedActions.push(action),
       });
 
       const startedAt = Date.now();
@@ -504,6 +511,7 @@ export default {
             stoppedReason: run.stoppedReason,
             tools: run.toolCalls.map((t) => t.call.name),
             appliedCount: appliedActions.length,
+            proposedCount: proposedActions.length,
             latencyMs: Date.now() - startedAt,
             inputTokens: run.usage.inputTokens,
             outputTokens: run.usage.outputTokens,
@@ -518,6 +526,7 @@ export default {
           steps: run.steps,
           stoppedReason: run.stoppedReason,
           appliedActions,
+          proposedActions,
         });
         return json(200, record);
       } catch (error) {

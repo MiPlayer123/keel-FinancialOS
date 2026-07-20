@@ -30,10 +30,13 @@ import { useHousehold } from '@/components/keel/household-context';
 import {
   archiveNote,
   askKeel,
+  keelCommand,
+  newId,
   saveNote,
   saveTask,
   unarchiveNote,
   type AgentAppliedAction,
+  type AgentProposedAction,
   type AiChatRecord,
 } from '@/lib/keel-api';
 import { Badge } from '@/components/ui/badge';
@@ -465,6 +468,10 @@ function KeelAnswer({ record }: { record: AiChatRecord }) {
         <AppliedActionsList actions={record.appliedActions} />
       ) : null}
 
+      {record.proposedActions.length > 0 ? (
+        <ProposedActionsList actions={record.proposedActions} />
+      ) : null}
+
       <Separator />
 
       <div className="flex flex-col gap-2">
@@ -512,6 +519,101 @@ function KeelAnswer({ record }: { record: AiChatRecord }) {
         </details>
       </div>
     </article>
+  );
+}
+
+/** Class-B changes the agent proposes — nothing happens until the user approves (Law 2/10). */
+function ProposedActionsList({ actions }: { actions: AgentProposedAction[] }) {
+  return (
+    <div className="flex flex-col gap-2">
+      {actions.map((action, i) => (
+        <ProposedActionCard key={`${action.command}-${String(i)}`} action={action} />
+      ))}
+    </div>
+  );
+}
+
+function ProposedActionCard({ action }: { action: AgentProposedAction }) {
+  const { householdId, userId } = useHousehold();
+  const [state, setState] = useState<'idle' | 'approving' | 'approved' | 'rejected'>('idle');
+
+  async function approve() {
+    if (householdId === null || userId === null || state !== 'idle') return;
+    setState('approving');
+    try {
+      await keelCommand({
+        commandId: newId(),
+        command: action.command,
+        economicEventKey: `${action.command}:${newId()}`,
+        actor: { kind: 'user', userId },
+        householdId,
+        payload: action.payload,
+      });
+      setState('approved');
+      toast.success('Approved and applied.');
+    } catch (err) {
+      setState('idle');
+      toast.error(err instanceof Error ? err.message : 'Could not apply the change.');
+    }
+  }
+
+  return (
+    <Card size="sm" className="max-w-xl">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <Sparkles className="size-4 text-muted-foreground" />
+          Proposed change
+        </CardTitle>
+        <CardDescription>Nothing changes until you approve. This runs KEEL&apos;s normal command.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="rounded-lg border bg-secondary/20 px-3 py-2">
+          <div className="mb-1 flex items-center gap-2">
+            <Badge variant="secondary">{action.command}</Badge>
+            <Badge variant="outline" className="font-normal">
+              Needs approval
+            </Badge>
+          </div>
+          <p className="text-sm text-foreground">{action.summary}</p>
+        </div>
+        {state === 'approved' ? (
+          <p className="mt-2 text-sm text-muted-foreground">Applied. You can review it on the Budgets page.</p>
+        ) : state === 'rejected' ? (
+          <p className="mt-2 text-sm text-muted-foreground">Dismissed. Nothing changed.</p>
+        ) : null}
+      </CardContent>
+      {state === 'idle' || state === 'approving' ? (
+        <CardFooter className="justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={state !== 'idle'}
+            onClick={() => {
+              setState('rejected');
+            }}
+          >
+            <X data-icon="inline-start" />
+            Reject
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            disabled={householdId === null || userId === null || state !== 'idle'}
+            onClick={() => {
+              void approve();
+            }}
+          >
+            {state === 'approving' ? (
+              <Loader2 data-icon="inline-start" className="animate-spin" />
+            ) : (
+              <Check data-icon="inline-start" />
+            )}
+            Approve
+          </Button>
+        </CardFooter>
+      ) : null}
+    </Card>
   );
 }
 

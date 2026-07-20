@@ -31,7 +31,12 @@ describe('buildAgentResponseRecord', () => {
       ...base,
       text: 'I propose setting Groceries to $600.',
       proposedActions: [
-        { kind: 'budgets.set_target', summary: 'Groceries → $600', approvalTokenId: 't1', payload: {}, expiresAt: base.asOf },
+        {
+          kind: 'budgets.set_target',
+          command: 'budgets.set_target',
+          summary: 'Groceries → $600',
+          payload: { month: '2026-07-01', categoryLedgerAccountId: 'c1', kind: 'amount', amountMinor: '60000' },
+        },
       ],
     });
     expect(rec.displayOnly).toBe(false);

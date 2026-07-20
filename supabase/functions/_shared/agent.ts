@@ -465,13 +465,23 @@ export interface AppliedAction {
   readonly undo?: AppliedActionUndo;
 }
 
+/** A change the agent proposes for approval (mirrors @keel/ai ProposedAction). */
+export interface ProposedAction {
+  readonly kind: string;
+  readonly command: string;
+  readonly summary: string;
+  readonly payload: Record<string, unknown>;
+}
+
 interface WriteExecCtx {
   readonly householdId: string;
+  readonly todayIso: string;
   readonly rpc: (proc: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
 }
 
 type WriteExecResult =
   | { readonly ok: true; readonly modelResult: Record<string, unknown>; readonly applied: AppliedAction }
+  | { readonly ok: true; readonly modelResult: Record<string, unknown>; readonly proposed: ProposedAction }
   | { readonly ok: false; readonly error: string; readonly detail?: string };
 
 interface WriteToolSpec {
@@ -493,6 +503,19 @@ const noteBody = (v: unknown): string | null => {
 
 const noteId = (v: unknown): string | null =>
   typeof v === 'string' && UUID_RE.test(v) ? v : null;
+
+// --- budget proposal helpers ---
+const currentMonthIso = (todayIso: string): string => `${todayIso.slice(0, 7)}-01`;
+/** Minor-unit amount as a non-negative digit string (Law 4: no floats). */
+const minorDigits = (v: unknown): string | null =>
+  typeof v === 'string' && /^\d+$/.test(v) ? v : null;
+const basisPoints = (v: unknown): number | null =>
+  typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 10000 ? v : null;
+/** Display-only dollar formatting for the proposal summary (server-side, not the LLM). */
+const displayMinor = (minor: string): string => {
+  const n = Number(minor);
+  return Number.isFinite(n) ? `$${(n / 100).toFixed(2)}` : `${minor} (minor units)`;
+};
 
 const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
   {
@@ -633,6 +656,140 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       };
     },
   },
+  // --- Budgets: Class B (suggest→approve). These PROPOSE the exact command +
+  // payload; nothing changes until the user approves in the app (Law 2/10). ---
+  {
+    name: 'propose_budget_target',
+    description:
+      'Propose a monthly budget target for one category (a fixed amount OR a percent of the plan total). Requires the user’s approval — this does NOT change anything by itself. First call list_categories to get the categoryLedgerAccountId.',
+    action: 'budgets.set_target',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['categoryLedgerAccountId'],
+      properties: {
+        categoryLedgerAccountId: { type: 'string', description: 'Category ledger account id (uuid) from list_categories.' },
+        categoryName: { type: 'string', description: 'Category name, for the summary shown to the user.' },
+        amountMinor: { type: 'string', description: 'Target amount in minor units, e.g. "60000" for $600. Provide this OR percentBp.' },
+        percentBp: { type: 'integer', minimum: 0, maximum: 10000, description: 'Percent of plan total in basis points (10000 = 100%).' },
+        month: { type: 'string', description: 'First-of-month ISO date; defaults to the current month.' },
+        rollover: { type: 'boolean' },
+      },
+    },
+    execute: (args, ctx) => {
+      const cat = noteId(args['categoryLedgerAccountId']);
+      if (cat === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'categoryLedgerAccountId must be a uuid' });
+      const month = isoDate(args['month']) ?? currentMonthIso(ctx.todayIso);
+      const amount = minorDigits(args['amountMinor']);
+      const pct = basisPoints(args['percentBp']);
+      if ((amount === null) === (pct === null)) {
+        return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'provide exactly one of amountMinor or percentBp' });
+      }
+      const rollover = args['rollover'] === true;
+      const name = typeof args['categoryName'] === 'string' && args['categoryName'].length > 0 ? args['categoryName'] : 'category';
+      const payload: Record<string, unknown> =
+        amount !== null
+          ? { month, categoryLedgerAccountId: cat, kind: 'amount', amountMinor: amount, ...(rollover ? { rollover } : {}) }
+          : { month, categoryLedgerAccountId: cat, kind: 'percent_of_total', percentBp: pct, ...(rollover ? { rollover } : {}) };
+      const summary =
+        amount !== null
+          ? `Set ${name} budget to ${displayMinor(amount)} for ${month.slice(0, 7)}`
+          : `Set ${name} budget to ${((pct as number) / 100).toString()}% of total for ${month.slice(0, 7)}`;
+      return Promise.resolve({ ok: true, modelResult: { ok: true, proposed: true }, proposed: { kind: 'budgets.set_target', command: 'budgets.set_target', summary, payload } });
+    },
+  },
+  {
+    name: 'propose_budget_total',
+    description:
+      'Propose the overall monthly budget total — a fixed amount OR a percent of expected income. Requires the user’s approval.',
+    action: 'budgets.set_total',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        amountMinor: { type: 'string', description: 'Total in minor units. Provide this OR percentBp.' },
+        percentBp: { type: 'integer', minimum: 0, maximum: 10000, description: 'Percent of expected income in basis points.' },
+        month: { type: 'string', description: 'First-of-month ISO date; defaults to current month.' },
+      },
+    },
+    execute: (args, ctx) => {
+      const month = isoDate(args['month']) ?? currentMonthIso(ctx.todayIso);
+      const amount = minorDigits(args['amountMinor']);
+      const pct = basisPoints(args['percentBp']);
+      if ((amount === null) === (pct === null)) {
+        return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'provide exactly one of amountMinor or percentBp' });
+      }
+      const payload: Record<string, unknown> =
+        amount !== null
+          ? { month, basis: 'amount', amountMinor: amount }
+          : { month, basis: 'percent_of_income', percentBp: pct };
+      const summary =
+        amount !== null
+          ? `Set the monthly budget total to ${displayMinor(amount)} for ${month.slice(0, 7)}`
+          : `Set the monthly budget total to ${((pct as number) / 100).toString()}% of expected income for ${month.slice(0, 7)}`;
+      return Promise.resolve({ ok: true, modelResult: { ok: true, proposed: true }, proposed: { kind: 'budgets.set_total', command: 'budgets.set_total', summary, payload } });
+    },
+  },
+  {
+    name: 'propose_expected_income',
+    description: 'Propose the expected income for a month (used for percent-based budgeting). Requires the user’s approval.',
+    action: 'budgets.set_expected_income',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['amountMinor'],
+      properties: {
+        amountMinor: { type: 'string', description: 'Expected income in minor units.' },
+        month: { type: 'string', description: 'First-of-month ISO date; defaults to current month.' },
+      },
+    },
+    execute: (args, ctx) => {
+      const amount = minorDigits(args['amountMinor']);
+      if (amount === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'amountMinor must be a non-negative minor-unit string' });
+      const month = isoDate(args['month']) ?? currentMonthIso(ctx.todayIso);
+      return Promise.resolve({
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'budgets.set_expected_income',
+          command: 'budgets.set_expected_income',
+          summary: `Set expected income to ${displayMinor(amount)} for ${month.slice(0, 7)}`,
+          payload: { month, amountMinor: amount },
+        },
+      });
+    },
+  },
+  {
+    name: 'propose_remove_budget_target',
+    description: 'Propose removing a category’s budget target for a month (soft removal). Requires the user’s approval.',
+    action: 'budgets.remove_target',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['categoryLedgerAccountId'],
+      properties: {
+        categoryLedgerAccountId: { type: 'string', description: 'Category ledger account id (uuid).' },
+        categoryName: { type: 'string' },
+        month: { type: 'string', description: 'First-of-month ISO date; defaults to current month.' },
+      },
+    },
+    execute: (args, ctx) => {
+      const cat = noteId(args['categoryLedgerAccountId']);
+      if (cat === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'categoryLedgerAccountId must be a uuid' });
+      const month = isoDate(args['month']) ?? currentMonthIso(ctx.todayIso);
+      const name = typeof args['categoryName'] === 'string' && args['categoryName'].length > 0 ? args['categoryName'] : 'category';
+      return Promise.resolve({
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'budgets.remove_target',
+          command: 'budgets.remove_target',
+          summary: `Remove the ${name} budget target for ${month.slice(0, 7)}`,
+          payload: { month, categoryLedgerAccountId: cat },
+        },
+      });
+    },
+  },
 ];
 
 const WRITE_TOOL_BY_NAME: Readonly<Record<string, WriteToolSpec>> = Object.fromEntries(
@@ -653,14 +810,17 @@ export const agentToolDefinitions = (): ToolDefinition[] => [
 export interface AgentToolDeps extends ReadToolDeps {
   /** Called for each successfully applied Class-A write (collected for the record). */
   readonly onApplied: (action: AppliedAction) => void;
+  /** Called for each staged Class-B proposal (collected for the record). */
+  readonly onProposed: (action: ProposedAction) => void;
 }
 
 /**
  * Build the combined read+write `executeTool` for `runAgent`. Reads flow through
- * `makeExecuteReadTool`; writes authorize their own action then run through the
- * audited note procs, reporting each applied change via `onApplied`. Never
- * throws for authz/validation/proc failures — returns an error PAYLOAD the model
- * can react to.
+ * `makeExecuteReadTool`; writes authorize their own action then either APPLY
+ * (Class A notes → `onApplied`) or PROPOSE (Class B budgets → `onProposed`,
+ * nothing changes until the user approves). Never throws for
+ * authz/validation/proc failures — returns an error PAYLOAD the model can react
+ * to.
  */
 export const makeExecuteAgentTool = (deps: AgentToolDeps) => {
   const runRead = makeExecuteReadTool(deps);
@@ -674,11 +834,16 @@ export const makeExecuteAgentTool = (deps: AgentToolDeps) => {
     });
     if (!decision.allowed) return JSON.stringify({ error: 'not_authorized', tool: call.name });
 
-    const res = await write.execute(call.args ?? {}, { householdId: deps.householdId, rpc: deps.rpc });
+    const res = await write.execute(call.args ?? {}, {
+      householdId: deps.householdId,
+      todayIso: deps.todayIso,
+      rpc: deps.rpc,
+    });
     if (!res.ok) {
       return JSON.stringify({ error: res.error, ...(res.detail ? { detail: res.detail } : {}) });
     }
-    deps.onApplied(res.applied);
+    if ('applied' in res) deps.onApplied(res.applied);
+    else deps.onProposed(res.proposed);
     return JSON.stringify(res.modelResult);
   };
 };
