@@ -33,6 +33,7 @@ export function VirtualTxnList({
   selecting,
   selected,
   onToggle,
+  onApproveAuto,
 }: {
   rows: RichTransactionRow[];
   categories: CategoryRow[];
@@ -101,6 +102,7 @@ export function VirtualTxnList({
                 selecting={selecting}
                 selected={selected}
                 onToggle={onToggle}
+                onApproveAuto={onApproveAuto}
               />
             </div>
           );

@@ -18,6 +18,10 @@ import type { RichTransactionRow } from '@/lib/keel-api';
 /** The fields these checks inspect — a subset of RichTransactionRow. */
 export type CategorySourceLike = Pick<RichTransactionRow, 'categorySource' | 'splits'>;
 
+/** Adds the concrete category id an inline approve must re-file with. */
+export type ApprovableLike = CategorySourceLike &
+  Pick<RichTransactionRow, 'categoryLedgerAccountId'>;
+
 /**
  * True when the CURRENT category was filed by a rule or the bank's PFC
  * mapping and no human has looked at it — the "Auto" badge condition.
@@ -41,4 +45,19 @@ export function isAutoCategorized(t: CategorySourceLike): boolean {
 export function isReviewedCategory(t: CategorySourceLike): boolean {
   if (t.splits && t.splits.length > 0) return true;
   return t.categorySource === 'user' || t.categorySource === 'transfer_confirm';
+}
+
+/**
+ * True when a one-click ✓ approve is offered on the row: the transaction is
+ * auto-categorized (rule / bank PFC, not yet human-confirmed) AND carries a
+ * concrete category to re-affirm. Approving simply re-files that SAME category
+ * with source='user' via the existing categorize command (Law 7 — no second
+ * write path): it clears the "Auto" state by turning inference into an explicit
+ * human decision (Law 2 suggest→approve, Law 9 explicit ownership), Quicken's
+ * "accept the auto category" gesture without opening the editor. A split has no
+ * single category to approve (its legs ARE the reviewed decision), and a row
+ * with no category id can't be re-filed, so neither is approvable.
+ */
+export function canApproveAuto(t: ApprovableLike): boolean {
+  return isAutoCategorized(t) && t.categoryLedgerAccountId !== null;
 }

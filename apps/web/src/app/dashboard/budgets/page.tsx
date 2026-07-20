@@ -11,6 +11,8 @@ import { AddBudgetCategoryPicker } from '@/components/keel/add-budget-category-p
 import { BudgetPlanHeader } from '@/components/keel/budget-plan-header';
 import { BudgetCategoryRow } from '@/components/keel/budget-category-row';
 import { useHousehold } from '@/components/keel/household-context';
+import { useEntityLens } from '@/components/keel/entity-lens-context';
+import { scopeToEntity } from '@/lib/category-picker';
 import {
   fetchBudgetMonth,
   fetchCategories,
@@ -51,6 +53,15 @@ export default function BudgetsPage() {
 
 function BudgetsBody() {
   const { householdId, userId, ready } = useHousehold();
+  // "The global version we have" (founder ask): budgeting must honour the same
+  // household-wide entity lens the Dashboard/Ledger/Accounts use. Categories are
+  // ledger_accounts scoped per entity, so the SAME name ("Restaurants") exists
+  // once per entity — with no scope the Add-category picker listed every name
+  // TWICE (Personal + Business), which read as double-counting. Scoping the
+  // addable list to the active lens collapses the apparent duplicate to the one
+  // entity the user is actually looking at; blended (null lens) keeps the full
+  // list and relies on the picker's entity-label disambiguation (D-060).
+  const { entityId: lensEntityId, multiEntity } = useEntityLens();
   const [offset, setOffset] = useState(0);
   const [plan, setPlan] = useState<BudgetMonth | null>(null);
   const [categories, setCategories] = useState<CategoryRow[]>([]);
@@ -108,7 +119,15 @@ function BudgetsBody() {
   // Categories the picker can still add: live EXPENSE categories not already
   // targeted and not money-movement buckets. Fed from categories.list (the
   // authoritative taxonomy), shaped into the picker's BudgetRow contract.
-  const addable = categories
+  // Entity-scoped to the active lens first (see the lens comment above): with a
+  // lens set, only that entity's categories are offered, so identically-named
+  // categories from another entity no longer appear as duplicates. A blended
+  // lens (null), or a single-entity household, passes the full list through.
+  const scopedCategories =
+    multiEntity && lensEntityId !== null
+      ? scopeToEntity(categories, lensEntityId)
+      : categories;
+  const addable = scopedCategories
     .filter(
       (c) =>
         c.kind === 'expense' &&

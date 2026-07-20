@@ -1,11 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
-import { isAutoCategorized, isReviewedCategory, type CategorySourceLike } from '@/lib/review-state';
+import {
+  canApproveAuto,
+  isAutoCategorized,
+  isReviewedCategory,
+  type ApprovableLike,
+  type CategorySourceLike,
+} from '@/lib/review-state';
 
 const row = (
   categorySource: 'user' | 'rule' | 'plaid_pfc' | 'transfer_confirm' | null,
   splits: CategorySourceLike['splits'] = null,
 ): CategorySourceLike => ({ categorySource, splits });
+
+const approvable = (
+  categorySource: ApprovableLike['categorySource'],
+  categoryLedgerAccountId: string | null,
+  splits: ApprovableLike['splits'] = null,
+): ApprovableLike => ({ categorySource, categoryLedgerAccountId, splits });
 
 describe('isAutoCategorized', () => {
   it('is true for a rule-filed category', () => {
@@ -65,5 +77,37 @@ describe('isReviewedCategory', () => {
 
   it('is false for a still-uncategorized transaction', () => {
     expect(isReviewedCategory(row(null))).toBe(false);
+  });
+});
+
+describe('canApproveAuto', () => {
+  it('is true for a rule-filed row with a concrete category', () => {
+    expect(canApproveAuto(approvable('rule', 'cat-1'))).toBe(true);
+  });
+
+  it('is true for a PFC-mapped row with a concrete category', () => {
+    expect(canApproveAuto(approvable('plaid_pfc', 'cat-1'))).toBe(true);
+  });
+
+  it('is false when the auto row carries no category id (nothing to re-file)', () => {
+    expect(canApproveAuto(approvable('plaid_pfc', null))).toBe(false);
+  });
+
+  it('is false for a user-confirmed row (already reviewed — nothing to approve)', () => {
+    expect(canApproveAuto(approvable('user', 'cat-1'))).toBe(false);
+  });
+
+  it('is false for a still-uncategorized row', () => {
+    expect(canApproveAuto(approvable(null, null))).toBe(false);
+  });
+
+  it('is false for a split, even with an overlay id present', () => {
+    expect(
+      canApproveAuto(
+        approvable('rule', 'cat-1', [
+          { categoryLedgerAccountId: 'c1', name: 'Groceries', kind: 'expense', amountMinor: '500' },
+        ]),
+      ),
+    ).toBe(false);
   });
 });
