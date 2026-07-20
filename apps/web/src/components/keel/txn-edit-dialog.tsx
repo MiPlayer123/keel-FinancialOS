@@ -467,15 +467,14 @@ export function CategoryPicker({
     [allMerged],
   );
 
-  // Only offer categories matching the transaction's direction (income/expense).
-  const options = useMemo(
-    () => merged.filter((c) => (row.categoryKind ? c.kind === row.categoryKind : true)),
-    [merged, row.categoryKind],
-  );
-  const groups = useMemo(
-    () => groupForPicker(merged, query, row.categoryKind ?? null),
-    [merged, query, row.categoryKind],
-  );
+  // Offer ALL categories across both kinds (income AND expense): the server
+  // (keel_categorize_transaction) validates entity + is_category but NOT kind,
+  // so an inflow can legitimately be filed under an expense category (e.g. a
+  // "payback" into Restaurants) and vice-versa. Kind-scoping the options made
+  // the UI stricter than the backend for no reason. Entity-scoping stays
+  // (via `merged`); the Income/Expense grouping below keeps it readable.
+  const options = merged;
+  const groups = useMemo(() => groupForPicker(merged, query, null), [merged, query]);
   const recentOptions = useMemo(
     () =>
       recents
@@ -1032,10 +1031,10 @@ function TxnEditForm({
   }
 
   const original = row.originalDescription ?? row.description;
-  const categoryOptions = useMemo(
-    () => categories.filter((c) => (row.categoryKind ? c.kind === row.categoryKind : true)),
-    [categories, row],
-  );
+  // Existence gate only (drives whether the Category section renders). Not
+  // kind-scoped: the picker itself offers both kinds now, so any category
+  // existing at all means the section is useful.
+  const categoryOptions = categories;
 
   // Split direction follows the cash sign (expense = money out); every split
   // row offers categories of that one kind, same as manual entry.
