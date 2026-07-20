@@ -103,6 +103,10 @@ export const INCLUDE = [
   // No secrets: tenant scope + a link between an already-exported statement and
   // an already-exported canonical transaction (Law 6 export contract).
   include({schema:'public',table:'statement_payment_links',columns:['household_id','id','statement_id','canonical_transaction_id','transfer_link_id','status','score','matcher_version','reason_codes','decided_by','decided_at','created_at'],sortKey:['household_id','id'],timestampColumns:['decided_at','created_at'],bigintColumns:[]}),
+  // SLICE 9 (statement-ingestion-v2.md §5 [A8]). Applied investment-statement
+  // holdings. No secrets: tenant scope + a link between an already-exported
+  // statement/extraction and the approval token that authorized it (Law 6).
+  include({schema:'public',table:'statement_holding_applications',columns:['household_id','id','statement_id','extraction_id','account_id','applied_by','approval_token_id','period_end','revoked_at','revoked_by','created_at'],sortKey:['household_id','id'],timestampColumns:['revoked_at','created_at'],bigintColumns:[]}),
   include({ schema: 'public', table: 'holdings', columns: ['id', 'household_id', 'account_id', 'as_of', 'symbol', 'name', 'qty', 'price_minor', 'value_minor', 'cost_basis_minor', 'currency', 'source', 'security_type', 'created_at', 'updated_at'], sortKey: ['id'], timestampColumns: ['created_at', 'updated_at'], bigintColumns: ['price_minor', 'value_minor', 'cost_basis_minor'] }),
   include({ schema: 'public', table: 'holdings_snapshots', columns: ['id', 'household_id', 'account_id', 'snapshot_date', 'symbol', 'name', 'qty', 'price_minor', 'value_minor', 'cost_basis_minor', 'currency', 'source', 'created_at'], sortKey: ['id'], timestampColumns: ['created_at'], bigintColumns: ['price_minor', 'value_minor', 'cost_basis_minor'] }),
   include({ schema: 'public', table: 'investment_sync_state', columns: ['connection_id', 'household_id', 'last_pulled_through', 'window_from', 'window_to', 'continuation_offset', 'last_synced_at', 'created_at', 'updated_at'], sortKey: ['connection_id'], timestampColumns: ['last_synced_at', 'created_at', 'updated_at'], bigintColumns: [] }),

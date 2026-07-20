@@ -135,6 +135,8 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'statements.set_cadence': 'keel_statement_set_cadence',
   'statements.decide_payment_link': 'keel_cmd_statements_decide_payment_link',
   'statements.detach_payment_link': 'keel_cmd_statements_detach_payment_link',
+  'statements.apply_holdings': 'keel_cmd_statements_apply_holdings',
+  'statements.unapply_holdings': 'keel_cmd_statements_unapply_holdings',
   'reconciliations.close': 'keel_reconciliation_close',
   'reconciliations.reopen': 'keel_reconciliation_reopen',
   'transactions.manual_create': 'keel_cmd_manual_transaction',
@@ -178,6 +180,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'statements.cadence': 'keel_statement_cadence',
   'statements.find_payment': 'keel_statement_suggest_payments',
   'statements.payment_links': 'keel_list_statement_payment_links',
+  'statements.holdings_diff': 'keel_statement_holdings_diff',
   'dashboard.cash_flow': 'keel_cash_flow',
   'dashboard.net_worth': 'keel_net_worth_as_of',
   'dashboard.net_worth_daily': 'keel_net_worth_daily',
@@ -2722,6 +2725,47 @@ export default {
       return json(200, data);
     }
 
+    if (path === '/statements/issue-holdings-approval') {
+      // SLICE 9 [A8]: mint an approval token bound to the EXACT server-derived
+      // positions payload the apply command will redeem (Law 11 gate). The client
+      // supplies ONLY the statementId — positions come from the extraction, so the
+      // issue side and apply side hash a byte-identical server payload by
+      // construction. authz gates at partner (same class-B floor as apply_holdings).
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const statementIdRaw = input['statementId'];
+      const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (
+        !householdId.success ||
+        typeof statementIdRaw !== 'string' ||
+        !uuidRe.test(statementIdRaw)
+      ) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Issue-holdings-approval request failed validation.',
+          details: {},
+        });
+      }
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'statements.apply_holdings', {
+        householdId: householdId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+      const { data, error } = await ctx.supabase.rpc(
+        'keel_cmd_statements_issue_holdings_approval',
+        {
+          p_household_id: householdId.data,
+          p_statement_id: statementIdRaw,
+        },
+      );
+      if (error) return mapDbError(error);
+      return json(200, data);
+    }
+
     if (path === '/commands') {
       const envelope = CommandEnvelopeSchema.safeParse(body);
       if (!envelope.success) {
@@ -2819,7 +2863,8 @@ export default {
         query.query === 'statements.drafts' ||
         query.query === 'statements.cadence' ||
         query.query === 'statements.find_payment' ||
-        query.query === 'statements.payment_links'
+        query.query === 'statements.payment_links' ||
+        query.query === 'statements.holdings_diff'
       ) {
         const parsedHousehold = HouseholdIdSchema.safeParse(query.householdId);
         if (!parsedHousehold.success) {
@@ -2932,7 +2977,8 @@ export default {
         }
       } else if (
         query.query === 'statements.find_payment' ||
-        query.query === 'statements.payment_links'
+        query.query === 'statements.payment_links' ||
+        query.query === 'statements.holdings_diff'
       ) {
         // SLICE 8 [A7]: find_payment runs the deterministic exact-only card-
         // payment matcher for one statement ("Find payment" button);

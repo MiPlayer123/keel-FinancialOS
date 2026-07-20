@@ -246,6 +246,19 @@ export const SetStatementCadencePayloadSchema=z.object({accountId:AccountIdSchem
 // a transfer. detach undoes a confirmed link (Law 2 reversible, never delete).
 export const DecideStatementPaymentLinkPayloadSchema=z.object({linkId:z.uuid(),confirm:z.boolean()}).strict();
 export const DetachStatementPaymentLinkPayloadSchema=z.object({linkId:z.uuid()}).strict();
+// SLICE 9 [A8]: apply an investment statement's extracted positions to the
+// account's holdings (Class B suggest→approve, Law 10; TOKEN-BOUND, Law 11). The
+// positions are SERVER-derived from the extraction — the client only names the
+// statement + carries the redeemed token; it never supplies positions (so the
+// issue side and apply side hash a byte-identical server payload). Reversible via
+// unapply (Law 2). approvalTokenId binds the exact positions payload (SLICE 0 GATE).
+export const ApplyStatementHoldingsPayloadSchema=z.object({
+  statementId:StatementIdSchema,
+  approvalTokenId:ApprovalTokenIdSchema,
+}).strict();
+export const UnapplyStatementHoldingsPayloadSchema=z.object({
+  statementId:StatementIdSchema,
+}).strict();
 
 /** One split of a manual transaction: a category and its debit-positive share. */
 export const ManualTransactionSplitSchema = z.object({
@@ -577,6 +590,8 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'statements.set_cadence':SetStatementCadencePayloadSchema,
   'statements.decide_payment_link':DecideStatementPaymentLinkPayloadSchema,
   'statements.detach_payment_link':DetachStatementPaymentLinkPayloadSchema,
+  'statements.apply_holdings':ApplyStatementHoldingsPayloadSchema,
+  'statements.unapply_holdings':UnapplyStatementHoldingsPayloadSchema,
   'reconciliations.close':CloseReconciliationPayloadSchema,
   'reconciliations.reopen':ReopenReconciliationPayloadSchema,
   'transactions.manual_create': ManualTransactionPayloadSchema,

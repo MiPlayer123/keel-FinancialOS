@@ -1971,6 +1971,97 @@ export async function detachStatementPaymentLink(input: {
   });
 }
 
+// SLICE 9 [A8]: investment-statement holdings — apply extracted positions to the
+// account's live holdings (Class B, token-bound), diff vs current, revert.
+export type StatementHoldingsDiffRow = {
+  symbol: string | null;
+  cusip: string | null;
+  isin: string | null;
+  name: string | null;
+  currentQty: string | null;
+  currentValueMinor: string | null;
+  statementQty: string | null;
+  statementValueMinor: string | null;
+  qtyDelta: string | null;
+  valueDeltaMinor: string | null;
+  state: 'added' | 'removed' | 'changed' | 'same';
+};
+
+export type StatementHoldingsDiff = {
+  hasExtraction: boolean;
+  currentAsOf: string | null;
+  rows: StatementHoldingsDiffRow[];
+};
+
+/**
+ * Per-symbol/CUSIP delta between a statement's extracted positions and the
+ * account's CURRENT holdings. Suggestion only (Law 10) — nothing auto-corrected.
+ * Account-scoped read (viewer).
+ */
+export async function fetchStatementHoldingsDiff(
+  householdId: string,
+  statementId: string,
+): Promise<StatementHoldingsDiff> {
+  const data = await invoke<{
+    hasExtraction?: boolean;
+    currentAsOf?: string | null;
+    rows?: StatementHoldingsDiffRow[];
+  }>('api/queries', {
+    query: 'statements.holdings_diff',
+    householdId,
+    statementId,
+  });
+  return {
+    hasExtraction: data.hasExtraction ?? false,
+    currentAsOf: data.currentAsOf ?? null,
+    rows: Array.isArray(data.rows) ? data.rows : [],
+  };
+}
+
+/**
+ * The gate, client half (mirrors runIssueThenApprove for draft approval): issue a
+ * token bound to the SERVER-derived positions of this statement, then apply with
+ * that token. The client supplies ONLY the statementId to BOTH calls — the server
+ * derives identical positions on each side, so the issued hash == the redeemed
+ * hash by construction (Law 11 / SLICE 0 GATE).
+ */
+export async function applyStatementHoldings(input: {
+  householdId: string;
+  userId: string;
+  statementId: string;
+}): Promise<CommandResult> {
+  // (a) issue the approval token for this statement's positions.
+  const issued = await invoke<{ tokenId: string; payloadSha256: string; expiresAt: string }>(
+    'api/statements/issue-holdings-approval',
+    { householdId: input.householdId, statementId: input.statementId },
+  );
+  // (b) apply with the redeemed token; the server re-derives the same positions.
+  return keelCommand({
+    commandId: newId(),
+    command: 'statements.apply_holdings',
+    economicEventKey: `statements.apply_holdings:${input.statementId}:${issued.tokenId}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: { statementId: input.statementId, approvalTokenId: issued.tokenId },
+  });
+}
+
+/** Revert a prior holdings application (undo — revoke + rebuild, never delete, Law 2). */
+export async function unapplyStatementHoldings(input: {
+  householdId: string;
+  userId: string;
+  statementId: string;
+}): Promise<CommandResult> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'statements.unapply_holdings',
+    economicEventKey: `statements.unapply_holdings:${input.statementId}:${newId()}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: { statementId: input.statementId },
+  });
+}
+
 export type ReconciliationSession = {
   sessionId: string;
   ledgerEndingMinor: string;
