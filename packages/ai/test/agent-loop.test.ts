@@ -172,3 +172,26 @@ describe('runAgent', () => {
     ).rejects.toThrow();
   });
 });
+
+describe('runAgent image', () => {
+  it('places the attached image on the first user transcript entry', async () => {
+    const provider = new ScriptedProvider([
+      { kind: 'message', text: 'That receipt totals $12.', modelVersion: 'm', usage: { inputTokens: 1, outputTokens: 1 } },
+    ]);
+    await runAgent({
+      provider,
+      system: 'sys',
+      tools: [],
+      userMessage: 'what is the total?',
+      image: { mediaType: 'image/jpeg', dataBase64: 'ZZZZ' },
+      executeTool: () => Promise.resolve('{}'),
+      maxSteps: 3,
+    });
+    const first = provider.seen[0]!.transcript[0]!;
+    expect(first.role).toBe('user');
+    if (first.role === 'user') {
+      expect(first.image?.dataBase64).toBe('ZZZZ');
+      expect(first.image?.mediaType).toBe('image/jpeg');
+    }
+  });
+});

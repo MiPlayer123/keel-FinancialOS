@@ -168,3 +168,51 @@ describe('AnthropicAgentProvider', () => {
     expect(() => new AnthropicAgentProvider({ ...cfg, anthropicVersion: '' })).toThrow(AiProviderError);
   });
 });
+
+describe('vision: image serialization', () => {
+  const withImage: ConverseInput = {
+    system: 'sys',
+    transcript: [
+      { role: 'user', text: 'what is this receipt total?', image: { mediaType: 'image/png', dataBase64: 'AAAA' } },
+    ],
+    tools: [],
+  };
+
+  it('OpenAI encodes the image as a data-url image_url part', async () => {
+    const calls: FetchArgs[] = [];
+    const provider = new OpenAiAgentProvider({
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-x',
+      apiKey: 'k',
+      fetchImpl: fakeFetch(200, { model: 'gpt-x', choices: [{ message: { content: 'ok' } }], usage: {} }, calls),
+    });
+    await provider.converse(withImage);
+    const payload = JSON.parse(calls[0]!.init.body as string) as { messages: { role: string; content: unknown }[] };
+    const userMsg = payload.messages.find((m) => m.role === 'user')!;
+    const parts = userMsg.content as { type: string; image_url?: { url: string } }[];
+    const image = parts.find((p) => p.type === 'image_url');
+    assertOk(image?.image_url?.url === 'data:image/png;base64,AAAA');
+    assertOk(parts.some((p) => p.type === 'text'));
+  });
+
+  it('Anthropic encodes the image as a base64 image block', async () => {
+    const calls: FetchArgs[] = [];
+    const provider = new AnthropicAgentProvider({
+      baseUrl: 'https://api.anthropic.com',
+      model: 'claude-x',
+      apiKey: 'k',
+      anthropicVersion: '2023-06-01',
+      fetchImpl: fakeFetch(200, { model: 'claude-x', content: [{ type: 'text', text: 'ok' }], usage: {} }, calls),
+    });
+    await provider.converse(withImage);
+    const payload = JSON.parse(calls[0]!.init.body as string) as { messages: { role: string; content: unknown }[] };
+    const userMsg = payload.messages.find((m) => m.role === 'user')!;
+    const parts = userMsg.content as { type: string; source?: { media_type: string; data: string } }[];
+    const image = parts.find((p) => p.type === 'image');
+    assertOk(image?.source?.media_type === 'image/png' && image?.source?.data === 'AAAA');
+  });
+});
+
+function assertOk(cond: unknown): asserts cond {
+  expect(cond).toBe(true);
+}

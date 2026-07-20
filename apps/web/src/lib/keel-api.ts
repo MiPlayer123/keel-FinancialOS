@@ -2685,13 +2685,18 @@ export type AiChatRecord = {
 };
 
 /** Ask KEEL one question; the agent may call read tools before answering. */
+/** An image attached to a chat question (base64, no data: prefix). */
+export type AskKeelImage = { mediaType: string; data: string };
+
 export async function askKeel(input: {
   householdId: string;
   question: string;
+  image?: AskKeelImage;
 }): Promise<AiChatRecord> {
   return invoke<AiChatRecord>('api/ai/chat', {
     householdId: input.householdId,
     question: input.question,
+    ...(input.image ? { image: input.image } : {}),
   });
 }
 
