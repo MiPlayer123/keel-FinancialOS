@@ -133,6 +133,8 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'statements.approve_draft': 'keel_cmd_statements_approve_draft',
   'statements.dismiss_draft': 'keel_cmd_statements_dismiss_draft',
   'statements.set_cadence': 'keel_statement_set_cadence',
+  'statements.decide_payment_link': 'keel_cmd_statements_decide_payment_link',
+  'statements.detach_payment_link': 'keel_cmd_statements_detach_payment_link',
   'reconciliations.close': 'keel_reconciliation_close',
   'reconciliations.reopen': 'keel_reconciliation_reopen',
   'transactions.manual_create': 'keel_cmd_manual_transaction',
@@ -174,6 +176,8 @@ const QUERY_TO_PROC: Record<string, string> = {
   'statements.list': 'keel_list_statements',
   'statements.drafts': 'keel_list_statement_drafts',
   'statements.cadence': 'keel_statement_cadence',
+  'statements.find_payment': 'keel_statement_suggest_payments',
+  'statements.payment_links': 'keel_list_statement_payment_links',
   'dashboard.cash_flow': 'keel_cash_flow',
   'dashboard.net_worth': 'keel_net_worth_as_of',
   'dashboard.net_worth_daily': 'keel_net_worth_daily',
@@ -2813,7 +2817,9 @@ export default {
         query.query === 'reimbursements.list' ||
         query.query === 'statements.list' ||
         query.query === 'statements.drafts' ||
-        query.query === 'statements.cadence'
+        query.query === 'statements.cadence' ||
+        query.query === 'statements.find_payment' ||
+        query.query === 'statements.payment_links'
       ) {
         const parsedHousehold = HouseholdIdSchema.safeParse(query.householdId);
         if (!parsedHousehold.success) {
@@ -2924,6 +2930,20 @@ export default {
         if (typeof db.search === 'string' && db.search.length <= 200) {
           rpcArgs.p_search = db.search;
         }
+      } else if (
+        query.query === 'statements.find_payment' ||
+        query.query === 'statements.payment_links'
+      ) {
+        // SLICE 8 [A7]: find_payment runs the deterministic exact-only card-
+        // payment matcher for one statement ("Find payment" button);
+        // payment_links reads the active/decided links. Both are statement-
+        // scoped — statementId required.
+        const db = body as { statementId?: unknown };
+        const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (typeof db.statementId !== 'string' || !uuidRe.test(db.statementId)) {
+          return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });
+        }
+        rpcArgs.p_statement_id = db.statementId;
       } else if (query.query === 'transactions.search') {
         // WS-H (F-021): command-palette typeahead. Requires a search term; the
         // proc returns an empty page for a blank/absent one.
