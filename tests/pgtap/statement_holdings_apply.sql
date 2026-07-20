@@ -172,12 +172,17 @@ insert into public.household_memberships(household_id,user_id,role) values
   ('00000000-0000-4000-8000-00000000a001','00000000-0000-4000-8000-000000000001','owner'),
   ('00000000-0000-4000-8000-00000000b001','00000000-0000-4000-8000-000000000002','owner');
 -- investment account (a401, owned by user1) + a checking account (a402)
+-- + a SECOND investment account (a403) that is NEVER a statement target here —
+-- it exists solely to prove the rebuild DELETE is account-scoped: a holding on a
+-- DIFFERENT account is untouched by an apply on a401.
 insert into public.accounts(id,household_id,subtype,currency) values
   ('00000000-0000-4000-8000-00000000a401','00000000-0000-4000-8000-00000000a001','brokerage','USD'),
-  ('00000000-0000-4000-8000-00000000a402','00000000-0000-4000-8000-00000000a001','checking','USD');
+  ('00000000-0000-4000-8000-00000000a402','00000000-0000-4000-8000-00000000a001','checking','USD'),
+  ('00000000-0000-4000-8000-00000000a403','00000000-0000-4000-8000-00000000a001','brokerage','USD');
 insert into public.account_owners(account_id,user_id) values
   ('00000000-0000-4000-8000-00000000a401','00000000-0000-4000-8000-000000000001'),
-  ('00000000-0000-4000-8000-00000000a402','00000000-0000-4000-8000-000000000001');
+  ('00000000-0000-4000-8000-00000000a402','00000000-0000-4000-8000-000000000001'),
+  ('00000000-0000-4000-8000-00000000a403','00000000-0000-4000-8000-000000000001');
 
 -- Extraction E1 (June): AAA 10@100.00 = 1000.00, BBB 5@50.00 = 250.00
 insert into public.statement_extractions(id,household_id,kind_hint) values
@@ -207,6 +212,22 @@ insert into public.statements(id,household_id,account_id,period_start,period_end
   ('00000000-0000-4000-8000-00000000c003','00000000-0000-4000-8000-00000000a001','00000000-0000-4000-8000-00000000a402','2026-06-01','2026-06-30','USD');
 insert into public.statement_drafts(household_id,account_id,statement_id,extraction_id,decided_at) values
   ('00000000-0000-4000-8000-00000000a001','00000000-0000-4000-8000-00000000a402','00000000-0000-4000-8000-00000000c003','00000000-0000-4000-8000-0000000e0001',now());
+
+-- DELETE-scope guard fixtures (the highest-risk property: the rebuild DELETE is
+-- `household_id + account_id + source='statement'` — it must NOT touch other
+-- sources or other accounts). Seed real non-statement holdings that any correct
+-- apply on a401 has to leave completely alone:
+--   * MAN1: a source='manual' holding on the SAME account (a401) — a user's
+--     hand-entered position. A broadened DELETE (dropping the source predicate)
+--     would wipe it.
+--   * OTH1: a source='statement' holding on a DIFFERENT account (a403) — a
+--     broadened DELETE (dropping the account predicate) would wipe it.
+insert into public.holdings
+  (household_id,account_id,as_of,symbol,name,qty,price_minor,value_minor,currency,source) values
+  ('00000000-0000-4000-8000-00000000a001','00000000-0000-4000-8000-00000000a401',
+   '2026-05-01','MAN1','Hand entered',7,3000,21000,'USD','manual'),
+  ('00000000-0000-4000-8000-00000000a001','00000000-0000-4000-8000-00000000a403',
+   '2026-05-01','OTH1','Other acct',4,5000,20000,'USD','statement');
 
 -- Structural -----------------------------------------------------------------
 select has_table('public','statement_holding_applications','applications table exists');
@@ -282,6 +303,24 @@ select is((select count(*)::text from public.statement_holding_applications
             where statement_id='00000000-0000-4000-8000-00000000c001' and revoked_at is null),'1',
   'one non-revoked application for S1');
 
+-- DELETE-scope (the highest-risk property): the S1 apply ran the rebuild DELETE
+-- on a401. The manual holding on the SAME account MUST survive (source predicate),
+-- and the statement holding on a DIFFERENT account MUST be untouched (account
+-- predicate). A future edit that broadens the DELETE would wipe real user/Plaid
+-- data — lock it here.
+select is((select count(*)::text from public.holdings
+            where account_id='00000000-0000-4000-8000-00000000a401'
+              and source='manual' and symbol='MAN1'),'1',
+  'DELETE-scope: source=manual holding on the SAME account SURVIVES apply (source predicate) [A8/Law 9]');
+select is((select qty::text from public.holdings
+            where account_id='00000000-0000-4000-8000-00000000a401'
+              and source='manual' and symbol='MAN1'),'7',
+  'DELETE-scope: the surviving manual holding is byte-unchanged (qty still 7)');
+select is((select count(*)::text from public.holdings
+            where account_id='00000000-0000-4000-8000-00000000a403'
+              and source='statement' and symbol='OTH1'),'1',
+  'DELETE-scope: statement holding on a DIFFERENT account is UNTOUCHED (account predicate) [A8/Law 9]');
+
 -- ==== APPLY S2 (July, newer) -> symbol-drop BBB, add CCC, AAA reprices ====
 create temp table _tk2 as select public.keel_cmd_statements_issue_holdings_approval(
   '00000000-0000-4000-8000-00000000a001','00000000-0000-4000-8000-00000000c002') as out;
@@ -308,6 +347,15 @@ select is((select value_minor::text from public.holdings where source='statement
 select is((select as_of::text from public.holdings where source='statement' and symbol='AAA'
             and account_id='00000000-0000-4000-8000-00000000a401'),'2026-07-31',
   'current as_of now = S2 period_end');
+-- DELETE-scope survives a SECOND rebuild (S2 apply): still intact after two applies.
+select is((select count(*)::text from public.holdings
+            where account_id='00000000-0000-4000-8000-00000000a401'
+              and source='manual' and symbol='MAN1'),'1',
+  'DELETE-scope: manual holding still survives after the S2 rebuild (same account)');
+select is((select count(*)::text from public.holdings
+            where account_id='00000000-0000-4000-8000-00000000a403'
+              and source='statement' and symbol='OTH1'),'1',
+  'DELETE-scope: OTH1 on a403 still untouched after the S2 rebuild (different account)');
 
 -- ==== RE-APPLY the OLDER S1 -> must NOT regress current (S2 still wins) ====
 create temp table _tk1b as select public.keel_cmd_statements_issue_holdings_approval(
