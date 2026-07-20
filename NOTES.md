@@ -129,6 +129,272 @@ for series `1c446787-bfc0-44a6-8838-b77d5f1be8eb` with cadence `semimonthly`,
 anchor `{kind:'day_pair', days:[15,31]}` (or just click "Fix schedule" in the UI).
 
 ---
+## 2026-07-20 — feat(documents): attach an EXISTING doc to a transaction + storage hygiene
+
+Founder ask (2026-07-20): (1) "docs attached to when the [transaction] elements
+too would be pretty good" — let a user attach an already-uploaded receipt/
+statement (or a fresh upload) to a specific transaction and open it from the
+txn detail; (2) storage-growth worry ("if you look at the model, quicken becomes
+so big") — confirm docs live in Storage (not inline), deduped by content hash,
+and surface a storage number.
+
+**Most of ask (1) was already shipped.** The attach-only slice
+(`20260717234500`) already has: a generic `document_attachments` link with a
+`canonical_transaction_id` target, `keel_documents_confirm_upload` accepting
+`target_type='transaction'`/`target_id`, `keel_documents_list_for_target`, and
+soft-detach `keel_cmd_documents_detach`. The web `AttachmentsSection` was ALREADY
+wired into `TxnDetailSheet` (`txn-edit-dialog.tsx:1558`) and into paychecks /
+reimbursements / statements. So a FRESH upload could already be attached to a
+transaction and opened. No parallel storage path was created (Law 7 honored) —
+this work extends the existing model only.
+
+**The real gap: attach an ALREADY-UPLOADED document.** `confirm_upload` only
+attaches at upload time; a receipt sitting in the inbox (or attached elsewhere)
+could not be linked to a transaction. Closed with:
+- **`keel_cmd_documents_attach`** (migration `20260723000000`) — command-shaped
+  (generic `/commands` dispatch, same 5-arg signature as `_detach`). Links an
+  existing non-deleted document to any target. Tenant-checks BOTH the document
+  and the target (mirrors `confirm_upload`'s per-target checks). Idempotent: a
+  live `(document_id, target)` link is returned (`alreadyAttached:true`), never
+  duplicated. Rejects a soft-deleted document (its attachments were already
+  detached by `_delete`). No bytes move — just a `document_attachments` row.
+- Registered: `AttachExistingDocumentPayloadSchema` +
+  `COMMAND_PAYLOAD_SCHEMAS['documents.attach']` (contracts); `documents.attach`
+  in `COMMAND_ACTIONS`/`ACTION_MINIMUM_ROLES='partner'` (authz);
+  `COMMAND_TO_PROC['documents.attach']` (api); `attachExistingDocument` (client).
+- **UI:** `AttachmentsSection` gained an "Attach existing" button opening a
+  searchable dialog of every household document (`ExistingDocumentPicker`);
+  docs already attached to THIS target show "Attached" and are disabled. The
+  existing "Attach file" fresh-upload path is untouched. Because the section is
+  shared, transactions/paychecks/reimbursements/statements ALL gain this at once.
+
+**Ask (2) — storage hygiene.** Confirmed with live read-only SELECTs
+(founder household, metadata only — no bytes downloaded): document tables have
+**zero `bytea` columns**; bytes live only in Storage referenced by
+`document_versions.storage_bucket`/`storage_path` (no Quicken-style inline
+bloat), deduped by unique `(document_id, content_sha256)` + the tenant
+`document_hashes` registry. (Founder household currently has 0 document rows —
+tested-then-cleaned or a different household.) Added:
+- **`keel_documents_storage_summary`** (read) — pure metadata: live/deleted doc
+  counts, live vs total stored bytes (string, BIGINT-safe), version count, and
+  `distinctContent` (dedup) so the UI can show "N unique files".
+- **`keel_documents_list_household`** (read) — every live household document +
+  storage pointer + live-attachment count; powers both the "pick existing"
+  picker and a storage-management view. Signed URLs minted in the edge route
+  (`/documents/list-household`), same pattern as `/documents/list`.
+- **UI:** a `StorageSummaryBar` strip on the Receipts page ("X in Storage · N
+  documents · M unique (duplicates deduped) · K removed (kept for export/audit)").
+- Authz reads `documents.list_household` / `documents.storage_summary` at
+  `viewer`; both bespoke edge routes (list_household needs signed URLs).
+
+**Soft-delete respected (user directive 2026-07-17):** attach never hard-deletes;
+detach stays soft (`detached_at`); a soft-deleted document is un-attachable.
+`liveBytes` excludes soft-deleted originals (they persist for export/audit).
+
+**Snapshot fix (pre-existing drift, unrelated):** `packages/authz/test/
+action.test.ts` `ACTIONS` snapshot was already stale on the branch base —
+missing 5 actions from the merged AI-agent batch (`transactions.categorize`,
+`categories.create/rename`, `tasks.save/set_status`). Appended them alongside
+my 3 new actions so the suite is green.
+
+**Tests (RAN):**
+- Contracts `documents.attach` payload — 45/45 green (`npx vitest run --root
+  packages/contracts`): accepts every target type, rejects unknown enum,
+  strict (no smuggled `accountId`), required fields enforced.
+- Authz vocabulary/tier — 142/142 green.
+- **pgTAP against the REAL sliced proc body** (`scripts/run-documents-attach-
+  pgtap.sh` → throwaway PG17 cluster, TAP shim incl. `throws_ok`,
+  `tests/pgtap/documents_attach_existing.sql`) — **7/7 pass**: first attach
+  creates one link; idempotent re-attach returns the live link with no
+  duplicate row; soft-deleted document rejected (P0006); cross-tenant target
+  rejected (P0006); non-member actor rejected (P0006).
+- `cd apps/web && pnpm build` green (ESLint enforced). `node scripts/build-
+  functions.mjs` green (vendors contracts+authz — new command/action wired).
+
+**Migration to apply (⚑ human, live cloud — after `20260722310000`):**
+`20260723000000_documents_attach_existing_and_storage_summary.sql`. Header
+spells out the single `psql --single-transaction` invocation. No live apply or
+live data mutation performed here (per worktree hard rules).
+
+---
+## 2026-07-20 — feat(reimbursements): expected / future-dated reimbursements (AR)
+
+"Someone owes me money" tracked BEFORE it arrives — an accounts-receivable line
+that settles when the real inbound transaction lands, or stays open / gets
+written off if it never comes. Builds ON the existing reimbursement domain
+(20260712140000), does not duplicate it.
+
+- **Why a NEW surface, not the existing `reimbursement_claims`.** The existing
+  claim REQUIRES an `original_transaction_id` (a real, already-posted expense)
+  and carves an `expense_share` capped at that expense's live posting. The
+  founder wants (a) STANDALONE expectations ("Leo owes me for cruise tickets" —
+  no source expense need exist) and (b) a FUTURE `expected_date`. Neither fits
+  the claim model without weakening its invariants, so expected reimbursements
+  are a distinct, lighter layer that REUSES `public.counterparties` and the
+  `keel_live_real_posting` capacity helper. From-an-expense creation is still
+  supported (optional `source_transaction_id`, capped at the source outflow).
+- **Not an economic event (Law 2/9).** Money hasn't moved, so an expected
+  reimbursement writes ZERO journal postings — same stance as claims/settlements
+  (`incomeImpactMinor` always `'0'`). It's visible as an upcoming/receivable
+  line only. The integration test asserts `journal_postings` count is unchanged
+  across create + record_receipt.
+- **New migration `20260723000000_expected_reimbursements.sql`** (⚑ human applies
+  live; after 20260722310000, so it ships in the PR for the orchestrator). Three
+  tables (`expected_reimbursements`, `_receipts`, `_status_events`), receipts +
+  events append-only via `keel_forbid_mutation`. Five commands on the standard
+  command spine (`keel_finish_command` → audit_log + domain_events +
+  command_executions; idempotency via `keel_idempotency_check`):
+  `expected_reimbursements.{create,record_receipt,write_off,reopen,reverse_receipt}`
+  + a `.list` AR read model (reproducible-numbers envelope, formula
+  `expected-reimbursement-v1`). All reversible: reopen undoes write-off/full-
+  receipt close; reverse_receipt undoes a match and reopens the parent.
+- **Settlement = suggest→approve match to a REAL inbound txn** (partner-tier,
+  Class B). Partial receipts leave a remainder (status stays `open`); full
+  coverage auto-closes to `received`. Receipt allocation is capped at both the
+  txn's live inflow AND the expectation's remaining balance.
+- **Access.** `keel_expected_reimbursement_access`: carved-from-expense rows
+  gate on the source expense's account (via `keel_recurring_account_access`);
+  standalone rows gate on household membership+role (null-safe JWT sub). RLS +
+  `keel_api`/`keel_export` grants + definer-owner guard mirror the reimbursement
+  domain exactly. Export chained onto `keel_export_household` (Law 6) — verified
+  live head is `keel_export_household(uuid,timestamptz)` owned by `keel_export`.
+- **Contracts/authz/API.** New Zod payload schemas + 2 branded ids in
+  `@keel/contracts`; 6 new Actions in `@keel/authz` (5 writes partner-tier, 1
+  read viewer-tier); `COMMAND_TO_PROC` + `QUERY_TO_PROC` + the /queries
+  authorize-allowlist in `supabase/functions/api/index.ts`. The generic
+  `/commands` dispatch is fully data-driven, so no bespoke route needed.
+- **UI.** New "Expected — money owed to you" section at the TOP of the
+  reimbursements page: outstanding total, open vs resolved rows, create dialog
+  (Standalone / From-an-expense toggle, counterparty, amount, expected date,
+  note), record-receipt dialog (pick inbound txn, prefilled to remaining),
+  write-off / reopen / undo-receipt with reasons. Existing claims section below
+  is unchanged.
+- **Tests.** Unit (RUNS here): `packages/reimbursements` gained a pure
+  `reconcileExpected` (remaining-balance + status derivation mirroring the DB)
+  with 10 cases covering create→partial→full→received, reversed-receipt reopen,
+  never-arrives→written-off, over-allocation + written-off-with-receipt
+  violations, malformed money — 18/18 green. Integration (needs local stack;
+  written, not runnable here): `tests/integration/44-expected-reimbursements.test.ts`
+  walks standalone+from-expense create, partial then full receipt (asserts no
+  postings), reverse-receipt reopen, write-off→reopen, append-only audit, and
+  cross-tenant 404.
+- **Deviation / hygiene.** While editing `packages/authz/test/action.test.ts` I
+  brought its hardcoded `ACTIONS` snapshot current — my branch base had drifted
+  (the AI-agent read actions were in source but not the test's expected array).
+  Only additive; the min-role invariants test is unchanged. (During this I hit a
+  `git checkout main -- …` that briefly clobbered my authz edits; recovered from
+  stash, re-verified. No functional impact.)
+- **Verification RAN:** `cd apps/web && pnpm build` green (ESLint enforced;
+  reimbursements route 10.2 kB). `node scripts/build-functions.mjs` green.
+  `packages/{reimbursements,contracts,authz}` unit suites green. Read-only psql
+  confirmed every live dependency exists and `expected_reimbursements` is a clean
+  create. No live DB apply performed — migration prepared + flagged for the human.
+## 2026-07-20 — fix(cash-flow): sign-classify the money-in/money-out graph; flag the partial current month
+
+Founder screen-share report: the dashboard monthly cash-flow bars "might be
+negative" and the series "jumps at the end"; net worth "should not drop a
+layer, the money is always there".
+
+**Diagnosis (live read-only, household a1ba3759…):**
+- *Negative "money out" bars (root cause, code bug).* `keel_cash_flow_monthly`
+  v6 (20260720220000) classified each category posting by its EFFECTIVE category
+  KIND (overlay-aware, matching `keel_budget_month`). Correct for BUDGET, wrong
+  for a cash-DIRECTION chart: a received payment the user tagged to a spend
+  category (e.g. a **$7,470 "POSH Event Payout"**, offset "Uncategorized
+  Income", overlaid to an event EXPENSE category; plus many "Zelle payment
+  from …" receipts overlaid to Restaurants/Groceries) was subtracted from
+  "money out". That drove **6 of the last 12 months' outflow NEGATIVE** — e.g.
+  Oct-2025 outflow = −$3,528 (expense-side split was +$4,387 real debits but
+  −$7,915 credits). A negative spend bar reads as broken (and Law 8: red is for
+  negative money only).
+- *"Jumps at the end" (partial-month artifact, not a data bug).* The newest
+  bucket is the current, incomplete month (API requests `p_to = today`), plotted
+  at full visual weight beside complete months. The month-to-date figures are
+  correct; only the presentation implied a spurious jump.
+- *Net worth "drop a layer" (data condition, NOT a read-model code bug).* The
+  reconnected live "Fidelity LLC" account (`70d540bf…`) booked its opening
+  anchor at effective **2026-07-19**, one day later than the archived
+  predecessor's (2026-07-18), so the archived-account read-model filter
+  (20260719130000, correct as written) leaves the $57,359.67 brokerage layer
+  missing for exactly 2026-07-18 and recovering on 07-19. This is a per-account
+  anchor-date gap from a specific reconnect, fixable only by a live data
+  correction to that account's anchor `effective_date` (≤ 07-18) — OUT OF SCOPE
+  for this agent (no live/founder-data mutation allowed). **⚑ flagged for the
+  orchestrator/human** to correct the anchor date and/or harden the reconnect
+  path so a replacement anchor never lands later than the account it replaces.
+
+**Fix (this PR):**
+- Migration `20260720231500_cash_flow_sign_classified.sql` (⚑ human applies
+  live, usual `--single-transaction` psql): `keel_cash_flow` →
+  `cash-flow-v7-sign-classified`, `keel_cash_flow_monthly` →
+  `cash-flow-monthly-v6-sign-classified`. The GRAPH procs now split by the SIGN
+  of each surviving category posting (credit < 0 → inflow; debit > 0 → outflow),
+  so both sides are non-negative by construction. Exclusions (confirmed-transfer
+  legs, `keel_is_non_income_settlement`, transfer-category overlays) applied
+  FIRST and UNCHANGED. `keel_budget_month` untouched — it stays the single
+  overlay-aware budget classifier (Law 9: two distinct scoped calculations).
+  **Net (inflow − outflow) is IDENTICAL to v6 per currency/month, verified live
+  over 12 months** (net = −Σ amount_minor in both formulations); only the gross
+  split moves. Deterministic BIGINT, no floats (Laws 1, 4).
+- Chart (`apps/web/src/components/keel/charts.tsx`, `CashFlowMonthlyChart`): the
+  current (in-progress) month is dimmed (`fillOpacity 0.4`, per-datum, no
+  deprecated `<Cell>`), its axis tick gets a `*`, its tooltip says "· so far",
+  and a "* this month so far" legend note appears. True month-to-date figures
+  kept — no fabricated projection (teardown C10).
+- Reference + tests: new pure `src/lib/cash-flow-classify.ts` mirrors the proc's
+  sign→direction rule; `cash-flow-classify.test.ts` (5 cases) reproduces the
+  $7,470-receipt bug, the Oct-2025 shape, and the net-preservation invariant.
+
+**Verification RAN:** `apps/web` `pnpm build` green (ESLint enforced; only
+pre-existing unrelated warnings). `npx vitest run src/lib` → 405/405 green
+(30 files) incl. the 5 new cases. No live DB apply performed — migration
+prepared and flagged for the human.
+
+---
+## 2026-07-20 — feat(ui): Personal/Business entity breakdown in the sidebar + drop dashboard account list
+
+Founder ask: the left rail's account list should be broken down by entity
+(Personal vs Business) EXACTLY like the Accounts page, and the flat account
+list card on the dashboard is redundant now that the rail + Accounts page cover
+it.
+
+- **Sidebar entity split reuses the Accounts-page read model, not a new path
+  (Law 7).** `SidebarAccounts` (app-shell.tsx) already read
+  `ledger.trial_balance` for balances and `entity.list`-derived data lives in
+  the shared `useEntityLens()` context. The rail now takes `entities` from that
+  context (via `NavLinks`) — no second `fetchEntities`/balance read — and, when
+  `entities.length > 1`, buckets accounts by `entityId` and renders one section
+  per entity in `entities.list` order, each with the same Assets / Liabilities /
+  Other three-way split and per-currency subtotals it already used. This mirrors
+  `EntityGroupedAccounts` on the Accounts page (accounts/page.tsx): same gate
+  (`entities.length > 1`), same deterministic order, same trailing "Other
+  entity" bucket for accounts pointing at an entity the list doesn't know (so
+  they never silently drop from the household total). Single-entity households
+  (`entities.length <= 1`) keep the flat layout byte-for-byte.
+- **Collapsible sections, default-open.** No collapsible primitive exists in
+  `components/ui`, so `SidebarEntitySection` is a hand-rolled `useState` toggle
+  (matching the codebase's hand-rolled disclosure pattern), default-open so the
+  breakdown is visible without a click (the founder wanted it visible), but
+  foldable so a several-entity household can shorten the rail. Header carries the
+  entity name + its net subtotal + a chevron; body is the existing groups.
+  Net-worth foot (household-wide, dominant currency) is unchanged and still
+  pinned below all sections.
+- **Sidebar arithmetic unchanged.** Balances still come from the shared
+  `ledger.trial_balance` read; per-entity/per-group subtotals reuse the existing
+  `currencySubtotal` helper (dominant-currency-only, never sums across
+  currencies — Law 4). The account-row markup was extracted into one `accountRow`
+  closure so the flat and per-entity layouts render identically.
+- **Dashboard: removed the flat `AccountsSummaryCard`.** Founder: "I honestly
+  don't see a reason we should even have accounts on the dashboard." Chose to
+  remove (task default) rather than replace: the entity-grouped rail + the
+  Accounts page now cover "what accounts and balances do I have" better than a
+  truncated top-5 card, and the net-worth hero already carries the headline. The
+  card component + its only call site are deleted; `accountList`/`balanceByLedger`
+  stay (they still feed the net-worth hero's `netMinor`), and no imports went
+  unused (verified).
+- **Verification RAN:** `pnpm install --frozen-lockfile` then
+  `cd apps/web && pnpm build` — green (ESLint enforced; typecheck + 24 routes
+  built). No DB/migration/live changes (pure UI, both reads pre-existing).
 
 ## 2026-07-19 — feat(recurring): semi-monthly (15th & 30th) schedule option
 

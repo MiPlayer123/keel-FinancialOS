@@ -168,6 +168,28 @@ describe('command envelope', () => {
     })).toMatchObject({ amountMinor: '400000' });
   });
 
+  it('documents.attach links an existing document to a target', () => {
+    const uuid2 = '11111111-2222-4333-8444-555555555555';
+    expect(parseCommandPayload('documents.attach', {
+      documentId: uuid, targetType: 'transaction', targetId: uuid2,
+    })).toMatchObject({ documentId: uuid, targetType: 'transaction', targetId: uuid2 });
+    // Every target type is accepted (symmetry with confirm_upload/list).
+    expect(parseCommandPayload('documents.attach', {
+      documentId: uuid, targetType: 'paycheck', targetId: uuid2,
+    })).toMatchObject({ targetType: 'paycheck' });
+    // targetType must be a known enum member.
+    expect(() => parseCommandPayload('documents.attach', {
+      documentId: uuid, targetType: 'account', targetId: uuid2,
+    })).toThrow();
+    // No smuggled extra keys (strict) and required fields enforced.
+    expect(() => parseCommandPayload('documents.attach', {
+      documentId: uuid, targetType: 'transaction', targetId: uuid2, accountId: uuid2,
+    })).toThrow();
+    expect(() => parseCommandPayload('documents.attach', {
+      documentId: uuid, targetType: 'transaction',
+    })).toThrow();
+  });
+
   it('rejects agent actors without onBehalfOf (Law 2: attribution)', () => {
     expect(
       CommandEnvelopeSchema.safeParse({

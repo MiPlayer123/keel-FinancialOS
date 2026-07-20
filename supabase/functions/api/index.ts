@@ -142,6 +142,11 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'reimbursements.settle': 'keel_reimbursement_settle',
   'reimbursements.reverse_settlement': 'keel_reimbursement_reverse_settlement',
   'reimbursements.reverse_claim': 'keel_reimbursement_reverse_claim',
+  'expected_reimbursements.create': 'keel_expected_reimbursement_create',
+  'expected_reimbursements.record_receipt': 'keel_expected_reimbursement_record_receipt',
+  'expected_reimbursements.write_off': 'keel_expected_reimbursement_write_off',
+  'expected_reimbursements.reopen': 'keel_expected_reimbursement_reopen',
+  'expected_reimbursements.reverse_receipt': 'keel_expected_reimbursement_reverse_receipt',
   'statements.create': 'keel_statement_create',
   'statements.approve_draft': 'keel_cmd_statements_approve_draft',
   'statements.dismiss_draft': 'keel_cmd_statements_dismiss_draft',
@@ -161,6 +166,7 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'accounts.set_opening_balance': 'keel_cmd_set_opening_balance',
   'accounts.reanchor_balance': 'keel_cmd_reanchor_balance',
   'categorization.decide_suggestion': 'keel_cmd_decide_category_suggestion',
+  'documents.attach': 'keel_cmd_documents_attach',
   'documents.detach': 'keel_cmd_documents_detach',
   'documents.delete': 'keel_cmd_documents_delete',
   'receipts.decide_match': 'keel_cmd_receipts_decide_match',
@@ -190,6 +196,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'paychecks.templates': 'keel_list_paycheck_templates',
   'paychecks.split_suggestions': 'keel_list_paycheck_split_suggestions',
   'reimbursements.list': 'keel_list_reimbursements',
+  'expected_reimbursements.list': 'keel_list_expected_reimbursements',
   'statements.list': 'keel_list_statements',
   'statements.drafts': 'keel_list_statement_drafts',
   'statements.cadence': 'keel_statement_cadence',
@@ -2647,6 +2654,74 @@ export default {
       return json(200, { rows: withUrls });
     }
 
+    // Storage hygiene / "attach an existing document" picker: every live
+    // document in the household + its storage pointer + a live-attachment
+    // count. Same signed-URL minting as /documents/list (Postgres can't sign).
+    if (path === '/documents/list-household') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      if (!householdId.success) {
+        return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });
+      }
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'documents.list_household', {
+        householdId: householdId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+      const { data, error } = await ctx.supabase.rpc('keel_documents_list_household', {
+        p_household_id: householdId.data,
+      });
+      if (error) return mapDbError(error);
+      const rows = (data as { rows: Record<string, unknown>[] })?.rows ?? [];
+      const withUrls = await Promise.all(
+        rows.map(async (row) => {
+          const bucket = row['storageBucket'];
+          const objectPath = row['storagePath'];
+          if (typeof bucket !== 'string' || typeof objectPath !== 'string') {
+            return { ...row, url: null };
+          }
+          const { data: signed } = await ctx.supabaseAdmin.storage
+            .from(bucket)
+            .createSignedUrl(
+              objectPath,
+              DOCUMENT_SIGNED_URL_TTL_S,
+              forceAttachmentBucket(bucket) ? { download: true } : undefined,
+            );
+          return { ...row, url: signed?.signedUrl ?? null };
+        }),
+      );
+      return json(200, { rows: withUrls });
+    }
+
+    // Storage hygiene summary: pure metadata (byte_size lives in
+    // document_versions; no bytes read). Total/live stored bytes + dedup
+    // (distinct content) so the user can see KEEL stays small vs Quicken bloat.
+    if (path === '/documents/storage-summary') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      if (!householdId.success) {
+        return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });
+      }
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'documents.storage_summary', {
+        householdId: householdId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+      const { data, error } = await ctx.supabase.rpc('keel_documents_storage_summary', {
+        p_household_id: householdId.data,
+      });
+      if (error) return mapDbError(error);
+      return json(200, data);
+    }
+
     // WS-J / F-030: receipts inbox — the receipts hub. Same shape as
     // /documents/list (proc returns storage pointers; this route mints the
     // per-row short-lived signed read URL Postgres cannot sign).
@@ -3005,6 +3080,7 @@ export default {
         query.query === 'paychecks.templates' ||
         query.query === 'paychecks.split_suggestions' ||
         query.query === 'reimbursements.list' ||
+        query.query === 'expected_reimbursements.list' ||
         query.query === 'statements.list' ||
         query.query === 'statements.drafts' ||
         query.query === 'statements.cadence' ||
