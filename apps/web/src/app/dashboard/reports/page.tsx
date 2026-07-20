@@ -58,6 +58,8 @@ import {
 } from '@/lib/report-scope';
 import { buildScopedTransactionsCsv, scopedExportFilename } from '@/lib/report-export';
 import { TransferNudgeBanner } from '@/components/keel/transfer-nudge-banner';
+import { CardBreakEvenCard } from '@/components/keel/card-breakeven-card';
+import { cardBreakEven, CREDIT_CARD_SUBTYPE } from '@/lib/card-breakeven';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -1101,6 +1103,20 @@ function ReportsBody() {
     });
   }, [rangedRows, months]);
 
+  // Credit-card rewards vs annual-fee break-even, over the SAME ranged rows and
+  // the report scope's account set. Credit cards are the liability accounts,
+  // marked by the canonical Plaid subtype 'credit card' (deterministic, never
+  // memo-derived — Law 5). Pure BigInt in cardBreakEven (Law 1/4); the card's
+  // footnote states scopeText (Law 9).
+  const creditCardIds = useMemo(
+    () => new Set(accounts.filter((a) => a.subtype === CREDIT_CARD_SUBTYPE).map((a) => a.id)),
+    [accounts],
+  );
+  const cardBreakEvenRows = useMemo(
+    () => cardBreakEven(rangedRows, creditCardIds),
+    [rangedRows, creditCardIds],
+  );
+
   // Parent grain (rolledMatrix), matching the matrix's default view — a
   // seeded subcategory tree at leaf grain would fragment the biggest movers.
   const comparison = useMemo(() => {
@@ -1462,6 +1478,8 @@ function ReportsBody() {
           </CardContent>
         </Card>
       ) : null}
+
+      <CardBreakEvenCard cards={cardBreakEvenRows} scopeText={scopeText} />
 
       <Card>
         <CardHeader className="pb-2">
