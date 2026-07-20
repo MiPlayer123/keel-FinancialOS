@@ -2,7 +2,12 @@
 
 import { useCallback } from 'react';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { keelQuery, type QueryResult } from '@/lib/keel-api';
+import {
+  fetchAllAccountTransactions,
+  keelQuery,
+  type QueryResult,
+  type RichTransactionRow,
+} from '@/lib/keel-api';
 
 /**
  * Shared cache-key prefix for every `useKeelQuery`/`useKeelQuerySilent` read.
@@ -186,4 +191,39 @@ export function useKeelQuerySilent<Row>(
   if (result.isSuccess) return result.data.rows;
   if (result.isError) return [];
   return null;
+}
+
+/**
+ * ACCOUNT-SCOPED rich transaction read for the account register (distribution
+ * follow-up). The account-detail page used to pull the GLOBAL rich list and
+ * filter client-side by `accountId` — but the global list is header-pinned, so
+ * a distribution's transfer leg (which lands in a SECOND account, e.g. a 401(k)
+ * inflow from a paycheck booked in Chase) never appeared in the destination
+ * account's register. `keel_list_transactions_rich_page` called WITH
+ * `p_account_id` synthesizes a `distributionTransfer` row for each leg landing
+ * in that account, so we must fetch account-scoped, not filter the global list.
+ *
+ * Backed by `fetchAllAccountTransactions`, which walks the keyset pages
+ * server-side (bounded: a single account is hundreds of rows, and the page's
+ * running-balance + spending-mix need the full set). Keyed under the shared
+ * `keel-query` prefix with `transactions.rich_page` + `{ accountId }` so a
+ * transaction edit's scoped invalidation (`TRANSACTION_MUTATION_KEYS`, which
+ * lists `transactions.rich_page`) refreshes this register too — the same
+ * prefix-match contract every other paginated read relies on.
+ */
+export function useAccountTransactions(householdId: string | null, accountId: string) {
+  const result = useQuery({
+    queryKey: [KEEL_QUERY_KEY, 'transactions.rich_page', householdId, JSON.stringify({ accountId })],
+    queryFn: async (): Promise<RichTransactionRow[]> => {
+      if (!householdId) throw new Error('useAccountTransactions: disabled (no household)');
+      return fetchAllAccountTransactions(householdId, accountId);
+    },
+    enabled: householdId !== null,
+  });
+
+  return {
+    rows: result.data ?? [],
+    loading: result.isLoading,
+    error: result.isError ? toErrorMessage(result.error) : null,
+  };
 }
