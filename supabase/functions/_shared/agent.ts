@@ -790,6 +790,58 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       });
     },
   },
+  // --- Reimbursements: Class B (suggest→approve). Log that a counterparty owes
+  // the user for a specific expense. Settle/reverse stay in the UI. ---
+  {
+    name: 'propose_reimbursement_claim',
+    description:
+      'Propose logging a reimbursement claim — that a counterparty (person, employer, insurer, …) owes the user for a specific expense transaction. Requires the user’s approval. Find the originalTransactionId with search_transactions or list_transactions first.',
+    action: 'reimbursements.create_claim',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['originalTransactionId', 'counterpartyName', 'kind', 'amountMinor', 'description'],
+      properties: {
+        originalTransactionId: { type: 'string', description: 'The expense transaction id (uuid) being reimbursed.' },
+        counterpartyName: { type: 'string', minLength: 1, maxLength: 200, description: 'Who owes / will reimburse.' },
+        kind: { type: 'string', enum: ['friend', 'employer', 'client', 'insurance', 'household'] },
+        amountMinor: { type: 'string', description: 'Amount owed in minor units (e.g. "4000" for $40).' },
+        currency: { type: 'string', description: '3-letter code; defaults USD.' },
+        description: { type: 'string', minLength: 1, maxLength: 500 },
+      },
+    },
+    execute: (args) => {
+      const txId = noteId(args['originalTransactionId']);
+      if (txId === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'originalTransactionId must be a uuid' });
+      const counterparty = typeof args['counterpartyName'] === 'string' ? args['counterpartyName'].trim() : '';
+      if (counterparty.length === 0 || counterparty.length > 200) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'counterpartyName 1..200 chars' });
+      const kinds = ['friend', 'employer', 'client', 'insurance', 'household'];
+      const kind = typeof args['kind'] === 'string' && kinds.includes(args['kind']) ? args['kind'] : null;
+      if (kind === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'kind must be one of friend|employer|client|insurance|household' });
+      const amount = minorDigits(args['amountMinor']);
+      if (amount === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'amountMinor must be a non-negative minor-unit string' });
+      const description = typeof args['description'] === 'string' ? args['description'].trim() : '';
+      if (description.length === 0 || description.length > 500) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'description 1..500 chars' });
+      const currency = typeof args['currency'] === 'string' && /^[A-Za-z]{3}$/.test(args['currency']) ? args['currency'].toUpperCase() : 'USD';
+      return Promise.resolve({
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'reimbursements.create_claim',
+          command: 'reimbursements.create_claim',
+          summary: `Log a ${displayMinor(amount)} reimbursement: ${counterparty} owes for "${truncate(description, 60)}"`,
+          payload: {
+            originalTransactionId: txId,
+            counterpartyName: counterparty,
+            kind,
+            amountMinor: amount,
+            currency,
+            description,
+          },
+        },
+      });
+    },
+  },
 ];
 
 const WRITE_TOOL_BY_NAME: Readonly<Record<string, WriteToolSpec>> = Object.fromEntries(

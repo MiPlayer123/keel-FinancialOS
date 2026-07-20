@@ -30,8 +30,10 @@ import { useHousehold } from '@/components/keel/household-context';
 import {
   archiveNote,
   askKeel,
+  getAiProfile,
   keelCommand,
   newId,
+  saveAiProfile,
   saveNote,
   saveTask,
   unarchiveNote,
@@ -299,7 +301,79 @@ function EmptyThread() {
           </div>
         </CardContent>
       </Card>
+      <ProfileEditor />
     </div>
+  );
+}
+
+/** User-authored personal context the agent receives (slice 5). */
+function ProfileEditor() {
+  const { householdId } = useHousehold();
+  const [text, setText] = useState('');
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (householdId === null) return;
+    void getAiProfile({ householdId })
+      .then((r) => {
+        if (!cancelled) {
+          setText(r.profileText);
+          setLoaded(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [householdId]);
+
+  async function save() {
+    if (householdId === null || saving) return;
+    setSaving(true);
+    try {
+      await saveAiProfile({ householdId, profileText: text });
+      toast.success('Assistant context saved.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <details className="rounded-xl border bg-card px-4 py-3">
+      <summary className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+        <Sparkles className="size-4 text-muted-foreground" />
+        Personalize your assistant
+      </summary>
+      <div className="mt-3 flex flex-col gap-2">
+        <p className="text-xs text-muted-foreground">
+          Tell KEEL about your goals, how you think about money, and the tone you prefer. It stays
+          private to this household and is used only to guide the assistant.
+        </p>
+        <textarea
+          value={text}
+          disabled={!loaded}
+          onChange={(e) => {
+            setText(e.target.value.slice(0, 4000));
+          }}
+          rows={4}
+          placeholder="e.g. I'm saving aggressively for a house down payment; flag any subscription over $20; keep answers brief."
+          className="w-full resize-y rounded-lg border bg-transparent px-3 py-2 text-sm outline-none focus:border-ring focus:ring-3 focus:ring-ring/50 disabled:opacity-50"
+        />
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] text-muted-foreground">{text.length}/4000</span>
+          <Button type="button" size="sm" disabled={!loaded || saving} onClick={() => void save()}>
+            {saving ? <Loader2 data-icon="inline-start" className="animate-spin" /> : null}
+            Save context
+          </Button>
+        </div>
+      </div>
+    </details>
   );
 }
 

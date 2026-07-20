@@ -2689,6 +2689,22 @@ export async function askKeel(input: {
   });
 }
 
+/** The user-authored profile the agent receives as trusted personal context. */
+export async function getAiProfile(input: { householdId: string }): Promise<{ profileText: string }> {
+  return invoke<{ profileText: string }>('api/ai/profile/get', { householdId: input.householdId });
+}
+
+/** Save (or clear, when blank) the user-authored assistant profile. */
+export async function saveAiProfile(input: {
+  householdId: string;
+  profileText: string;
+}): Promise<unknown> {
+  return invoke('api/ai/profile/save', {
+    householdId: input.householdId,
+    profileText: input.profileText,
+  });
+}
+
 /** Generate a browser-side UUID for command ids. */
 export function newId(): string {
   return crypto.randomUUID();

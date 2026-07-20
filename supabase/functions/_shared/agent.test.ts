@@ -306,3 +306,37 @@ Deno.test('non-digit amountMinor is rejected (Law 4: no floats)', async () => {
   assert(out.error === 'invalid_arguments');
   assert(proposed.length === 0);
 });
+
+Deno.test('propose_reimbursement_claim stages a create_claim command payload', async () => {
+  const proposed: ProposedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls: [] }), [], proposed));
+  const out = JSON.parse(
+    await exec(
+      call('propose_reimbursement_claim', {
+        originalTransactionId: NOTE_ID,
+        counterpartyName: 'Alex',
+        kind: 'friend',
+        amountMinor: '4000',
+        description: 'Dinner split',
+      }),
+    ),
+  );
+  assert(out.proposed === true);
+  assert(proposed.length === 1);
+  const p = proposed[0]!;
+  assert(p.command === 'reimbursements.create_claim');
+  assert(p.payload.counterpartyName === 'Alex');
+  assert(p.payload.kind === 'friend');
+  assert(p.payload.amountMinor === '4000');
+  assert(p.payload.currency === 'USD', 'currency defaults to USD');
+});
+
+Deno.test('propose_reimbursement_claim rejects an unknown counterparty kind', async () => {
+  const proposed: ProposedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls: [] }), [], proposed));
+  const out = JSON.parse(
+    await exec(call('propose_reimbursement_claim', { originalTransactionId: NOTE_ID, counterpartyName: 'Alex', kind: 'landlord', amountMinor: '4000', description: 'x' })),
+  );
+  assert(out.error === 'invalid_arguments');
+  assert(proposed.length === 0);
+});
