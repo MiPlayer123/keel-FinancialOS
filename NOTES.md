@@ -4,6 +4,23 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-19 — SLICE A (paycheck-split-templates-v2 §D4): deterministic split-template math
+`packages/paychecks/src/template.ts` + `test/template.test.ts`. Pure TS, no runtime deps. Cites Law 1 (no LLM arithmetic — deterministic spine), Law 4 (BIGINT minor units, no floats, enums), Law 9 (reproducible: formula version stamped, exact source rows). Foundation slice; the part Codex flagged FAIL in v1.
+
+- **Codex worked example passes exactly (executable fixture):** N=100000, F=12300, percent bps {1,1,246} → G=115157; per-line taxes 12/12/2833, remainder deposit=100000; reconciles through `reconcilePaycheck`. The naive independent-rounding approach gave the wrong −1 remainder; selecting G and letting the single remainder line absorb residue fixes it.
+- **DEVIATION from the plan §D4 (justified, spec line paycheck-split-templates-v2.md:56–59, 64):** the plan asserts net(G) is monotone and the reconciling gross is UNIQUE, selectable by a bounded ±2 local search. **Both claims are false for k≥2 percent lines** and were caught by the fast-check property suite, not by the worked example. As G→G+1 each per-line `round_half_up(G·pᵢ,10000)` rises by 0 or 1, so Σtaxes rises by 0..k and net(G+1)−net(G) = 1−(0..k) ∈ [1−k, 1]. Therefore (a) net(G) is NOT globally monotone (it dips locally when ≥2 lines cross a rounding boundary at the same G), which breaks binary search; and (b) the set of G with net(G)=N is a contiguous *interval*, not a point — a ±2 window is also too narrow (the interval width and seed offset scale with k and with 1/(10000−P), so for P near 10000 the true solution can be thousands of units from the ceil-seed).
+  - **Fix (deterministic, canonical, bigint):** compute the exact closed-form ceil seed `G0 = ceil((N−R+ΣF)·10000/(10000−P))`, then LINEARLY scan a provably-sufficient window `[G0−pad, G0+pad]` with `pad = ceil(k·10000/(10000−P)) + 2` (the max distance any exact solution can sit from the linear-model seed, since each rounding residue is <1 so total net slack is <k), and return the SMALLEST reconciling G — the minimal gross that produces the take-home. Canonical-minimality is proven by a fast-check property that brute-forces net(G) over a wide range and asserts the library returns the exact global minimum.
+  - **Uniqueness convention documented:** because multiple G can yield the same net, "the gross" is defined as the minimal such G. Idempotence holds: re-applying to the emitted net reproduces identical lines (same N ⇒ same minimal G).
+  - **No unreachable non-negative net:** net(0)=0, net changes by ≤+1 per unit of G, and net→∞, so it lands on every non-negative integer — every valid net is reachable. The internal "no gross near seed" path is therefore a fail-closed guard (Law 1: never a silent wrong output), marked `c8 ignore` with the proof in-comment, alongside the negative-remainder and reconcile-backstop guards.
+- **Aggregate P constraint enforced (the v1 gap):** `P = Σ bps < 10000` checked across the whole template, not just per-line `bps < 10000`. P≥10000 → typed `aggregate_percent_out_of_range`.
+- **Overflow guards (§D4):** every multiply/divide guarded against int64 (9223372036854775807); both the mul guard (`(N−R+ΣF)·10000`, `G·bps`) and the add guard (Σ fixed deductions / Σ bps / Σ reimbursements) have executable rejection tests.
+- **Reimbursements (§D5 +R):** supported as a fixed additive class; net(G) = G + R − ΣF − Σtaxes, seed base becomes N−R+ΣF, and R exceeding that base is typed-rejected (`reimbursement_exceeds_seed`) rather than seeding a negative gross. Emitted as its own `reimbursement` component so `reconcilePaycheck` counts it as an addition.
+- **Output shape:** `keel_paycheck_create`-shaped components (one gross earning=G + every deduction + one `direct_deposit`=N) plus the `reconcilePaycheck` input, which is validated in-line (§D4 step 3) before return.
+- **Tests: 48 pass (46 new + 2 pre-existing reconcile), 100% line/branch/statement/function coverage** (`packages/paychecks` now runs `vitest run --coverage` with the ledger-style 100% threshold; added `fast-check` + `@vitest/coverage-v8` devDeps). Fixtures use the fictional employer 'Anchorwave Payroll' (CLAUDE.md ops fact — no real payroll strings).
+- **Scope:** Slice A is pure math only. SQL parity proc, the token-bound apply command, booking, suggestions, and UI are Slices B–F (not in this PR).
+
+---
+
 ## 2026-07-20 — SLICE 9 (statement-ingestion-v2 §5 [A8]): investment holdings apply/revert/diff
 `20260720270000_statement_holdings_apply.sql` + contracts/authz/api/export/UI.
 
