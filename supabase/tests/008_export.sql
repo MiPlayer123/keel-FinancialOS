@@ -113,6 +113,11 @@ insert into expected_export_tables(table_name,allowed_columns,omitted_columns) v
 -- rewrap all ship together in 20260720260000_statement_payment_links.sql).
 insert into expected_export_tables(table_name,allowed_columns,omitted_columns) values
  ('statement_payment_links',array['household_id','id','statement_id','canonical_transaction_id','transfer_link_id','status','score','matcher_version','reason_codes','decided_by','decided_at','created_at'],'{}');
+-- SLICE 9 (statement-ingestion-v2.md §5 [A8]): applied investment-statement
+-- holdings export layer (INCLUDE entry + keel_export grant/RLS +
+-- keel_export_household rewrap all ship in 20260720270000_statement_holdings_apply.sql).
+insert into expected_export_tables(table_name,allowed_columns,omitted_columns) values
+ ('statement_holding_applications',array['household_id','id','statement_id','extraction_id','account_id','applied_by','approval_token_id','period_end','revoked_at','revoked_by','created_at'],'{}');
 
 create temporary table excluded_export_tables(table_name text primary key) on commit drop;
 insert into excluded_export_tables(table_name) values
@@ -145,8 +150,8 @@ select ok(
 select is(
   (select count(*)::int from expected_export_tables
     where has_table_privilege('keel_export', format('public.%I', table_name), 'SELECT')),
-  80,
-  'keel_export can SELECT all 80 included tables'
+  81,
+  'keel_export can SELECT all 81 included tables'
 );
 select is(
   (select count(*)::int
@@ -277,8 +282,8 @@ reset role;
 select is(
   (select count(*)::int from jsonb_object_keys(
     public.keel_export_household('00000000-0000-4000-8000-00000000a001')->'tables')),
-  80,
-  'snapshot contains all 80 included table arrays'
+  81,
+  'snapshot contains all 81 included table arrays'
 );
 select is(
   (select count(*)::int from excluded_export_tables e
