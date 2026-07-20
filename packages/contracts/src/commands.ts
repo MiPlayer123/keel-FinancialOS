@@ -18,6 +18,8 @@ import {
   EmployerIdSchema,
   ReimbursementClaimIdSchema,
   SettlementIdSchema,
+  ExpectedReimbursementIdSchema,
+  ExpectedReimbursementReceiptIdSchema,
   StatementIdSchema,
   StatementDraftIdSchema,
   ApprovalTokenIdSchema,
@@ -273,6 +275,28 @@ export const SettleReimbursementPayloadSchema=z.object({
 }).strict();
 export const ReverseSettlementPayloadSchema=z.object({settlementId:SettlementIdSchema,reason:z.string().min(1).max(500)}).strict();
 export const ReverseClaimPayloadSchema=z.object({claimId:ReimbursementClaimIdSchema,reason:z.string().min(1).max(500)}).strict();
+// Expected (future-dated / pending) reimbursements — an accounts-receivable
+// line tracked BEFORE the money arrives. Standalone or carved from an expense
+// (optional sourceTransactionId). Never an economic event (no postings).
+const ExpectedDateSchema=z.string().regex(/^\d{4}-\d{2}-\d{2}$/u,'expectedDate must be YYYY-MM-DD');
+export const CreateExpectedReimbursementPayloadSchema=z.object({
+  counterpartyName:z.string().min(1).max(200),
+  kind:z.enum(['friend','employer','client','insurance','household']),
+  amountMinor:MinorUnitsStringSchema.regex(/^\d+$/u),
+  currency:CurrencyCodeSchema,
+  expectedDate:ExpectedDateSchema,
+  description:z.string().min(1).max(500),
+  sourceTransactionId:CanonicalTransactionIdSchema.optional(),
+}).strict();
+export const RecordExpectedReimbursementReceiptPayloadSchema=z.object({
+  expectedId:ExpectedReimbursementIdSchema,
+  transactionId:CanonicalTransactionIdSchema,
+  amountMinor:MinorUnitsStringSchema.regex(/^\d+$/u),
+  note:z.string().min(1).max(500),
+}).strict();
+export const WriteOffExpectedReimbursementPayloadSchema=z.object({expectedId:ExpectedReimbursementIdSchema,reason:z.string().min(1).max(500)}).strict();
+export const ReopenExpectedReimbursementPayloadSchema=z.object({expectedId:ExpectedReimbursementIdSchema,reason:z.string().min(1).max(500)}).strict();
+export const ReverseExpectedReimbursementReceiptPayloadSchema=z.object({receiptId:ExpectedReimbursementReceiptIdSchema,reason:z.string().min(1).max(500)}).strict();
 // [A6] statement balance-check mode: strict (opening+Σ=ending) or anchor
 // (investment/valuation ending is a mark-to-market, not a line sum — carries a
 // typed reason + a stored gap explanation, gate-8 provenance).
@@ -671,6 +695,11 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'reimbursements.settle':SettleReimbursementPayloadSchema,
   'reimbursements.reverse_settlement':ReverseSettlementPayloadSchema,
   'reimbursements.reverse_claim':ReverseClaimPayloadSchema,
+  'expected_reimbursements.create':CreateExpectedReimbursementPayloadSchema,
+  'expected_reimbursements.record_receipt':RecordExpectedReimbursementReceiptPayloadSchema,
+  'expected_reimbursements.write_off':WriteOffExpectedReimbursementPayloadSchema,
+  'expected_reimbursements.reopen':ReopenExpectedReimbursementPayloadSchema,
+  'expected_reimbursements.reverse_receipt':ReverseExpectedReimbursementReceiptPayloadSchema,
   'statements.create':CreateStatementPayloadSchema,
   'statements.approve_draft':ApproveStatementDraftPayloadSchema,
   'statements.dismiss_draft':DismissStatementDraftPayloadSchema,

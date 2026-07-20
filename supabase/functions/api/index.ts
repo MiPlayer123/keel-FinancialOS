@@ -141,6 +141,11 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'reimbursements.settle': 'keel_reimbursement_settle',
   'reimbursements.reverse_settlement': 'keel_reimbursement_reverse_settlement',
   'reimbursements.reverse_claim': 'keel_reimbursement_reverse_claim',
+  'expected_reimbursements.create': 'keel_expected_reimbursement_create',
+  'expected_reimbursements.record_receipt': 'keel_expected_reimbursement_record_receipt',
+  'expected_reimbursements.write_off': 'keel_expected_reimbursement_write_off',
+  'expected_reimbursements.reopen': 'keel_expected_reimbursement_reopen',
+  'expected_reimbursements.reverse_receipt': 'keel_expected_reimbursement_reverse_receipt',
   'statements.create': 'keel_statement_create',
   'statements.approve_draft': 'keel_cmd_statements_approve_draft',
   'statements.dismiss_draft': 'keel_cmd_statements_dismiss_draft',
@@ -190,6 +195,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'paychecks.templates': 'keel_list_paycheck_templates',
   'paychecks.split_suggestions': 'keel_list_paycheck_split_suggestions',
   'reimbursements.list': 'keel_list_reimbursements',
+  'expected_reimbursements.list': 'keel_list_expected_reimbursements',
   'statements.list': 'keel_list_statements',
   'statements.drafts': 'keel_list_statement_drafts',
   'statements.cadence': 'keel_statement_cadence',
@@ -3073,6 +3079,7 @@ export default {
         query.query === 'paychecks.templates' ||
         query.query === 'paychecks.split_suggestions' ||
         query.query === 'reimbursements.list' ||
+        query.query === 'expected_reimbursements.list' ||
         query.query === 'statements.list' ||
         query.query === 'statements.drafts' ||
         query.query === 'statements.cadence' ||
