@@ -30,12 +30,16 @@ import { useHousehold } from '@/components/keel/household-context';
 import {
   archiveNote,
   askKeel,
+  categorizeTransaction,
+  createCategory,
   getAiProfile,
   keelCommand,
   newId,
+  renameCategory,
   saveAiProfile,
   saveNote,
   saveTask,
+  setTaskStatus,
   unarchiveNote,
   type AgentAppliedAction,
   type AgentProposedAction,
@@ -619,14 +623,37 @@ function ProposedActionCard({ action }: { action: AgentProposedAction }) {
     if (householdId === null || userId === null || state !== 'idle') return;
     setState('approving');
     try {
-      await keelCommand({
-        commandId,
-        command: action.command,
-        economicEventKey: eventKey,
-        actor: { kind: 'user', userId },
-        householdId,
-        payload: action.payload,
-      });
+      const p = action.payload;
+      // Most commands ride the /commands envelope; a few are bespoke routes with
+      // their own typed client fns. Route by command name.
+      if (action.command === 'transactions.categorize') {
+        await categorizeTransaction({
+          householdId,
+          transactionId: String(p['transactionId']),
+          categoryLedgerAccountId: String(p['categoryLedgerAccountId']),
+        });
+      } else if (action.command === 'categories.create') {
+        await createCategory({
+          householdId,
+          name: String(p['name']),
+          kind: p['kind'] === 'income' ? 'income' : 'expense',
+        });
+      } else if (action.command === 'categories.rename') {
+        await renameCategory({
+          householdId,
+          categoryLedgerAccountId: String(p['categoryLedgerAccountId']),
+          name: String(p['name']),
+        });
+      } else {
+        await keelCommand({
+          commandId,
+          command: action.command,
+          economicEventKey: eventKey,
+          actor: { kind: 'user', userId },
+          householdId,
+          payload: action.payload,
+        });
+      }
       setState('approved');
       toast.success('Approved and applied.');
     } catch (err) {
@@ -731,12 +758,23 @@ function AppliedActionRow({ action }: { action: AgentAppliedAction }) {
     if (householdId === null || u === undefined || state !== 'idle') return;
     setState('undoing');
     try {
-      if (u.op === 'archive_note') {
+      if (u.op === 'archive_note' && u.noteId) {
         await archiveNote({ householdId, noteId: u.noteId });
-      } else if (u.op === 'unarchive_note') {
+      } else if (u.op === 'unarchive_note' && u.noteId) {
         await unarchiveNote({ householdId, noteId: u.noteId });
-      } else {
+      } else if (u.op === 'edit_note' && u.noteId) {
         await saveNote({ householdId, noteId: u.noteId, body: u.body ?? '', pinned: u.pinned ?? false });
+      } else if (u.op === 'set_task_status' && u.taskId && u.status) {
+        await setTaskStatus({ householdId, taskId: u.taskId, status: u.status });
+      } else if (u.op === 'edit_task' && u.taskId) {
+        await saveTask({
+          householdId,
+          taskId: u.taskId,
+          title: u.title ?? '',
+          description: u.description ?? null,
+          dueOn: u.dueOn ?? null,
+          ...(u.priority ? { priority: u.priority } : {}),
+        });
       }
       setState('undone');
       toast.success('Undone.');

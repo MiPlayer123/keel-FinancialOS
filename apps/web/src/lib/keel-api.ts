@@ -2626,10 +2626,16 @@ export async function setTaskStatus(input: {
 
 /** How the UI reverses an auto-applied action (Law 2: every AI write is undoable). */
 export type AgentAppliedActionUndo = {
-  op: 'archive_note' | 'unarchive_note' | 'edit_note';
-  noteId: string;
+  op: 'archive_note' | 'unarchive_note' | 'edit_note' | 'set_task_status' | 'edit_task';
+  noteId?: string;
+  taskId?: string;
   body?: string;
   pinned?: boolean;
+  status?: 'open' | 'done' | 'dismissed';
+  title?: string;
+  description?: string | null;
+  dueOn?: string | null;
+  priority?: 'low' | 'normal' | 'high';
 };
 
 /** A change the agent already applied (Class A auto, undoable). */

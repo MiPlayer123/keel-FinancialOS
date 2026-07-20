@@ -148,10 +148,15 @@ const noteRpc = (opts: {
   (proc: string, args: Record<string, unknown>) => {
     opts.calls.push({ proc, args });
     if (proc === 'keel_note_save') return Promise.resolve({ data: NOTE_ID, error: null });
+    if (proc === 'keel_task_save') return Promise.resolve({ data: TASK_ID, error: null });
+    if (proc === 'keel_task_set_status') return Promise.resolve({ data: null, error: null });
     if (proc === 'keel_list_notes_tasks') return Promise.resolve({ data: { rows: opts.listRows ?? [] }, error: null });
     if (proc === 'keel_list_categories') return Promise.resolve({ data: opts.catRows ?? [], error: null });
     return Promise.resolve({ data: null, error: null });
   };
+
+const TASK_ID = '33333333-3333-3333-3333-333333333333';
+const CLAIM_ID = '44444444-4444-4444-4444-444444444444';
 
 const agentDeps = (
   authorize: AuthorizeFn,
@@ -359,4 +364,110 @@ Deno.test('propose_reimbursement_claim rejects an unknown counterparty kind', as
   );
   assert(out.error === 'invalid_arguments');
   assert(proposed.length === 0);
+});
+
+// ---------------------------------------------------------------------------
+// New writes: recategorize, categories, tasks, reimbursement settle/reverse
+// ---------------------------------------------------------------------------
+
+Deno.test('the new write tools are all in the catalog', () => {
+  const names = agentToolDefinitions().map((d) => d.name);
+  for (const t of [
+    'propose_recategorize_transaction',
+    'propose_create_category',
+    'propose_rename_category',
+    'create_task',
+    'edit_task',
+    'set_task_status',
+    'propose_settle_reimbursement',
+    'propose_reverse_reimbursement_claim',
+    'propose_reverse_reimbursement_settlement',
+  ]) {
+    assert(names.includes(t), `catalog missing ${t}`);
+  }
+});
+
+Deno.test('propose_recategorize_transaction resolves the real category, never applies', async () => {
+  const proposed: ProposedAction[] = [];
+  const catRows = [{ ledgerAccountId: CAT_ID, name: 'Groceries', kind: 'expense' }];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls: [], catRows }), [], proposed));
+  const out = JSON.parse(
+    await exec(call('propose_recategorize_transaction', { transactionId: NOTE_ID, categoryLedgerAccountId: CAT_ID })),
+  );
+  assert(out.proposed === true);
+  assert(proposed[0]!.command === 'transactions.categorize');
+  assert(proposed[0]!.payload.transactionId === NOTE_ID);
+  assert(proposed[0]!.summary.includes('Groceries'));
+});
+
+Deno.test('propose_recategorize_transaction rejects an unknown category id', async () => {
+  const proposed: ProposedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls: [], catRows: [] }), [], proposed));
+  const out = JSON.parse(await exec(call('propose_recategorize_transaction', { transactionId: NOTE_ID, categoryLedgerAccountId: CAT_ID })));
+  assert(out.error === 'invalid_arguments');
+  assert(proposed.length === 0);
+});
+
+Deno.test('propose_create_category stages a create payload', async () => {
+  const proposed: ProposedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls: [] }), [], proposed));
+  const out = JSON.parse(await exec(call('propose_create_category', { name: 'Coffee', kind: 'expense' })));
+  assert(out.proposed === true);
+  assert(proposed[0]!.command === 'categories.create');
+  assert(proposed[0]!.payload.name === 'Coffee' && proposed[0]!.payload.kind === 'expense');
+});
+
+Deno.test('propose_rename_category uses the resolved old name in the summary', async () => {
+  const proposed: ProposedAction[] = [];
+  const catRows = [{ ledgerAccountId: CAT_ID, name: 'Groceries', kind: 'expense' }];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls: [], catRows }), [], proposed));
+  const out = JSON.parse(await exec(call('propose_rename_category', { categoryLedgerAccountId: CAT_ID, name: 'Food' })));
+  assert(out.proposed === true);
+  assert(proposed[0]!.summary.includes('Groceries') && proposed[0]!.summary.includes('Food'));
+});
+
+Deno.test('create_task applies immediately with a dismiss-undo, never proposes', async () => {
+  const calls: { proc: string; args: Record<string, unknown> }[] = [];
+  const applied: AppliedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls }), applied));
+  const out = JSON.parse(await exec(call('create_task', { title: 'Call the bank', priority: 'high' })));
+  assert(out.ok === true && out.taskId === TASK_ID);
+  assert(applied[0]!.kind === 'tasks.create');
+  assert(applied[0]!.undo?.op === 'set_task_status');
+  assert(applied[0]!.undo?.status === 'dismissed');
+  const save = calls.find((c) => c.proc === 'keel_task_save')!;
+  assert(save.args['p_task_id'] === null && save.args['p_priority'] === 'high');
+});
+
+Deno.test('set_task_status captures the prior status for undo', async () => {
+  const applied: AppliedAction[] = [];
+  const listRows = [{ type: 'task', id: TASK_ID, title: 'x', status: 'open' }];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls: [], listRows }), applied));
+  await exec(call('set_task_status', { taskId: TASK_ID, status: 'done' }));
+  assert(applied[0]!.kind === 'tasks.set_status');
+  assert(applied[0]!.undo?.op === 'set_task_status');
+  assert(applied[0]!.undo?.status === 'open', 'undo restores the prior status');
+});
+
+Deno.test('propose_settle_reimbursement builds an allocations payload', async () => {
+  const proposed: ProposedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls: [] }), [], proposed));
+  const out = JSON.parse(
+    await exec(call('propose_settle_reimbursement', { claimId: CLAIM_ID, transactionId: NOTE_ID, amountMinor: '4000', note: 'venmo' })),
+  );
+  assert(out.proposed === true);
+  assert(proposed[0]!.command === 'reimbursements.settle');
+  const allocs = proposed[0]!.payload.allocations as { claimId: string; amountMinor: string }[];
+  assert(allocs[0]!.claimId === CLAIM_ID && allocs[0]!.amountMinor === '4000');
+});
+
+Deno.test('reverse-reimbursement proposals require a reason and stage nothing when denied', async () => {
+  const proposed: ProposedAction[] = [];
+  const denied = makeExecuteAgentTool(agentDeps(deny, noteRpc({ calls: [] }), [], proposed));
+  const d = JSON.parse(await denied(call('propose_reverse_reimbursement_claim', { claimId: CLAIM_ID, reason: 'duplicate' })));
+  assert(d.error === 'not_authorized');
+  assert(proposed.length === 0);
+  const ok = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls: [] }), [], proposed));
+  const missing = JSON.parse(await ok(call('propose_reverse_reimbursement_settlement', { settlementId: CLAIM_ID })));
+  assert(missing.error === 'invalid_arguments');
 });
