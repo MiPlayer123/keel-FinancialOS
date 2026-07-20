@@ -26,6 +26,7 @@ describe('action vocabulary', () => {
       'recurring.resume',
       'recurring.cancel',
       'recurring.reject',
+      'recurring.reclassify_cadence',
       'recurring.link_schedule',
       'recurring.unlink_schedule',
       'paychecks.create',
@@ -114,6 +115,12 @@ describe('action vocabulary', () => {
       'notes.archive',
       'notes.unarchive',
       'ai_profile.save',
+      // AI-agent batch 2 write actions (Law 10 Class B — suggest→approve).
+      'transactions.categorize',
+      'categories.create',
+      'categories.rename',
+      'tasks.save',
+      'tasks.set_status',
     ]);
   });
 
@@ -143,6 +150,7 @@ describe('action vocabulary', () => {
     expect(ACTION_MINIMUM_ROLES['recurring.resume']).toBe('partner');
     expect(ACTION_MINIMUM_ROLES['recurring.cancel']).toBe('partner');
     expect(ACTION_MINIMUM_ROLES['recurring.reject']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['recurring.reclassify_cadence']).toBe('partner');
     expect(ACTION_MINIMUM_ROLES['recurring.list']).toBe('viewer');
   });
 

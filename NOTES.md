@@ -4,6 +4,132 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-20 — feat(recurring): semi-monthly cadence detection fix + editable cadence
+
+Founder feedback: his Deeptune payroll pays on the **15th and the last calendar
+day of every month** (semi-monthly, month-length aware: Jan 31, Feb 28/29, Apr
+30) but recurring detection classified it **biweekly**, so upcoming/projected
+dates were wrong — and there was no way to correct it. Two deliverables:
+(A) make detection recognize semi-monthly over the biweekly false positive, and
+(B) let the user edit/correct a series' cadence.
+
+**ROOT CAUSE (live, read-only SELECTs on founder household a1ba3759-…):**
+- The cadence *model* already fully supported semi-monthly end-to-end: the
+  `recurring_cadence` enum carries `semimonthly`; the `day_pair` anchor kind
+  exists in `packages/detectors/src/types.ts`; `cadenceDatesBetween` (TS) and the
+  SQL-authoritative `keel_recurring_cadence_dates` (20260712120000:269, `least(
+  anchor, days_in_month)` month-end clamp at :364) both project `day_pair`
+  correctly. The TS detector (`recurring-grid-v2`) already had `semimonthlyFits`.
+- The founder's series `1c446787-…` was confirmed under the OLDER
+  `recurring-grid-v1` as `biweekly` (epoch_grid, 14-day, coverage 6/19 — a poor
+  fit that still got confirmed). His real Deeptune deposit dates: 12-15, 12-31,
+  01-15, 01-30, 02-13, 02-27, 03-13, 03-31, 04-15, 04-30, 05-15, 05-29, 06-15,
+  06-30, 07-15 → clearly 15th + last-day, shifted a few days EARLY when the
+  anchor lands on a weekend (paid the prior business day).
+- **Why detection picked biweekly:** those weekend-shifted dates are frequently
+  ~14–15 days apart for a run (Dec 31 → Jan 15 → Jan 30 → Feb 13 → Feb 27 → Mar
+  13 are all 14–15 days apart), so a DENSE biweekly epoch grid snaps them and,
+  being denser, both OUT-SCORES and FRAGMENTS the single correct semi-monthly
+  series into two biweekly pieces in `chooseDisjointFits`. Reproduced exactly in
+  a unit test: the founder's 10-date sequence detected as 2 biweekly series.
+
+**(A) DETECTION FIX (`packages/detectors/src/detect.ts`):**
+- `semimonthlyFits`: tolerance 2 → **3** (`SEMIMONTHLY_TOLERANCE`) — real payroll
+  shifts up to 3 business days (15th on Sunday → paid Fri 13th). Seed the
+  candidate day-of-month set with the canonical month-end days **28–31** in
+  addition to observed days, so a drifted last-day deposit (paid the 27th/30th)
+  can still pair against a `31` ("last day") anchor that clamps to Feb 28/29,
+  Apr 30, etc. Lower pair-gap bound 10 → 9 so a 13/27 pair (both anchors drifted
+  early) still qualifies.
+- **Structural disambiguation in `chooseDisjointFits`** (not score-based): a
+  semimonthly fit DOMINATES (drops) any weekly/biweekly/monthly fit whose matched
+  transactions it FULLY covers, guarded by two rules that stop it eating
+  legitimately-separate series: (1) STRICTLY MORE coverage (a real 2/month stream
+  covers more than either biweekly fragment / a single monthly; equality would
+  let a `day_pair` contortion tie and steal a genuine series it merely overlaps),
+  and (2) a `variable` semimonthly fit never dominates a `fixed`-amount fit — that
+  preserves "two distinct fixed-amount subscriptions in one counterparty group"
+  (e.g. $9.99 on the 5th + $15.99 on the 20th) as TWO monthly series, since the
+  spanning semimonthly fit is necessarily variable. Deterministic set containment;
+  no floats, no money (Law 1/9).
+- **Result:** the founder's exact 10-date sequence now detects as ONE
+  `semimonthly` series, `day_pair [15,31]`, all 10 occurrences. Full detector
+  suite 94/94 (biweekly-vs-semimonthly disambiguation, two-fixed-monthly-clusters,
+  strict biweekly paycheck, monthly Spotify, all backtests) still green — the
+  strictly-more + fixed-amount guards fixed the 8 regressions the first (too-broad)
+  dominance rule caused. New worked-example tests: the Deeptune weekend-drift
+  sequence, and a clean 15/31 series projected across Feb + 31-day months asserting
+  month-end clamp (no Feb 31).
+
+**(B) EDITABLE CADENCE — new command `recurring.reclassify_cadence`**
+(`20260722320000_recurring_reclassify_cadence.sql`, ⚑ HUMAN APPLIES LIVE — later
+than live tip 20260722310000; single `--single-transaction` apply, no enum
+change). Reuses the existing domain contract (Law 7 — same `/commands` envelope,
+authz, dispatch as every recurring.* command; web/MCP/support call the same proc,
+no side door).
+- Mints a NEW `recurring_candidate_versions` row copied verbatim from the current
+  candidate (evidence, amounts, counterparty — Law 9 source preservation) with
+  ONLY `cadence` + `cadenceAnchor` overridden, stamped
+  `detectorVersion='manual-cadence-v1'` + `manualCadenceOverride=true` so a later
+  detector run does NOT silently revert the user's hand-set cadence (Law 9
+  explicit ownership). Re-points `current_candidate_version_id`; if confirmed,
+  re-projects occurrences via the SAME `keel_recurring_cadence_dates` generator
+  the confirm path uses. **No occurrence deletion** — `recurring_occurrences` is
+  immutable, and both `keel_list_recurring` and `keel_cash_flow_forecast` filter
+  `candidate_version_id = current_candidate_version_id`, so re-pointing silently
+  switches every projection/forecast while the old rows remain as history (Law 2
+  reversible, append-only; audit_log + domain_events + command_executions written;
+  idempotent by economic_event_key + payload hash).
+- **Anchor casing:** the web API `toSnakeKeys` recursively snake-cases the whole
+  payload, but the stored candidate + `keel_recurring_cadence_dates` speak the
+  detector's camelCase anchor (`intervalDays`/`anchorEpochDay`/`intervalMonths`).
+  The proc normalizes the incoming (snake- or camel-cased) anchor back to
+  canonical camelCase before storing/projecting. Cadence↔anchor.kind agreement is
+  re-validated in SQL (weekly/biweekly→epoch_grid, monthly/quarterly/annual→
+  day_of_month, semimonthly→day_pair) AND in the contracts zod schema.
+- Contracts (`packages/contracts`): `RecurringReclassifyCadencePayloadSchema` +
+  `CadenceAnchorSchema` discriminated union mirroring the detector; superRefine
+  enforces cadence↔anchor pairing + distinct day_pair days. Authz
+  (`packages/authz`): new `recurring.reclassify_cadence` action, `partner`
+  minimum role. API dispatch (`supabase/functions/api`): COMMAND_TO_PROC entry.
+- **UI:** shared `EditCadenceDialog` (`apps/web/src/components/edit-cadence-dialog
+  .tsx`) — cadence picker + day-of-month inputs (semi-monthly defaults 15th & 31st
+  = "last day"); wired into BOTH the Recurring page ("Fix schedule" on any live
+  series) and the Paychecks page ("Fix pay schedule" on a detected paycheck).
+  Client helpers `reclassifyCadence` + `buildCadenceAnchor` in
+  `apps/web/src/lib/recurring.ts`. Refetches recurring.list on save.
+- **Class B** (Law 10): a user-initiated correction on their own data
+  (suggest→approve satisfied by the user issuing it); NO money moves (Class D
+  untouched).
+
+**VERIFICATION RAN:**
+- Full workspace tests: **0 failures** (`pnpm -r test`) — detectors 94, contracts
+  45, authz 140, paychecks 52, ledger 71, ai 86, documents 149, exports 80, etc.
+  (Also fixed a PRE-EXISTING authz `action.test.ts` drift: 5 AI-agent-batch-2
+  actions from commit 68e6120 were never added to the expected ACTIONS list; it
+  was already red on the base branch. Added them alongside my new action.)
+- `cd apps/web && pnpm build` GREEN (ESLint enforced; only pre-existing unrelated
+  warnings). `node scripts/build-functions.mjs` GREEN.
+- **SQL command proven end-to-end** on a throwaway Postgres 17 with the REAL
+  migration + REAL `keel_recurring_cadence_dates`/`keel_payload_hash` sliced from
+  their real migrations: `scripts/run-recurring-reclassify-cadence-pgtap.sh` +
+  `tests/pgtap/recurring_reclassify_cadence.sql`, **8/8 pass** — a confirmed
+  biweekly Deeptune series reclassified to semimonthly [15,31] flips the current
+  candidate to manual-cadence-v1 (override=true), projects 12 fifteenths + the
+  last day of every month with Feb 2027 clamped to the 28th (never Feb 31), 30-day
+  months on the 30th, prior candidate preserved (append-only, exactly 2 versions),
+  and a cadence/anchor mismatch is rejected with P0009.
+- No live DB apply performed; no live data mutated. Live probes were READ-ONLY.
+
+**MIGRATION TO APPLY (orchestrator):** `20260722320000_recurring_reclassify_cadence
+.sql` — single `--single-transaction` apply. Then deploy edge functions
+(`api`, `worker`) for the new command route, and Vercel picks up the web on merge.
+To fix the founder's actual series after apply: issue `recurring.reclassify_cadence`
+for series `1c446787-bfc0-44a6-8838-b77d5f1be8eb` with cadence `semimonthly`,
+anchor `{kind:'day_pair', days:[15,31]}` (or just click "Fix schedule" in the UI).
+
+---
+
 ## 2026-07-19 — feat(recurring): semi-monthly (15th & 30th) schedule option
 
 Adds a `semimonthly` `schedule_frequency` so a user can declare "Twice a month

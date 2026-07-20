@@ -250,14 +250,35 @@ const calendarFits = (
   }));
 };
 
+// Real payroll paid on fixed calendar days (e.g. the 15th and the last day of
+// the month) shifts a few days EARLY when the anchor lands on a weekend/holiday
+// (paid the prior business day) — the 15th on a Sunday is paid Friday the 13th
+// (2-day shift), and a rare Sunday-plus-holiday can push 3. So semi-monthly
+// tolerance is 3 (vs the biweekly grid's 2). This matters because those same
+// drifted dates are OFTEN ~14 days apart for a stretch (Dec 31 -> Jan 15 -> Jan
+// 30 -> Feb 13 -> Feb 27 -> Mar 13 are all 14-15 days apart), so a dense
+// biweekly epoch grid can otherwise snap them and out-score / fragment the true
+// single semi-monthly series.
+const SEMIMONTHLY_TOLERANCE = 3 as const;
+
 const semimonthlyFits = (subset: readonly ParsedTransaction[]): Fit[] => {
-  const days = [...new Set(subset.map((transaction) => transaction.day))].sort((a, b) => a - b);
+  const observed = [...new Set(subset.map((transaction) => transaction.day))].sort((a, b) => a - b);
+  // Seed the candidate day set with the canonical month-end days (28-31) in
+  // addition to observed days: a drifted last-day-of-month deposit (e.g. paid the
+  // 27th or 30th) must still be able to pair against a 31 ("last day") anchor,
+  // which clamps to Feb 28/29, Apr 30, etc. in the grid below. Without this seed,
+  // a month-end series whose observed days are all < 31 could never propose the
+  // 31 anchor and would lose the "last day of month" semantics.
+  const days = [...new Set([...observed, 28, 29, 30, 31])].sort((a, b) => a - b);
   const minMonth = Math.min(...subset.map((transaction) => transaction.year * 12 + transaction.month - 1));
   const maxMonth = Math.max(...subset.map((transaction) => transaction.year * 12 + transaction.month - 1));
   const pairs: Array<readonly [number, number]> = [];
   days.forEach((first, firstIndex) => {
     days.slice(firstIndex + 1).forEach((second) => {
-      if (second - first >= 10 && second - first <= 20) pairs.push([first, second]);
+      // A semi-monthly pair is two anchors ~half a month apart. Widened lower
+      // bound to 9 so a 13/27-style pair (both anchors drifted early) still
+      // qualifies; upper bound stays 20.
+      if (second - first >= 9 && second - first <= 20) pairs.push([first, second]);
     });
   });
   return pairs.flatMap((pair) => {
@@ -272,7 +293,7 @@ const semimonthlyFits = (subset: readonly ParsedTransaction[]): Fit[] => {
     }
     slots.sort((left, right) => left.date.localeCompare(right.date));
     const anchor: CadenceAnchor = { kind: 'day_pair', days: pair };
-    const fit = makeFit('semimonthly', anchor, subset, slots, 2);
+    const fit = makeFit('semimonthly', anchor, subset, slots, SEMIMONTHLY_TOLERANCE);
     return fit ? [fit] : [];
   });
 };
@@ -327,9 +348,61 @@ const chooseDisjointFits = (group: readonly ParsedTransaction[]): Fit[] => {
       if (!current || compareFits(fit, current) < 0) unique.set(fit.fitKey, fit);
     }
   }
+  // Semi-monthly vs biweekly disambiguation (structural, not score-based).
+  // A true semi-monthly payroll (15th + last day of month) drifts a few days
+  // early on weekend/holiday anchors, and those drifted dates are frequently
+  // ~14 days apart for a run — so a dense epoch (weekly/biweekly) grid can snap
+  // them and, being denser, out-score AND fragment the single correct
+  // semi-monthly series into two biweekly pieces. The domain truth is that
+  // "two hits per month, near the 15th and month-end" is the MORE SPECIFIC
+  // explanation whenever it covers the same transactions. So: drop any epoch fit
+  // whose matched transactions are ALL also covered by a single semimonthly fit
+  // that matches at least as many transactions. Deterministic set containment;
+  // no floats, no scores. A genuine biweekly series (day-of-month walks the whole
+  // calendar, never clustering at two anchors) is never fully covered by one
+  // day_pair fit, so it survives untouched (regression-guarded by tests).
+  // A drifted semi-monthly series (e.g. a variable payroll paid on the 15th and
+  // the last day of each month, shifted early on weekends) can be mis-explained
+  // EITHER as two biweekly fragments OR as two monthly series (15th + 31st) —
+  // both strictly less specific than "twice a month, 15th & month-end". So a
+  // semimonthly fit dominates a weekly/biweekly/monthly fit whose matched
+  // transactions it FULLY covers, subject to two guards that keep this from
+  // eating legitimately-separate series:
+  //
+  //  (1) STRICTLY MORE coverage. The semimonthly fit must match strictly MORE
+  //      transactions than the fit it dominates (a real 2/month stream covers
+  //      ~2x a single monthly and more than either biweekly fragment). Equality
+  //      is not enough — that would let a day_pair contortion tie and steal a
+  //      genuine biweekly/monthly series it merely happens to overlap.
+  //  (2) DON'T MERGE DISTINCT FIXED-AMOUNT CLUSTERS. Two different fixed-amount
+  //      subscriptions in one counterparty group (e.g. $9.99 on the 5th and
+  //      $15.99 on the 20th) look pair-like but are TWO real series; the
+  //      spanning semimonthly fit is necessarily `variable`. So a `variable`
+  //      semimonthly fit never dominates a `fixed`-amount fit. A truly one-stream
+  //      semimonthly payroll is itself variable-vs-variable (or fixed-vs-fixed),
+  //      so it still collapses.
+  const allFits = [...unique.values()];
+  const semimonthlyFitList = allFits.filter((fit) => fit.cadence === 'semimonthly');
+  const dominated = new Set<string>();
+  for (const other of allFits) {
+    if (other.cadence !== 'weekly' && other.cadence !== 'biweekly' && other.cadence !== 'monthly') {
+      continue;
+    }
+    const covered = semimonthlyFitList.some(
+      (semi) =>
+        semi.fitKey !== other.fitKey &&
+        other.matched.length > 0 &&
+        semi.matched.length > other.matched.length &&
+        !(other.amountFixed && !semi.amountFixed) &&
+        other.matched.every((t) => semi.matched.some((s) => s.txnId === t.txnId)),
+    );
+    if (covered) dominated.add(other.fitKey);
+  }
+
   const used = new Set<string>();
   const chosen: Fit[] = [];
-  for (const fit of [...unique.values()].sort(compareFits)) {
+  for (const fit of allFits.sort(compareFits)) {
+    if (dominated.has(fit.fitKey)) continue;
     if (fit.matched.some((transaction) => used.has(transaction.txnId))) continue;
     fit.matched.forEach((transaction) => used.add(transaction.txnId));
     chosen.push(fit);
