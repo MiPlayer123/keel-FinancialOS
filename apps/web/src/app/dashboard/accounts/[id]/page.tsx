@@ -19,6 +19,7 @@ import { EmptyState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
 import {
+  useAccountTransactions,
   useKeelInvalidate,
   useKeelQuery,
   useKeelQuerySilent,
@@ -340,10 +341,16 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
     };
   }, [householdId, anyConnectionSyncing]);
 
-  const accountTxns = useMemo(
-    () => txns.rows.filter((t) => t.accountId === accountId),
-    [txns.rows, accountId],
-  );
+  // ACCOUNT-SCOPED register (distribution follow-up). The old client-side
+  // `txns.rows.filter(t => t.accountId === accountId)` over the GLOBAL rich
+  // list could never surface a distribution's transfer leg — that row lands in
+  // a SECOND account and the global list is header-pinned. The account-scoped
+  // read (`keel_list_transactions_rich_page` WITH `p_account_id`) synthesizes a
+  // `distributionTransfer` row for each leg landing here, so we fetch scoped.
+  // The global `txns.rows` is still used for merchant-history + counterparty
+  // lookups (AddTransactionDialog / TxnDetailSheet) below.
+  const accountTxnsQuery = useAccountTransactions(householdId, accountId);
+  const accountTxns = accountTxnsQuery.rows;
   const spending = useMemo(() => spendingMix(accountTxns), [accountTxns]);
 
   const balanceByLedgerMap = useMemo(

@@ -51,7 +51,7 @@ export function isMoneyMovementCategoryName(name: string): boolean {
 
 /** The fields `isDebtOrTransferLike` inspects — a subset of RichTransactionRow. */
 export type DebtOrTransferLike = Pick<RichTransactionRow, 'transferStatus' | 'categoryName'> &
-  Partial<Pick<RichTransactionRow, 'categoryPfcKey'>>;
+  Partial<Pick<RichTransactionRow, 'categoryPfcKey' | 'distributionTransfer'>>;
 
 /**
  * True when a row is money-movement or debt payoff rather than real spend, so
@@ -76,6 +76,10 @@ export type DebtOrTransferLike = Pick<RichTransactionRow, 'transferStatus' | 'ca
  */
 export function isDebtOrTransferLike(txn: DebtOrTransferLike): boolean {
   if (txn.transferStatus === 'confirmed') return true;
+  // A distribution's transfer leg (a paycheck's 401(k) inflow landing in the
+  // Roth account) is money movement into another real account, not spend —
+  // exclude it like a confirmed transfer even though transferStatus is null.
+  if (txn.distributionTransfer === true) return true;
   const pfc = txn.categoryPfcKey;
   if (pfc != null && isDebtTransferPfcKey(pfc)) return true;
   return txn.categoryName != null && isMoneyMovementCategoryName(txn.categoryName);
