@@ -246,9 +246,12 @@ function RecurringBody() {
                 <p className="min-w-0 flex-1 truncate text-sm">{series.counterpartyKey}</p>
                 <Money
                   amountMinor={
+                    // Sign comes from the series direction; use the MAGNITUDE of
+                    // the expected amount so an already-signed value can't double
+                    // up (outflow "-699" would otherwise become "--699").
                     series.sign === 'outflow'
-                      ? `-${occ.expectedAmountMinor}`
-                      : occ.expectedAmountMinor
+                      ? `-${occ.expectedAmountMinor.replace(/-/g, '')}`
+                      : occ.expectedAmountMinor.replace(/-/g, '')
                   }
                   currency={occ.currency}
                   signed
