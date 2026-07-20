@@ -558,68 +558,6 @@ function UpcomingRecurringCard({
   );
 }
 
-function AccountsSummaryCard({
-  accounts,
-  balanceByLedger,
-}: {
-  accounts: AccountRow[];
-  balanceByLedger: Map<string, string>;
-}) {
-  const visibleAccounts = accounts.slice(0, 5);
-  return (
-    <Card size="sm">
-      <CardHeader>
-        <CardTitle>Accounts</CardTitle>
-        <CardAction className="flex items-center gap-2">
-          <Badge variant="secondary" className="font-normal">
-            {String(accounts.length)}
-          </Badge>
-          <Link
-            href="/dashboard/accounts"
-            className={buttonVariants({ variant: 'ghost', size: 'xs' })}
-          >
-            View all
-          </Link>
-        </CardAction>
-      </CardHeader>
-      <CardContent>
-        {visibleAccounts.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            Connect a bank or add an account to start tracking balances.
-          </p>
-        ) : (
-          visibleAccounts.map((account, index) => (
-            <Fragment key={account.id}>
-              <Link
-                href={`/dashboard/accounts/${account.id}`}
-                className="flex min-w-0 items-center justify-between gap-3 py-2 first:pt-0 last:pb-0"
-              >
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{account.name}</p>
-                  <p className="truncate text-xs capitalize text-muted-foreground">
-                    {account.subtype.replaceAll('_', ' ')}
-                  </p>
-                </div>
-                <Money
-                  amountMinor={balanceByLedger.get(account.ledgerAccountId) ?? '0'}
-                  currency={account.currency}
-                  className="shrink-0 text-sm"
-                />
-              </Link>
-              {index < visibleAccounts.length - 1 ? <Separator /> : null}
-            </Fragment>
-          ))
-        )}
-        {accounts.length > visibleAccounts.length ? (
-          <p className="pt-2 text-xs text-muted-foreground">
-            +{String(accounts.length - visibleAccounts.length)} more accounts
-          </p>
-        ) : null}
-      </CardContent>
-    </Card>
-  );
-}
-
 function SpendingCard({
   spending,
   insights,
@@ -998,7 +936,11 @@ function HomeBody() {
         {lensActive ? null : (
           <UpcomingRecurringCard rows={upcomingRecurring} todayIso={todayIso} />
         )}
-        <AccountsSummaryCard accounts={accountList} balanceByLedger={balanceByLedger} />
+        {/* The flat account list card was removed here (founder ask
+            2026-07-20): the entity-grouped account rail in the sidebar plus the
+            full Accounts page now cover "what accounts do I have and their
+            balances" better than a truncated top-5 card on the dashboard did.
+            The net-worth hero above already carries the headline figure. */}
         <NotesTasksCard householdId={householdId} compact />
         {!lensActive && forecast !== null ? (
           <ProjectedCashCard forecast={forecast} varies={forecastVaries} todayIso={todayIso} />
