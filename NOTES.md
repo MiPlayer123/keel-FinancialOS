@@ -4,6 +4,69 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-20 — fix(cash-flow): sign-classify the money-in/money-out graph; flag the partial current month
+
+Founder screen-share report: the dashboard monthly cash-flow bars "might be
+negative" and the series "jumps at the end"; net worth "should not drop a
+layer, the money is always there".
+
+**Diagnosis (live read-only, household a1ba3759…):**
+- *Negative "money out" bars (root cause, code bug).* `keel_cash_flow_monthly`
+  v6 (20260720220000) classified each category posting by its EFFECTIVE category
+  KIND (overlay-aware, matching `keel_budget_month`). Correct for BUDGET, wrong
+  for a cash-DIRECTION chart: a received payment the user tagged to a spend
+  category (e.g. a **$7,470 "POSH Event Payout"**, offset "Uncategorized
+  Income", overlaid to an event EXPENSE category; plus many "Zelle payment
+  from …" receipts overlaid to Restaurants/Groceries) was subtracted from
+  "money out". That drove **6 of the last 12 months' outflow NEGATIVE** — e.g.
+  Oct-2025 outflow = −$3,528 (expense-side split was +$4,387 real debits but
+  −$7,915 credits). A negative spend bar reads as broken (and Law 8: red is for
+  negative money only).
+- *"Jumps at the end" (partial-month artifact, not a data bug).* The newest
+  bucket is the current, incomplete month (API requests `p_to = today`), plotted
+  at full visual weight beside complete months. The month-to-date figures are
+  correct; only the presentation implied a spurious jump.
+- *Net worth "drop a layer" (data condition, NOT a read-model code bug).* The
+  reconnected live "Fidelity LLC" account (`70d540bf…`) booked its opening
+  anchor at effective **2026-07-19**, one day later than the archived
+  predecessor's (2026-07-18), so the archived-account read-model filter
+  (20260719130000, correct as written) leaves the $57,359.67 brokerage layer
+  missing for exactly 2026-07-18 and recovering on 07-19. This is a per-account
+  anchor-date gap from a specific reconnect, fixable only by a live data
+  correction to that account's anchor `effective_date` (≤ 07-18) — OUT OF SCOPE
+  for this agent (no live/founder-data mutation allowed). **⚑ flagged for the
+  orchestrator/human** to correct the anchor date and/or harden the reconnect
+  path so a replacement anchor never lands later than the account it replaces.
+
+**Fix (this PR):**
+- Migration `20260720231500_cash_flow_sign_classified.sql` (⚑ human applies
+  live, usual `--single-transaction` psql): `keel_cash_flow` →
+  `cash-flow-v7-sign-classified`, `keel_cash_flow_monthly` →
+  `cash-flow-monthly-v6-sign-classified`. The GRAPH procs now split by the SIGN
+  of each surviving category posting (credit < 0 → inflow; debit > 0 → outflow),
+  so both sides are non-negative by construction. Exclusions (confirmed-transfer
+  legs, `keel_is_non_income_settlement`, transfer-category overlays) applied
+  FIRST and UNCHANGED. `keel_budget_month` untouched — it stays the single
+  overlay-aware budget classifier (Law 9: two distinct scoped calculations).
+  **Net (inflow − outflow) is IDENTICAL to v6 per currency/month, verified live
+  over 12 months** (net = −Σ amount_minor in both formulations); only the gross
+  split moves. Deterministic BIGINT, no floats (Laws 1, 4).
+- Chart (`apps/web/src/components/keel/charts.tsx`, `CashFlowMonthlyChart`): the
+  current (in-progress) month is dimmed (`fillOpacity 0.4`, per-datum, no
+  deprecated `<Cell>`), its axis tick gets a `*`, its tooltip says "· so far",
+  and a "* this month so far" legend note appears. True month-to-date figures
+  kept — no fabricated projection (teardown C10).
+- Reference + tests: new pure `src/lib/cash-flow-classify.ts` mirrors the proc's
+  sign→direction rule; `cash-flow-classify.test.ts` (5 cases) reproduces the
+  $7,470-receipt bug, the Oct-2025 shape, and the net-preservation invariant.
+
+**Verification RAN:** `apps/web` `pnpm build` green (ESLint enforced; only
+pre-existing unrelated warnings). `npx vitest run src/lib` → 405/405 green
+(30 files) incl. the 5 new cases. No live DB apply performed — migration
+prepared and flagged for the human.
+
+---
+
 ## 2026-07-19 — feat(recurring): semi-monthly (15th & 30th) schedule option
 
 Adds a `semimonthly` `schedule_frequency` so a user can declare "Twice a month
