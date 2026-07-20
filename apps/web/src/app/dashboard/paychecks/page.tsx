@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Banknote, Plus, Loader2, ChevronRight, Pencil, Trash2, Undo2, Sparkles, X } from 'lucide-react';
+import { Banknote, Plus, Loader2, ChevronRight, Pencil, Trash2, Undo2, Sparkles, X, CalendarClock } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
@@ -33,6 +33,7 @@ import {
   type PreviewLine,
 } from '@/lib/paycheck-template-math';
 import type { PaycheckTemplate } from '@/lib/keel-api';
+import { EditCadenceDialog } from '@/components/edit-cadence-dialog';
 import { TxnPicker } from '@/components/keel/txn-picker';
 import { AttachmentsSection } from '@/components/keel/attachments-section';
 import { sha256Hex, parseSignedDollars, minorToDollars } from '@/lib/hash';
@@ -240,6 +241,12 @@ function PaychecksBody() {
   const [templatesData, setTemplatesData] = useState<PaycheckTemplatesResult | null>(null);
   const [editorSeries, setEditorSeries] = useState<
     { seriesId: string; employerId: string | null; employerName: string; depositMinor: string | null } | null
+  >(null);
+  // Correct a mis-detected pay cadence (e.g. semi-monthly payroll read as
+  // biweekly). Keyed by the detected series; re-projects on save (recurring
+  // list refetch) so the next-paycheck date + cash forecast update.
+  const [cadenceEditSeries, setCadenceEditSeries] = useState<
+    { seriesId: string; label: string; referenceDate: string } | null
   >(null);
 
   const reloadTemplates = useCallback(() => {
@@ -537,6 +544,27 @@ function PaychecksBody() {
                       <Pencil className="size-3.5" />
                       {settings?.activeTemplateId ? 'Edit split template' : 'Set up split template'}
                     </Button>
+                    {householdId && userId ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="gap-1.5"
+                        onClick={() => {
+                          setCadenceEditSeries({
+                            seriesId: series.seriesId,
+                            label: series.counterpartyKey,
+                            referenceDate:
+                              [...series.occurrences]
+                                .map((o) => o.expectedDate)
+                                .sort()
+                                .at(-1) ?? todayIso,
+                          });
+                        }}
+                      >
+                        <CalendarClock className="size-3.5" />
+                        Fix pay schedule
+                      </Button>
+                    ) : null}
                     {resolvedEmployerId && settings ? (
                       <PaycheckAutonomyToggle
                         householdId={householdId ?? ''}
@@ -656,6 +684,24 @@ function PaychecksBody() {
             reloadTemplates();
             setEditorSeries(null);
           }}
+        />
+      ) : null}
+
+      {cadenceEditSeries && householdId && userId ? (
+        <EditCadenceDialog
+          open
+          onClose={() => {
+            setCadenceEditSeries(null);
+          }}
+          onDone={() => {
+            void recurring.refetch();
+            setCadenceEditSeries(null);
+          }}
+          seriesId={cadenceEditSeries.seriesId}
+          seriesLabel={cadenceEditSeries.label}
+          householdId={householdId}
+          userId={userId}
+          referenceDate={cadenceEditSeries.referenceDate}
         />
       ) : null}
     </div>

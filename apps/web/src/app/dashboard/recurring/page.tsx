@@ -44,6 +44,7 @@ import {
   type RecurringCommand,
 } from '@/lib/recurring';
 import { RECURRING_BUCKET_BADGE_LABELS } from '@/lib/recurring-bucket';
+import { EditCadenceDialog } from '@/components/edit-cadence-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -558,7 +559,12 @@ function SeriesCard({
 }) {
   const [busy, setBusy] = useState<RecurringCommand | null>(null);
   const [linkBusy, setLinkBusy] = useState(false);
+  const [editingCadence, setEditingCadence] = useState(false);
   const next = nextOccurrence(series, todayIso());
+  // Reference date for the edit dialog: the most recent projected occurrence,
+  // else today. Used to anchor epoch-grid cadences + default the day-of-month.
+  const cadenceReferenceDate =
+    [...series.occurrences].map((o) => o.expectedDate).sort().at(-1) ?? todayIso();
   const lockedToday = series.status !== 'suggested' && changedToday(series, todayIso());
   const actions = RECURRING_ACTIONS[series.status];
 
@@ -731,6 +737,20 @@ function SeriesCard({
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {/* Correct a mis-detected cadence (e.g. semi-monthly payroll read as
+              biweekly). Available on any live series; not shown once terminal. */}
+          {userId && ['suggested', 'confirmed', 'paused'].includes(series.status) ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy !== null}
+              onClick={() => {
+                setEditingCadence(true);
+              }}
+            >
+              Fix schedule
+            </Button>
+          ) : null}
           {lockedToday ? (
             <span className="text-xs text-muted-foreground">
               Changed today — next change available tomorrow.
@@ -753,6 +773,20 @@ function SeriesCard({
           )}
         </div>
       </CardContent>
+      {userId ? (
+        <EditCadenceDialog
+          open={editingCadence}
+          onClose={() => {
+            setEditingCadence(false);
+          }}
+          onDone={onDone}
+          seriesId={series.seriesId}
+          seriesLabel={series.counterpartyKey}
+          householdId={householdId}
+          userId={userId}
+          referenceDate={cadenceReferenceDate}
+        />
+      ) : null}
     </Card>
   );
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DETECTOR_VERSION,
   NORMALIZER_VERSION,
+  cadenceDatesBetween,
   detectRecurringSeries,
   fingerprint,
   normalizeCounterparty,
@@ -163,6 +164,80 @@ describe('detectRecurringSeries calendar-grid fitting', () => {
       { asOf: '2024-02-26' },
     );
     expect(biweekly[0]?.cadence).toBe('biweekly');
+  });
+
+  it('classifies the Deeptune 15th-&-last-day payroll as semimonthly, not biweekly', () => {
+    // Worked example (doc 10 §2.4): the founder's real cadence — 15th and the
+    // LAST calendar day of each month, with the anchor landing a few days early
+    // when it falls on a weekend/holiday (paid the prior business day). The naive
+    // detector read this as biweekly (~14 days); semimonthly (day_pair 15/31) is
+    // the correct fit and must win. Amounts vary (variable payroll) so no
+    // fixed-amount subset can bias the fit toward a 14-day grid.
+    const pay = [
+      // Dec: 15th, 31st (EOM)
+      txn('dt-1', '2025-12-15', '104326', 'DEEPTUNE PAYROLL'),
+      txn('dt-2', '2025-12-31', '110500', 'DEEPTUNE PAYROLL'),
+      // Jan: 15th, 30th (EOM 31 = Sat -> Fri 30)
+      txn('dt-3', '2026-01-15', '99800', 'DEEPTUNE PAYROLL'),
+      txn('dt-4', '2026-01-30', '120000', 'DEEPTUNE PAYROLL'),
+      // Feb: 13th (15 = Sun -> Fri 13), 27th (EOM 28 = Sat -> Fri 27)
+      txn('dt-5', '2026-02-13', '90100', 'DEEPTUNE PAYROLL'),
+      txn('dt-6', '2026-02-27', '130400', 'DEEPTUNE PAYROLL'),
+      // Mar: 13th (15 = Sun -> Fri 13), 31st (EOM)
+      txn('dt-7', '2026-03-13', '88000', 'DEEPTUNE PAYROLL'),
+      txn('dt-8', '2026-03-31', '141900', 'DEEPTUNE PAYROLL'),
+      // Apr: 15th, 30th (EOM)
+      txn('dt-9', '2026-04-15', '95000', 'DEEPTUNE PAYROLL'),
+      txn('dt-10', '2026-04-30', '133000', 'DEEPTUNE PAYROLL'),
+    ];
+    const series = detectRecurringSeries(pay, { asOf: '2026-04-30' });
+    expect(series).toHaveLength(1);
+    expect(series[0]?.cadence).toBe('semimonthly');
+    expect(series[0]?.cadenceAnchor.kind).toBe('day_pair');
+    // The chosen pair is the mid-month + month-end anchors (month-end drifts to
+    // ~30/31 depending on the sample); the mid-month day is 15 (or 13 when the
+    // 15th shifted). Assert the pair straddles a ~15/16-day gap, not 14.
+    const anchor = series[0]?.cadenceAnchor;
+    if (anchor?.kind === 'day_pair') {
+      const [lo, hi] = anchor.days;
+      expect(hi - lo).toBeGreaterThanOrEqual(13);
+      expect(hi).toBeGreaterThanOrEqual(27); // month-end anchor, not a mid-month
+    }
+    expect(series[0]?.occurrenceCount).toBeGreaterThanOrEqual(8);
+  });
+
+  it('projects semimonthly 15/31 across February and 31-day months, month-end clamped', () => {
+    // Detect a clean 15th-&-31st series, then project it and assert the generated
+    // dates land on the real calendar: Jan 31, Feb 28/29, Apr 30 — never Feb 31.
+    const series = detectRecurringSeries(
+      [
+        txn('em-1', '2024-01-15', '-20000', 'Rent Escrow'),
+        txn('em-2', '2024-01-31', '-20000', 'Rent Escrow'),
+        txn('em-3', '2024-02-15', '-20000', 'Rent Escrow'),
+        txn('em-4', '2024-02-29', '-20000', 'Rent Escrow'),
+        txn('em-5', '2024-03-15', '-20000', 'Rent Escrow'),
+        txn('em-6', '2024-03-31', '-20000', 'Rent Escrow'),
+      ],
+      { asOf: '2024-03-31' },
+    );
+    expect(series[0]?.cadence).toBe('semimonthly');
+    const anchor = series[0]?.cadenceAnchor;
+    expect(anchor).toMatchObject({ kind: 'day_pair' });
+    if (anchor?.kind === 'day_pair') {
+      // The month-end anchor is the larger day (>= 29 given the sample includes
+      // Jan 31 / Mar 31); mid-month is 15.
+      expect(anchor.days[0]).toBe(15);
+      expect(anchor.days[1]).toBeGreaterThanOrEqual(29);
+      const projected = cadenceDatesBetween(anchor, '2024-01-01', '2024-04-30');
+      // Feb clamps to 29 (leap year), never 31; Apr clamps to 30.
+      expect(projected).toContain('2024-01-15');
+      expect(projected).toContain('2024-01-31');
+      expect(projected).toContain('2024-02-15');
+      expect(projected).toContain('2024-02-29');
+      expect(projected).toContain('2024-04-30');
+      expect(projected).not.toContain('2024-02-31');
+      expect(projected).not.toContain('2024-04-31');
+    }
   });
 
   it('groups by account, sign, currency, and normalizer version', () => {

@@ -356,6 +356,74 @@ describe('command payloads', () => {
     ).toThrow();
   });
 
+  it('recurring.reclassify_cadence accepts semimonthly day_pair + rejects cadence/anchor mismatch', () => {
+    // Valid: semi-monthly with a 15th & last-day (31) anchor pair.
+    const semi = parseCommandPayload('recurring.reclassify_cadence', {
+      seriesId: uuid,
+      cadence: 'semimonthly',
+      cadenceAnchor: { kind: 'day_pair', days: [15, 31] },
+      effectiveDate: '2026-07-20',
+      horizonDays: 120,
+    });
+    expect(semi.cadence).toBe('semimonthly');
+    expect(semi.cadenceAnchor).toMatchObject({ kind: 'day_pair', days: [15, 31] });
+
+    // Valid: biweekly epoch grid.
+    expect(
+      parseCommandPayload('recurring.reclassify_cadence', {
+        seriesId: uuid,
+        cadence: 'biweekly',
+        cadenceAnchor: { kind: 'epoch_grid', intervalDays: 14, anchorEpochDay: 20400 },
+        effectiveDate: '2026-07-20',
+        horizonDays: 90,
+      }).cadence,
+    ).toBe('biweekly');
+
+    // Reject: cadence semimonthly but anchor is an epoch grid (mismatch).
+    expect(() =>
+      parseCommandPayload('recurring.reclassify_cadence', {
+        seriesId: uuid,
+        cadence: 'semimonthly',
+        cadenceAnchor: { kind: 'epoch_grid', intervalDays: 14, anchorEpochDay: 20400 },
+        effectiveDate: '2026-07-20',
+        horizonDays: 120,
+      }),
+    ).toThrow();
+
+    // Reject: biweekly cadence with a 7-day (weekly) interval.
+    expect(() =>
+      parseCommandPayload('recurring.reclassify_cadence', {
+        seriesId: uuid,
+        cadence: 'biweekly',
+        cadenceAnchor: { kind: 'epoch_grid', intervalDays: 7, anchorEpochDay: 20400 },
+        effectiveDate: '2026-07-20',
+        horizonDays: 120,
+      }),
+    ).toThrow();
+
+    // Reject: semimonthly with two identical days.
+    expect(() =>
+      parseCommandPayload('recurring.reclassify_cadence', {
+        seriesId: uuid,
+        cadence: 'semimonthly',
+        cadenceAnchor: { kind: 'day_pair', days: [15, 15] },
+        effectiveDate: '2026-07-20',
+        horizonDays: 120,
+      }),
+    ).toThrow();
+
+    // Reject: day out of range.
+    expect(() =>
+      parseCommandPayload('recurring.reclassify_cadence', {
+        seriesId: uuid,
+        cadence: 'monthly',
+        cadenceAnchor: { kind: 'day_of_month', day: 32, intervalMonths: 1, phase: 0 },
+        effectiveDate: '2026-07-20',
+        horizonDays: 120,
+      }),
+    ).toThrow();
+  });
+
   it('ingest.record_raw_event stores body verbatim as data', () => {
     const parsed = parseCommandPayload('ingest.record_raw_event', {
       provider: 'simulator',

@@ -133,6 +133,78 @@ export const RecurringResumePayloadSchema = RecurringTransitionPayloadSchema.ext
 export const RecurringCancelPayloadSchema = RecurringTransitionPayloadSchema;
 export const RecurringRejectPayloadSchema = RecurringTransitionPayloadSchema;
 
+// recurring.reclassify_cadence — user correction of a series' cadence + anchor
+// (Law 2 reversible/audited, Law 9 explicit ownership: the new candidate is
+// stamped manual so a later detector run does not silently revert it, Law 10
+// Class B suggest→approve). The anchor is a discriminated union mirroring the
+// detector's CadenceAnchor (packages/detectors/src/types.ts) and what
+// keel_recurring_cadence_dates (SQL) interprets:
+//   epoch_grid   -> weekly (7) / biweekly (14)
+//   day_of_month -> monthly (1) / quarterly (3) / annual (12)
+//   day_pair     -> semimonthly (two days per month, month-end-clamped)
+const DayOfMonthSchema = z.number().int().min(1).max(31);
+export const CadenceAnchorSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('epoch_grid'),
+    intervalDays: z.union([z.literal(7), z.literal(14)]),
+    anchorEpochDay: z.number().int(),
+  }).strict(),
+  z.object({
+    kind: z.literal('day_of_month'),
+    day: DayOfMonthSchema,
+    intervalMonths: z.union([z.literal(1), z.literal(3), z.literal(12)]),
+    phase: z.number().int().min(0).max(11),
+  }).strict(),
+  z.object({
+    kind: z.literal('day_pair'),
+    days: z.tuple([DayOfMonthSchema, DayOfMonthSchema]),
+  }).strict(),
+]);
+export const RecurringCadenceSchema = z.enum([
+  'weekly', 'biweekly', 'semimonthly', 'monthly', 'quarterly', 'annual',
+]);
+export const RecurringReclassifyCadencePayloadSchema = z.object({
+  seriesId: RecurringSeriesIdSchema,
+  cadence: RecurringCadenceSchema,
+  cadenceAnchor: CadenceAnchorSchema,
+  effectiveDate: IsoDateSchema,
+  horizonDays: z.number().int().min(1).max(366),
+}).strict().superRefine((value, ctx) => {
+  // Cadence <-> anchor.kind agreement (mirrors the SQL guard so a mismatch is a
+  // 400 before it ever reaches the DB). Same authoritative mapping, one contract.
+  const kind = value.cadenceAnchor.kind;
+  const ok =
+    ((value.cadence === 'weekly' || value.cadence === 'biweekly') && kind === 'epoch_grid') ||
+    ((value.cadence === 'monthly' || value.cadence === 'quarterly' || value.cadence === 'annual') && kind === 'day_of_month') ||
+    (value.cadence === 'semimonthly' && kind === 'day_pair');
+  if (!ok) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `cadence ${value.cadence} does not match anchor kind ${kind}`,
+      path: ['cadenceAnchor', 'kind'],
+    });
+    return;
+  }
+  if (value.cadenceAnchor.kind === 'epoch_grid') {
+    const want = value.cadence === 'weekly' ? 7 : 14;
+    if (value.cadenceAnchor.intervalDays !== want) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'epoch interval does not match cadence', path: ['cadenceAnchor', 'intervalDays'] });
+    }
+  }
+  if (value.cadenceAnchor.kind === 'day_of_month') {
+    const want = value.cadence === 'monthly' ? 1 : value.cadence === 'quarterly' ? 3 : 12;
+    if (value.cadenceAnchor.intervalMonths !== want) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'intervalMonths does not match cadence', path: ['cadenceAnchor', 'intervalMonths'] });
+    }
+  }
+  if (value.cadenceAnchor.kind === 'day_pair') {
+    const [a, b] = value.cadenceAnchor.days;
+    if (a === b) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'semimonthly requires two distinct days', path: ['cadenceAnchor', 'days'] });
+    }
+  }
+});
+
 // F-028: link a detected series to a manual scheduled transaction so the
 // projection stops double-counting. schedule_id / link_id are plain UUIDs
 // (scheduled_transactions has no branded id schema — it uses a bespoke route).
@@ -680,6 +752,7 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'recurring.resume': RecurringResumePayloadSchema,
   'recurring.cancel': RecurringCancelPayloadSchema,
   'recurring.reject': RecurringRejectPayloadSchema,
+  'recurring.reclassify_cadence': RecurringReclassifyCadencePayloadSchema,
   'recurring.link_schedule': RecurringLinkSchedulePayloadSchema,
   'recurring.unlink_schedule': RecurringUnlinkSchedulePayloadSchema,
   'paychecks.create': CreatePaycheckPayloadSchema,
