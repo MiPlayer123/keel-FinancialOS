@@ -192,9 +192,27 @@ export type MonthlyFlow = {
   netMinor: string;
 };
 
+/** The current calendar month in the same `YYYY-MM` key the read model emits,
+ *  in UTC (the read model buckets by effective_date, which is a UTC date). The
+ *  newest bar is this month only when its key matches — used to flag the
+ *  in-progress (partial) month so its month-to-date total does not read as a
+ *  spurious end-of-series jump/drop (founder report 2026-07-20). */
+function currentMonthKey(): string {
+  const now = new Date();
+  const y = String(now.getUTCFullYear());
+  const m = String(now.getUTCMonth() + 1).padStart(2, '0');
+  return `${y}-${m}`;
+}
+
 /** Grouped monthly inflow/outflow bars (emerald/indigo, legend + tooltip).
  *  `onMonthClick` (optional) makes each month column a drill-through into the
- *  register — the caller supplies the navigation. */
+ *  register — the caller supplies the navigation.
+ *
+ *  The newest bucket is usually the CURRENT month, which is incomplete — it
+ *  holds only days 1..today while every prior bar is a full month. Plotted at
+ *  full weight it reads as a broken "jump at the end". We keep its true
+ *  month-to-date figures (never fabricate a projection) but dim the bar and
+ *  mark it "so far" so the partial period is legible as in-progress. */
 export function CashFlowMonthlyChart({
   rows,
   height = 220,
@@ -204,12 +222,21 @@ export function CashFlowMonthlyChart({
   height?: number;
   onMonthClick?: (month: string) => void;
 }) {
-  const data = rows.map((r) => ({
-    month: r.month,
-    inflow: toGeometry(r.inflowMinor),
-    outflow: toGeometry(r.outflowMinor),
-    row: r,
-  }));
+  const thisMonth = currentMonthKey();
+  const data = rows.map((r) => {
+    const inProgress = r.month === thisMonth;
+    return {
+      month: r.month,
+      inflow: toGeometry(r.inflowMinor),
+      outflow: toGeometry(r.outflowMinor),
+      row: r,
+      inProgress,
+      // Per-datum opacity (recharts reads `fillOpacity` off the shape without
+      // the deprecated <Cell>, matching CategoryDonut's approach). The complete
+      // months stay fully opaque; the partial current month is dimmed.
+      fillOpacity: inProgress ? 0.4 : 1,
+    };
+  });
   // recharts hands the categorical chart state back on click; the active
   // label is the month key of the column under the cursor.
   const handleClick =
@@ -236,7 +263,7 @@ export function CashFlowMonthlyChart({
               tickLine={false}
               axisLine={false}
               tick={{ fill: INK_MUTED, fontSize: 11 }}
-              tickFormatter={monthLabel}
+              tickFormatter={(m: string) => (m === thisMonth ? `${monthLabel(m)}*` : monthLabel(m))}
             />
             <YAxis
               width={52}
@@ -252,7 +279,10 @@ export function CashFlowMonthlyChart({
                 if (!active || !p) return null;
                 return (
                   <TooltipShell>
-                    <p className="text-muted-foreground">{monthLabel(p.month)}</p>
+                    <p className="text-muted-foreground">
+                      {monthLabel(p.month)}
+                      {p.inProgress ? ' · so far' : ''}
+                    </p>
                     <p className="font-mono tabular-nums">
                       In {formatMoney(p.row.inflowMinor, { currency: p.row.currency })}
                     </p>
@@ -292,6 +322,9 @@ export function CashFlowMonthlyChart({
           <span className="size-2.5 rounded-[3px]" style={{ background: 'var(--keel-chart-outflow)' }} />
           Money out
         </span>
+        {data.some((d) => d.inProgress) ? (
+          <span className="text-muted-foreground/80">* this month so far</span>
+        ) : null}
       </div>
     </div>
   );
