@@ -27,7 +27,15 @@ import {
 
 import { PageHeader } from '@/components/keel/page-header';
 import { useHousehold } from '@/components/keel/household-context';
-import { askKeel, saveNote, saveTask, type AiChatRecord } from '@/lib/keel-api';
+import {
+  archiveNote,
+  askKeel,
+  saveNote,
+  saveTask,
+  unarchiveNote,
+  type AgentAppliedAction,
+  type AiChatRecord,
+} from '@/lib/keel-api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -97,9 +105,7 @@ const QUESTION_MAX = 2000;
 const RECORD_KEY = 'keelRecord';
 const PROPOSAL_KEY = 'keelProposal';
 
-type AssistantProposal =
-  | { kind: 'task'; title: string; source: 'local-intent@v1' }
-  | { kind: 'note'; body: string; source: 'local-intent@v1' };
+type AssistantProposal = { kind: 'task'; title: string; source: 'local-intent@v1' };
 
 function formatAsOf(iso: string): string {
   const parsed = new Date(iso);
@@ -127,18 +133,13 @@ function failedRun(text: string): ChatModelRunResult {
 
 /** Backend is single-shot: extract only the latest user question from the thread. */
 
+// Tasks are still drafted client-side (the agent has no task-write tool yet).
+// NOTES are NOT intercepted here — they flow to the agent, which creates them
+// as Class A auto+undo writes. Task-write tools are a future slice.
 function parseAssistantProposal(question: string): AssistantProposal | null {
   const text = question.trim().replace(/\s+/g, ' ');
   if (text.length === 0) return null;
 
-  const notePrefixes = [
-    'note:',
-    'remember:',
-    'remember that ',
-    'make a note that ',
-    'add a note that ',
-    'add note:',
-  ];
   const taskPrefixes = [
     'task:',
     'todo:',
@@ -150,12 +151,6 @@ function parseAssistantProposal(question: string): AssistantProposal | null {
   ];
   const lower = text.toLowerCase();
 
-  for (const prefix of notePrefixes) {
-    if (lower.startsWith(prefix)) {
-      const body = text.slice(prefix.length).trim();
-      return body.length > 0 ? { kind: 'note', body, source: 'local-intent@v1' } : null;
-    }
-  }
   for (const prefix of taskPrefixes) {
     if (lower.startsWith(prefix)) {
       const title = text.slice(prefix.length).trim();
@@ -214,12 +209,8 @@ function AssistantChat() {
         }
         const proposal = parseAssistantProposal(question);
         if (proposal !== null) {
-          const text =
-            proposal.kind === 'task'
-              ? 'I drafted a task. Review it before I save anything.'
-              : 'I drafted a note. Review it before I save anything.';
           return {
-            content: [{ type: 'text', text }],
+            content: [{ type: 'text', text: 'I drafted a task. Review it before I save anything.' }],
             metadata: { custom: { [PROPOSAL_KEY]: proposal } },
           };
         }
@@ -281,13 +272,14 @@ function EmptyThread() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm">
             <ShieldCheck className="size-4 text-muted-foreground" />
-            Read-only finance copilot
+            Your finance copilot
           </CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-3 text-sm text-muted-foreground">
           <p>
-            Every figure is computed by KEEL&apos;s ledger. The assistant narrates your books and
-            cannot move money or change records without an explicit reviewed action.
+            Every figure comes from KEEL&apos;s ledger, not the model. The assistant can read
+            across your finances and manage notes for you — anything it changes is undoable.
+            Moving money and editing the ledger still require your explicit approval.
           </p>
           <div className="flex flex-wrap gap-2">
             {SUGGESTED_QUESTIONS.map((suggestion) => (
@@ -344,22 +336,17 @@ function AssistantMessage() {
 function ProposalReviewCard({ proposal }: { proposal: AssistantProposal }) {
   const { householdId } = useHousehold();
   const [state, setState] = useState<'idle' | 'saving' | 'saved' | 'cancelled'>('idle');
-  const isTask = proposal.kind === 'task';
 
   async function confirm() {
     if (householdId === null || state !== 'idle') return;
     setState('saving');
     try {
-      if (proposal.kind === 'task') {
-        await saveTask({ householdId, title: proposal.title });
-      } else {
-        await saveNote({ householdId, body: proposal.body });
-      }
+      await saveTask({ householdId, title: proposal.title });
       setState('saved');
-      toast.success(isTask ? 'Task saved.' : 'Note saved.');
+      toast.success('Task saved.');
     } catch (err) {
       setState('idle');
-      toast.error(err instanceof Error ? err.message : 'Could not save the proposal.');
+      toast.error(err instanceof Error ? err.message : 'Could not save the task.');
     }
   }
 
@@ -377,14 +364,12 @@ function ProposalReviewCard({ proposal }: { proposal: AssistantProposal }) {
       <CardContent className="flex flex-col gap-3">
         <div className="rounded-lg border bg-secondary/20 px-3 py-2">
           <div className="mb-1 flex items-center gap-2">
-            <Badge variant="secondary">{isTask ? 'Task' : 'Note'}</Badge>
+            <Badge variant="secondary">Task</Badge>
             <Badge variant="outline" className="font-normal">
               Draft
             </Badge>
           </div>
-          <p className="text-sm text-foreground">
-            {proposal.kind === 'task' ? proposal.title : proposal.body}
-          </p>
+          <p className="text-sm text-foreground">{proposal.title}</p>
         </div>
         {state === 'saved' ? (
           <p className="text-sm text-muted-foreground">Saved. You can manage it from Home.</p>
@@ -476,6 +461,10 @@ function KeelAnswer({ record }: { record: AiChatRecord }) {
         ) : null}
       </div>
 
+      {record.appliedActions.length > 0 ? (
+        <AppliedActionsList actions={record.appliedActions} />
+      ) : null}
+
       <Separator />
 
       <div className="flex flex-col gap-2">
@@ -526,6 +515,75 @@ function KeelAnswer({ record }: { record: AiChatRecord }) {
   );
 }
 
+/** Class-A auto writes the agent applied this turn, each with a one-tap undo (Law 2). */
+function AppliedActionsList({ actions }: { actions: AgentAppliedAction[] }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      {actions.map((action, i) => (
+        <AppliedActionRow key={`${action.ref}-${String(i)}`} action={action} />
+      ))}
+    </div>
+  );
+}
+
+function AppliedActionRow({ action }: { action: AgentAppliedAction }) {
+  const { householdId } = useHousehold();
+  const [state, setState] = useState<'idle' | 'undoing' | 'undone'>('idle');
+  const canUndo = action.undo !== undefined && householdId !== null;
+
+  async function undo() {
+    const u = action.undo;
+    if (householdId === null || u === undefined || state !== 'idle') return;
+    setState('undoing');
+    try {
+      if (u.op === 'archive_note') {
+        await archiveNote({ householdId, noteId: u.noteId });
+      } else if (u.op === 'unarchive_note') {
+        await unarchiveNote({ householdId, noteId: u.noteId });
+      } else {
+        await saveNote({ householdId, noteId: u.noteId, body: u.body ?? '', pinned: u.pinned ?? false });
+      }
+      setState('undone');
+      toast.success('Undone.');
+    } catch (err) {
+      setState('idle');
+      toast.error(err instanceof Error ? err.message : 'Could not undo.');
+    }
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg border bg-secondary/20 px-3 py-2">
+      <div className="flex min-w-0 items-center gap-2 text-sm">
+        <Check className="size-4 shrink-0 text-muted-foreground" />
+        <span
+          className={
+            state === 'undone'
+              ? 'truncate text-muted-foreground line-through'
+              : 'truncate text-foreground'
+          }
+        >
+          {action.summary}
+        </span>
+      </div>
+      {canUndo ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="shrink-0"
+          disabled={state !== 'idle'}
+          onClick={() => {
+            void undo();
+          }}
+        >
+          {state === 'undoing' ? <Loader2 data-icon="inline-start" className="animate-spin" /> : null}
+          {state === 'undone' ? 'Undone' : 'Undo'}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 function Composer() {
   return (
     <div className="flex flex-col gap-2">
@@ -541,7 +599,7 @@ function Composer() {
         <div className="flex items-center justify-between gap-2 px-1 pb-1">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Sparkles className="size-3.5" />
-            Preview · explicit confirmation required for writes
+            Preview · note edits are undoable; financial changes need approval
           </div>
           <AuiIf condition={(s) => !s.thread.isRunning}>
             <ComposerPrimitive.Send asChild>

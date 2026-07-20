@@ -440,3 +440,245 @@ export const makeExecuteReadTool = (deps: ReadToolDeps) => async (call: ToolCall
   const capped = spec.capResult ? spec.capResult(data) : data;
   return boundJson(capped);
 };
+
+// ---------------------------------------------------------------------------
+// Write tools — Class A (notes): auto-applied + undoable (Law 2/10).
+// The agent applies these directly through the EXISTING audited note procs
+// (keel_note_save / keel_note_archive / keel_note_unarchive) — same authorized
+// path, each write hits audit_log and is reversible. Budgets & reimbursements
+// are Class B (proposal-gated) and land in later slices, NOT here.
+// ---------------------------------------------------------------------------
+
+/** How the UI reverses an applied action (mirrors @keel/ai AppliedActionUndo). */
+export interface AppliedActionUndo {
+  readonly op: 'archive_note' | 'unarchive_note' | 'edit_note';
+  readonly noteId: string;
+  readonly body?: string;
+  readonly pinned?: boolean;
+}
+
+/** A change the agent applied (mirrors @keel/ai AppliedAction). */
+export interface AppliedAction {
+  readonly kind: string;
+  readonly summary: string;
+  readonly ref: string;
+  readonly undo?: AppliedActionUndo;
+}
+
+interface WriteExecCtx {
+  readonly householdId: string;
+  readonly rpc: (proc: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
+}
+
+type WriteExecResult =
+  | { readonly ok: true; readonly modelResult: Record<string, unknown>; readonly applied: AppliedAction }
+  | { readonly ok: false; readonly error: string; readonly detail?: string };
+
+interface WriteToolSpec {
+  readonly name: string;
+  readonly description: string;
+  readonly action: ActionName;
+  readonly parameters: JsonSchema;
+  readonly execute: (args: Record<string, unknown>, ctx: WriteExecCtx) => Promise<WriteExecResult>;
+}
+
+const truncate = (s: string, max: number): string =>
+  s.length <= max ? s : `${s.slice(0, max - 1)}…`;
+
+const noteBody = (v: unknown): string | null => {
+  if (typeof v !== 'string') return null;
+  const trimmed = v.trim();
+  return trimmed.length >= 1 && trimmed.length <= 1000 ? trimmed : null;
+};
+
+const noteId = (v: unknown): string | null =>
+  typeof v === 'string' && UUID_RE.test(v) ? v : null;
+
+const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
+  {
+    name: 'create_note',
+    description:
+      'Create a household note/reminder. Applied immediately and undoable. Use when the user says "remember…", "make a note…", "note that…".',
+    action: 'notes.save',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['body'],
+      properties: {
+        body: { type: 'string', minLength: 1, maxLength: 1000, description: 'The note text.' },
+        pinned: { type: 'boolean', description: 'Pin to the top (default false).' },
+      },
+    },
+    execute: async (args, ctx) => {
+      const body = noteBody(args['body']);
+      if (body === null) return { ok: false, error: 'invalid_arguments', detail: 'body must be 1..1000 chars' };
+      const pinned = args['pinned'] === true;
+      const { data, error } = await ctx.rpc('keel_note_save', {
+        p_household_id: ctx.householdId,
+        p_note_id: null,
+        p_body: body,
+        p_pinned: pinned,
+      });
+      if (error) return { ok: false, error: 'write_failed' };
+      const id = typeof data === 'string' ? data : '';
+      return {
+        ok: true,
+        modelResult: { ok: true, noteId: id },
+        applied: {
+          kind: 'notes.create',
+          summary: `Added note: "${truncate(body, 80)}"`,
+          ref: id,
+          undo: { op: 'archive_note', noteId: id },
+        },
+      };
+    },
+  },
+  {
+    name: 'edit_note',
+    description: 'Edit an existing note by id. Applied immediately and undoable.',
+    action: 'notes.save',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['noteId', 'body'],
+      properties: {
+        noteId: { type: 'string', description: 'The note id (uuid).' },
+        body: { type: 'string', minLength: 1, maxLength: 1000 },
+        pinned: { type: 'boolean' },
+      },
+    },
+    execute: async (args, ctx) => {
+      const id = noteId(args['noteId']);
+      const body = noteBody(args['body']);
+      if (id === null) return { ok: false, error: 'invalid_arguments', detail: 'noteId must be a uuid' };
+      if (body === null) return { ok: false, error: 'invalid_arguments', detail: 'body must be 1..1000 chars' };
+      // Capture prior state so the UI can offer an edit-undo (re-apply it).
+      const { data: listData } = await ctx.rpc('keel_list_notes_tasks', { p_household_id: ctx.householdId });
+      const rows = (((listData as { rows?: unknown[] } | null)?.rows ?? []) as Record<string, unknown>[]).filter(
+        (r) => r['type'] === 'note' && r['id'] === id,
+      );
+      const prior = rows[0];
+      const priorBody = prior && typeof prior['body'] === 'string' ? (prior['body'] as string) : undefined;
+      const priorPinned = prior && typeof prior['pinned'] === 'boolean' ? (prior['pinned'] as boolean) : undefined;
+      const pinned = typeof args['pinned'] === 'boolean' ? (args['pinned'] as boolean) : (priorPinned ?? false);
+      const { error } = await ctx.rpc('keel_note_save', {
+        p_household_id: ctx.householdId,
+        p_note_id: id,
+        p_body: body,
+        p_pinned: pinned,
+      });
+      if (error) return { ok: false, error: 'write_failed' };
+      const applied: AppliedAction = {
+        kind: 'notes.update',
+        summary: `Edited note: "${truncate(body, 80)}"`,
+        ref: id,
+        ...(priorBody !== undefined
+          ? { undo: { op: 'edit_note' as const, noteId: id, body: priorBody, ...(priorPinned !== undefined ? { pinned: priorPinned } : {}) } }
+          : {}),
+      };
+      return { ok: true, modelResult: { ok: true, noteId: id }, applied };
+    },
+  },
+  {
+    name: 'archive_note',
+    description: 'Archive (soft-delete) a note by id. Applied immediately and undoable (restores on undo).',
+    action: 'notes.archive',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['noteId'],
+      properties: { noteId: { type: 'string', description: 'The note id (uuid).' } },
+    },
+    execute: async (args, ctx) => {
+      const id = noteId(args['noteId']);
+      if (id === null) return { ok: false, error: 'invalid_arguments', detail: 'noteId must be a uuid' };
+      const { error } = await ctx.rpc('keel_note_archive', { p_household_id: ctx.householdId, p_note_id: id });
+      if (error) return { ok: false, error: 'write_failed' };
+      return {
+        ok: true,
+        modelResult: { ok: true, noteId: id },
+        applied: {
+          kind: 'notes.archive',
+          summary: 'Archived a note',
+          ref: id,
+          undo: { op: 'unarchive_note', noteId: id },
+        },
+      };
+    },
+  },
+  {
+    name: 'restore_note',
+    description: 'Restore a previously archived note by id. Applied immediately and undoable.',
+    action: 'notes.unarchive',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['noteId'],
+      properties: { noteId: { type: 'string', description: 'The note id (uuid).' } },
+    },
+    execute: async (args, ctx) => {
+      const id = noteId(args['noteId']);
+      if (id === null) return { ok: false, error: 'invalid_arguments', detail: 'noteId must be a uuid' };
+      const { error } = await ctx.rpc('keel_note_unarchive', { p_household_id: ctx.householdId, p_note_id: id });
+      if (error) return { ok: false, error: 'write_failed' };
+      return {
+        ok: true,
+        modelResult: { ok: true, noteId: id },
+        applied: {
+          kind: 'notes.unarchive',
+          summary: 'Restored a note',
+          ref: id,
+          undo: { op: 'archive_note', noteId: id },
+        },
+      };
+    },
+  },
+];
+
+const WRITE_TOOL_BY_NAME: Readonly<Record<string, WriteToolSpec>> = Object.fromEntries(
+  WRITE_TOOL_SPECS.map((t) => [t.name, t]),
+);
+
+export const writeToolDefinitions = (): ToolDefinition[] =>
+  WRITE_TOOL_SPECS.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
+
+export const WRITE_TOOL_NAMES: readonly string[] = WRITE_TOOL_SPECS.map((t) => t.name);
+
+/** Every tool (read + write) the agent may call. */
+export const agentToolDefinitions = (): ToolDefinition[] => [
+  ...readToolDefinitions(),
+  ...writeToolDefinitions(),
+];
+
+export interface AgentToolDeps extends ReadToolDeps {
+  /** Called for each successfully applied Class-A write (collected for the record). */
+  readonly onApplied: (action: AppliedAction) => void;
+}
+
+/**
+ * Build the combined read+write `executeTool` for `runAgent`. Reads flow through
+ * `makeExecuteReadTool`; writes authorize their own action then run through the
+ * audited note procs, reporting each applied change via `onApplied`. Never
+ * throws for authz/validation/proc failures — returns an error PAYLOAD the model
+ * can react to.
+ */
+export const makeExecuteAgentTool = (deps: AgentToolDeps) => {
+  const runRead = makeExecuteReadTool(deps);
+  return async (call: ToolCall): Promise<string> => {
+    const write = WRITE_TOOL_BY_NAME[call.name];
+    if (!write) return runRead(call); // read tool, or unknown_tool (handled there)
+
+    const decision = deps.authorize(deps.authzCtx, write.action, {
+      kind: 'household',
+      householdId: deps.householdId,
+    });
+    if (!decision.allowed) return JSON.stringify({ error: 'not_authorized', tool: call.name });
+
+    const res = await write.execute(call.args ?? {}, { householdId: deps.householdId, rpc: deps.rpc });
+    if (!res.ok) {
+      return JSON.stringify({ error: res.error, ...(res.detail ? { detail: res.detail } : {}) });
+    }
+    deps.onApplied(res.applied);
+    return JSON.stringify(res.modelResult);
+  };
+};

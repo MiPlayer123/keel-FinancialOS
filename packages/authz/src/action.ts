@@ -99,7 +99,21 @@ export const READ_ACTIONS = [
   ...EXPORT_ACTIONS,
 ] as const;
 
-export const ACTIONS = [...WRITE_ACTIONS, ...READ_ACTIONS] as const;
+/**
+ * AI-agent write actions (Law 10 Class A — auto+undo). The agent applies these
+ * directly (notes are lightweight, non-ledger planning records) and every write
+ * is audited + reversible. They are NOT envelope commands (the agent calls the
+ * existing audited note procs directly), so they are intentionally not in
+ * WRITE_ACTIONS / CommandName — but they ARE explicit, compiler-checked Actions
+ * gated at partner tier, so a read-only role's agent cannot write (Law 7).
+ */
+export const AGENT_WRITE_ACTIONS = [
+  'notes.save',
+  'notes.archive',
+  'notes.unarchive',
+] as const;
+
+export const ACTIONS = [...WRITE_ACTIONS, ...READ_ACTIONS, ...AGENT_WRITE_ACTIONS] as const;
 
 export type WriteAction = (typeof WRITE_ACTIONS)[number];
 export type ReadAction = (typeof READ_ACTIONS)[number];
@@ -185,6 +199,11 @@ export const ACTION_MINIMUM_ROLES = {
   'goals.list': 'viewer',
   'rules.list': 'viewer',
   'tags.list': 'viewer',
+  // AI-agent Class A writes (notes) — partner tier (a read-only role's agent
+  // cannot write). See AGENT_WRITE_ACTIONS.
+  'notes.save': 'partner',
+  'notes.archive': 'partner',
+  'notes.unarchive': 'partner',
   'admin.export_all': 'owner',
 } as const satisfies Readonly<Record<Action, MinimumRole>>;
 

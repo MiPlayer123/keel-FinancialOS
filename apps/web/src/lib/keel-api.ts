@@ -2476,6 +2476,17 @@ export async function archiveNote(input: {
   });
 }
 
+/** Restore a soft-deleted note — the undo for an archive (Law 2). */
+export async function unarchiveNote(input: {
+  householdId: string;
+  noteId: string;
+}): Promise<unknown> {
+  return invoke('api/notes/unarchive', {
+    householdId: input.householdId,
+    noteId: input.noteId,
+  });
+}
+
 export async function saveTask(input: {
   householdId: string;
   taskId?: string | null;
@@ -2506,12 +2517,22 @@ export async function setTaskStatus(input: {
   });
 }
 
+/** How the UI reverses an auto-applied action (Law 2: every AI write is undoable). */
+export type AgentAppliedActionUndo = {
+  op: 'archive_note' | 'unarchive_note' | 'edit_note';
+  noteId: string;
+  body?: string;
+  pinned?: boolean;
+};
+
 /** A change the agent already applied (Class A auto, undoable). */
 export type AgentAppliedAction = {
   kind: string;
   summary: string;
-  /** Handle the undo path uses to reverse it. */
+  /** Object id the action affected. */
   ref: string;
+  /** Present when the UI can offer a one-tap undo. */
+  undo?: AgentAppliedActionUndo;
 };
 
 /** A change the agent proposes; requires the user's approval (Class B, Law 11). */

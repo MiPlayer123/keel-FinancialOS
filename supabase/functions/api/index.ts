@@ -48,7 +48,7 @@ import {
   type HouseholdExport,
 } from '../_shared/vendor/keel-domain.mjs';
 import { json, mapDbError, toSnakeKeys } from '../_shared/http.ts';
-import { makeExecuteReadTool, readToolDefinitions } from '../_shared/agent.ts';
+import { agentToolDefinitions, makeExecuteAgentTool, type AppliedAction } from '../_shared/agent.ts';
 import { decideStatementPromotion } from '../_shared/statement-sniff.ts';
 import { decryptToken, encryptToken, type EncryptedRecord } from '../_shared/credential-crypto.ts';
 import { currentKekVersion, getKek } from '../_shared/credential-kek.ts';
@@ -465,12 +465,17 @@ export default {
               apiKey: openaiKey,
             });
 
-      const executeTool = makeExecuteReadTool({
+      // Class-A auto writes (notes) report here; collected into the record so
+      // the UI can show what changed + offer undo (Law 2). Budgets/reimbursements
+      // are Class B (proposals) and land in later slices.
+      const appliedActions: AppliedAction[] = [];
+      const executeTool = makeExecuteAgentTool({
         authorize,
         authzCtx,
         householdId: householdId.data,
         rpc: (proc, args) => ctx.supabase.rpc(proc, args),
         todayIso,
+        onApplied: (action) => appliedActions.push(action),
       });
 
       const startedAt = Date.now();
@@ -478,7 +483,7 @@ export default {
         const run = await runAgent({
           provider,
           system,
-          tools: readToolDefinitions(),
+          tools: agentToolDefinitions(),
           userMessage: question.trim(),
           executeTool,
           maxSteps: 8,
@@ -494,6 +499,7 @@ export default {
             steps: run.steps,
             stoppedReason: run.stoppedReason,
             tools: run.toolCalls.map((t) => t.call.name),
+            appliedCount: appliedActions.length,
             latencyMs: Date.now() - startedAt,
             inputTokens: run.usage.inputTokens,
             outputTokens: run.usage.outputTokens,
@@ -507,6 +513,7 @@ export default {
           toolsUsed: run.toolCalls.map((t) => t.call.name),
           steps: run.steps,
           stoppedReason: run.stoppedReason,
+          appliedActions,
         });
         return json(200, record);
       } catch (error) {
@@ -1346,6 +1353,7 @@ export default {
     if (
       path === '/notes/save' ||
       path === '/notes/archive' ||
+      path === '/notes/unarchive' ||
       path === '/tasks/save' ||
       path === '/tasks/set-status'
     ) {
@@ -1396,6 +1404,23 @@ export default {
           });
         }
         const { error } = await ctx.supabase.rpc('keel_note_archive', {
+          p_household_id: householdId.data,
+          p_note_id: noteId,
+        });
+        if (error) return mapDbError(error);
+        return json(200, { ok: true });
+      }
+      if (path === '/notes/unarchive') {
+        // Undo for an archive (Law 2). Restores a soft-deleted note.
+        const noteId = input['noteId'];
+        if (typeof noteId !== 'string' || !uuidReNoteTask.test(noteId)) {
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Note request failed validation.',
+            details: {},
+          });
+        }
+        const { error } = await ctx.supabase.rpc('keel_note_unarchive', {
           p_household_id: householdId.data,
           p_note_id: noteId,
         });

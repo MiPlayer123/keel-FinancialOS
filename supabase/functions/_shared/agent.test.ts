@@ -1,7 +1,11 @@
 import {
+  agentToolDefinitions,
+  makeExecuteAgentTool,
   makeExecuteReadTool,
   READ_TOOL_NAMES,
   readToolDefinitions,
+  WRITE_TOOL_NAMES,
+  type AppliedAction,
   type AuthorizeFn,
 } from './agent.ts';
 
@@ -126,4 +130,102 @@ Deno.test('large results are bounded so context cannot be blown', async () => {
   // Either row-capped or truncated, but never the full 5000-row blob.
   assert(raw.length < 200_000, 'result was not bounded');
   assert(parsed.truncated === true || (parsed.rows && parsed.rows.length <= 100));
+});
+
+// ---------------------------------------------------------------------------
+// Write tools (Class A notes)
+// ---------------------------------------------------------------------------
+
+const NOTE_ID = '11111111-1111-1111-1111-111111111111';
+
+/** Route rpc by proc name; records every call for assertions. */
+const noteRpc = (opts: { calls: { proc: string; args: Record<string, unknown> }[]; listRows?: unknown[] }) =>
+  (proc: string, args: Record<string, unknown>) => {
+    opts.calls.push({ proc, args });
+    if (proc === 'keel_note_save') return Promise.resolve({ data: NOTE_ID, error: null });
+    if (proc === 'keel_list_notes_tasks') return Promise.resolve({ data: { rows: opts.listRows ?? [] }, error: null });
+    return Promise.resolve({ data: null, error: null });
+  };
+
+const agentDeps = (
+  authorize: AuthorizeFn,
+  rpc: (proc: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>,
+  applied: AppliedAction[],
+) => ({ authorize, authzCtx: {}, householdId: 'h1', rpc, todayIso: '2026-07-19', onApplied: (a: AppliedAction) => applied.push(a) });
+
+Deno.test('agent tool catalog includes the note write tools', () => {
+  const names = agentToolDefinitions().map((d) => d.name);
+  for (const w of ['create_note', 'edit_note', 'archive_note', 'restore_note']) {
+    assert(WRITE_TOOL_NAMES.includes(w), `missing write tool ${w}`);
+    assert(names.includes(w), `catalog missing ${w}`);
+  }
+  // Reads are still present in the combined catalog.
+  assert(names.includes('get_account_balances'));
+});
+
+Deno.test('create_note applies immediately and records an archive-undo', async () => {
+  const calls: { proc: string; args: Record<string, unknown> }[] = [];
+  const applied: AppliedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls }), applied));
+  const out = JSON.parse(await exec(call('create_note', { body: 'Pay the water bill' })));
+  assert(out.ok === true && out.noteId === NOTE_ID);
+  assert(applied.length === 1);
+  assert(applied[0]!.kind === 'notes.create');
+  assert(applied[0]!.undo?.op === 'archive_note');
+  assert(applied[0]!.undo?.noteId === NOTE_ID);
+  // Created via the fixed household, note id null (insert path).
+  const save = calls.find((c) => c.proc === 'keel_note_save')!;
+  assert(save.args['p_household_id'] === 'h1');
+  assert(save.args['p_note_id'] === null);
+});
+
+Deno.test('edit_note captures the prior body for an edit-undo', async () => {
+  const calls: { proc: string; args: Record<string, unknown> }[] = [];
+  const applied: AppliedAction[] = [];
+  const listRows = [{ type: 'note', id: NOTE_ID, body: 'old body', pinned: false }];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls, listRows }), applied));
+  await exec(call('edit_note', { noteId: NOTE_ID, body: 'new body' }));
+  assert(applied.length === 1);
+  assert(applied[0]!.kind === 'notes.update');
+  assert(applied[0]!.undo?.op === 'edit_note');
+  assert(applied[0]!.undo?.body === 'old body', 'prior body must be captured for undo');
+});
+
+Deno.test('archive_note and restore_note carry inverse undos', async () => {
+  const applied: AppliedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls: [] }), applied));
+  await exec(call('archive_note', { noteId: NOTE_ID }));
+  await exec(call('restore_note', { noteId: NOTE_ID }));
+  assert(applied[0]!.undo?.op === 'unarchive_note');
+  assert(applied[1]!.undo?.op === 'archive_note');
+});
+
+Deno.test('a denied write authorizes-off, never runs the proc or applies', async () => {
+  const calls: { proc: string; args: Record<string, unknown> }[] = [];
+  const applied: AppliedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(deny, noteRpc({ calls }), applied));
+  const out = JSON.parse(await exec(call('create_note', { body: 'x' })));
+  assert(out.error === 'not_authorized');
+  assert(calls.length === 0, 'no proc call on denied write');
+  assert(applied.length === 0, 'nothing applied on denied write');
+});
+
+Deno.test('invalid write args are rejected before the proc and nothing is applied', async () => {
+  const calls: { proc: string; args: Record<string, unknown> }[] = [];
+  const applied: AppliedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls }), applied));
+  const empty = JSON.parse(await exec(call('create_note', { body: '   ' })));
+  assert(empty.error === 'invalid_arguments');
+  const badId = JSON.parse(await exec(call('archive_note', { noteId: 'not-a-uuid' })));
+  assert(badId.error === 'invalid_arguments');
+  assert(calls.length === 0);
+  assert(applied.length === 0);
+});
+
+Deno.test('the combined executor still serves reads and unknown tools', async () => {
+  const applied: AppliedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls: [] }), applied));
+  const unknown = JSON.parse(await exec(call('does_not_exist')));
+  assert(unknown.error === 'unknown_tool');
+  assert(applied.length === 0);
 });

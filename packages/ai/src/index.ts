@@ -63,6 +63,7 @@ export {
   EmptyAgentResponseError,
   type AgentResponseRecord,
   type AppliedAction,
+  type AppliedActionUndo,
   type BuildAgentRecordInput,
   type ProposedAction,
 } from './agent-record.js';

@@ -13,12 +13,23 @@ import { AGENT_PROMPT_VERSION } from './agent-prompt.js';
 
 export const AGENT_TLDR_MAX_LENGTH = 280;
 
-/** A change the agent already applied (Class A auto, undoable) — write slices. */
+/** How the UI reverses an auto-applied action (Law 2: every AI write is undoable). */
+export interface AppliedActionUndo {
+  readonly op: 'archive_note' | 'unarchive_note' | 'edit_note';
+  readonly noteId: string;
+  /** Prior body, for edit-undo (re-apply what was there before). */
+  readonly body?: string;
+  readonly pinned?: boolean;
+}
+
+/** A change the agent already applied (Class A auto, undoable). */
 export interface AppliedAction {
   readonly kind: string;
   readonly summary: string;
-  /** Handle the UI/undo path uses to reverse it. */
+  /** Object id the action affected. */
   readonly ref: string;
+  /** Present when the UI can offer a one-tap undo. */
+  readonly undo?: AppliedActionUndo;
 }
 
 /** A change the agent proposes; requires the user's approval (Class B). */
