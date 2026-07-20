@@ -52,7 +52,9 @@ function threeMonthActuals(rows: RichTransactionRow[], months: string[]): Map<st
     if (!monthSet.has(mk)) continue;
     if (t.splits && t.splits.length > 0) {
       for (const s of t.splits) {
-        if (s.kind !== 'expense') continue;
+        // Only expense category legs count toward a budget; income and
+        // account-transfer (distribution) legs are skipped.
+        if (s.kind !== 'expense' || s.categoryLedgerAccountId === null) continue;
         add(s.categoryLedgerAccountId, BigInt(s.amountMinor || '0'));
       }
       continue;

@@ -16,7 +16,8 @@ export type SplitDraftRow = {
 
 /** A split as the read model reports it (debit-positive minor units). */
 export type SplitLike = {
-  categoryLedgerAccountId: string;
+  /** Null for an account-transfer leg (a distribution). */
+  categoryLedgerAccountId: string | null;
   amountMinor: string;
 };
 
