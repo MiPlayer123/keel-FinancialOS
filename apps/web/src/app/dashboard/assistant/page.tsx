@@ -42,26 +42,48 @@ import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
 
 /**
- * KEEL Assistant (Preview) — read-only AI chat POC on @assistant-ui/react.
+ * KEEL Assistant — a tool-use finance agent on @assistant-ui/react.
  *
- * Law 10: class C, preview-only. Answers are display-only narration of
- * KEEL's deterministic numbers; nothing here can write, propose, or approve.
- * Law 11: the backend returns a typed record (tldr / body / as-of / scope /
- * evidence refs), rendered TLDR-first with provenance on every answer.
- * The evidence disclosure lists section LABELS only — never raw data.
+ * The agent reaches data ONLY through KEEL's authorized read tools (Law 7);
+ * every number comes from the deterministic ledger (Law 1), never the model's
+ * arithmetic. Law 11: the backend returns a typed record (tldr / body / as-of /
+ * scope / tools used), rendered TLDR-first with provenance on every answer. The
+ * provenance discloses which read TOOLS ran — never raw data.
  *
- * The thread is client-side state only (LocalRuntime keeps history); the
- * backend stays single-shot — each run sends ONLY the latest question.
+ * This slice is read-only (writes — notes auto+undo, budgets/reimbursements as
+ * approval cards — land in later slices). The thread is client-side state
+ * (LocalRuntime keeps history); each run sends only the latest question.
  * Errors surface as typed states (ai_unavailable → "not configured" notice),
  * never as fabricated answers.
  */
 
-const EVIDENCE_LABELS: Record<string, string> = {
-  accounts: 'Accounts & balances',
-  transactions: 'Recent transactions',
-  categories: 'Category list',
-  budgets: 'Budgets',
+/** Friendly labels for the read tools the agent can call (provenance display). */
+const TOOL_LABELS: Record<string, string> = {
+  list_entities: 'Entities',
+  get_account_balances: 'Account balances',
+  list_transactions: 'Transactions',
+  search_transactions: 'Transaction search',
+  list_categories: 'Categories',
+  get_budget_month: 'Budget plan',
+  list_budgets: 'Budgets',
+  list_reimbursements: 'Reimbursements',
+  list_notes_and_tasks: 'Notes & tasks',
+  list_recurring: 'Recurring',
+  list_paychecks: 'Paychecks',
+  list_statements: 'Statements',
+  list_transfers: 'Transfers',
+  list_holdings: 'Holdings',
+  get_investments_overview: 'Investments',
+  get_net_worth: 'Net worth',
+  get_cash_flow: 'Cash flow',
+  get_cash_flow_forecast: 'Cash-flow forecast',
+  list_goals: 'Goals',
+  list_rules: 'Rules',
+  list_tags: 'Tags',
 };
+
+const prettifyTool = (name: string): string =>
+  TOOL_LABELS[name] ?? name.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
 
 const SUGGESTED_QUESTIONS = [
   'What are my account balances?',
@@ -69,7 +91,7 @@ const SUGGESTED_QUESTIONS = [
   'Am I over budget in any category this month?',
 ];
 
-const QUESTION_MAX = 500;
+const QUESTION_MAX = 2000;
 
 /** Key under which the typed AI record rides on assistant-message metadata. */
 const RECORD_KEY = 'keelRecord';
@@ -474,19 +496,28 @@ function KeelAnswer({ record }: { record: AiChatRecord }) {
         <details className="group/provenance rounded-lg border bg-secondary/20 px-3 py-2">
           <summary className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
             <MessageSquareText className="size-3.5" />
-            What the model saw
+            {record.toolsUsed.length > 0
+              ? `What the agent checked (${String(record.toolsUsed.length)})`
+              : 'What the agent checked'}
           </summary>
           <div className="mt-2 flex flex-col gap-2">
-            <div className="flex flex-wrap gap-1.5">
-              {record.evidenceRefs.map((ref) => (
-                <Badge key={ref} variant="outline" className="font-normal">
-                  {EVIDENCE_LABELS[ref] ?? ref}
-                </Badge>
-              ))}
-            </div>
+            {record.toolsUsed.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {[...new Set(record.toolsUsed)].map((tool) => (
+                  <Badge key={tool} variant="outline" className="font-normal">
+                    {prettifyTool(tool)}
+                  </Badge>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[11px] text-muted-foreground">
+                Answered directly — no data lookups were needed.
+              </p>
+            )}
             <p className="text-[11px] text-muted-foreground">
-              Precomputed summaries only — model {record.modelVersion}, prompt{' '}
-              {record.promptVersion}. Display-only; no actions were proposed or taken.
+              Every figure comes from KEEL&apos;s ledger, not the model — model {record.modelVersion},
+              prompt {record.promptVersion}.
+              {record.displayOnly ? ' Read-only; no actions were taken.' : ''}
             </p>
           </div>
         </details>

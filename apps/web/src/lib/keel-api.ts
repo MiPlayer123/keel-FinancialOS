@@ -679,10 +679,24 @@ export type TransactionRow = {
 /** Rich ledger row: amount, account, and category for display + re-categorize. */
 /** One split of a multi-category transaction (real offset posting). */
 export type TransactionSplit = {
-  categoryLedgerAccountId: string;
+  /**
+   * A split leg is EITHER a category leg (legType 'category', the default and
+   * the only kind pre-distribution-migration) OR an account-transfer leg
+   * (legType 'account') that moves money into another real account inside the
+   * SAME transaction — e.g. a paycheck's 401(k) contribution into a retirement
+   * account. An account leg has a null categoryLedgerAccountId and carries the
+   * target account in `accountId`.
+   */
+  legType?: 'category' | 'account';
+  /** Null for an account-transfer leg. */
+  categoryLedgerAccountId: string | null;
+  /** Category name, or the target account name for a transfer leg. */
   name: string;
-  kind: 'income' | 'expense';
-  /** Debit-positive: positive = spend on that category. */
+  /** 'transfer' for an account leg. */
+  kind: 'income' | 'expense' | 'transfer';
+  /** The target real account for a transfer leg (null for a category leg). */
+  accountId?: string | null;
+  /** Debit-positive: positive = spend on that category / into that account. */
   amountMinor: string;
 };
 
@@ -2492,25 +2506,47 @@ export async function setTaskStatus(input: {
   });
 }
 
+/** A change the agent already applied (Class A auto, undoable). */
+export type AgentAppliedAction = {
+  kind: string;
+  summary: string;
+  /** Handle the undo path uses to reverse it. */
+  ref: string;
+};
+
+/** A change the agent proposes; requires the user's approval (Class B, Law 11). */
+export type AgentProposedAction = {
+  kind: string;
+  summary: string;
+  /** Approval token id binding the exact payload; redeemed on approve. */
+  approvalTokenId: string;
+  payload: Record<string, unknown>;
+  expiresAt: string;
+};
+
 /**
- * Typed, display-only AI chat record (Law 11) returned by /api/ai/chat.
- * Class C preview: narration of server-computed numbers — never a write,
- * never a proposed action. `evidenceRefs` are snapshot SECTION ids (what the
- * model saw), not raw data.
+ * Typed agent response record (Law 11) returned by /api/ai/chat.
+ * The model owns only the prose; the server stamps every provenance field.
+ * `toolsUsed` are the read tools the agent invoked (its evidence). Writes, when
+ * present, arrive as `appliedActions` (auto, undoable) or `proposedActions`
+ * (approval-gated) — empty while the agent only read data.
  */
 export type AiChatRecord = {
   tldr: string;
   body: string;
   asOf: string;
   scope: { householdId: string; entityIds: string[] };
-  riskClass: 'C';
-  displayOnly: true;
+  displayOnly: boolean;
   modelVersion: string;
   promptVersion: string;
-  evidenceRefs: string[];
+  toolsUsed: string[];
+  steps: number;
+  stoppedReason: 'final' | 'max_steps';
+  appliedActions: AgentAppliedAction[];
+  proposedActions: AgentProposedAction[];
 };
 
-/** Ask KEEL Assistant one read-only question (single-shot, no streaming). */
+/** Ask KEEL one question; the agent may call read tools before answering. */
 export async function askKeel(input: {
   householdId: string;
   question: string;
