@@ -114,3 +114,6 @@ export const reconcilePaycheck = (input: PaycheckInput): {
     violations,
   };
 };
+
+// Slice A — deterministic split-template math (docs/harness/plans/paycheck-split-templates-v2.md §D4).
+export * from './template.js';
