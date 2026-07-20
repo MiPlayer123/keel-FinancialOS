@@ -906,8 +906,46 @@ begin
   select * into v_row from public.paychecks where household_id=p_household_id and id=(p_payload->>'paycheck_id')::uuid for update;
   if not found or not public.keel_paycheck_access(p_household_id,v_row.id,true)
   then raise exception 'KEEL_SCOPE_VIOLATION: paycheck not found' using errcode='P0006'; end if;
-  if (p_transition='reversed' and v_row.status<>'active') or (p_transition='restored' and v_row.status<>'reversed')
+  if (p_transition='reversed' and v_row.status<>'active')
+    or (p_transition='restored' and (v_row.status<>'reversed' or v_row.superseded_by_paycheck_id is not null))
   then raise exception 'KEEL_INVALID_COMMAND: invalid paycheck transition' using errcode='P0009'; end if;
+  -- Restore-time overallocation guard, restated VERBATIM from the live tip
+  -- (20260718092000_paycheck_restore_capacity_guard). This §6 CREATE OR REPLACE
+  -- runs last, so it MUST carry this guard forward or it silently reverts the fix
+  -- and re-opens the paycheck-restore double-count bug (Slice-D review blocker).
+  if p_transition='restored' and exists (
+    select 1
+    from (
+      select pm.transaction_id,sum(pm.allocated_minor) as mine_minor
+      from public.paycheck_transaction_matches pm
+      where pm.household_id=p_household_id and pm.paycheck_id=v_row.id
+      group by pm.transaction_id
+    ) mine
+    left join lateral (
+      select abs(asset.amount_minor) as capacity_minor
+      from public.canonical_transactions t
+      join public.accounts a on a.household_id=t.household_id and a.id=t.account_id
+      join lateral (
+        select b.id from public.journal_batches b
+        where b.household_id=t.household_id and b.canonical_transaction_id=t.id
+          and b.reverses_batch_id is null
+          and not exists(select 1 from public.journal_revisions r where r.original_batch_id=b.id)
+        order by b.posted_at desc,b.id desc limit 1
+      ) live on true
+      join public.journal_postings asset on asset.batch_id=live.id and asset.ledger_account_id=a.ledger_account_id
+      where t.household_id=p_household_id and t.id=mine.transaction_id and asset.amount_minor>0
+    ) cap on true
+    left join lateral (
+      select coalesce(sum(other.allocated_minor),0) as others_minor
+      from public.paycheck_transaction_matches other
+      join public.paychecks op on op.household_id=other.household_id and op.id=other.paycheck_id
+      where other.household_id=p_household_id and other.transaction_id=mine.transaction_id
+        and op.status='active' and op.id<>v_row.id
+    ) o on true
+    where mine.mine_minor+coalesce(o.others_minor,0)>coalesce(cap.capacity_minor,0)
+  ) then
+    raise exception 'KEEL_INVALID_COMMAND: restoring would overallocate an already-claimed deposit' using errcode='P0009';
+  end if;
   -- SLICE D guard: a template-applied paycheck (live application) must be undone via
   -- paychecks.unapply (which also reverses the booking). unapply itself calls this
   -- proc with reason 'template unapplied' AFTER flipping nothing yet, so allow that
