@@ -82,7 +82,7 @@ describe('CSV export', () => {
       created_at: '2026-07-12T12:00:00Z',
     }]);
     const files = toCsvFiles(exportValue);
-    expect(files).toHaveLength(85);
+    expect(files).toHaveLength(86);
     const parsed = parseCsv(files.find((file) => file.name === 'import_rows.csv')!.csv);
     expect(parsed[0]).toEqual(['id', 'import_batch_id', 'row_number', 'raw', 'created_at']);
     expect(parsed[1]![3]).toBe('{"a":"=cmd()","z":2}');

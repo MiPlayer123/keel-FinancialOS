@@ -1892,6 +1892,85 @@ export async function setStatementCadence(input: {
   });
 }
 
+// ---- SLICE 8 [A7] card-payment ↔ statement links ---------------------------
+// Class B (Law 10): the matcher suggests, the user confirms/rejects; confirm
+// never auto-confirms a transfer. Reversible via detach (Law 2).
+export type StatementPaymentLink = {
+  linkId: string;
+  status: 'suggested' | 'confirmed' | 'rejected' | 'detached';
+  score: number;
+  reasonCodes: string[];
+  matcherVersion: string;
+  transferLinkId: string | null;
+  transactionId: string;
+  txnDate: string;
+  txnDescription: string;
+  txnAmountMinor: string;
+  currency: string;
+};
+
+/** The active/decided (suggested|confirmed) payment links for one statement. */
+export async function fetchStatementPaymentLinks(
+  householdId: string,
+  statementId: string,
+): Promise<StatementPaymentLink[]> {
+  const res = await keelQuery<StatementPaymentLink>('statements.payment_links', householdId, {
+    statementId,
+  });
+  return res.rows;
+}
+
+/**
+ * Run the deterministic exact-only matcher for one statement ("Find payment").
+ * Returns the number of NEW suggestions written (0 or 1; 0 when nothing matched,
+ * is ambiguous, or is already decided). Read-scoped (viewer) but materializes a
+ * suggestion — never a confirmed link.
+ */
+export async function findStatementPayment(
+  householdId: string,
+  statementId: string,
+): Promise<number> {
+  const res = await invoke<number>('api/queries', {
+    query: 'statements.find_payment',
+    householdId,
+    statementId,
+  });
+  return typeof res === 'number' ? res : 0;
+}
+
+/** Confirm (true) or reject (false) a suggested card-payment link. */
+export async function decideStatementPaymentLink(input: {
+  householdId: string;
+  userId: string;
+  linkId: string;
+  confirm: boolean;
+}): Promise<CommandResult> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'statements.decide_payment_link',
+    economicEventKey: `statements.decide_payment_link:${input.linkId}:${input.confirm ? 'confirm' : 'reject'}:${newId()}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: { linkId: input.linkId, confirm: input.confirm },
+  });
+}
+
+/** Detach a confirmed card-payment link (undo — never a delete, Law 2). */
+export async function detachStatementPaymentLink(input: {
+  householdId: string;
+  userId: string;
+  linkId: string;
+}): Promise<CommandResult> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'statements.detach_payment_link',
+    economicEventKey: `statements.detach_payment_link:${input.linkId}:${newId()}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: { linkId: input.linkId },
+  });
+}
+
 export type ReconciliationSession = {
   sessionId: string;
   ledgerEndingMinor: string;

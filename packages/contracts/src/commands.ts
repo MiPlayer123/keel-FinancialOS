@@ -240,6 +240,12 @@ export const ApproveStatementDraftPayloadSchema=z.object({
 export const ReopenReconciliationPayloadSchema=z.object({sessionId:ReconciliationSessionIdSchema,reason:z.string().min(1).max(500)}).strict();
 // F-029: set (1-31) or clear (null) an account's expected statement close day.
 export const SetStatementCadencePayloadSchema=z.object({accountId:AccountIdSchema,closeDay:z.number().int().min(1).max(31).nullable()}).strict();
+// SLICE 8 [A7]: decide a suggested card-payment↔statement link (Class B
+// suggest→approve, Law 10). confirm=true → confirmed; false → rejected
+// (terminal). Confirm may only RAISE a transfer SUGGESTION, never auto-confirm
+// a transfer. detach undoes a confirmed link (Law 2 reversible, never delete).
+export const DecideStatementPaymentLinkPayloadSchema=z.object({linkId:z.uuid(),confirm:z.boolean()}).strict();
+export const DetachStatementPaymentLinkPayloadSchema=z.object({linkId:z.uuid()}).strict();
 
 /** One split of a manual transaction: a category and its debit-positive share. */
 export const ManualTransactionSplitSchema = z.object({
@@ -569,6 +575,8 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'statements.approve_draft':ApproveStatementDraftPayloadSchema,
   'statements.dismiss_draft':DismissStatementDraftPayloadSchema,
   'statements.set_cadence':SetStatementCadencePayloadSchema,
+  'statements.decide_payment_link':DecideStatementPaymentLinkPayloadSchema,
+  'statements.detach_payment_link':DetachStatementPaymentLinkPayloadSchema,
   'reconciliations.close':CloseReconciliationPayloadSchema,
   'reconciliations.reopen':ReopenReconciliationPayloadSchema,
   'transactions.manual_create': ManualTransactionPayloadSchema,
