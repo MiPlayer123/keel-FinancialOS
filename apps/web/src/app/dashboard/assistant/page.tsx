@@ -30,10 +30,15 @@ import { useHousehold } from '@/components/keel/household-context';
 import {
   archiveNote,
   askKeel,
+  getAiProfile,
+  keelCommand,
+  newId,
+  saveAiProfile,
   saveNote,
   saveTask,
   unarchiveNote,
   type AgentAppliedAction,
+  type AgentProposedAction,
   type AiChatRecord,
 } from '@/lib/keel-api';
 import { Badge } from '@/components/ui/badge';
@@ -180,7 +185,7 @@ export default function AssistantPage() {
       <PageHeader
         title="Assistant"
         description="Ask about your accounts, spending, and budgets — read-only narration of KEEL's numbers."
-        actions={<Badge variant="secondary">Preview</Badge>}
+        actions={null}
       />
       <AssistantChat />
     </>
@@ -296,7 +301,79 @@ function EmptyThread() {
           </div>
         </CardContent>
       </Card>
+      <ProfileEditor />
     </div>
+  );
+}
+
+/** User-authored personal context the agent receives (slice 5). */
+function ProfileEditor() {
+  const { householdId } = useHousehold();
+  const [text, setText] = useState('');
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (householdId === null) return;
+    void getAiProfile({ householdId })
+      .then((r) => {
+        if (!cancelled) {
+          setText(r.profileText);
+          setLoaded(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [householdId]);
+
+  async function save() {
+    if (householdId === null || saving) return;
+    setSaving(true);
+    try {
+      await saveAiProfile({ householdId, profileText: text });
+      toast.success('Assistant context saved.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <details className="rounded-xl border bg-card px-4 py-3">
+      <summary className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+        <Sparkles className="size-4 text-muted-foreground" />
+        Personalize your assistant
+      </summary>
+      <div className="mt-3 flex flex-col gap-2">
+        <p className="text-xs text-muted-foreground">
+          Tell KEEL about your goals, how you think about money, and the tone you prefer. It stays
+          private to this household and is used only to guide the assistant.
+        </p>
+        <textarea
+          value={text}
+          disabled={!loaded}
+          onChange={(e) => {
+            setText(e.target.value.slice(0, 4000));
+          }}
+          rows={4}
+          placeholder="e.g. I'm saving aggressively for a house down payment; flag any subscription over $20; keep answers brief."
+          className="w-full resize-y rounded-lg border bg-transparent px-3 py-2 text-sm outline-none focus:border-ring focus:ring-3 focus:ring-ring/50 disabled:opacity-50"
+        />
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] text-muted-foreground">{text.length}/4000</span>
+          <Button type="button" size="sm" disabled={!loaded || saving} onClick={() => void save()}>
+            {saving ? <Loader2 data-icon="inline-start" className="animate-spin" /> : null}
+            Save context
+          </Button>
+        </div>
+      </div>
+    </details>
   );
 }
 
@@ -465,6 +542,10 @@ function KeelAnswer({ record }: { record: AiChatRecord }) {
         <AppliedActionsList actions={record.appliedActions} />
       ) : null}
 
+      {record.proposedActions.length > 0 ? (
+        <ProposedActionsList actions={record.proposedActions} />
+      ) : null}
+
       <Separator />
 
       <div className="flex flex-col gap-2">
@@ -512,6 +593,120 @@ function KeelAnswer({ record }: { record: AiChatRecord }) {
         </details>
       </div>
     </article>
+  );
+}
+
+/** Class-B changes the agent proposes — nothing happens until the user approves (Law 2/10). */
+function ProposedActionsList({ actions }: { actions: AgentProposedAction[] }) {
+  return (
+    <div className="flex flex-col gap-2">
+      {actions.map((action, i) => (
+        <ProposedActionCard key={`${action.command}-${String(i)}`} action={action} />
+      ))}
+    </div>
+  );
+}
+
+function ProposedActionCard({ action }: { action: AgentProposedAction }) {
+  const { householdId, userId } = useHousehold();
+  const [state, setState] = useState<'idle' | 'approving' | 'approved' | 'rejected'>('idle');
+  // Stable per proposal: a double-submit that races the state guard replays
+  // idempotently server-side (keel_idempotency_check) instead of applying twice.
+  const commandId = useMemo(() => newId(), []);
+  const eventKey = useMemo(() => `${action.command}:${newId()}`, [action.command]);
+
+  async function approve() {
+    if (householdId === null || userId === null || state !== 'idle') return;
+    setState('approving');
+    try {
+      await keelCommand({
+        commandId,
+        command: action.command,
+        economicEventKey: eventKey,
+        actor: { kind: 'user', userId },
+        householdId,
+        payload: action.payload,
+      });
+      setState('approved');
+      toast.success('Approved and applied.');
+    } catch (err) {
+      setState('idle');
+      toast.error(err instanceof Error ? err.message : 'Could not apply the change.');
+    }
+  }
+
+  return (
+    <Card size="sm" className="max-w-xl">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <Sparkles className="size-4 text-muted-foreground" />
+          Proposed change
+        </CardTitle>
+        <CardDescription>Nothing changes until you approve. This runs KEEL&apos;s normal command.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="rounded-lg border bg-secondary/20 px-3 py-2">
+          <div className="mb-1 flex items-center gap-2">
+            <Badge variant="secondary">{action.command}</Badge>
+            <Badge variant="outline" className="font-normal">
+              Needs approval
+            </Badge>
+          </div>
+          <p className="text-sm text-foreground">{action.summary}</p>
+          {/* The EXACT payload that will be committed on approve (Law 11) — so
+              the user verifies the bound values, not just the summary. */}
+          <details className="mt-2">
+            <summary className="cursor-pointer text-[11px] text-muted-foreground">
+              Exactly what will change
+            </summary>
+            <div className="mt-1 flex flex-col gap-0.5 rounded border bg-background/50 px-2 py-1 text-[11px] text-muted-foreground">
+              {Object.entries(action.payload).map(([k, v]) => (
+                <div key={k} className="flex gap-2">
+                  <span className="shrink-0 font-medium">{k}:</span>
+                  <span className="truncate break-all">{String(v)}</span>
+                </div>
+              ))}
+            </div>
+          </details>
+        </div>
+        {state === 'approved' ? (
+          <p className="mt-2 text-sm text-muted-foreground">Applied. You can review it on the Budgets page.</p>
+        ) : state === 'rejected' ? (
+          <p className="mt-2 text-sm text-muted-foreground">Dismissed. Nothing changed.</p>
+        ) : null}
+      </CardContent>
+      {state === 'idle' || state === 'approving' ? (
+        <CardFooter className="justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={state !== 'idle'}
+            onClick={() => {
+              setState('rejected');
+            }}
+          >
+            <X data-icon="inline-start" />
+            Reject
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            disabled={householdId === null || userId === null || state !== 'idle'}
+            onClick={() => {
+              void approve();
+            }}
+          >
+            {state === 'approving' ? (
+              <Loader2 data-icon="inline-start" className="animate-spin" />
+            ) : (
+              <Check data-icon="inline-start" />
+            )}
+            Approve
+          </Button>
+        </CardFooter>
+      ) : null}
+    </Card>
   );
 }
 
@@ -599,7 +794,7 @@ function Composer() {
         <div className="flex items-center justify-between gap-2 px-1 pb-1">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Sparkles className="size-3.5" />
-            Preview · note edits are undoable; financial changes need approval
+            Note edits are undoable; financial changes need your approval
           </div>
           <AuiIf condition={(s) => !s.thread.isRunning}>
             <ComposerPrimitive.Send asChild>

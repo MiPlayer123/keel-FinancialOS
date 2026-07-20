@@ -18,6 +18,7 @@ import {
   AnthropicAgentProvider,
   buildAgentResponseRecord,
   buildAgentSystemPrompt,
+  buildDerivedContext,
   CanonicalTransactionIdSchema,
   CommandIdSchema,
   EmptyAgentResponseError,
@@ -48,7 +49,12 @@ import {
   type HouseholdExport,
 } from '../_shared/vendor/keel-domain.mjs';
 import { json, mapDbError, toSnakeKeys } from '../_shared/http.ts';
-import { agentToolDefinitions, makeExecuteAgentTool, type AppliedAction } from '../_shared/agent.ts';
+import {
+  agentToolDefinitions,
+  makeExecuteAgentTool,
+  type AppliedAction,
+  type ProposedAction,
+} from '../_shared/agent.ts';
 import { decideStatementPromotion } from '../_shared/statement-sniff.ts';
 import { decryptToken, encryptToken, type EncryptedRecord } from '../_shared/credential-crypto.ts';
 import { currentKekVersion, getKek } from '../_shared/credential-kek.ts';
@@ -453,7 +459,59 @@ export default {
       // Per-request random boundary so ingested memos can't pre-embed the data
       // delimiter (Law 5, spotlighting).
       const dataBoundary = `kd-${crypto.randomUUID()}`;
-      const system = buildAgentSystemPrompt({ dataBoundary, asOf: nowIso });
+
+      // Personal context (slice 5): the user's authored profile (TRUSTED,
+      // user-tier — not ingested data) + deterministic auto-derived facts
+      // (accounts connected, entities, budget presence). Best-effort: any
+      // failure degrades to no context and never blocks the answer.
+      let personalProfile = '';
+      let derivedContext = '';
+      try {
+        const monthIso = `${todayIso.slice(0, 7)}-01`;
+        const [profileRes, entitiesRes, accountsRes, targetsRes] = await Promise.all([
+          ctx.supabase.rpc('keel_ai_profile_get', { p_household_id: householdId.data }),
+          ctx.supabase.from('entities').select('name').eq('household_id', householdId.data),
+          ctx.supabase
+            .from('accounts')
+            .select('name, subtype')
+            .eq('household_id', householdId.data)
+            .is('archived_at', null)
+            .order('name'),
+          ctx.supabase
+            .from('budget_targets')
+            .select('household_id')
+            .eq('household_id', householdId.data)
+            .is('end_month', null)
+            .limit(1),
+        ]);
+        if (typeof profileRes.data === 'string') personalProfile = profileRes.data;
+        const entities = ((entitiesRes.data ?? []) as { name?: string }[])
+          .map((e) => ({ name: typeof e.name === 'string' ? e.name : '' }))
+          .filter((e) => e.name.length > 0);
+        const accounts = ((accountsRes.data ?? []) as { name?: string; subtype?: string }[])
+          .map((a) => ({ name: a.name ?? '', subtype: a.subtype ?? 'account' }))
+          .filter((a) => a.name.length > 0);
+        derivedContext = buildDerivedContext(
+          {
+            accounts,
+            entities,
+            budgetsMonth: todayIso.slice(0, 7),
+            hasBudget: Array.isArray(targetsRes.data) && targetsRes.data.length > 0,
+          },
+          // Same boundary the system prompt declares: account/entity names are
+          // data-tier (may be provider-sourced) and must be spotlighted (Law 5).
+          dataBoundary,
+        );
+      } catch {
+        // Personal context is optional; never fail the request over it.
+      }
+
+      const system = buildAgentSystemPrompt({
+        dataBoundary,
+        asOf: nowIso,
+        personalProfile,
+        derivedContext,
+      });
 
       const provider =
         providerKind === 'anthropic'
@@ -473,6 +531,7 @@ export default {
       // the UI can show what changed + offer undo (Law 2). Budgets/reimbursements
       // are Class B (proposals) and land in later slices.
       const appliedActions: AppliedAction[] = [];
+      const proposedActions: ProposedAction[] = [];
       const executeTool = makeExecuteAgentTool({
         authorize,
         authzCtx,
@@ -480,6 +539,7 @@ export default {
         rpc: (proc, args) => ctx.supabase.rpc(proc, args),
         todayIso,
         onApplied: (action) => appliedActions.push(action),
+        onProposed: (action) => proposedActions.push(action),
       });
 
       const startedAt = Date.now();
@@ -504,6 +564,7 @@ export default {
             stoppedReason: run.stoppedReason,
             tools: run.toolCalls.map((t) => t.call.name),
             appliedCount: appliedActions.length,
+            proposedCount: proposedActions.length,
             latencyMs: Date.now() - startedAt,
             inputTokens: run.usage.inputTokens,
             outputTokens: run.usage.outputTokens,
@@ -518,6 +579,7 @@ export default {
           steps: run.steps,
           stoppedReason: run.stoppedReason,
           appliedActions,
+          proposedActions,
         });
         return json(200, record);
       } catch (error) {
@@ -535,6 +597,55 @@ export default {
         }
         return internalFailure();
       }
+    }
+
+    if (path === '/ai/profile/get' || path === '/ai/profile/save') {
+      // Personal-context profile (slice 5): trusted, user-authored free text
+      // the agent receives as context. Membership + audit are enforced in the
+      // definer procs (keel_ai_profile_get / keel_ai_profile_save).
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      if (!householdId.success) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'AI profile request failed validation.',
+          details: {},
+        });
+      }
+      if (path === '/ai/profile/get') {
+        const { data, error } = await ctx.supabase.rpc('keel_ai_profile_get', {
+          p_household_id: householdId.data,
+        });
+        if (error) return mapDbError(error);
+        return json(200, { profileText: typeof data === 'string' ? data : '' });
+      }
+      // Saving the shared profile is partner-tier (Law 7): it becomes trusted
+      // prompt context in every member's agent session, so a viewer must not
+      // write it. Fail-closed compiler, same as every other write.
+      const profileAuthzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const profileDecision = authorize(profileAuthzCtx, 'ai_profile.save', {
+        kind: 'household',
+        householdId: householdId.data,
+      });
+      if (!profileDecision.allowed) {
+        return profileDecision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: profileDecision.reason, details: {} });
+      }
+      const profileText = input['profileText'];
+      if (typeof profileText !== 'string' || profileText.length > 4000) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'AI profile request failed validation.',
+          details: {},
+        });
+      }
+      const { error } = await ctx.supabase.rpc('keel_ai_profile_save', {
+        p_household_id: householdId.data,
+        p_profile_text: profileText,
+      });
+      if (error) return mapDbError(error);
+      return json(200, { ok: true });
     }
 
     if (path === '/connections/link-token') {

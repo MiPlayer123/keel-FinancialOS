@@ -2642,14 +2642,18 @@ export type AgentAppliedAction = {
   undo?: AgentAppliedActionUndo;
 };
 
-/** A change the agent proposes; requires the user's approval (Class B, Law 11). */
+/**
+ * A change the agent proposes; requires the user's explicit approval (Class B,
+ * Law 2/10). The agent never dispatches it — on approve the UI issues `command`
+ * with `payload` as a normal authorized user command.
+ */
 export type AgentProposedAction = {
   kind: string;
+  /** Authorized command name dispatched on approve (e.g. 'budgets.set_target'). */
+  command: string;
   summary: string;
-  /** Approval token id binding the exact payload; redeemed on approve. */
-  approvalTokenId: string;
+  /** Exact command payload shown to and approved by the user. */
   payload: Record<string, unknown>;
-  expiresAt: string;
 };
 
 /**
@@ -2682,6 +2686,22 @@ export async function askKeel(input: {
   return invoke<AiChatRecord>('api/ai/chat', {
     householdId: input.householdId,
     question: input.question,
+  });
+}
+
+/** The user-authored profile the agent receives as trusted personal context. */
+export async function getAiProfile(input: { householdId: string }): Promise<{ profileText: string }> {
+  return invoke<{ profileText: string }>('api/ai/profile/get', { householdId: input.householdId });
+}
+
+/** Save (or clear, when blank) the user-authored assistant profile. */
+export async function saveAiProfile(input: {
+  householdId: string;
+  profileText: string;
+}): Promise<unknown> {
+  return invoke('api/ai/profile/save', {
+    householdId: input.householdId,
+    profileText: input.profileText,
   });
 }
 

@@ -7,6 +7,7 @@ import {
   WRITE_TOOL_NAMES,
   type AppliedAction,
   type AuthorizeFn,
+  type ProposedAction,
 } from './agent.ts';
 
 const assert: (condition: unknown, message?: string) => asserts condition = (
@@ -139,11 +140,16 @@ Deno.test('large results are bounded so context cannot be blown', async () => {
 const NOTE_ID = '11111111-1111-1111-1111-111111111111';
 
 /** Route rpc by proc name; records every call for assertions. */
-const noteRpc = (opts: { calls: { proc: string; args: Record<string, unknown> }[]; listRows?: unknown[] }) =>
+const noteRpc = (opts: {
+  calls: { proc: string; args: Record<string, unknown> }[];
+  listRows?: unknown[];
+  catRows?: unknown[];
+}) =>
   (proc: string, args: Record<string, unknown>) => {
     opts.calls.push({ proc, args });
     if (proc === 'keel_note_save') return Promise.resolve({ data: NOTE_ID, error: null });
     if (proc === 'keel_list_notes_tasks') return Promise.resolve({ data: { rows: opts.listRows ?? [] }, error: null });
+    if (proc === 'keel_list_categories') return Promise.resolve({ data: opts.catRows ?? [], error: null });
     return Promise.resolve({ data: null, error: null });
   };
 
@@ -151,7 +157,16 @@ const agentDeps = (
   authorize: AuthorizeFn,
   rpc: (proc: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>,
   applied: AppliedAction[],
-) => ({ authorize, authzCtx: {}, householdId: 'h1', rpc, todayIso: '2026-07-19', onApplied: (a: AppliedAction) => applied.push(a) });
+  proposed: ProposedAction[] = [],
+) => ({
+  authorize,
+  authzCtx: {},
+  householdId: 'h1',
+  rpc,
+  todayIso: '2026-07-19',
+  onApplied: (a: AppliedAction) => applied.push(a),
+  onProposed: (p: ProposedAction) => proposed.push(p),
+});
 
 Deno.test('agent tool catalog includes the note write tools', () => {
   const names = agentToolDefinitions().map((d) => d.name);
@@ -228,4 +243,120 @@ Deno.test('the combined executor still serves reads and unknown tools', async ()
   const unknown = JSON.parse(await exec(call('does_not_exist')));
   assert(unknown.error === 'unknown_tool');
   assert(applied.length === 0);
+});
+
+// ---------------------------------------------------------------------------
+// Budget proposals (Class B — suggest→approve, never applied by the agent)
+// ---------------------------------------------------------------------------
+
+const CAT_ID = '22222222-2222-2222-2222-222222222222';
+
+Deno.test('budget proposal tools are in the catalog', () => {
+  const names = agentToolDefinitions().map((d) => d.name);
+  for (const p of ['propose_budget_target', 'propose_budget_total', 'propose_expected_income', 'propose_remove_budget_target']) {
+    assert(names.includes(p), `catalog missing ${p}`);
+  }
+});
+
+Deno.test('propose_budget_target stages an exact command payload, never applies', async () => {
+  const calls: { proc: string; args: Record<string, unknown> }[] = [];
+  const applied: AppliedAction[] = [];
+  const proposed: ProposedAction[] = [];
+  const catRows = [{ ledgerAccountId: CAT_ID, name: 'Groceries', kind: 'expense' }];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls, catRows }), applied, proposed));
+  const out = JSON.parse(
+    // The model claims "Dining" but the id is the Groceries category — the
+    // server must use the RESOLVED name, not the model's label (Law 11).
+    await exec(call('propose_budget_target', { categoryLedgerAccountId: CAT_ID, amountMinor: '60000', categoryName: 'Dining' })),
+  );
+  assert(out.proposed === true);
+  assert(applied.length === 0, 'a proposal must never apply');
+  // Only the category-resolution read ran; NO write proc.
+  assert(calls.every((c) => c.proc === 'keel_list_categories'), 'a proposal must not call a write proc');
+  assert(proposed.length === 1);
+  const p = proposed[0]!;
+  assert(p.command === 'budgets.set_target');
+  assert(p.payload.categoryLedgerAccountId === CAT_ID);
+  assert(p.payload.kind === 'amount');
+  assert(p.payload.amountMinor === '60000');
+  assert(typeof p.payload.month === 'string' && (p.payload.month as string).endsWith('-01'));
+  // Summary reflects the REAL category, not the model's mislabel.
+  assert(p.summary.includes('Groceries'), 'summary must use the resolved category name');
+  assert(!p.summary.includes('Dining'), 'summary must not trust the model label');
+});
+
+Deno.test('propose_budget_target rejects an id that is not a live category', async () => {
+  const proposed: ProposedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls: [], catRows: [] }), [], proposed));
+  const out = JSON.parse(await exec(call('propose_budget_target', { categoryLedgerAccountId: CAT_ID, amountMinor: '60000' })));
+  assert(out.error === 'invalid_arguments');
+  assert(proposed.length === 0);
+});
+
+Deno.test('propose_budget_target requires exactly one of amountMinor / percentBp', async () => {
+  const proposed: ProposedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls: [] }), [], proposed));
+  const both = JSON.parse(await exec(call('propose_budget_target', { categoryLedgerAccountId: CAT_ID, amountMinor: '100', percentBp: 5000 })));
+  assert(both.error === 'invalid_arguments');
+  const neither = JSON.parse(await exec(call('propose_budget_target', { categoryLedgerAccountId: CAT_ID })));
+  assert(neither.error === 'invalid_arguments');
+  assert(proposed.length === 0);
+});
+
+Deno.test('a denied budget proposal authorizes-off and stages nothing', async () => {
+  const proposed: ProposedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(deny, noteRpc({ calls: [] }), [], proposed));
+  const out = JSON.parse(await exec(call('propose_budget_total', { amountMinor: '500000' })));
+  assert(out.error === 'not_authorized');
+  assert(proposed.length === 0);
+});
+
+Deno.test('propose_budget_total builds a discriminated basis payload', async () => {
+  const proposed: ProposedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls: [] }), [], proposed));
+  await exec(call('propose_budget_total', { percentBp: 8000 }));
+  assert(proposed[0]!.payload.basis === 'percent_of_income');
+  assert(proposed[0]!.payload.percentBp === 8000);
+});
+
+Deno.test('non-digit amountMinor is rejected (Law 4: no floats)', async () => {
+  const proposed: ProposedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls: [] }), [], proposed));
+  const out = JSON.parse(await exec(call('propose_expected_income', { amountMinor: '600.50' })));
+  assert(out.error === 'invalid_arguments');
+  assert(proposed.length === 0);
+});
+
+Deno.test('propose_reimbursement_claim stages a create_claim command payload', async () => {
+  const proposed: ProposedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls: [] }), [], proposed));
+  const out = JSON.parse(
+    await exec(
+      call('propose_reimbursement_claim', {
+        originalTransactionId: NOTE_ID,
+        counterpartyName: 'Alex',
+        kind: 'friend',
+        amountMinor: '4000',
+        description: 'Dinner split',
+      }),
+    ),
+  );
+  assert(out.proposed === true);
+  assert(proposed.length === 1);
+  const p = proposed[0]!;
+  assert(p.command === 'reimbursements.create_claim');
+  assert(p.payload.counterpartyName === 'Alex');
+  assert(p.payload.kind === 'friend');
+  assert(p.payload.amountMinor === '4000');
+  assert(p.payload.currency === 'USD', 'currency defaults to USD');
+});
+
+Deno.test('propose_reimbursement_claim rejects an unknown counterparty kind', async () => {
+  const proposed: ProposedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, noteRpc({ calls: [] }), [], proposed));
+  const out = JSON.parse(
+    await exec(call('propose_reimbursement_claim', { originalTransactionId: NOTE_ID, counterpartyName: 'Alex', kind: 'landlord', amountMinor: '4000', description: 'x' })),
+  );
+  assert(out.error === 'invalid_arguments');
+  assert(proposed.length === 0);
 });

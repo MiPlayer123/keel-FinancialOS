@@ -118,6 +118,10 @@ export const AGENT_WRITE_ACTIONS = [
   'notes.save',
   'notes.archive',
   'notes.unarchive',
+  // The household-shared assistant profile is injected as TRUSTED prompt
+  // context into every member's agent session, so writing it is partner-tier —
+  // a viewer must not be able to plant instructions in a partner/owner's agent.
+  'ai_profile.save',
 ] as const;
 
 export const ACTIONS = [...WRITE_ACTIONS, ...READ_ACTIONS, ...AGENT_WRITE_ACTIONS] as const;
@@ -219,6 +223,7 @@ export const ACTION_MINIMUM_ROLES = {
   'notes.save': 'partner',
   'notes.archive': 'partner',
   'notes.unarchive': 'partner',
+  'ai_profile.save': 'partner',
   'admin.export_all': 'owner',
 } as const satisfies Readonly<Record<Action, MinimumRole>>;
 

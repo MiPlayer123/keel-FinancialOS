@@ -32,15 +32,22 @@ export interface AppliedAction {
   readonly undo?: AppliedActionUndo;
 }
 
-/** A change the agent proposes; requires the user's approval (Class B). */
+/**
+ * A change the agent proposes; requires the user's explicit approval before it
+ * happens (Class B, suggest→approve — Law 2/10). The agent NEVER dispatches
+ * these; it only stages the exact command + payload. On approve, the UI issues
+ * the change as a normal authorized user command (the user already has direct
+ * write capability — no new privilege), so the approval IS the user acting.
+ */
 export interface ProposedAction {
+  /** e.g. 'budgets.set_target' — also the command dispatched on approve. */
   readonly kind: string;
+  /** The authorized command name the UI dispatches when the user approves. */
+  readonly command: string;
+  /** Human-readable description of exactly what will change. */
   readonly summary: string;
-  /** Law-11 approval token id binding the exact payload; redeemed on approve. */
-  readonly approvalTokenId: string;
-  /** Opaque, server-normalized payload the token is bound to. */
+  /** The exact command payload (contracts shape) shown and approved. */
   readonly payload: Record<string, unknown>;
-  readonly expiresAt: string;
 }
 
 export interface AgentResponseRecord {

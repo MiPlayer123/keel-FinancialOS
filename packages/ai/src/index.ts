@@ -68,6 +68,12 @@ export {
   type ProposedAction,
 } from './agent-record.js';
 export {
+  buildDerivedContext,
+  type DerivedAccount,
+  type DerivedContextFacts,
+  type DerivedEntity,
+} from './derived-context.js';
+export {
   buildChatResponseRecord,
   EmptyAiResponseError,
   TLDR_MAX_LENGTH,
