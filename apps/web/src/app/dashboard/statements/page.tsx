@@ -39,12 +39,17 @@ import {
   keelCommand,
   keelQuery,
   newId,
+  fetchStatementPaymentLinks,
+  findStatementPayment,
+  decideStatementPaymentLink,
+  detachStatementPaymentLink,
   STATEMENT_UPLOAD_ACCEPT,
   type AccountRow,
   type RichTransactionRow,
   type StatementCadenceRow,
   type StatementDraftRow,
   type StatementRow,
+  type StatementPaymentLink,
 } from '@/lib/keel-api';
 import {
   buildStatementBody,
@@ -233,6 +238,7 @@ function StatementsBody() {
               key={s.statementId}
               statement={s}
               accountName={accountName(s.accountId)}
+              accountSubtype={accounts.find((a) => a.id === s.accountId)?.subtype ?? null}
               entityId={accounts.find((a) => a.id === s.accountId)?.entityId ?? null}
               open={openDetail === s.statementId}
               onToggle={() => {
@@ -434,9 +440,186 @@ function StatementCadenceSection({
   );
 }
 
+// SLICE 8 [A7]: card-payment ↔ statement linking on a credit-card statement.
+// The matcher (Law 1 deterministic, exact-only) suggests the card-side payment
+// that settled the balance; the user confirms/rejects (Law 10 class B — nothing
+// auto-confirms). Confirmed links can be detached (Law 2 reversible). When
+// nothing is suggested yet, "Find payment" runs the matcher once.
+function CardPaymentSection({
+  statementId,
+  endingMinor,
+  currency,
+  householdId,
+  userId,
+}: {
+  statementId: string;
+  endingMinor: string;
+  currency: string;
+  householdId: string | null;
+  userId: string | null;
+}) {
+  const [links, setLinks] = useState<StatementPaymentLink[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!householdId) return;
+    try {
+      setLinks(await fetchStatementPaymentLinks(householdId, statementId));
+    } catch {
+      setLinks([]);
+    }
+  }, [householdId, statementId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function find() {
+    if (!householdId) return;
+    setBusy('find');
+    try {
+      const written = await findStatementPayment(householdId, statementId);
+      if (written > 0) {
+        toast.success('Found a matching card payment.');
+      } else {
+        toast.info('No single exact card payment found for this balance yet.');
+      }
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not search for a payment.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function decide(linkId: string, confirm: boolean) {
+    if (!householdId || !userId) return;
+    setBusy(linkId);
+    try {
+      await decideStatementPaymentLink({ householdId, userId, linkId, confirm });
+      toast.success(confirm ? 'Card payment confirmed.' : 'Suggestion dismissed.');
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not update the link.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function detach(linkId: string) {
+    if (!householdId || !userId) return;
+    setBusy(linkId);
+    try {
+      await detachStatementPaymentLink({ householdId, userId, linkId });
+      toast.success('Card payment detached.');
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not detach the link.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const active = (links ?? []).filter(
+    (l) => l.status === 'suggested' || l.status === 'confirmed',
+  );
+
+  return (
+    <div className="rounded-md border border-border p-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium">Card payment</p>
+          <p className="text-xs text-muted-foreground">
+            The payment that settled this balance (
+            <Money amountMinor={endingMinor} currency={currency} className="text-xs" />
+            ).
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={busy !== null || !householdId}
+          onClick={() => {
+            void find();
+          }}
+        >
+          {busy === 'find' ? 'Searching…' : 'Find payment'}
+        </Button>
+      </div>
+
+      {links === null ? (
+        <Skeleton className="h-10 w-full" />
+      ) : active.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          No linked payment yet. Use “Find payment” to match the credit that paid this balance.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {active.map((l) => (
+            <div
+              key={l.linkId}
+              className="flex items-center gap-3 rounded-md border border-border px-3 py-2 text-sm"
+            >
+              <span className="w-20 shrink-0 font-mono text-xs text-muted-foreground">
+                {l.txnDate}
+              </span>
+              <span className="min-w-0 flex-1 truncate" title={l.txnDescription}>
+                {l.txnDescription}
+              </span>
+              <Money amountMinor={l.txnAmountMinor} currency={l.currency} className="text-sm" />
+              <Badge variant={l.status === 'confirmed' ? 'default' : 'secondary'} className="capitalize">
+                {l.status}
+              </Badge>
+              {l.status === 'suggested' ? (
+                <div className="flex shrink-0 gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={busy !== null}
+                    onClick={() => {
+                      void decide(l.linkId, true);
+                    }}
+                  >
+                    Confirm
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={busy !== null}
+                    onClick={() => {
+                      void decide(l.linkId, false);
+                    }}
+                  >
+                    Reject
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={busy !== null}
+                  onClick={() => {
+                    void detach(l.linkId);
+                  }}
+                >
+                  Detach
+                </Button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StatementCard({
   statement: s,
   accountName,
+  accountSubtype,
   entityId,
   open,
   onToggle,
@@ -446,6 +629,7 @@ function StatementCard({
 }: {
   statement: StatementRow;
   accountName: string;
+  accountSubtype: string | null;
   entityId: string | null;
   open: boolean;
   onToggle: () => void;
@@ -536,6 +720,16 @@ function StatementCard({
             targetId={s.statementId}
             kind="statement"
           />
+
+          {accountSubtype === 'credit_card' ? (
+            <CardPaymentSection
+              statementId={s.statementId}
+              endingMinor={s.endingMinor}
+              currency={s.currency}
+              householdId={householdId}
+              userId={userId}
+            />
+          ) : null}
 
           <div className="overflow-hidden rounded-md border border-border">
             {s.lines.map((l, i) => (
