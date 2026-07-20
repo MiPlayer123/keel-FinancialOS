@@ -12,6 +12,7 @@ import {
   fetchEntities,
   fetchRecurringClassification,
   fetchDetectedPaycheckDismissals,
+  fetchPaycheckTemplates,
   dismissDetectedPaycheck,
   keelCommand,
   newId,
@@ -19,7 +20,12 @@ import {
   type DetectedPaycheckDismissal,
   type RecurringSeriesRow,
   type RichTransactionRow,
+  type PaycheckTemplatesResult,
 } from '@/lib/keel-api';
+import {
+  PaycheckTemplateEditor,
+  PaycheckAutonomyToggle,
+} from '@/components/keel/paycheck-template-editor';
 import { TxnPicker } from '@/components/keel/txn-picker';
 import { AttachmentsSection } from '@/components/keel/attachments-section';
 import { sha256Hex, parseSignedDollars, minorToDollars } from '@/lib/hash';
@@ -216,6 +222,24 @@ function PaychecksBody() {
   // never all inflows — dividends/interest never appear here.
   const [classification, setClassification] = useState<RecurringClassificationRow[]>([]);
   const [dismissals, setDismissals] = useState<DetectedPaycheckDismissal[]>([]);
+  // Paycheck split templates (SLICE C, paycheck-split-templates-v2.md §4): the
+  // per-series template editor + autonomy grant. Templates are keyed by employer;
+  // a detected series resolves its employer by matching its counterparty to a
+  // known template's employer name, else (no template yet) employerId is null and
+  // the editor prompts the user to record a paycheck first.
+  const [templatesData, setTemplatesData] = useState<PaycheckTemplatesResult | null>(null);
+  const [editorSeries, setEditorSeries] = useState<
+    { seriesId: string; employerId: string | null; employerName: string; depositMinor: string | null } | null
+  >(null);
+
+  const reloadTemplates = useCallback(() => {
+    if (!householdId) return;
+    void fetchPaycheckTemplates(householdId)
+      .then(setTemplatesData)
+      .catch(() => {
+        setTemplatesData(null);
+      });
+  }, [householdId]);
 
   const reloadDismissals = useCallback(() => {
     if (!householdId) return;
@@ -241,7 +265,24 @@ function PaychecksBody() {
         setClassification([]);
       });
     reloadDismissals();
-  }, [householdId, reloadDismissals]);
+    reloadTemplates();
+  }, [householdId, reloadDismissals, reloadTemplates]);
+
+  // Resolve a detected series' employer + its per-series settings from the
+  // templates read model. Employer match is by name (the read model has no
+  // series→employer link until a template exists); null employerId ⇒ the editor
+  // prompts to record a paycheck first (which creates the employer).
+  const seriesSettingsById = useMemo(
+    () => new Map((templatesData?.seriesSettings ?? []).map((s) => [s.seriesId, s])),
+    [templatesData],
+  );
+  const employerIdByName = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of templatesData?.templates ?? []) {
+      m.set(t.employerName.trim().toLowerCase(), t.employerId);
+    }
+    return m;
+  }, [templatesData]);
 
   const bucketBySeries = useMemo(
     () => new Map(classification.map((c) => [c.seriesId, c.bucket])),
@@ -365,11 +406,16 @@ function PaychecksBody() {
               // The occurrence this card surfaces. Declining hides THIS one; the
               // employer + latest detected deposit stay for the next paycheck.
               const occurrenceDate = amount?.expectedDate ?? null;
+              const employerKey = series.counterpartyKey.trim().toLowerCase();
+              const resolvedEmployerId = employerIdByName.get(employerKey) ?? null;
+              const settings = seriesSettingsById.get(series.seriesId) ?? null;
+              const seriesDepositMinor = amount?.expectedAmountMinor ?? null;
               return (
                 <div
                   key={series.seriesId}
-                  className="flex flex-col gap-3 rounded-lg border border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+                  className="flex flex-col gap-3 rounded-lg border border-border px-4 py-3"
                 >
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium">{series.counterpartyKey}</p>
                     <p className="text-xs text-muted-foreground">
@@ -459,6 +505,43 @@ function PaychecksBody() {
                       }}
                     />
                   </div>
+                  </div>
+
+                  {/* Split template + autonomy grant (SLICE C, §4). The editor
+                      authors an immutable template version; the toggle sets the
+                      OWNER-only per-series autonomy. */}
+                  <div className="flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="gap-1.5"
+                      onClick={() => {
+                        setEditorSeries({
+                          seriesId: series.seriesId,
+                          employerId: resolvedEmployerId,
+                          employerName: series.counterpartyKey,
+                          depositMinor: seriesDepositMinor,
+                        });
+                      }}
+                    >
+                      <Pencil className="size-3.5" />
+                      {settings?.activeTemplateId ? 'Edit split template' : 'Set up split template'}
+                    </Button>
+                    {resolvedEmployerId && settings ? (
+                      <PaycheckAutonomyToggle
+                        householdId={householdId ?? ''}
+                        userId={userId ?? ''}
+                        seriesId={series.seriesId}
+                        employerId={resolvedEmployerId}
+                        employerName={series.counterpartyKey}
+                        activeTemplateId={settings.activeTemplateId}
+                        bookingEnabled={settings.bookingEnabled}
+                        incomeCategoryLedgerAccountId={settings.incomeCategoryLedgerAccountId}
+                        autonomy={settings.autonomy}
+                        onChanged={reloadTemplates}
+                      />
+                    ) : null}
+                  </div>
                 </div>
               );
             })}
@@ -515,6 +598,25 @@ function PaychecksBody() {
           void refetch();
         }}
       />
+
+      {editorSeries ? (
+        <PaycheckTemplateEditor
+          open
+          onOpenChange={(o) => {
+            if (!o) setEditorSeries(null);
+          }}
+          householdId={householdId ?? ''}
+          userId={userId ?? ''}
+          seriesId={editorSeries.seriesId}
+          employerId={editorSeries.employerId}
+          employerName={editorSeries.employerName}
+          latestDepositMinor={editorSeries.depositMinor}
+          onSaved={() => {
+            reloadTemplates();
+            setEditorSeries(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

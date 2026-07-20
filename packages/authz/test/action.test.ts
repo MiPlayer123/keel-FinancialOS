@@ -33,6 +33,8 @@ describe('action vocabulary', () => {
       'paychecks.reverse',
       'paychecks.restore',
       'paychecks.dismiss_detected',
+      'paychecks.save_template',
+      'paychecks.set_series_settings',
       'reimbursements.create_claim',
       'reimbursements.settle',
       'reimbursements.reverse_settlement',
@@ -84,7 +86,31 @@ describe('action vocabulary', () => {
       'receipts.inbox',
       'budgets.month',
       'audit.read',
+      // AI-agent read reconciliation actions (added after the original Stage 1A
+      // snapshot; this list had drifted out of date on main — brought current
+      // here since Slice C edits this file). EXPORT_ACTIONS terminates READ_ACTIONS.
+      'balances.latest',
+      'categories.list',
+      'entities.list',
+      'budgets.list',
+      'notes_tasks.list',
+      'transfers.list',
+      'transactions.rich',
+      'transactions.rich_page',
+      'transactions.search',
+      'dashboard.net_worth',
+      'dashboard.cash_flow',
+      'dashboard.cash_flow_forecast',
+      'holdings.list',
+      'investments.overview',
+      'goals.list',
+      'rules.list',
+      'tags.list',
       'admin.export_all',
+      // AGENT_WRITE_ACTIONS (Law 10 Class A — auto+undo notes writes).
+      'notes.save',
+      'notes.archive',
+      'notes.unarchive',
     ]);
   });
 
@@ -122,9 +148,19 @@ describe('action vocabulary', () => {
       expect(ACTION_MINIMUM_ROLES[action]).toBe('viewer');
     }
 
+    // Every write is partner-floor EXCEPT paychecks.set_series_settings, which
+    // is an OWNER-floor policy change (the per-series autonomy grant —
+    // paycheck-split-templates-v2.md §3/[AMENDED 6]; enforced in the DB too via
+    // keel_assert_member_owner). This is the one write that legitimately needs
+    // owner; new writes default to partner.
+    const OWNER_FLOOR_WRITES: readonly string[] = ['paychecks.set_series_settings'];
     for (const action of WRITE_ACTIONS) {
-      expect(ACTION_MINIMUM_ROLES[action]).toBe('partner');
+      expect(ACTION_MINIMUM_ROLES[action]).toBe(
+        OWNER_FLOOR_WRITES.includes(action) ? 'owner' : 'partner',
+      );
     }
+    expect(ACTION_MINIMUM_ROLES['paychecks.set_series_settings']).toBe('owner');
+    expect(ACTION_MINIMUM_ROLES['paychecks.save_template']).toBe('partner');
 
     expect(EXPORT_ACTIONS).toEqual(['admin.export_all']);
     expect(ACTION_MINIMUM_ROLES['admin.export_all']).toBe('owner');

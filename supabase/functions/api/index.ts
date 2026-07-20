@@ -127,6 +127,8 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'paychecks.reverse': 'keel_paycheck_reverse',
   'paychecks.restore': 'keel_paycheck_restore',
   'paychecks.dismiss_detected': 'keel_cmd_dismiss_detected_paycheck',
+  'paychecks.save_template': 'keel_cmd_paycheck_save_template',
+  'paychecks.set_series_settings': 'keel_cmd_paycheck_set_series_settings',
   'reimbursements.create_claim': 'keel_reimbursement_create_claim',
   'reimbursements.settle': 'keel_reimbursement_settle',
   'reimbursements.reverse_settlement': 'keel_reimbursement_reverse_settlement',

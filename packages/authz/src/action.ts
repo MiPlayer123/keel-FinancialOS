@@ -20,6 +20,8 @@ export const WRITE_ACTIONS = [
   'paychecks.reverse',
   'paychecks.restore',
   'paychecks.dismiss_detected',
+  'paychecks.save_template',
+  'paychecks.set_series_settings',
   'reimbursements.create_claim',
   'reimbursements.settle',
   'reimbursements.reverse_settlement',
@@ -146,6 +148,12 @@ export const ACTION_MINIMUM_ROLES = {
   'paychecks.reverse': 'partner',
   'paychecks.restore': 'partner',
   'paychecks.dismiss_detected': 'partner',
+  // Authoring a template version is a partner-level write; FLIPPING autonomy is
+  // an OWNER-only policy change (paycheck-split-templates-v2.md §3/[AMENDED 6]).
+  // The owner floor is also enforced in the DB (keel_assert_member_owner) because
+  // this package-authz floor is bypassable via a direct RPC.
+  'paychecks.save_template': 'partner',
+  'paychecks.set_series_settings': 'owner',
   'reimbursements.create_claim':'partner',
   'reimbursements.settle':'partner',
   'reimbursements.reverse_settlement':'partner',

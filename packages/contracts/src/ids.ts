@@ -49,6 +49,7 @@ export const PeriodLockIdSchema = uuid.brand<'PeriodLockId'>();
 export const RecurringSeriesIdSchema = uuid.brand<'RecurringSeriesId'>();
 export const PaycheckIdSchema = uuid.brand<'PaycheckId'>();
 export const PaycheckTemplateIdSchema = uuid.brand<'PaycheckTemplateId'>();
+export const EmployerIdSchema = uuid.brand<'EmployerId'>();
 export const PaycheckSplitSuggestionIdSchema = uuid.brand<'PaycheckSplitSuggestionId'>();
 export const ReimbursementClaimIdSchema=uuid.brand<'ReimbursementClaimId'>();
 export const SettlementIdSchema=uuid.brand<'SettlementId'>();
