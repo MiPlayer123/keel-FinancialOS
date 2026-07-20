@@ -4,6 +4,52 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-20 — feat(dashboard): clickable summary amounts + verify/fix spending-pace symmetry
+
+Two founder dashboard-polish items (no migration; UI + one read-model bug fix).
+
+**(1) Clickable amounts — reuse the existing drill-in pattern, don't invent one.**
+The canonical drill is `ledgerDrillHref` (lib/report-scope.ts) / `?q=` / `?from&to`
+into `/dashboard/ledger` — already used by the cash-flow chart, report donut/month
+columns, and Recent transactions. Wired the same pattern onto the dashboard figures
+that each stand for a SET of underlying transactions:
+- **SpendingCard insight rows** (Biggest purchase, Spending pace, Top merchant):
+  each now carries an `href` and renders as a `Link` (hover-highlighted row) into
+  the ledger filtered to exactly those rows — biggest/top-merchant by counterparty
+  `?q=`, pace by the current month-to-date `?from&to` range. Rows without an href
+  (none today) still render as a plain div, so the affordance is honest.
+- **UpcomingRecurringCard rows**: the occurrence is still EXPECTED (no posted txn),
+  so the row drills into the ledger by counterparty `?q=` — the PAST postings behind
+  the recurring figure (includes the founder's green upcoming-income tiles). Same
+  `?q=` drill Recent transactions uses.
+- Left the SpendingCard `CategoryBarList` bars NON-clickable for now: `spendingMix`
+  keys on category display NAME (not ledger id) and folds a "top-6 + Other" bucket,
+  so a per-bar ledger drill would need threading `categoryLedgerAccountId` through +
+  can't map "Other" to one filter. Deferred rather than shipped half-right — the
+  reports page already offers the id-accurate category donut drill.
+
+**(2) Spending pace vs last month — verified, and fixed a latent asymmetry.**
+`buildInsights` (was inline in dashboard/page.tsx) compares this month's spend vs
+last month's. The prior-month side WAS correctly capped at `<= dayOfMonth`
+(same-period-last-month). The current-month side used `effectiveDate.startsWith(month)`
+with **no upper bound** — it happened to equal MTD only because real posted rows
+can't be future-dated. Live read-only SELECT on founder household a1ba3759-… (2026-07-20):
+0 future-dated current-month rows, `max(effective_date)=today`, so the LIVE number
+was correct by coincidence — but a manual/projected entry dated later this month
+would inflate "this month so far" against a comparison window frozen at day-of-month.
+Windows confirmed via SELECT: this=2026-07-01→today, prev=2026-06-01→same-day.
+- **Fix:** cap the current-month accumulation at `effectiveDate <= todayIso` too, so
+  both windows are equal-length (MTD vs same-period-last-month). Smallest correct
+  change; no behavior change on today's live data, correct under future-dated rows.
+- **Testability:** extracted `buildInsights` + `Insight` into `lib/dashboard-insights.ts`
+  (pure, injectable `now: Date` — same pattern as `presetRange(preset, now)`), imported
+  back into page.tsx. New `dashboard-insights.test.ts`: same-period-MTD math, the
+  future-dated-leak guard (a $1000 row dated later this month must NOT move the pace),
+  and the both-windows-non-empty gate. 3/3 pass; full web lib suite 408/408; `pnpm build`
+  (ESLint gate) clean.
+
+---
+
 ## 2026-07-20 — fix(txn/category UX): budget dedup + credit-card dropdown + inline ✓ approve
 
 Three related transaction/category-UI fixes (one component cluster). Frontend +
