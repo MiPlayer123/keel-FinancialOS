@@ -31,7 +31,6 @@ import { getSupabaseBrowserClient } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from '@/components/ui/sheet';
@@ -114,11 +113,6 @@ function NavItemLink({
       <Icon className="size-4 shrink-0" />
       {collapsed ? null : label}
       {!collapsed && href === '/dashboard/review' ? <ReviewBadge /> : null}
-      {!collapsed && href === '/dashboard/assistant' ? (
-        <Badge variant="outline" className="ml-auto px-1.5 text-[10px] text-muted-foreground">
-          Preview
-        </Badge>
-      ) : null}
     </Link>
   );
 

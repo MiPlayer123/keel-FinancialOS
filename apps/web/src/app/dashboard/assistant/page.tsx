@@ -185,7 +185,7 @@ export default function AssistantPage() {
       <PageHeader
         title="Assistant"
         description="Ask about your accounts, spending, and budgets — read-only narration of KEEL's numbers."
-        actions={<Badge variant="secondary">Preview</Badge>}
+        actions={null}
       />
       <AssistantChat />
     </>
@@ -775,7 +775,7 @@ function Composer() {
         <div className="flex items-center justify-between gap-2 px-1 pb-1">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Sparkles className="size-3.5" />
-            Preview · note edits are undoable; financial changes need approval
+            Note edits are undoable; financial changes need your approval
           </div>
           <AuiIf condition={(s) => !s.thread.isRunning}>
             <ComposerPrimitive.Send asChild>
