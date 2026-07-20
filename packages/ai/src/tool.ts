@@ -45,11 +45,23 @@ export interface ChatUsage {
 }
 
 /**
+ * An image the user attached. It is DATA-TIER (Law 5): a photo can contain text
+ * that reads like an instruction, so the prompt tells the model to treat it as
+ * information only, never as a command. base64-encoded; no data: prefix.
+ */
+export interface ImageInput {
+  /** e.g. 'image/jpeg' | 'image/png' | 'image/webp'. */
+  readonly mediaType: string;
+  /** Raw base64 (no `data:...;base64,` prefix). */
+  readonly dataBase64: string;
+}
+
+/**
  * Neutral conversation transcript. Each provider serializes this to its own
  * wire format, so the loop stays provider-agnostic.
  */
 export type TranscriptEntry =
-  | { readonly role: 'user'; readonly text: string }
+  | { readonly role: 'user'; readonly text: string; readonly image?: ImageInput }
   | { readonly role: 'assistant_text'; readonly text: string }
   | { readonly role: 'assistant_tool_calls'; readonly calls: readonly ToolCall[] }
   | { readonly role: 'tool_result'; readonly results: readonly ToolResultMessage[] };
@@ -88,6 +100,8 @@ export interface RunAgentInput {
   readonly system: string;
   readonly tools: readonly ToolDefinition[];
   readonly userMessage: string;
+  /** Optional image the user attached with the question (data-tier, Law 5). */
+  readonly image?: ImageInput;
   /**
    * Runs one tool call and returns its JSON-encoded result string. MUST NOT
    * throw for authz/validation failures — return an error payload instead so
@@ -135,7 +149,9 @@ export const runAgent = async (input: RunAgentInput): Promise<AgentRunResult> =>
   if (input.maxSteps < 1) {
     throw new Error('runAgent requires maxSteps >= 1');
   }
-  const transcript: TranscriptEntry[] = [{ role: 'user', text: input.userMessage }];
+  const transcript: TranscriptEntry[] = [
+    { role: 'user', text: input.userMessage, ...(input.image ? { image: input.image } : {}) },
+  ];
   const executed: ExecutedToolCall[] = [];
   let usage = { inputTokens: 0, outputTokens: 0 };
   let modelVersion = '';

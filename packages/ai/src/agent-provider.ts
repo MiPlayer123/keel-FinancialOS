@@ -50,9 +50,13 @@ export interface OpenAiAgentConfig {
   readonly fetchImpl?: typeof fetch;
 }
 
+type OpenAiContentPart =
+  | { readonly type: 'text'; readonly text: string }
+  | { readonly type: 'image_url'; readonly image_url: { readonly url: string } };
+
 interface OpenAiMessage {
   readonly role: 'system' | 'user' | 'assistant' | 'tool';
-  readonly content?: string | null;
+  readonly content?: string | null | readonly OpenAiContentPart[];
   readonly tool_call_id?: string;
   readonly tool_calls?: readonly {
     readonly id: string;
@@ -66,7 +70,17 @@ const openAiMessages = (system: string, transcript: readonly TranscriptEntry[]):
   for (const entry of transcript) {
     switch (entry.role) {
       case 'user':
-        messages.push({ role: 'user', content: entry.text });
+        messages.push(
+          entry.image
+            ? {
+                role: 'user',
+                content: [
+                  { type: 'text', text: entry.text },
+                  { type: 'image_url', image_url: { url: `data:${entry.image.mediaType};base64,${entry.image.dataBase64}` } },
+                ],
+              }
+            : { role: 'user', content: entry.text },
+        );
         break;
       case 'assistant_text':
         messages.push({ role: 'assistant', content: entry.text });
@@ -202,6 +216,10 @@ export interface AnthropicAgentConfig {
 
 type AnthropicBlock =
   | { readonly type: 'text'; readonly text: string }
+  | {
+      readonly type: 'image';
+      readonly source: { readonly type: 'base64'; readonly media_type: string; readonly data: string };
+    }
   | { readonly type: 'tool_use'; readonly id: string; readonly name: string; readonly input: unknown }
   | { readonly type: 'tool_result'; readonly tool_use_id: string; readonly content: string };
 
@@ -215,7 +233,15 @@ const anthropicMessages = (transcript: readonly TranscriptEntry[]): AnthropicMes
   for (const entry of transcript) {
     switch (entry.role) {
       case 'user':
-        messages.push({ role: 'user', content: [{ type: 'text', text: entry.text }] });
+        messages.push({
+          role: 'user',
+          content: entry.image
+            ? [
+                { type: 'text', text: entry.text },
+                { type: 'image', source: { type: 'base64', media_type: entry.image.mediaType, data: entry.image.dataBase64 } },
+              ]
+            : [{ type: 'text', text: entry.text }],
+        });
         break;
       case 'assistant_text':
         messages.push({ role: 'assistant', content: [{ type: 'text', text: entry.text }] });

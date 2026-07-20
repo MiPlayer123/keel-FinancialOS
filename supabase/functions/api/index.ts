@@ -425,6 +425,32 @@ export default {
         });
       }
 
+      // Optional attached image (vision). It is DATA-TIER (Law 5): the prompt
+      // treats it as information, never instructions. Allowlisted mime + size
+      // cap (~5MB image → ~7M base64 chars).
+      let agentImage: { mediaType: string; dataBase64: string } | undefined;
+      const rawImage = input['image'];
+      if (rawImage !== undefined && rawImage !== null) {
+        const img = rawImage as Record<string, unknown>;
+        const mediaType = img['mediaType'];
+        const data = img['data'];
+        const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+        if (
+          typeof mediaType !== 'string' ||
+          !allowed.includes(mediaType) ||
+          typeof data !== 'string' ||
+          data.length === 0 ||
+          data.length > 7_000_000
+        ) {
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Attached image failed validation.',
+            details: {},
+          });
+        }
+        agentImage = { mediaType, dataBase64: data };
+      }
+
       // Law 12: provider keys live ONLY in provider secret stores — the function
       // environment first, Supabase Vault second (service_role-only definer
       // keel_ai_provider_key). Anthropic preferred when configured (best tool
@@ -559,6 +585,7 @@ export default {
           system,
           tools: agentToolDefinitions(),
           userMessage: question.trim(),
+          ...(agentImage ? { image: agentImage } : {}),
           executeTool,
           maxSteps: 8,
           maxTokens: 1024,
@@ -575,6 +602,7 @@ export default {
             tools: run.toolCalls.map((t) => t.call.name),
             appliedCount: appliedActions.length,
             proposedCount: proposedActions.length,
+            hasImage: agentImage !== undefined,
             latencyMs: Date.now() - startedAt,
             inputTokens: run.usage.inputTokens,
             outputTokens: run.usage.outputTokens,
