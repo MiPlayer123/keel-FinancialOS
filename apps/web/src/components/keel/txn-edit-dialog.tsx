@@ -1243,7 +1243,16 @@ function TxnEditForm({
                       {s.legType === 'account' ? `Transfer to ${s.name}` : s.name}
                     </span>
                   </span>
-                  <Money amountMinor={s.amountMinor} currency={row.currency} signed className="text-sm" />
+                  {/* Negate the stored debit-positive offset to the natural
+                      cash-effect sign, so a paycheck reads gross POSITIVE, taxes
+                      and the 401k transfer NEGATIVE, and the lines sum to the net
+                      deposit (same convention as the ledger's grouped-split view). */}
+                  <Money
+                    amountMinor={(-BigInt(s.amountMinor)).toString()}
+                    currency={row.currency}
+                    signed
+                    className="text-sm"
+                  />
                 </div>
               ))}
             </div>
