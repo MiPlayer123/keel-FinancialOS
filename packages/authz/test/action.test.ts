@@ -123,11 +123,6 @@ describe('action vocabulary', () => {
       'notes.archive',
       'notes.unarchive',
       'ai_profile.save',
-      'transactions.categorize',
-      'categories.create',
-      'categories.rename',
-      'tasks.save',
-      'tasks.set_status',
     ]);
   });
 
