@@ -746,6 +746,14 @@ export type RichTransactionRow = {
   categorySource?: 'user' | 'rule' | 'plaid_pfc' | 'transfer_confirm' | null;
   /** Present (non-null) only for multi-split transactions. */
   splits?: TransactionSplit[] | null;
+  /**
+   * True when this row is a distribution's transfer leg viewed from the
+   * DESTINATION account (e.g. a paycheck's 401k seen in the Roth register). It
+   * is the same canonical transaction as the paycheck — shown here as a transfer
+   * with the header account as counterparty, no separate row in the global
+   * ledger. counterpartyAccountName holds the header (source) account.
+   */
+  distributionTransfer?: boolean;
   /** User labels, orthogonal to categories (absent pre-tags-migration). */
   tags?: { tagId: string; name: string }[];
   /** Present when this transaction is one side of a suggested/confirmed transfer pair. */
