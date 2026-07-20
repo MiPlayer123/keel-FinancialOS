@@ -15,12 +15,14 @@ import { withSupabase } from 'npm:@supabase/server@1.3.0';
 import {
   AccountIdSchema,
   AiProviderError,
-  buildChatMessages,
-  buildChatResponseRecord,
+  AnthropicAgentProvider,
+  buildAgentResponseRecord,
+  buildAgentSystemPrompt,
   CanonicalTransactionIdSchema,
   CommandIdSchema,
-  EmptyAiResponseError,
-  OpenAiCompatibleChatProvider,
+  EmptyAgentResponseError,
+  OpenAiAgentProvider,
+  runAgent,
   CommandEnvelopeSchema,
   ConnectionIdSchema,
   DocumentIdSchema,
@@ -44,9 +46,9 @@ import {
   type HouseholdId,
   type HouseholdRole,
   type HouseholdExport,
-  type FinancialContextSnapshot,
 } from '../_shared/vendor/keel-domain.mjs';
 import { json, mapDbError, toSnakeKeys } from '../_shared/http.ts';
+import { makeExecuteReadTool, readToolDefinitions } from '../_shared/agent.ts';
 import { decideStatementPromotion } from '../_shared/statement-sniff.ts';
 import { decryptToken, encryptToken, type EncryptedRecord } from '../_shared/credential-crypto.ts';
 import { currentKekVersion, getKek } from '../_shared/credential-kek.ts';
@@ -381,10 +383,12 @@ export default {
     }
 
     if (path === '/ai/chat') {
-      // Read-only AI chat POC (docs/research/AI-CHAT-2026-07-16.md §6, Laws
-      // 1/5/10/11/12). Class C preview-only: the model narrates a bounded,
-      // server-computed snapshot; NOTHING on this path can write. The typed
-      // record it returns is display-only.
+      // KEEL agent (Laws 1/2/5/7/9/10/11/12). The model reaches data ONLY
+      // through the authorized read-tool catalog (_shared/agent.ts) — same
+      // fail-closed authz + procs as every other surface, no side door. Reads
+      // are free; writes are governed (notes auto+undo; budgets/reimbursements
+      // approval-gated) and land in later slices. This slice is read-only:
+      // NOTHING here can write.
       const input = body as Record<string, unknown>;
       const householdId = HouseholdIdSchema.safeParse(input['householdId']);
       const question = input['question'];
@@ -392,7 +396,7 @@ export default {
         !householdId.success ||
         typeof question !== 'string' ||
         question.trim().length === 0 ||
-        question.length > 500
+        question.length > 2000
       ) {
         return json(400, {
           code: 'invalid_command',
@@ -401,18 +405,22 @@ export default {
         });
       }
 
-      // Law 12: the provider key lives ONLY in provider secret stores — the
-      // function environment first, Supabase Vault second (via the
-      // service_role-only definer keel_ai_provider_key; this pipeline cannot
-      // script the dashboard env store). Absent everywhere = feature off,
-      // clean typed 503 — never a stubbed answer. The value is never logged
-      // and never leaves this scope.
-      let aiApiKey = Deno.env.get('OPENAI_API_KEY') ?? '';
-      if (aiApiKey.length === 0) {
+      // Law 12: provider keys live ONLY in provider secret stores — the function
+      // environment first, Supabase Vault second (service_role-only definer
+      // keel_ai_provider_key). Anthropic preferred when configured (best tool
+      // use; matches the system's Anthropic-shaped laws), else OpenAI-compatible.
+      // Absent everywhere = feature off, clean typed 503 — never stubbed. Keys
+      // never leave this scope, never logged.
+      const anthropicKey = Deno.env.get('ANTHROPIC_API_KEY') ?? '';
+      let openaiKey = Deno.env.get('OPENAI_API_KEY') ?? '';
+      if (openaiKey.length === 0 && anthropicKey.length === 0) {
         const { data: vaultKey } = await ctx.supabaseAdmin.rpc('keel_ai_provider_key');
-        aiApiKey = typeof vaultKey === 'string' ? vaultKey : '';
+        openaiKey = typeof vaultKey === 'string' ? vaultKey : '';
       }
-      if (aiApiKey.length === 0) {
+      const providerKind =
+        (Deno.env.get('AI_PROVIDER') ?? (anthropicKey.length > 0 ? 'anthropic' : 'openai')).toLowerCase();
+      const activeKey = providerKind === 'anthropic' ? anthropicKey : openaiKey;
+      if (activeKey.length === 0) {
         return json(503, {
           code: 'ai_unavailable',
           message: 'AI assistant is not configured.',
@@ -420,9 +428,9 @@ export default {
         });
       }
 
-      // Same fail-closed compiler as every other surface (Laws 7/9). Chat
-      // reads transactions + ledger balances, so BOTH viewer-tier read
-      // actions must pass before any data is fetched.
+      // Same fail-closed compiler as every other surface (Laws 7/9). The agent
+      // needs at least the two viewer-tier reads before any tool can run; each
+      // individual tool re-authorizes its own action inside makeExecuteReadTool.
       const authzCtx = await loadAuthzContext(ctx.supabase, userId);
       for (const action of ['transactions.list', 'ledger.trial_balance'] as const) {
         const decision = authorize(authzCtx, action, {
@@ -436,143 +444,76 @@ export default {
         }
       }
 
-      // Context snapshot from EXISTING read procs only (Law 1: numbers are
-      // precomputed by the deterministic spine; no new SQL in this POC). All
-      // procs re-check membership via auth.uid(), same as the UI's queries.
       const nowIso = new Date().toISOString();
-      const monthIso = `${nowIso.slice(0, 7)}-01`;
-      const [entitiesRes, trialRes, txRes, catRes, budgetRes, accountsRes] = await Promise.all([
-        ctx.supabase.rpc('keel_list_entities', { p_household_id: householdId.data }),
-        ctx.supabase.rpc('keel_trial_balance', { p_household_id: householdId.data }),
-        ctx.supabase.rpc('keel_list_transactions_rich', { p_household_id: householdId.data }),
-        ctx.supabase.rpc('keel_list_categories', { p_household_id: householdId.data }),
-        ctx.supabase.rpc('keel_list_budgets', {
-          p_household_id: householdId.data,
-          p_month: monthIso,
-        }),
-        ctx.supabase
-          .from('accounts')
-          .select('id, name, subtype, currency, ledger_account_id')
-          .eq('household_id', householdId.data)
-          .is('archived_at', null)
-          .order('name'),
-      ]);
-      for (const res of [entitiesRes, trialRes, txRes, catRes, budgetRes, accountsRes]) {
-        if (res.error) return mapDbError(res.error);
-      }
-
-      const entities = (entitiesRes.data ?? []) as { entityId: string }[];
-      const balances = new Map(
-        (
-          ((trialRes.data as { rows?: unknown[] } | null)?.rows ?? []) as {
-            ledgerAccountId: string;
-            currency: string;
-            balanceMinor: string;
-          }[]
-        ).map((row) => [row.ledgerAccountId, row.balanceMinor]),
-      );
-      const accountRows = (accountsRes.data ?? []) as {
-        id: string;
-        name: string;
-        subtype: string;
-        currency: string;
-        ledger_account_id: string;
-      }[];
-      const txRows = (
-        ((txRes.data as { rows?: unknown[] } | null)?.rows ?? []) as {
-          transactionId: string;
-          effectiveDate: string;
-          description: string;
-          amountMinor: string;
-          currency: string;
-          accountName: string;
-          categoryName: string | null;
-          status: string;
-        }[]
-      ).slice(0, 50); // rows arrive newest-first; keep the snapshot bounded
-      const categoryRows = (
-        (catRes.data ?? []) as { name: string; kind: 'income' | 'expense' }[]
-      ).slice(0, 100);
-      const budgetRows = (
-        ((budgetRes.data as { rows?: unknown[] } | null)?.rows ?? []) as {
-          categoryName: string;
-          currency: string;
-          budgetMinor: string | null;
-          spentMinor: string;
-        }[]
-      ).slice(0, 100);
-
-      const snapshot: FinancialContextSnapshot = {
-        asOf: nowIso,
-        scope: {
-          householdId: householdId.data,
-          entityIds: entities.map((e) => e.entityId),
-        },
-        budgetsMonth: monthIso,
-        accounts: accountRows.map((a) => ({
-          accountId: a.id,
-          name: a.name,
-          subtype: a.subtype,
-          currency: a.currency,
-          balanceMinor: balances.get(a.ledger_account_id) ?? '0',
-        })),
-        transactions: txRows.map((t) => ({
-          transactionId: t.transactionId,
-          effectiveDate: t.effectiveDate,
-          description: t.description, // data-tier; prompt builder wraps it (Law 5)
-          amountMinor: t.amountMinor,
-          currency: t.currency,
-          accountName: t.accountName,
-          categoryName: t.categoryName,
-          status: t.status,
-        })),
-        categories: categoryRows.map((c) => ({ name: c.name, kind: c.kind })),
-        budgets: budgetRows.map((b) => ({
-          categoryName: b.categoryName,
-          currency: b.currency,
-          budgetMinor: b.budgetMinor,
-          spentMinor: b.spentMinor,
-        })),
-      };
-
-      const provider = new OpenAiCompatibleChatProvider({
-        baseUrl: Deno.env.get('OPENAI_BASE_URL') ?? 'https://api.openai.com/v1',
-        model: Deno.env.get('OPENAI_MODEL') ?? 'gpt-4o-mini',
-        apiKey: aiApiKey,
-      });
-      // Per-request random boundary so ingested memos can't pre-embed the
-      // data delimiter (Law 5, spotlighting).
+      const todayIso = nowIso.slice(0, 10);
+      // Per-request random boundary so ingested memos can't pre-embed the data
+      // delimiter (Law 5, spotlighting).
       const dataBoundary = `kd-${crypto.randomUUID()}`;
+      const system = buildAgentSystemPrompt({ dataBoundary, asOf: nowIso });
+
+      const provider =
+        providerKind === 'anthropic'
+          ? new AnthropicAgentProvider({
+              baseUrl: Deno.env.get('ANTHROPIC_BASE_URL') ?? 'https://api.anthropic.com',
+              model: Deno.env.get('ANTHROPIC_MODEL') ?? 'claude-sonnet-5',
+              apiKey: anthropicKey,
+              anthropicVersion: Deno.env.get('ANTHROPIC_VERSION') ?? '2023-06-01',
+            })
+          : new OpenAiAgentProvider({
+              baseUrl: Deno.env.get('OPENAI_BASE_URL') ?? 'https://api.openai.com/v1',
+              model: Deno.env.get('OPENAI_MODEL') ?? 'gpt-4o-mini',
+              apiKey: openaiKey,
+            });
+
+      const executeTool = makeExecuteReadTool({
+        authorize,
+        authzCtx,
+        householdId: householdId.data,
+        rpc: (proc, args) => ctx.supabase.rpc(proc, args),
+        todayIso,
+      });
+
       const startedAt = Date.now();
       try {
-        const completion = await provider.complete(
-          buildChatMessages(snapshot, question.trim(), { dataBoundary }),
-          { maxTokens: 700 },
-        );
-        // Usage telemetry: counts and model only — never the question, the
-        // snapshot, or any credential (Law 12). The keel_meter_provider_call
-        // proc is plaid-only and this POC adds no migrations, so usage_events
-        // metering is deferred to the full slice (deviation noted in report).
+        const run = await runAgent({
+          provider,
+          system,
+          tools: readToolDefinitions(),
+          userMessage: question.trim(),
+          executeTool,
+          maxSteps: 8,
+          maxTokens: 1024,
+        });
+        // Telemetry: model, step count, and tool NAMES only — never the
+        // question, tool results, or any credential (Law 12).
         console.log(
-          'ai_chat_completion',
+          'ai_agent_run',
           JSON.stringify({
-            model: completion.modelVersion,
+            provider: providerKind,
+            model: run.modelVersion,
+            steps: run.steps,
+            stoppedReason: run.stoppedReason,
+            tools: run.toolCalls.map((t) => t.call.name),
             latencyMs: Date.now() - startedAt,
-            inputTokens: completion.usage.inputTokens,
-            outputTokens: completion.usage.outputTokens,
+            inputTokens: run.usage.inputTokens,
+            outputTokens: run.usage.outputTokens,
           }),
         );
-        const record = buildChatResponseRecord({
-          text: completion.text,
-          snapshot,
-          modelVersion: completion.modelVersion,
+        const record = buildAgentResponseRecord({
+          text: run.finalText,
+          asOf: nowIso,
+          scope: { householdId: householdId.data, entityIds: [] },
+          modelVersion: run.modelVersion,
+          toolsUsed: run.toolCalls.map((t) => t.call.name),
+          steps: run.steps,
+          stoppedReason: run.stoppedReason,
         });
         return json(200, record);
       } catch (error) {
-        if (error instanceof AiProviderError || error instanceof EmptyAiResponseError) {
+        if (error instanceof AiProviderError || error instanceof EmptyAgentResponseError) {
           // Status code only — provider error bodies never reach logs or wire.
           console.error(
-            'ai_chat_provider_failed',
+            'ai_agent_provider_failed',
             error instanceof AiProviderError ? (error.status ?? 'transport') : 'empty',
           );
           return json(502, {

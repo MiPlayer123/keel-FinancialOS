@@ -74,6 +74,28 @@ export const READ_ACTIONS = [
   'receipts.inbox',
   'budgets.month',
   'audit.read',
+  // AI-agent read reconciliation (Law 7): every read the agent can perform is
+  // an explicit, compiler-checked Action gated at viewer tier, not merely a
+  // proc-side membership check. These query names already exist in
+  // QUERY_TO_PROC and are read-only; the UI's /queries dispatch is unchanged
+  // (it authorizes its own hardcoded subset), so adding them here is additive.
+  'balances.latest',
+  'categories.list',
+  'entities.list',
+  'budgets.list',
+  'notes_tasks.list',
+  'transfers.list',
+  'transactions.rich',
+  'transactions.rich_page',
+  'transactions.search',
+  'dashboard.net_worth',
+  'dashboard.cash_flow',
+  'dashboard.cash_flow_forecast',
+  'holdings.list',
+  'investments.overview',
+  'goals.list',
+  'rules.list',
+  'tags.list',
   ...EXPORT_ACTIONS,
 ] as const;
 
@@ -145,6 +167,24 @@ export const ACTION_MINIMUM_ROLES = {
   'documents.list_for_target': 'viewer',
   'receipts.inbox': 'viewer',
   'audit.read': 'viewer',
+  // AI-agent read reconciliation (viewer tier — see READ_ACTIONS above).
+  'balances.latest': 'viewer',
+  'categories.list': 'viewer',
+  'entities.list': 'viewer',
+  'budgets.list': 'viewer',
+  'notes_tasks.list': 'viewer',
+  'transfers.list': 'viewer',
+  'transactions.rich': 'viewer',
+  'transactions.rich_page': 'viewer',
+  'transactions.search': 'viewer',
+  'dashboard.net_worth': 'viewer',
+  'dashboard.cash_flow': 'viewer',
+  'dashboard.cash_flow_forecast': 'viewer',
+  'holdings.list': 'viewer',
+  'investments.overview': 'viewer',
+  'goals.list': 'viewer',
+  'rules.list': 'viewer',
+  'tags.list': 'viewer',
   'admin.export_all': 'owner',
 } as const satisfies Readonly<Record<Action, MinimumRole>>;
 

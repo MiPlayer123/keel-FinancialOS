@@ -27,9 +27,45 @@ export {
   type ChatCompleteOptions,
   type ChatCompletion,
   type ChatProvider,
-  type ChatUsage,
+  type ChatUsage as ChatCompletionUsage,
   type OpenAiCompatibleConfig,
 } from './provider.js';
+export {
+  runAgent,
+  type AgentProvider,
+  type AgentRunResult,
+  type AgentTurn,
+  type ChatUsage,
+  type ConverseInput,
+  type ExecutedToolCall,
+  type JsonSchema,
+  type RunAgentInput,
+  type ToolCall,
+  type ToolDefinition,
+  type ToolResultMessage,
+  type TranscriptEntry,
+} from './tool.js';
+export {
+  AnthropicAgentProvider,
+  OpenAiAgentProvider,
+  type AnthropicAgentConfig,
+  type OpenAiAgentConfig,
+} from './agent-provider.js';
+export {
+  AGENT_PROMPT_VERSION,
+  buildAgentSystemPrompt,
+  DEFAULT_AGENT_DATA_BOUNDARY,
+  type AgentPromptOptions,
+} from './agent-prompt.js';
+export {
+  AGENT_TLDR_MAX_LENGTH,
+  buildAgentResponseRecord,
+  EmptyAgentResponseError,
+  type AgentResponseRecord,
+  type AppliedAction,
+  type BuildAgentRecordInput,
+  type ProposedAction,
+} from './agent-record.js';
 export {
   buildChatResponseRecord,
   EmptyAiResponseError,
