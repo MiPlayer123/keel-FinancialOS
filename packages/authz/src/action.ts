@@ -124,6 +124,15 @@ export const AGENT_WRITE_ACTIONS = [
   // context into every member's agent session, so writing it is partner-tier —
   // a viewer must not be able to plant instructions in a partner/owner's agent.
   'ai_profile.save',
+  // More agent writes (bespoke-route procs enforce membership only, so these
+  // Actions add the partner-tier floor). Recategorize + category create/rename
+  // are Class B (proposal-gated in the UI); tasks are Class A (auto+undo, notes
+  // sibling).
+  'transactions.categorize',
+  'categories.create',
+  'categories.rename',
+  'tasks.save',
+  'tasks.set_status',
 ] as const;
 
 export const ACTIONS = [...WRITE_ACTIONS, ...READ_ACTIONS, ...AGENT_WRITE_ACTIONS] as const;
@@ -230,6 +239,11 @@ export const ACTION_MINIMUM_ROLES = {
   'notes.archive': 'partner',
   'notes.unarchive': 'partner',
   'ai_profile.save': 'partner',
+  'transactions.categorize': 'partner',
+  'categories.create': 'partner',
+  'categories.rename': 'partner',
+  'tasks.save': 'partner',
+  'tasks.set_status': 'partner',
   'admin.export_all': 'owner',
 } as const satisfies Readonly<Record<Action, MinimumRole>>;
 

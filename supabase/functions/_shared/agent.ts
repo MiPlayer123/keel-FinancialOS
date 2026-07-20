@@ -451,10 +451,16 @@ export const makeExecuteReadTool = (deps: ReadToolDeps) => async (call: ToolCall
 
 /** How the UI reverses an applied action (mirrors @keel/ai AppliedActionUndo). */
 export interface AppliedActionUndo {
-  readonly op: 'archive_note' | 'unarchive_note' | 'edit_note';
-  readonly noteId: string;
+  readonly op: 'archive_note' | 'unarchive_note' | 'edit_note' | 'set_task_status' | 'edit_task';
+  readonly noteId?: string;
+  readonly taskId?: string;
   readonly body?: string;
   readonly pinned?: boolean;
+  readonly status?: 'open' | 'done' | 'dismissed';
+  readonly title?: string;
+  readonly description?: string | null;
+  readonly dueOn?: string | null;
+  readonly priority?: 'low' | 'normal' | 'high';
 }
 
 /** A change the agent applied (mirrors @keel/ai AppliedAction). */
@@ -535,6 +541,26 @@ const resolveCategoryName = async (
     : (((data as { rows?: unknown[] } | null)?.rows) ?? [])) as Record<string, unknown>[];
   const match = rows.find((r) => r['ledgerAccountId'] === categoryLedgerAccountId);
   return match && typeof match['name'] === 'string' ? (match['name'] as string) : null;
+};
+
+// --- task helpers (Class A, notes sibling) ---
+const TASK_PRIORITIES = ['low', 'normal', 'high'];
+const TASK_STATUSES = ['open', 'done', 'dismissed'];
+const taskTitle = (v: unknown): string | null => {
+  if (typeof v !== 'string') return null;
+  const t = v.trim();
+  return t.length >= 1 && t.length <= 160 ? t : null;
+};
+/** Find a task's current row (for edit/status undo capture) via the list proc. */
+const resolveTaskRow = async (
+  rpc: (proc: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>,
+  householdId: string,
+  taskId: string,
+): Promise<Record<string, unknown> | null> => {
+  const { data, error } = await rpc('keel_list_notes_tasks', { p_household_id: householdId });
+  if (error) return null;
+  const rows = (((data as { rows?: unknown[] } | null)?.rows) ?? []) as Record<string, unknown>[];
+  return rows.find((r) => r['type'] === 'task' && r['id'] === taskId) ?? null;
 };
 
 const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
@@ -861,6 +887,340 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
             currency,
             description,
           },
+        },
+      });
+    },
+  },
+  // --- Recategorize a transaction: Class B (category = Law 10 Class B). ---
+  {
+    name: 'propose_recategorize_transaction',
+    description:
+      'Propose changing the category of one existing transaction. Requires the user’s approval. Get the transactionId from list_transactions/search_transactions and the categoryLedgerAccountId from list_categories. (Split transactions are categorized by their splits, not here.)',
+    action: 'transactions.categorize',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['transactionId', 'categoryLedgerAccountId'],
+      properties: {
+        transactionId: { type: 'string', description: 'The transaction id (uuid).' },
+        categoryLedgerAccountId: { type: 'string', description: 'The target category ledger account id (uuid) from list_categories.' },
+      },
+    },
+    execute: async (args, ctx) => {
+      const txId = noteId(args['transactionId']);
+      const cat = noteId(args['categoryLedgerAccountId']);
+      if (txId === null) return { ok: false, error: 'invalid_arguments', detail: 'transactionId must be a uuid' };
+      if (cat === null) return { ok: false, error: 'invalid_arguments', detail: 'categoryLedgerAccountId must be a uuid' };
+      const name = await resolveCategoryName(ctx.rpc, ctx.householdId, cat);
+      if (name === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live category in this household' };
+      return {
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'transactions.categorize',
+          command: 'transactions.categorize',
+          summary: `Recategorize a transaction to ${name}`,
+          payload: { transactionId: txId, categoryLedgerAccountId: cat },
+        },
+      };
+    },
+  },
+  // --- Create a category: Class B. ---
+  {
+    name: 'propose_create_category',
+    description: 'Propose creating a new spending/income category. Requires the user’s approval.',
+    action: 'categories.create',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['name', 'kind'],
+      properties: {
+        name: { type: 'string', minLength: 1, maxLength: 80, description: 'Category name.' },
+        kind: { type: 'string', enum: ['expense', 'income'] },
+      },
+    },
+    execute: (args) => {
+      const name = typeof args['name'] === 'string' ? args['name'].trim() : '';
+      if (name.length === 0 || name.length > 80) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'name 1..80 chars' });
+      const kind = args['kind'] === 'expense' || args['kind'] === 'income' ? args['kind'] : null;
+      if (kind === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'kind must be expense or income' });
+      return Promise.resolve({
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'categories.create',
+          command: 'categories.create',
+          summary: `Create a new ${kind} category: "${name}"`,
+          payload: { name, kind },
+        },
+      });
+    },
+  },
+  // --- Rename a category: Class B. ---
+  {
+    name: 'propose_rename_category',
+    description: 'Propose renaming an existing category. Requires the user’s approval. Get the categoryLedgerAccountId from list_categories.',
+    action: 'categories.rename',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['categoryLedgerAccountId', 'name'],
+      properties: {
+        categoryLedgerAccountId: { type: 'string', description: 'The category ledger account id (uuid).' },
+        name: { type: 'string', minLength: 1, maxLength: 80, description: 'New name.' },
+      },
+    },
+    execute: async (args, ctx) => {
+      const cat = noteId(args['categoryLedgerAccountId']);
+      if (cat === null) return { ok: false, error: 'invalid_arguments', detail: 'categoryLedgerAccountId must be a uuid' };
+      const name = typeof args['name'] === 'string' ? args['name'].trim() : '';
+      if (name.length === 0 || name.length > 80) return { ok: false, error: 'invalid_arguments', detail: 'name 1..80 chars' };
+      const oldName = await resolveCategoryName(ctx.rpc, ctx.householdId, cat);
+      if (oldName === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live category in this household' };
+      return {
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'categories.rename',
+          command: 'categories.rename',
+          summary: `Rename category "${oldName}" to "${name}"`,
+          payload: { categoryLedgerAccountId: cat, name },
+        },
+      };
+    },
+  },
+  // --- Tasks: Class A auto+undo (notes sibling). ---
+  {
+    name: 'create_task',
+    description: 'Create a task/to-do. Applied immediately and undoable. Use for "remind me to…", "add a task to…".',
+    action: 'tasks.save',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['title'],
+      properties: {
+        title: { type: 'string', minLength: 1, maxLength: 160 },
+        description: { type: 'string', maxLength: 1000 },
+        dueOn: { type: 'string', description: 'Due date, ISO YYYY-MM-DD.' },
+        priority: { type: 'string', enum: ['low', 'normal', 'high'] },
+      },
+    },
+    execute: async (args, ctx) => {
+      const title = taskTitle(args['title']);
+      if (title === null) return { ok: false, error: 'invalid_arguments', detail: 'title 1..160 chars' };
+      const description = typeof args['description'] === 'string' && args['description'].length <= 1000 ? args['description'] : null;
+      const dueOn = isoDate(args['dueOn']);
+      const priority = typeof args['priority'] === 'string' && TASK_PRIORITIES.includes(args['priority']) ? args['priority'] : 'normal';
+      const { data, error } = await ctx.rpc('keel_task_save', {
+        p_household_id: ctx.householdId,
+        p_task_id: null,
+        p_title: title,
+        p_description: description,
+        p_due_on: dueOn,
+        p_priority: priority,
+      });
+      if (error) return { ok: false, error: 'write_failed' };
+      const id = typeof data === 'string' ? data : '';
+      return {
+        ok: true,
+        modelResult: { ok: true, taskId: id },
+        applied: {
+          kind: 'tasks.create',
+          summary: `Added task: "${truncate(title, 80)}"`,
+          ref: id,
+          undo: { op: 'set_task_status', taskId: id, status: 'dismissed' },
+        },
+      };
+    },
+  },
+  {
+    name: 'edit_task',
+    description: 'Edit an existing task by id. Applied immediately and undoable.',
+    action: 'tasks.save',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['taskId', 'title'],
+      properties: {
+        taskId: { type: 'string', description: 'The task id (uuid).' },
+        title: { type: 'string', minLength: 1, maxLength: 160 },
+        description: { type: 'string', maxLength: 1000 },
+        dueOn: { type: 'string', description: 'Due date, ISO YYYY-MM-DD.' },
+        priority: { type: 'string', enum: ['low', 'normal', 'high'] },
+      },
+    },
+    execute: async (args, ctx) => {
+      const id = noteId(args['taskId']);
+      const title = taskTitle(args['title']);
+      if (id === null) return { ok: false, error: 'invalid_arguments', detail: 'taskId must be a uuid' };
+      if (title === null) return { ok: false, error: 'invalid_arguments', detail: 'title 1..160 chars' };
+      const prior = await resolveTaskRow(ctx.rpc, ctx.householdId, id);
+      const description = typeof args['description'] === 'string' && args['description'].length <= 1000 ? args['description'] : null;
+      const dueOn = isoDate(args['dueOn']);
+      const priority = typeof args['priority'] === 'string' && TASK_PRIORITIES.includes(args['priority']) ? args['priority'] : 'normal';
+      const { error } = await ctx.rpc('keel_task_save', {
+        p_household_id: ctx.householdId,
+        p_task_id: id,
+        p_title: title,
+        p_description: description,
+        p_due_on: dueOn,
+        p_priority: priority,
+      });
+      if (error) return { ok: false, error: 'write_failed' };
+      const undo = prior
+        ? {
+            op: 'edit_task' as const,
+            taskId: id,
+            title: typeof prior['title'] === 'string' ? (prior['title'] as string) : title,
+            description: typeof prior['description'] === 'string' ? (prior['description'] as string) : null,
+            dueOn: typeof prior['dueOn'] === 'string' ? (prior['dueOn'] as string) : null,
+            priority: typeof prior['priority'] === 'string' && TASK_PRIORITIES.includes(prior['priority'] as string) ? (prior['priority'] as 'low' | 'normal' | 'high') : 'normal',
+          }
+        : undefined;
+      const applied: AppliedAction = {
+        kind: 'tasks.update',
+        summary: `Edited task: "${truncate(title, 80)}"`,
+        ref: id,
+        ...(undo ? { undo } : {}),
+      };
+      return { ok: true, modelResult: { ok: true, taskId: id }, applied };
+    },
+  },
+  {
+    name: 'set_task_status',
+    description: 'Mark a task done, reopen it (open), or dismiss it. Applied immediately and undoable.',
+    action: 'tasks.set_status',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['taskId', 'status'],
+      properties: {
+        taskId: { type: 'string', description: 'The task id (uuid).' },
+        status: { type: 'string', enum: ['open', 'done', 'dismissed'] },
+      },
+    },
+    execute: async (args, ctx) => {
+      const id = noteId(args['taskId']);
+      const status = typeof args['status'] === 'string' && TASK_STATUSES.includes(args['status']) ? args['status'] : null;
+      if (id === null) return { ok: false, error: 'invalid_arguments', detail: 'taskId must be a uuid' };
+      if (status === null) return { ok: false, error: 'invalid_arguments', detail: 'status must be open|done|dismissed' };
+      // Capture prior status BEFORE mutating (for undo).
+      const prior = await resolveTaskRow(ctx.rpc, ctx.householdId, id);
+      const priorStatus =
+        prior && typeof prior['status'] === 'string' && TASK_STATUSES.includes(prior['status'] as string)
+          ? (prior['status'] as 'open' | 'done' | 'dismissed')
+          : 'open';
+      const { error } = await ctx.rpc('keel_task_set_status', {
+        p_household_id: ctx.householdId,
+        p_task_id: id,
+        p_status: status,
+      });
+      if (error) return { ok: false, error: 'write_failed' };
+      return {
+        ok: true,
+        modelResult: { ok: true, taskId: id },
+        applied: {
+          kind: 'tasks.set_status',
+          summary: `Marked a task ${status}`,
+          ref: id,
+          undo: { op: 'set_task_status', taskId: id, status: priorStatus },
+        },
+      };
+    },
+  },
+  // --- Reimbursements: settle + reverse (Class B, /commands envelope). ---
+  {
+    name: 'propose_settle_reimbursement',
+    description:
+      'Propose settling a reimbursement claim from a specific transaction (e.g. the deposit that paid you back). Requires the user’s approval. Get claimId from list_reimbursements and transactionId from list_transactions.',
+    action: 'reimbursements.settle',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['claimId', 'transactionId', 'amountMinor', 'note'],
+      properties: {
+        claimId: { type: 'string', description: 'The reimbursement claim id (uuid).' },
+        transactionId: { type: 'string', description: 'The settling transaction id (uuid).' },
+        amountMinor: { type: 'string', description: 'Amount applied, in minor units.' },
+        note: { type: 'string', minLength: 1, maxLength: 500 },
+      },
+    },
+    execute: (args) => {
+      const claimId = noteId(args['claimId']);
+      const txId = noteId(args['transactionId']);
+      const amount = minorDigits(args['amountMinor']);
+      const note = typeof args['note'] === 'string' ? args['note'].trim() : '';
+      if (claimId === null || txId === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'claimId and transactionId must be uuids' });
+      if (amount === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'amountMinor must be a non-negative minor-unit string' });
+      if (note.length === 0 || note.length > 500) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'note 1..500 chars' });
+      return Promise.resolve({
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'reimbursements.settle',
+          command: 'reimbursements.settle',
+          summary: `Settle ${displayMinor(amount)} of a reimbursement claim from a transaction`,
+          payload: { transactionId: txId, allocations: [{ claimId, amountMinor: amount }], note },
+        },
+      });
+    },
+  },
+  {
+    name: 'propose_reverse_reimbursement_claim',
+    description: 'Propose reversing (undoing) a reimbursement claim. Requires the user’s approval. Get claimId from list_reimbursements.',
+    action: 'reimbursements.reverse_claim',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['claimId', 'reason'],
+      properties: {
+        claimId: { type: 'string', description: 'The claim id (uuid).' },
+        reason: { type: 'string', minLength: 1, maxLength: 500 },
+      },
+    },
+    execute: (args) => {
+      const claimId = noteId(args['claimId']);
+      const reason = typeof args['reason'] === 'string' ? args['reason'].trim() : '';
+      if (claimId === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'claimId must be a uuid' });
+      if (reason.length === 0 || reason.length > 500) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'reason 1..500 chars' });
+      return Promise.resolve({
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'reimbursements.reverse_claim',
+          command: 'reimbursements.reverse_claim',
+          summary: 'Reverse a reimbursement claim',
+          payload: { claimId, reason },
+        },
+      });
+    },
+  },
+  {
+    name: 'propose_reverse_reimbursement_settlement',
+    description: 'Propose reversing (undoing) a reimbursement settlement. Requires the user’s approval. Get settlementId from list_reimbursements.',
+    action: 'reimbursements.reverse_settlement',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['settlementId', 'reason'],
+      properties: {
+        settlementId: { type: 'string', description: 'The settlement id (uuid).' },
+        reason: { type: 'string', minLength: 1, maxLength: 500 },
+      },
+    },
+    execute: (args) => {
+      const settlementId = noteId(args['settlementId']);
+      const reason = typeof args['reason'] === 'string' ? args['reason'].trim() : '';
+      if (settlementId === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'settlementId must be a uuid' });
+      if (reason.length === 0 || reason.length > 500) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'reason 1..500 chars' });
+      return Promise.resolve({
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'reimbursements.reverse_settlement',
+          command: 'reimbursements.reverse_settlement',
+          summary: 'Reverse a reimbursement settlement',
+          payload: { settlementId, reason },
         },
       });
     },

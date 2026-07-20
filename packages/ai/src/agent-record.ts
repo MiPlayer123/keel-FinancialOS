@@ -15,11 +15,26 @@ export const AGENT_TLDR_MAX_LENGTH = 280;
 
 /** How the UI reverses an auto-applied action (Law 2: every AI write is undoable). */
 export interface AppliedActionUndo {
-  readonly op: 'archive_note' | 'unarchive_note' | 'edit_note';
-  readonly noteId: string;
-  /** Prior body, for edit-undo (re-apply what was there before). */
+  readonly op:
+    | 'archive_note'
+    | 'unarchive_note'
+    | 'edit_note'
+    | 'set_task_status'
+    | 'edit_task';
+  /** Present for note ops. */
+  readonly noteId?: string;
+  /** Present for task ops. */
+  readonly taskId?: string;
+  /** Prior body, for note edit-undo. */
   readonly body?: string;
   readonly pinned?: boolean;
+  /** For set_task_status undo (restore prior status). */
+  readonly status?: 'open' | 'done' | 'dismissed';
+  /** Prior task fields, for task edit-undo. */
+  readonly title?: string;
+  readonly description?: string | null;
+  readonly dueOn?: string | null;
+  readonly priority?: 'low' | 'normal' | 'high';
 }
 
 /** A change the agent already applied (Class A auto, undoable). */

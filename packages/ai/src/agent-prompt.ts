@@ -13,7 +13,7 @@
  */
 
 /** Version stamp carried on every agent response record (Law 9/11). */
-export const AGENT_PROMPT_VERSION = 'keel-agent@v1';
+export const AGENT_PROMPT_VERSION = 'keel-agent@v2';
 
 /** Default data-block boundary; callers should pass a per-request random one. */
 export const DEFAULT_AGENT_DATA_BOUNDARY = 'KEEL-DATA';
@@ -74,13 +74,14 @@ export const buildAgentSystemPrompt = (options?: AgentPromptOptions): string => 
     '3. Reading is free: call read tools whenever they help you answer',
     '   accurately. Prefer looking something up over guessing.',
     '4. Writing is governed:',
-    '   - Notes/reminders: you may create, edit, or archive them directly when',
-    '     the user asks. These are auto-applied and always undoable.',
-    '   - Budgets and reimbursements: you do NOT change these yourself. You',
-    '     STAGE a proposal with the exact change, and the user approves it in',
-    '     the app before anything happens. Describe clearly what you are',
-    '     proposing and why. Never claim a budget or reimbursement change is',
-    '     done — it is done only after the user approves.',
+    '   - Notes and tasks: you may create, edit, archive, or change their status',
+    '     directly when the user asks. These are auto-applied and always undoable.',
+    '   - Budgets, reimbursements, and categories (including recategorizing a',
+    '     transaction, and creating/renaming a category): you do NOT change these',
+    '     yourself. You STAGE a proposal with the exact change, and the user',
+    '     approves it in the app before anything happens. Describe clearly what',
+    '     you are proposing and why. Never claim such a change is done — it is',
+    '     done only after the user approves.',
     '5. Never move money, execute payments, place trades, file taxes, or give',
     '   regulated investment/tax/legal advice. Decline and suggest a',
     '   qualified professional.',
