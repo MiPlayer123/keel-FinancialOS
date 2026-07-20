@@ -4,6 +4,95 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-20 — feat(documents): attach an EXISTING doc to a transaction + storage hygiene
+
+Founder ask (2026-07-20): (1) "docs attached to when the [transaction] elements
+too would be pretty good" — let a user attach an already-uploaded receipt/
+statement (or a fresh upload) to a specific transaction and open it from the
+txn detail; (2) storage-growth worry ("if you look at the model, quicken becomes
+so big") — confirm docs live in Storage (not inline), deduped by content hash,
+and surface a storage number.
+
+**Most of ask (1) was already shipped.** The attach-only slice
+(`20260717234500`) already has: a generic `document_attachments` link with a
+`canonical_transaction_id` target, `keel_documents_confirm_upload` accepting
+`target_type='transaction'`/`target_id`, `keel_documents_list_for_target`, and
+soft-detach `keel_cmd_documents_detach`. The web `AttachmentsSection` was ALREADY
+wired into `TxnDetailSheet` (`txn-edit-dialog.tsx:1558`) and into paychecks /
+reimbursements / statements. So a FRESH upload could already be attached to a
+transaction and opened. No parallel storage path was created (Law 7 honored) —
+this work extends the existing model only.
+
+**The real gap: attach an ALREADY-UPLOADED document.** `confirm_upload` only
+attaches at upload time; a receipt sitting in the inbox (or attached elsewhere)
+could not be linked to a transaction. Closed with:
+- **`keel_cmd_documents_attach`** (migration `20260723000000`) — command-shaped
+  (generic `/commands` dispatch, same 5-arg signature as `_detach`). Links an
+  existing non-deleted document to any target. Tenant-checks BOTH the document
+  and the target (mirrors `confirm_upload`'s per-target checks). Idempotent: a
+  live `(document_id, target)` link is returned (`alreadyAttached:true`), never
+  duplicated. Rejects a soft-deleted document (its attachments were already
+  detached by `_delete`). No bytes move — just a `document_attachments` row.
+- Registered: `AttachExistingDocumentPayloadSchema` +
+  `COMMAND_PAYLOAD_SCHEMAS['documents.attach']` (contracts); `documents.attach`
+  in `COMMAND_ACTIONS`/`ACTION_MINIMUM_ROLES='partner'` (authz);
+  `COMMAND_TO_PROC['documents.attach']` (api); `attachExistingDocument` (client).
+- **UI:** `AttachmentsSection` gained an "Attach existing" button opening a
+  searchable dialog of every household document (`ExistingDocumentPicker`);
+  docs already attached to THIS target show "Attached" and are disabled. The
+  existing "Attach file" fresh-upload path is untouched. Because the section is
+  shared, transactions/paychecks/reimbursements/statements ALL gain this at once.
+
+**Ask (2) — storage hygiene.** Confirmed with live read-only SELECTs
+(founder household, metadata only — no bytes downloaded): document tables have
+**zero `bytea` columns**; bytes live only in Storage referenced by
+`document_versions.storage_bucket`/`storage_path` (no Quicken-style inline
+bloat), deduped by unique `(document_id, content_sha256)` + the tenant
+`document_hashes` registry. (Founder household currently has 0 document rows —
+tested-then-cleaned or a different household.) Added:
+- **`keel_documents_storage_summary`** (read) — pure metadata: live/deleted doc
+  counts, live vs total stored bytes (string, BIGINT-safe), version count, and
+  `distinctContent` (dedup) so the UI can show "N unique files".
+- **`keel_documents_list_household`** (read) — every live household document +
+  storage pointer + live-attachment count; powers both the "pick existing"
+  picker and a storage-management view. Signed URLs minted in the edge route
+  (`/documents/list-household`), same pattern as `/documents/list`.
+- **UI:** a `StorageSummaryBar` strip on the Receipts page ("X in Storage · N
+  documents · M unique (duplicates deduped) · K removed (kept for export/audit)").
+- Authz reads `documents.list_household` / `documents.storage_summary` at
+  `viewer`; both bespoke edge routes (list_household needs signed URLs).
+
+**Soft-delete respected (user directive 2026-07-17):** attach never hard-deletes;
+detach stays soft (`detached_at`); a soft-deleted document is un-attachable.
+`liveBytes` excludes soft-deleted originals (they persist for export/audit).
+
+**Snapshot fix (pre-existing drift, unrelated):** `packages/authz/test/
+action.test.ts` `ACTIONS` snapshot was already stale on the branch base —
+missing 5 actions from the merged AI-agent batch (`transactions.categorize`,
+`categories.create/rename`, `tasks.save/set_status`). Appended them alongside
+my 3 new actions so the suite is green.
+
+**Tests (RAN):**
+- Contracts `documents.attach` payload — 45/45 green (`npx vitest run --root
+  packages/contracts`): accepts every target type, rejects unknown enum,
+  strict (no smuggled `accountId`), required fields enforced.
+- Authz vocabulary/tier — 142/142 green.
+- **pgTAP against the REAL sliced proc body** (`scripts/run-documents-attach-
+  pgtap.sh` → throwaway PG17 cluster, TAP shim incl. `throws_ok`,
+  `tests/pgtap/documents_attach_existing.sql`) — **7/7 pass**: first attach
+  creates one link; idempotent re-attach returns the live link with no
+  duplicate row; soft-deleted document rejected (P0006); cross-tenant target
+  rejected (P0006); non-member actor rejected (P0006).
+- `cd apps/web && pnpm build` green (ESLint enforced). `node scripts/build-
+  functions.mjs` green (vendors contracts+authz — new command/action wired).
+
+**Migration to apply (⚑ human, live cloud — after `20260722310000`):**
+`20260723000000_documents_attach_existing_and_storage_summary.sql`. Header
+spells out the single `psql --single-transaction` invocation. No live apply or
+live data mutation performed here (per worktree hard rules).
+
+---
+
 ## 2026-07-19 — feat(recurring): semi-monthly (15th & 30th) schedule option
 
 Adds a `semimonthly` `schedule_frequency` so a user can declare "Twice a month

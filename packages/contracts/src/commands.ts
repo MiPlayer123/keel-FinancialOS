@@ -550,6 +550,17 @@ export const DetachDocumentPayloadSchema = z.object({
   reason: z.string().min(1).max(500),
 }).strict();
 
+/**
+ * Attach an ALREADY-UPLOADED document to a target (e.g. a receipt from the
+ * inbox onto a transaction). Reuses the same document_attachments link the
+ * fresh-upload confirm flow creates; no bytes move. Idempotent server-side.
+ */
+export const AttachExistingDocumentPayloadSchema = z.object({
+  documentId: DocumentIdSchema,
+  targetType: DocumentTargetTypeSchema,
+  targetId: z.uuid(),
+}).strict();
+
 /** Soft-delete only — the storage object and versions persist for the export/audit window. */
 export const DeleteDocumentPayloadSchema = z.object({
   documentId: DocumentIdSchema,
@@ -678,6 +689,7 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'accounts.set_opening_balance': SetOpeningBalancePayloadSchema,
   'accounts.reanchor_balance': ReanchorBalancePayloadSchema,
   'categorization.decide_suggestion': DecideCategorySuggestionPayloadSchema,
+  'documents.attach': AttachExistingDocumentPayloadSchema,
   'documents.detach': DetachDocumentPayloadSchema,
   'documents.delete': DeleteDocumentPayloadSchema,
   'receipts.decide_match': DecideReceiptMatchPayloadSchema,

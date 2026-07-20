@@ -60,6 +60,7 @@ describe('action vocabulary', () => {
       'accounts.reanchor_balance',
       'categorization.decide_suggestion',
       'documents.confirm_upload',
+      'documents.attach',
       'documents.detach',
       'documents.delete',
       'receipts.decide_match',
@@ -85,6 +86,8 @@ describe('action vocabulary', () => {
       'statements.payment_links',
       'statements.holdings_diff',
       'documents.list_for_target',
+      'documents.list_household',
+      'documents.storage_summary',
       'receipts.inbox',
       'budgets.month',
       'audit.read',
@@ -114,6 +117,11 @@ describe('action vocabulary', () => {
       'notes.archive',
       'notes.unarchive',
       'ai_profile.save',
+      'transactions.categorize',
+      'categories.create',
+      'categories.rename',
+      'tasks.save',
+      'tasks.set_status',
     ]);
   });
 
