@@ -50,6 +50,63 @@ Windows confirmed via SELECT: this=2026-07-01→today, prev=2026-06-01→same-da
 
 ---
 
+## 2026-07-20 — fix(txn/category UX): budget dedup + credit-card dropdown + inline ✓ approve
+
+Three related transaction/category-UI fixes (one component cluster). Frontend +
+one pure lib helper only — **no migration**, no live DB writes. `pnpm build`
+(ESLint gate) green; web unit suite 406/406 green (incl. 6 new review-state
+cases). Root-caused each with live read-only SELECTs on the founder household.
+
+**(A) Budget "double double double" (restaurants).** Live SELECTs proved the
+spend math is NOT double-counting: the founder has ZERO budget targets, and the
+one `Restaurants` posting set is single-offset (7 postings, $135, offn.n=1). The
+real duplication: there are TWO `Restaurants` categories — one per entity
+(Personal `a44c…`, Business LLC `12075…`), because categories are per-entity
+ledger_accounts (each n=1, not dup rows). The budget "Add category" picker
+(`add-budget-category-picker.tsx`, fed by `budgets/page.tsx` `addable`) listed
+the FULL cross-entity taxonomy from `categories.list`, so every common name
+appeared twice — read as "double". Fix = "use the global version we have": the
+budget page now consumes `useEntityLens` (the same household-wide entity lens
+Dashboard/Ledger/Accounts already use) and scopes `addable` via
+`scopeToEntity(categories, lensEntityId)` when a lens is active in a multi-entity
+household. Blended (null) / single-entity households pass the full list through
+and keep the existing entity-label disambiguation. This is precisely the
+pattern `20260720230000_category_picker_entity_scope.sql` established.
+
+**(B) Credit-card category dropdown won't open.** The account-detail page ALWAYS
+renders `VirtualTxnList` (window-virtualized); the ledger's grouped view renders
+plain `TxnList` where the dropdown works — so "buggy on the credit-card side" =
+"buggy in the virtualized list". The compact row `CategoryPicker` is a Base UI
+Popover with `modal="trap-focus"`. Verified against installed `@base-ui/react@1.6.0`
+source: `trap-focus` does NOT lock scroll/backdrop (those gate on `modal===true`),
+but it DOES run `FloatingFocusManager` in modal focus mode (force-focuses the
+popup on open) AND `CommandInput autoFocus` focuses synchronously. Either focus
+shift scrolls the window; `useWindowVirtualizer` then recomputes its range and
+can UNMOUNT the very row that owns this `Popover.Root` — the popup opens and is
+torn down in the same frame, i.e. "won't open". Fix = new `nonModal` prop on
+`CategoryPicker`, set only on the list-row picker: renders `modal={false}` (no
+focus trap, no forced focus-into-popup) and drops the input `autoFocus`, so
+opening never scrolls and the row stays virtualized. Sheet-hosted pickers
+(split rows, detail category) keep the default `trap-focus` — they live in a
+real modal surface and aren't inside a window virtualizer. (Mechanism confirmed
+by source-reading; no live browser repro was possible — no local env + Chrome
+headless failed EPERM in the delegate.)
+
+**(C) Inline ✓ approve on auto-categorized rows (Quicken-style).** Reuses the
+existing audited write path (Law 7): approving re-files the row's OWN category
+with source='user' via `categorizeTransaction` → `api/transactions/categorize`
+→ `keel_categorize_transaction`, which clears the Auto (`categorySource` 'rule'
+/'plaid_pfc') state — identical to picking the same category, which
+`CategoryPicker.commit()` already re-fires for `auto` rows. New pure helper
+`canApproveAuto(row)` (`review-state.ts`, + 6 tests): auto AND has a concrete
+category id, never a split. The checkmark renders inside `TxnRow` next to the
+picker (hidden <sm, emerald tick = confirm affordance, never money-red per Law 8),
+threaded as optional `onApproveAuto` through `ListCallbacks` → `TxnList` /
+`VirtualTxnList` → ledger + accounts pages (distinct "Category approved." toast;
+falls back to `onRecategorize` when unset). Did NOT invent a second write path
+and did NOT use `keel_cmd_decide_category_suggestion` (that's for the separate
+Review-page suggestion queue; these rows carry a live overlay to re-affirm, not
+a pending suggestion row).
 ## 2026-07-20 — feat(recurring): semi-monthly cadence detection fix + editable cadence
 
 Founder feedback: his Deeptune payroll pays on the **15th and the last calendar

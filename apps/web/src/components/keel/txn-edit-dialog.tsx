@@ -63,7 +63,7 @@ import { maskAccountLabel } from '@/lib/account-label';
 import { merchantDisplayName } from '@/lib/merchant-name';
 import { shortDateWithYear } from '@/lib/relative-date';
 import { isUncategorized } from '@/lib/needs-attention';
-import { isAutoCategorized } from '@/lib/review-state';
+import { canApproveAuto, isAutoCategorized } from '@/lib/review-state';
 import { useHousehold } from '@/components/keel/household-context';
 import { AttachmentsSection } from '@/components/keel/attachments-section';
 import { TransferCounterpartyFlow } from '@/components/keel/transfer-counterparty-flow';
@@ -122,6 +122,15 @@ export type ListCallbacks = {
   selecting: boolean;
   selected: Set<string>;
   onToggle: (id: string) => void;
+  /**
+   * Inline ✓ approve of an auto-categorized row (Quicken-style). Optional so
+   * callers that don't offer it (e.g. read-only lists) simply omit it — the
+   * checkmark then never renders. Defaults to onRecategorize with the row's own
+   * category id: approving re-files the SAME category with source='user' via the
+   * one categorize command (Law 7 — no second write path), which is exactly what
+   * clears the "Auto" state.
+   */
+  onApproveAuto?: ((txnId: string, categoryId: string) => void) | undefined;
 };
 
 export function TxnList({
@@ -134,6 +143,7 @@ export function TxnList({
   selecting,
   selected,
   onToggle,
+  onApproveAuto,
 }: {
   rows: RichTransactionRow[];
   categories: CategoryRow[];
@@ -163,6 +173,7 @@ export function TxnList({
           selecting={selecting}
           selected={selected}
           onToggle={onToggle}
+          onApproveAuto={onApproveAuto}
         />
       ))}
     </div>
@@ -186,12 +197,23 @@ export function TxnRow({
   selecting,
   selected,
   onToggle,
+  onApproveAuto,
 }: {
   t: RichTransactionRow;
   topBorder: boolean;
   categories: CategoryRow[];
   running?: Map<string, string> | undefined;
 } & ListCallbacks) {
+  // Quicken-style inline approve: offered only on an auto-categorized row that
+  // carries a concrete category. Approving re-files that SAME category with
+  // source='user' through the ordinary recategorize path (Law 7 — one write
+  // path), turning inference into an explicit human decision (Law 2/9). Falls
+  // back to onRecategorize when the caller passes no dedicated handler.
+  const showApprove = canApproveAuto(t) && !selecting;
+  const approve = onApproveAuto ?? onRecategorize;
+  // Concrete category to re-affirm (canApproveAuto already guarantees non-null
+  // when showApprove; captured here to avoid a forbidden non-null assertion).
+  const approveCatId = t.categoryLedgerAccountId;
   return (
     <div
       className={`flex items-center gap-3 px-4 py-2.5 ${topBorder ? 'border-t border-border' : ''}`}
@@ -315,20 +337,48 @@ export function TxnRow({
               Split · {t.splits.length}
             </Badge>
           ) : (
-            <CategoryPicker
-              row={t}
-              categories={categories}
-              auto={isAutoCategorized(t)}
-              // P1-6: the compact row picker must NOT write a one-sided
-              // "Transfers" tag. Picking Transfer here opens the detail Sheet,
-              // where the counterparty flow (match / book) runs.
-              onTransferPick={() => {
-                onEdit(t);
-              }}
-              onPick={(catId) => {
-                onRecategorize(t.transactionId, catId);
-              }}
-            />
+            <span className="flex shrink-0 items-center gap-1">
+              {/* Inline ✓ approve (F: Quicken-style auto confirm). Renders only
+                  on an auto-categorized row; hidden below sm alongside the
+                  picker it qualifies. Approving re-files the row's OWN category
+                  with source='user' via the shared recategorize command — the
+                  Auto pill clears and the row becomes reviewed without opening
+                  the editor. Green tick = a confirm affordance, never a money
+                  judgment (Law 8: red is reserved for negative money). */}
+              {showApprove && approveCatId !== null ? (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`Approve category ${t.categoryName ?? ''}`.trim()}
+                  title={`Approve “${t.categoryName ?? 'this category'}” — confirm the auto-categorization`}
+                  className="hidden size-7 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 sm:inline-flex dark:text-emerald-500 dark:hover:bg-emerald-950/40"
+                  onClick={() => {
+                    approve(t.transactionId, approveCatId);
+                  }}
+                >
+                  <Check className="size-4" />
+                </Button>
+              ) : null}
+              <CategoryPicker
+                row={t}
+                categories={categories}
+                auto={isAutoCategorized(t)}
+                // This list may be window-virtualized (VirtualTxnList); a
+                // non-modal popover keeps opening it from scrolling the window
+                // and unmounting the row mid-open (the "dropdown won't open on
+                // the credit-card page" bug — those pages always virtualize).
+                nonModal
+                // P1-6: the compact row picker must NOT write a one-sided
+                // "Transfers" tag. Picking Transfer here opens the detail Sheet,
+                // where the counterparty flow (match / book) runs.
+                onTransferPick={() => {
+                  onEdit(t);
+                }}
+                onPick={(catId) => {
+                  onRecategorize(t.transactionId, catId);
+                }}
+              />
+            </span>
           )}
           <div className="flex shrink-0 items-center justify-end gap-2">
             {t.status === 'pending' ? (
@@ -399,6 +449,7 @@ export function CategoryPicker({
   wide,
   createEntityId,
   auto,
+  nonModal,
 }: {
   row: RichTransactionRow;
   categories: CategoryRow[];
@@ -432,6 +483,19 @@ export function CategoryPicker({
    * this is provenance, not a verdict.
    */
   auto?: boolean;
+  /**
+   * Render the popover NON-modal (no focus trap, no forced focus-into-popup on
+   * open). Set for the compact picker inside the virtualized transaction list:
+   * modal='trap-focus' force-focuses the popup on open, which scrolls the
+   * window; useWindowVirtualizer then recomputes its range and can UNMOUNT the
+   * very row that owns this Popover.Root, so the dropdown appears not to open
+   * (it opens and is torn down in the same frame). A non-modal popover keeps
+   * the trigger's click from moving focus/scroll, so the row stays virtualized
+   * and the popup survives. The Sheet-hosted pickers (split rows, detail
+   * category) keep the default trap-focus — they live in a real modal surface
+   * and aren't inside a window virtualizer.
+   */
+  nonModal?: boolean;
 }) {
   const { householdId } = useHousehold();
   const [open, setOpen] = useState(false);
@@ -619,7 +683,15 @@ export function CategoryPicker({
     'items-center justify-between gap-1.5 rounded-lg border border-input bg-transparent py-2 pr-2 pl-2.5 text-sm transition-colors outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30 dark:hover:bg-input/50';
 
   return (
-    <Popover open={open} onOpenChange={handleOpenChange} modal="trap-focus">
+    <Popover
+      open={open}
+      onOpenChange={handleOpenChange}
+      // Virtualized-list picker (nonModal): no focus trap, so opening never
+      // force-focuses the popup, never scrolls the window, and never lets the
+      // window virtualizer unmount this row mid-open. Elsewhere keep the
+      // a11y focus trap.
+      modal={nonModal ? false : 'trap-focus'}
+    >
       <PopoverTrigger
         title={`Category: ${label}`}
         className={
@@ -655,7 +727,11 @@ export function CategoryPicker({
             placeholder="Search or create…"
             value={query}
             onValueChange={setQuery}
-            autoFocus
+            // Don't grab focus synchronously in the non-modal list picker: a
+            // sync focus() scrolls the window and can de-virtualize (unmount)
+            // this row before the popup settles. Modal (Sheet) pickers keep
+            // autoFocus so typing starts immediately behind the focus trap.
+            autoFocus={!nonModal}
           />
           <CommandList>
             {groups.length === 0 && !canCreate && !(onTransferPick && hasTransferCategory) ? (
