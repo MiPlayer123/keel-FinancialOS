@@ -917,8 +917,15 @@ function TxnEditForm({
     setUndoingTransfer(false);
     // Multi-split rows open straight into the editor, seeded from the real
     // postings; single-category rows start in picker mode with a "Split…"
-    // affordance.
-    setSplitRows(row.splits && row.splits.length > 0 ? seedRowsFromSplits(row.splits) : null);
+    // affordance. A distribution (a split with an account-transfer leg, e.g. a
+    // paycheck's 401k into a retirement account) is NOT editable by the
+    // category-only editor — it opens read-only (see the Splits block below).
+    const rowHasAccountLeg = (row.splits ?? []).some((s) => s.legType === 'account');
+    setSplitRows(
+      row.splits && row.splits.length > 0 && !rowHasAccountLeg
+        ? seedRowsFromSplits(row.splits)
+        : null,
+    );
     setSplitBusy(false);
     setSplitAttemptKey(crypto.randomUUID());
     setRowTags(row.tags ?? []);
@@ -1060,6 +1067,12 @@ function TxnEditForm({
   const splitRemainder = splitRows ? splitRemainderMinor(row.amountMinor, splitRows) : '0';
   const splitSaveReady = splitRows !== null && splitsReady(row.amountMinor, splitRows);
   const isExistingSplit = (row.splits?.length ?? 0) > 0;
+  // A distribution: at least one leg is a transfer INTO another real account
+  // (e.g. a paycheck's 401k). It reads as one ledger line with the transfer
+  // shown inside it, and is displayed read-only here (the category-only editor
+  // can't represent an account leg).
+  const accountLegs = (row.splits ?? []).filter((s) => s.legType === 'account');
+  const hasAccountLeg = accountLegs.length > 0;
 
   function splitCategoryName(categoryId: string | null): string | null {
     if (categoryId === null) return null;
@@ -1196,6 +1209,34 @@ function TxnEditForm({
             </p>
           ) : null}
         </div>
+        {hasAccountLeg && row.transferStatus !== 'confirmed' ? (
+          // A distribution: one ledger line whose splits include a transfer into
+          // another account (e.g. a paycheck's 401k). Shown read-only — the
+          // transfer leg keeps this a single transaction, and its counterparty
+          // balance grows from the same batch.
+          <div className="space-y-2">
+            <Label>Splits</Label>
+            <div className="space-y-1.5 rounded-md border border-border px-3 py-2">
+              {(row.splits ?? []).map((s, i) => (
+                <div key={i} className="flex items-center justify-between gap-3 text-sm">
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    {s.legType === 'account' ? (
+                      <ArrowLeftRight className="size-3.5 shrink-0 text-muted-foreground" />
+                    ) : null}
+                    <span className="min-w-0 truncate">
+                      {s.legType === 'account' ? `Transfer to ${s.name}` : s.name}
+                    </span>
+                  </span>
+                  <Money amountMinor={s.amountMinor} currency={row.currency} signed className="text-sm" />
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Excluded from income and spending — the transfer moves money between your
+              accounts inside this one entry.
+            </p>
+          </div>
+        ) : null}
         {splitRows !== null && row.transferStatus !== 'confirmed' ? (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -1344,7 +1385,7 @@ function TxnEditForm({
             </div>
           </div>
         ) : null}
-        {row.transferStatus !== 'confirmed' && splitRows === null && categoryOptions.length > 0 ? (
+        {row.transferStatus !== 'confirmed' && splitRows === null && !hasAccountLeg && categoryOptions.length > 0 ? (
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <Label>Category</Label>
