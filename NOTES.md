@@ -4,6 +4,63 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-19 — feat(recurring): semi-monthly (15th & 30th) schedule option
+
+Adds a `semimonthly` `schedule_frequency` so a user can declare "Twice a month
+(15th & 30th)" on a `scheduled_transactions` reminder (bill/income). Money never
+moves — this is the same Class-D-untouched bookkeeping surface; only the
+due-date cadence is new.
+
+- **Two migration files, and the order matters (⚑ human applies live).**
+  `ALTER TYPE ... ADD VALUE` cannot be used in the same transaction that creates
+  it, and the repo applies with `psql --single-transaction`. So the enum add is
+  isolated in `20260719120000_schedule_semimonthly_enum.sql` (apply FIRST,
+  WITHOUT `--single-transaction`, so it auto-commits), and everything that USES
+  the value — the `anchor_day_2` column + function replacements — is in
+  `20260719120100_schedule_semimonthly.sql` (apply second, the usual way). Both
+  file headers spell out the exact psql invocations. `ADD VALUE IF NOT EXISTS`
+  makes the enum file idempotent.
+- **Second anchor day.** `scheduled_transactions` already had a single
+  `anchor_day`; semi-monthly needs two, so added `anchor_day_2 smallint CHECK 1..31`
+  (nullable; only populated for `semimonthly`, cleared to NULL for every other
+  frequency so a later frequency change can't leave a stale second day).
+- **Advance logic (`keel_schedule_advance`).** New `semimonthly` branch: from the
+  current due date, target this month's LARGER anchor (clamped
+  `least(anchor, days_in_month)`) if we're strictly before it, else next month's
+  SMALLER anchor. Reuses the exact month-end clamp the monthly branch uses, so a
+  "30th" becomes Feb 28/29 automatically and recovers to Mar 30. Comparison uses
+  the CLAMPED larger anchor so a 30-anchor sitting on Feb 28 counts as "reached"
+  and rolls to Mar 15 (not back to Feb 28).
+- **Save (`keel_schedule_save`).** Signature gained trailing `p_anchor_day`,
+  `p_anchor_day_2` (both nullable, defaulted). Non-semimonthly callers still get
+  the original derive-anchor-from-next-due-date behavior. Semi-monthly requires
+  two DISTINCT days (`P0009` `KEEL_SEMIMONTHLY_NEEDS_TWO_DAYS` /
+  `_DAYS_MUST_DIFFER`) and normalizes them to `anchor_day < anchor_day_2`.
+  Because the arg list grew, the OLD 9-arg overload is `drop function if exists`'d
+  first — two overloads reachable by the same named args would be an ambiguous-
+  function error at call time.
+- **Client mirror kept in lockstep.** `stepScheduleDue` (apps/web/src/lib/
+  recurring.ts) gained a matching `semimonthly` branch + an `anchorDay2` param;
+  both projection loops (recurring page + dashboard page) now pass
+  `sc.anchorDay2`. `keel_list_schedules` + the export wrapper emit the new field
+  (new export chain link `_pre_schedule_anchor2`).
+- **UI.** `FREQUENCY_LABELS.semimonthly = 'Twice a month (15th & 30th)'`; the Add
+  Schedule dialog reveals two day-of-month inputs (defaults 15 & 30) only when
+  semimonthly is picked, validates 1..31 + distinct, and threads them into
+  `saveSchedule` → `/schedules/save` → the RPC.
+- **Tests.** Unit: 5 new `stepScheduleDue` semimonthly cases incl. Feb clamp +
+  leap-year Feb 29 + order-independence + year-boundary + [1,31] pair (recurring
+  unit suite 29/29 green via `npx vitest run recurring.test`). Integration:
+  `tests/integration/24-schedule-semimonthly.test.ts` walks the live advance proc
+  through the Feb edge and asserts the normalize + distinct-day validation
+  (requires a running local stack; not runnable here).
+- **Verification RAN:** `cd apps/web && pnpm build` green (ESLint enforced; only
+  pre-existing unrelated warnings). `node scripts/build-functions.mjs` green. No
+  live DB apply performed — migrations are prepared and flagged for the human.
+  (Applied to live + merged 2026-07-19 alongside the distribution work.)
+
+---
+
 ## 2026-07-19 — fix(recurring): make a user DISMISSAL durable across re-detection
 `20260722010000_recurring_dismissal_durable.sql` + `tests/pgtap/recurring_dismissal_durable.sql` + `scripts/run-recurring-dismissal-durable-pgtap.sh`. Cites Law 1 (deterministic, no LLM), Law 2 (reversible correction — un-dismiss preserved), Law 9 (source preservation: append-only candidate history intact).
 

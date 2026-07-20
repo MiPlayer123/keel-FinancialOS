@@ -336,7 +336,7 @@ function computeFreeToSpend(
         else billsDueMinor += -amt;
       }
       if (sc.frequency === 'once') break;
-      due = stepScheduleDue(due, sc.frequency, sc.anchorDay);
+      due = stepScheduleDue(due, sc.frequency, sc.anchorDay, sc.anchorDay2);
       guard += 1;
     }
   }
