@@ -534,6 +534,20 @@ function LedgerTable() {
   const recategorizeEditing = (id: string, cat: string) => {
     void recategorize(id, cat);
   };
+  // Inline ✓ approve of an auto-categorized row: same categorize command
+  // (Law 7), re-filing the row's OWN category with source='user'. A distinct
+  // toast so the founder knows the Auto state was confirmed, not changed.
+  const approveAutoEditing = (id: string, cat: string) => {
+    if (!householdId) return;
+    void categorizeTransaction({ householdId, transactionId: id, categoryLedgerAccountId: cat })
+      .then(() => {
+        toast.success('Category approved.');
+        return refetch();
+      })
+      .catch((err: unknown) => {
+        toast.error(err instanceof Error ? err.message : 'Could not approve the category.');
+      });
+  };
 
   return (
     <div className="space-y-4">
@@ -801,6 +815,7 @@ function LedgerTable() {
             rows={filtered}
             categories={categories}
             onRecategorize={recategorizeEditing}
+            onApproveAuto={approveAutoEditing}
             onEdit={selectForEdit}
             selecting={selecting}
             selected={selected}
@@ -812,6 +827,7 @@ function LedgerTable() {
             categories={categories}
             groupBy={grouping}
             onRecategorize={recategorizeEditing}
+            onApproveAuto={approveAutoEditing}
             onEdit={(row) => {
               // Category grouping fans split rows with per-share amounts;
               // the edit surface must always show the REAL transaction.

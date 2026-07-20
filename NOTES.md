@@ -72,6 +72,211 @@ per-card grouping + worst-net-first order, BigInt beyond Number precision,
 split-aware fee/reward shares, defensive sign guards. `pnpm build` (ESLint gate)
 green.
 
+## 2026-07-20 — feat(goals): savings goals that TRACK a linked account balance (Monarch/Copilot-style auto-progress)
+
+**Framing.** The task title read "build a goals capability," but a full goals
+feature ALREADY exists on main: `savings_goals` + `goal_contributions` tables,
+`keel_goal_save` / `keel_goal_contribute` / `keel_goal_set_status` /
+`keel_list_goals` procs, `/api/goals/{save,contribute,set-status}` routes, a
+rich `/dashboard/goals` page (savings + debt kinds, progress bars, add/withdraw,
+archive/restore, on-track monthly-needed math, a Class-C payoff simulator),
+export-chain registration (Law 6) and audit/RLS. So "build goals" = already done.
+
+**The real gap (why the founder says "I just don't have anything to put in
+here").** Read-only SELECT on founder household a1ba3759-… → **0 goals**. And
+structurally: a **savings** goal's progress is `Σ goal_contributions` — purely
+hand-entered Add/Withdraw. The optional linked account ("Lives in") is captured
+but **completely ignored** for progress; it's decorative. So a founder with a
+real savings account would have to hand-type every dollar to see any progress —
+"nothing to put in here." Meanwhile **debt** goals ALREADY derive progress
+deterministically from the ledger balance of their linked account
+(`keel_list_goals` lateral join on `journal_postings`, Law 9). Monarch/Copilot's
+signature move — link a savings account, progress tracks its balance
+automatically — is exactly the missing bridge on the asset side.
+
+**Decision (smallest correct, builds ON not beside).** Add a **tracking mode**
+to savings goals, mirroring the debt-goal ledger-derivation that already ships:
+- `savings_goals.tracking public.goal_tracking not null default 'manual'`
+  (enum `manual` | `account_balance`). Debt goals are always `manual` here
+  (their derivation is the debt path; the column just isn't consulted).
+- `tracking = 'manual'` (existing behavior, unchanged): progress =
+  Σ contributions. Add/Withdraw still work.
+- `tracking = 'account_balance'` (NEW): progress = current ASSET balance
+  magnitude of the linked account, derived at read time from `journal_postings`
+  — the asset mirror of the debt path. `savedMinor` becomes derived (Law 9,
+  reproducible), NOT stored, NOT a parallel earmark ledger (Law 1). Requires an
+  `account_id`; contributions are REFUSED (like debt) because there is exactly
+  one source of truth — the account balance.
+- Reaching flips `status` to `reached` on read (derived), same as debt.
+
+Why an asset uses `+Σ postings` while a liability uses `-Σ postings`: KEEL's
+balance convention is debit-positive (`keel_apply_account_balance`). An asset's
+usable magnitude is `greatest(Σ postings, 0)`; a liability's owed magnitude is
+`greatest(-Σ postings, 0)`. I branch on `ledger_accounts.kind` so a goal tracking
+a normal asset (checking/savings) reads its positive balance.
+
+**Touch points (all mirror existing goal spine):**
+1. migration `20260724000000_goal_track_account_balance.sql` — enum, column,
+   `keel_goal_save` gains `p_tracking` (signature change → drop+recreate, grants
+   restated), `keel_goal_contribute` refuses `account_balance`, `keel_list_goals`
+   derives `savedMinor` for `account_balance` goals from the ledger + emits a
+   `trackedBalanceMinor` field, `keel_goal_set_status` recompute branch, export
+   chain new link (`_pre_goal_tracking`), ownership hardening with the
+   grant/revoke-CREATE guard the worktree rules require.
+2. `apps/web/src/lib/keel-api.ts` — `GoalRow.tracking`, `saveGoal` passes
+   `tracking`.
+3. `/dashboard/goals/page.tsx` — savings sub-choice "Track an account balance"
+   vs "Track manually"; tracked goals show live balance + hide Add/Withdraw +
+   an "updates automatically" note (same affordance debt goals already have).
+4. `tests/integration/*-goals.test.ts` — create→progress→reached/archive across
+   all three modes (manual, account_balance asset, debt), idempotency of save,
+   contribution-refusal on tracked goals, household scope isolation.
+
+**Contracts/authz note.** Goals do NOT use the `/commands` envelope spine — they
+predate it and route through bespoke `/api/goals/*` → SECURITY DEFINER RPC (same
+pattern as notes/tasks). I follow the EXISTING goal pattern rather than
+retrofitting the envelope, to build ON the shipped feature (task directive).
+`goals.list` authz action already exists (viewer). No new authz action needed;
+writes are gated inside the definer procs by `household_memberships` (the
+established goal-write authorization, matching notes/tasks).
+
+**Verification (all green).**
+- `cd apps/web && pnpm build` — clean (ESLint gate passes; /dashboard/goals
+  builds at 10.6 kB). `node scripts/build-functions.mjs` — edge bundle clean.
+- Package tests: `@keel/contracts` 46/46, `@keel/authz` 144/144.
+- **Migration proven against a REAL throwaway Postgres 17** (scratch cluster,
+  trust auth, torn down after): loaded minimal prereqs + prior goal-fn
+  signatures, then applied `20260724000000` — applies cleanly, all 5 functions +
+  enum + column + export chain + ownership created. Functional assertions:
+  (1) tracked savings goal → `savedMinor` = `trackedBalanceMinor` = ledger
+  balance ($500), `status=reached` vs $400 target — DERIVED, not stored;
+  (2) balance ↓ to $200 → `savedMinor→20000`, `status→active` on read (reactive,
+  reproducible); (3) contribute REFUSED (`KEEL_TRACKED_GOAL_NO_CONTRIB`);
+  (4) asset-only + account-required guards fire; (5) manual savings goals still
+  accumulate from contributions; (6) audit rows carry the tracking mode;
+  (7) export re-emits `savings_goals` WITH the `tracking` field (Law 6),
+  new wrapper owned by `keel_export`, prior link renamed, goal procs owned by
+  `keel_api`. Derivation expression cross-checked READ-ONLY on live founder
+  household: `greatest(Σ postings,0)` for assets matches
+  `keel_apply_account_balance`'s debit-positive convention (line 66:
+  `case when kind='liability' then -current else current end`) — Law 9
+  reproducible, consistent with the debt-goal path already shipped.
+- Integration test `tests/integration/45-goal-track-account-balance.test.ts`
+  added (mirrors existing goal/command test style). NOT runnable in the worktree
+  (needs `supabase start` + Docker, which this worktree doesn't do); for CI /
+  the orchestrator to run against the stack once the migration is applied.
+
+**Migration to apply (orchestrator):**
+`supabase/migrations/20260724000000_goal_track_account_balance.sql` — timestamped
+after 20260723020000 per the worktree rule; includes the
+`grant create on schema public to keel_api/keel_export … revoke` wrappers around
+every `owner to` to avoid the live "permission denied for schema public" drift.
+
+---
+
+## 2026-07-20 — feat(dashboard): clickable summary amounts + verify/fix spending-pace symmetry
+
+Two founder dashboard-polish items (no migration; UI + one read-model bug fix).
+
+**(1) Clickable amounts — reuse the existing drill-in pattern, don't invent one.**
+The canonical drill is `ledgerDrillHref` (lib/report-scope.ts) / `?q=` / `?from&to`
+into `/dashboard/ledger` — already used by the cash-flow chart, report donut/month
+columns, and Recent transactions. Wired the same pattern onto the dashboard figures
+that each stand for a SET of underlying transactions:
+- **SpendingCard insight rows** (Biggest purchase, Spending pace, Top merchant):
+  each now carries an `href` and renders as a `Link` (hover-highlighted row) into
+  the ledger filtered to exactly those rows — biggest/top-merchant by counterparty
+  `?q=`, pace by the current month-to-date `?from&to` range. Rows without an href
+  (none today) still render as a plain div, so the affordance is honest.
+- **UpcomingRecurringCard rows**: the occurrence is still EXPECTED (no posted txn),
+  so the row drills into the ledger by counterparty `?q=` — the PAST postings behind
+  the recurring figure (includes the founder's green upcoming-income tiles). Same
+  `?q=` drill Recent transactions uses.
+- Left the SpendingCard `CategoryBarList` bars NON-clickable for now: `spendingMix`
+  keys on category display NAME (not ledger id) and folds a "top-6 + Other" bucket,
+  so a per-bar ledger drill would need threading `categoryLedgerAccountId` through +
+  can't map "Other" to one filter. Deferred rather than shipped half-right — the
+  reports page already offers the id-accurate category donut drill.
+
+**(2) Spending pace vs last month — verified, and fixed a latent asymmetry.**
+`buildInsights` (was inline in dashboard/page.tsx) compares this month's spend vs
+last month's. The prior-month side WAS correctly capped at `<= dayOfMonth`
+(same-period-last-month). The current-month side used `effectiveDate.startsWith(month)`
+with **no upper bound** — it happened to equal MTD only because real posted rows
+can't be future-dated. Live read-only SELECT on founder household a1ba3759-… (2026-07-20):
+0 future-dated current-month rows, `max(effective_date)=today`, so the LIVE number
+was correct by coincidence — but a manual/projected entry dated later this month
+would inflate "this month so far" against a comparison window frozen at day-of-month.
+Windows confirmed via SELECT: this=2026-07-01→today, prev=2026-06-01→same-day.
+- **Fix:** cap the current-month accumulation at `effectiveDate <= todayIso` too, so
+  both windows are equal-length (MTD vs same-period-last-month). Smallest correct
+  change; no behavior change on today's live data, correct under future-dated rows.
+- **Testability:** extracted `buildInsights` + `Insight` into `lib/dashboard-insights.ts`
+  (pure, injectable `now: Date` — same pattern as `presetRange(preset, now)`), imported
+  back into page.tsx. New `dashboard-insights.test.ts`: same-period-MTD math, the
+  future-dated-leak guard (a $1000 row dated later this month must NOT move the pace),
+  and the both-windows-non-empty gate. 3/3 pass; full web lib suite 408/408; `pnpm build`
+  (ESLint gate) clean.
+
+---
+
+## 2026-07-20 — fix(txn/category UX): budget dedup + credit-card dropdown + inline ✓ approve
+
+Three related transaction/category-UI fixes (one component cluster). Frontend +
+one pure lib helper only — **no migration**, no live DB writes. `pnpm build`
+(ESLint gate) green; web unit suite 406/406 green (incl. 6 new review-state
+cases). Root-caused each with live read-only SELECTs on the founder household.
+
+**(A) Budget "double double double" (restaurants).** Live SELECTs proved the
+spend math is NOT double-counting: the founder has ZERO budget targets, and the
+one `Restaurants` posting set is single-offset (7 postings, $135, offn.n=1). The
+real duplication: there are TWO `Restaurants` categories — one per entity
+(Personal `a44c…`, Business LLC `12075…`), because categories are per-entity
+ledger_accounts (each n=1, not dup rows). The budget "Add category" picker
+(`add-budget-category-picker.tsx`, fed by `budgets/page.tsx` `addable`) listed
+the FULL cross-entity taxonomy from `categories.list`, so every common name
+appeared twice — read as "double". Fix = "use the global version we have": the
+budget page now consumes `useEntityLens` (the same household-wide entity lens
+Dashboard/Ledger/Accounts already use) and scopes `addable` via
+`scopeToEntity(categories, lensEntityId)` when a lens is active in a multi-entity
+household. Blended (null) / single-entity households pass the full list through
+and keep the existing entity-label disambiguation. This is precisely the
+pattern `20260720230000_category_picker_entity_scope.sql` established.
+
+**(B) Credit-card category dropdown won't open.** The account-detail page ALWAYS
+renders `VirtualTxnList` (window-virtualized); the ledger's grouped view renders
+plain `TxnList` where the dropdown works — so "buggy on the credit-card side" =
+"buggy in the virtualized list". The compact row `CategoryPicker` is a Base UI
+Popover with `modal="trap-focus"`. Verified against installed `@base-ui/react@1.6.0`
+source: `trap-focus` does NOT lock scroll/backdrop (those gate on `modal===true`),
+but it DOES run `FloatingFocusManager` in modal focus mode (force-focuses the
+popup on open) AND `CommandInput autoFocus` focuses synchronously. Either focus
+shift scrolls the window; `useWindowVirtualizer` then recomputes its range and
+can UNMOUNT the very row that owns this `Popover.Root` — the popup opens and is
+torn down in the same frame, i.e. "won't open". Fix = new `nonModal` prop on
+`CategoryPicker`, set only on the list-row picker: renders `modal={false}` (no
+focus trap, no forced focus-into-popup) and drops the input `autoFocus`, so
+opening never scrolls and the row stays virtualized. Sheet-hosted pickers
+(split rows, detail category) keep the default `trap-focus` — they live in a
+real modal surface and aren't inside a window virtualizer. (Mechanism confirmed
+by source-reading; no live browser repro was possible — no local env + Chrome
+headless failed EPERM in the delegate.)
+
+**(C) Inline ✓ approve on auto-categorized rows (Quicken-style).** Reuses the
+existing audited write path (Law 7): approving re-files the row's OWN category
+with source='user' via `categorizeTransaction` → `api/transactions/categorize`
+→ `keel_categorize_transaction`, which clears the Auto (`categorySource` 'rule'
+/'plaid_pfc') state — identical to picking the same category, which
+`CategoryPicker.commit()` already re-fires for `auto` rows. New pure helper
+`canApproveAuto(row)` (`review-state.ts`, + 6 tests): auto AND has a concrete
+category id, never a split. The checkmark renders inside `TxnRow` next to the
+picker (hidden <sm, emerald tick = confirm affordance, never money-red per Law 8),
+threaded as optional `onApproveAuto` through `ListCallbacks` → `TxnList` /
+`VirtualTxnList` → ledger + accounts pages (distinct "Category approved." toast;
+falls back to `onRecategorize` when unset). Did NOT invent a second write path
+and did NOT use `keel_cmd_decide_category_suggestion` (that's for the separate
+Review-page suggestion queue; these rows carry a live overlay to re-affirm, not
+a pending suggestion row).
 ## 2026-07-20 — feat(recurring): semi-monthly cadence detection fix + editable cadence
 
 Founder feedback: his Deeptune payroll pays on the **15th and the last calendar

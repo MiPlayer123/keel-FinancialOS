@@ -28,12 +28,13 @@ import {
   type TrialBalanceRow,
 } from '@/lib/keel-api';
 import { merchantDisplayName } from '@/lib/merchant-name';
+import { buildInsights, type Insight } from '@/lib/dashboard-insights';
 import { stepScheduleDue } from '@/lib/recurring';
 import { relativeDueLabel } from '@/lib/relative-date';
 import { Badge } from '@/components/ui/badge';
 import { CashFlowCard } from '@/components/keel/cash-flow-card';
 import { BalanceTrendChart, CashFlowMonthlyChart, CategoryBarList } from '@/components/keel/charts';
-import { spendingMix, isDebtOrTransferLike } from '@/lib/spending';
+import { spendingMix } from '@/lib/spending';
 import { NetWorthHero } from '@/components/keel/net-worth-hero';
 import { NotesTasksCard } from '@/components/keel/notes-tasks-card';
 import { NeedsAttention } from '@/components/keel/needs-attention';
@@ -147,95 +148,6 @@ function agoLabel(iso: string): string {
   const hours = Math.trunc(mins / 60);
   if (hours < 24) return `${String(hours)}h ago`;
   return `${String(Math.trunc(hours / 24))}d ago`;
-}
-
-// rawDetail: unabbreviated source string (e.g. the raw bank memo behind a
-// cleaned merchant name) — surfaces in the tooltip so the inference never
-// hides the source (Law 9; review finding).
-type Insight = { label: string; value: string; detail: string; rawDetail?: string };
-
-/**
- * Deterministic pocket insights from data already on the page (Law 1 — no
- * model anywhere near this). BigInt sums; labels format minor strings.
- */
-function buildInsights(rows: RichTransactionRow[]): Insight[] {
-  const out: Insight[] = [];
-  const today = new Date();
-  const todayIso = today.toISOString().slice(0, 10);
-  const month = todayIso.slice(0, 7);
-  const dayOfMonth = Number(todayIso.slice(8, 10));
-  const prev = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 1));
-  const prevMonth = prev.toISOString().slice(0, 7);
-  const weekAgo = new Date(today);
-  weekAgo.setUTCDate(weekAgo.getUTCDate() - 7);
-  const weekAgoIso = weekAgo.toISOString().slice(0, 10);
-
-  // BigInt sums are only meaningful within one currency; aggregate the
-  // household's dominant currency and format with it.
-  const currencyCounts = new Map<string, number>();
-  for (const t of rows) {
-    currencyCounts.set(t.currency, (currencyCounts.get(t.currency) ?? 0) + 1);
-  }
-  const domCurrency = [...currencyCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'USD';
-
-  let biggest: RichTransactionRow | null = null;
-  let mtd = 0n;
-  let prevToSameDay = 0n;
-  const merchants = new Map<string, bigint>();
-
-  for (const t of rows) {
-    if (isDebtOrTransferLike(t)) continue;
-    if (t.currency !== domCurrency) continue;
-    const cash = BigInt(t.amountMinor || '0');
-    if (cash >= 0n) continue; // outflows only
-    if (t.effectiveDate >= weekAgoIso) {
-      if (!biggest || cash < BigInt(biggest.amountMinor)) biggest = t;
-    }
-    if (t.effectiveDate.startsWith(month)) {
-      mtd += -cash;
-      merchants.set(t.description, (merchants.get(t.description) ?? 0n) + -cash);
-    }
-    if (
-      t.effectiveDate.startsWith(prevMonth) &&
-      Number(t.effectiveDate.slice(8, 10)) <= dayOfMonth
-    ) {
-      prevToSameDay += -cash;
-    }
-  }
-
-  if (biggest) {
-    out.push({
-      label: 'Biggest purchase · 7 days',
-      value: formatMoney(biggest.amountMinor.replace('-', ''), { currency: biggest.currency }),
-      detail: merchantDisplayName(biggest.description).slice(0, 40),
-      rawDetail: biggest.description,
-    });
-  }
-  if (mtd > 0n && prevToSameDay > 0n) {
-    const deltaPct = Number(((mtd - prevToSameDay) * 100n) / prevToSameDay);
-    out.push({
-      label: 'Spending pace vs last month',
-      value: `${deltaPct >= 0 ? '+' : ''}${String(deltaPct)}%`,
-      detail: `${formatMoney(mtd.toString(), { currency: domCurrency })} so far vs ${formatMoney(prevToSameDay.toString(), { currency: domCurrency })} by day ${String(dayOfMonth)}`,
-    });
-  }
-  const rankedMerchants = [...merchants.entries()].sort((a, b) =>
-    b[1] > a[1] ? 1 : b[1] < a[1] ? -1 : 0,
-  );
-  // The true top merchant, always — even when it also owns the biggest 7-day
-  // purchase. Skipping to rank 2 would mislabel the tile (review finding);
-  // with money-movement excluded upstream, an honest overlap is fine.
-  const topMerchant = rankedMerchants[0];
-  if (topMerchant && topMerchant[1] > 0n) {
-    out.push({
-      label: 'Top merchant this month',
-      value: formatMoney(topMerchant[1].toString(), { currency: domCurrency }),
-      // Display-only cleanup; aggregation stays keyed on the raw memo.
-      detail: merchantDisplayName(topMerchant[0]).slice(0, 40),
-      rawDetail: topMerchant[0],
-    });
-  }
-  return out;
 }
 
 type FreeToSpend = {
@@ -527,7 +439,14 @@ function UpcomingRecurringCard({
         ) : (
           rows.map(({ series, occurrence }, index) => (
             <Fragment key={occurrence.occurrenceId}>
-              <div className="flex min-w-0 items-center gap-3 py-2 first:pt-0 last:pb-0">
+              {/* The occurrence is still EXPECTED (no posted txn yet), so drill
+                  into the ledger for this counterparty's PAST postings — the
+                  underlying transactions behind the recurring figure (same
+                  counterparty `?q=` drill Recent transactions uses). */}
+              <Link
+                href={`/dashboard/ledger?q=${encodeURIComponent(series.counterpartyKey)}`}
+                className="-mx-2 flex min-w-0 items-center gap-3 rounded-md px-2 py-2 transition-colors first:pt-0 last:pb-0 hover:bg-accent"
+              >
                 <CalendarClock className="size-4 shrink-0 text-muted-foreground" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">
@@ -548,7 +467,7 @@ function UpcomingRecurringCard({
                   signed
                   className="shrink-0 text-sm"
                 />
-              </div>
+              </Link>
               {index < rows.length - 1 ? <Separator /> : null}
             </Fragment>
           ))
@@ -580,20 +499,40 @@ function SpendingCard({
           <>
             <Separator />
             <div className="flex flex-col gap-3">
-              {insights.map((insight) => (
-                <div key={insight.label} className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <p className="text-xs text-muted-foreground">{insight.label}</p>
-                    <p
-                      className="truncate text-xs text-muted-foreground"
-                      title={insight.rawDetail ?? insight.detail}
-                    >
-                      {insight.detail}
-                    </p>
+              {insights.map((insight) => {
+                const body = (
+                  <>
+                    <div className="min-w-0">
+                      <p className="text-xs text-muted-foreground">{insight.label}</p>
+                      <p
+                        className="truncate text-xs text-muted-foreground"
+                        title={insight.rawDetail ?? insight.detail}
+                      >
+                        {insight.detail}
+                      </p>
+                    </div>
+                    <p className="shrink-0 font-medium tabular-nums">{insight.value}</p>
+                  </>
+                );
+                // Each insight number stands for a set of underlying
+                // transactions — when it carries a drill-in href, make the whole
+                // row a link into the ledger filtered to exactly those rows
+                // (same drill pattern the cash-flow chart and report rows use;
+                // proof on demand, Law 9).
+                return insight.href ? (
+                  <Link
+                    key={insight.label}
+                    href={insight.href}
+                    className="-mx-2 flex items-start justify-between gap-4 rounded-md px-2 py-0.5 transition-colors hover:bg-accent"
+                  >
+                    {body}
+                  </Link>
+                ) : (
+                  <div key={insight.label} className="flex items-start justify-between gap-4">
+                    {body}
                   </div>
-                  <p className="shrink-0 font-medium tabular-nums">{insight.value}</p>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </>
         ) : null}

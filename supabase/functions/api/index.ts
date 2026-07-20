@@ -1654,6 +1654,7 @@ export default {
         const targetDate = input['targetDate'] ?? null;
         const accountId = input['accountId'] ?? null;
         const kind = input['kind'] ?? 'savings';
+        const tracking = input['tracking'] ?? 'manual';
         if (
           (goalId !== null && (typeof goalId !== 'string' || !uuidReGoal.test(goalId))) ||
           typeof name !== 'string' ||
@@ -1664,7 +1665,8 @@ export default {
           (targetDate !== null &&
             (typeof targetDate !== 'string' || !dateReGoal.test(targetDate))) ||
           (accountId !== null && (typeof accountId !== 'string' || !uuidReGoal.test(accountId))) ||
-          (kind !== 'savings' && kind !== 'debt')
+          (kind !== 'savings' && kind !== 'debt') ||
+          (tracking !== 'manual' && tracking !== 'account_balance')
         ) {
           return json(400, {
             code: 'invalid_command',
@@ -1680,6 +1682,7 @@ export default {
           p_target_date: targetDate,
           p_account_id: accountId,
           p_kind: kind,
+          p_tracking: tracking,
         });
         if (error) return mapDbError(error);
         return json(200, { goalId: data });
