@@ -455,6 +455,23 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
         toast.error(err instanceof Error ? err.message : 'Could not change the category.');
       });
   };
+  // Inline ✓ approve of an auto-categorized row: same categorize command (Law 7),
+  // re-filing the row's OWN category with source='user' to clear the Auto state.
+  const approveAutoEditing = (txnId: string, categoryId: string) => {
+    if (!householdId) return;
+    void categorizeTransaction({
+      householdId,
+      transactionId: txnId,
+      categoryLedgerAccountId: categoryId,
+    })
+      .then(() => {
+        toast.success('Category approved.');
+        return txns.refetch();
+      })
+      .catch((err: unknown) => {
+        toast.error(err instanceof Error ? err.message : 'Could not approve the category.');
+      });
+  };
   const merchantSearchEditing = (description: string) => {
     router.push(`/dashboard/ledger?q=${encodeURIComponent(description)}`);
   };
@@ -832,6 +849,7 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
                 onToggle={() => undefined}
                 onEdit={selectForEdit}
                 onRecategorize={recategorizeEditing}
+                onApproveAuto={approveAutoEditing}
               />
             )}
           </section>
