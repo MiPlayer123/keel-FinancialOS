@@ -437,7 +437,14 @@ $$;
 -- Runtime grant + unprivileged definer (mirrors the other recurring.* commands).
 grant execute on function public.keel_recurring_reclassify_cadence(uuid, text, jsonb, uuid, jsonb)
   to keel_api, keel_worker;
+-- Live grant-drift: keel_api lacks CREATE on schema public on the cloud project,
+-- so `alter function ... owner to keel_api` fails with "permission denied for
+-- schema public". Grant CREATE for the owner change, then revoke it again
+-- (the documented idiom in CLAUDE.md; the local/throwaway PG this was authored
+-- against still has the grant, which is why it only surfaces on live apply).
+grant create on schema public to keel_api;
 alter function public.keel_recurring_reclassify_cadence(uuid, text, jsonb, uuid, jsonb)
   owner to keel_api;
+revoke create on schema public from keel_api;
 revoke all on function public.keel_recurring_reclassify_cadence(uuid, text, jsonb, uuid, jsonb)
   from public, anon;
