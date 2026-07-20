@@ -43,6 +43,9 @@ import {
   findStatementPayment,
   decideStatementPaymentLink,
   detachStatementPaymentLink,
+  fetchStatementHoldingsDiff,
+  applyStatementHoldings,
+  unapplyStatementHoldings,
   STATEMENT_UPLOAD_ACCEPT,
   type AccountRow,
   type RichTransactionRow,
@@ -50,7 +53,9 @@ import {
   type StatementDraftRow,
   type StatementRow,
   type StatementPaymentLink,
+  type StatementHoldingsDiff,
 } from '@/lib/keel-api';
+import { looksLikeInvestmentAccount } from '@/lib/investment-subtype';
 import {
   buildStatementBody,
   runIssueThenApprove,
@@ -616,6 +621,147 @@ function CardPaymentSection({
   );
 }
 
+// SLICE 9 [A8]: investment-statement holdings. Shows the per-symbol/CUSIP diff
+// between the extracted positions and the account's CURRENT holdings (suggestion
+// only, Law 10), and lets the user APPLY the positions (token-bound, class-B) or
+// REVERT (Law 2). Apply rebuilds current from the newest applied statement; an
+// older statement never regresses current, and a symbol absent from a newer full
+// statement drops.
+function InvestmentHoldingsSection({
+  statementId,
+  currency,
+  householdId,
+  userId,
+}: {
+  statementId: string;
+  currency: string;
+  householdId: string | null;
+  userId: string | null;
+}) {
+  const [diff, setDiff] = useState<StatementHoldingsDiff | null>(null);
+  const [busy, setBusy] = useState<null | 'apply' | 'revert'>(null);
+
+  const load = useCallback(async () => {
+    if (!householdId) return;
+    try {
+      setDiff(await fetchStatementHoldingsDiff(householdId, statementId));
+    } catch {
+      setDiff(null);
+    }
+  }, [householdId, statementId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function apply() {
+    if (!householdId || !userId) return;
+    setBusy('apply');
+    try {
+      await applyStatementHoldings({ householdId, userId, statementId });
+      toast.success('Positions applied to this account’s holdings.');
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not apply positions.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function revert() {
+    if (!householdId || !userId) return;
+    setBusy('revert');
+    try {
+      await unapplyStatementHoldings({ householdId, userId, statementId });
+      toast.success('Reverted — holdings rebuilt from the prior statement.');
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not revert.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (!diff || !diff.hasExtraction) return null;
+  const rows = diff.rows;
+  const changed = rows.filter((r) => r.state !== 'same');
+
+  return (
+    <div className="space-y-2 rounded-md border border-border p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 text-sm font-medium">
+          <TrendingUp className="size-4" /> Portfolio positions
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <Button type="button" size="sm" disabled={busy !== null || !userId} onClick={() => void apply()}>
+            {busy === 'apply' ? 'Applying…' : 'Apply positions'}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy !== null || !userId}
+            onClick={() => void revert()}
+          >
+            {busy === 'revert' ? 'Reverting…' : 'Revert'}
+          </Button>
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {changed.length === 0
+          ? 'These positions already match the account’s current holdings.'
+          : 'Suggested changes vs current holdings — nothing is applied until you choose Apply.'}
+      </p>
+      <div className="overflow-hidden rounded-md border border-border">
+        <div className="flex items-center gap-3 bg-muted/40 px-3 py-1.5 text-xs font-medium text-muted-foreground">
+          <span className="w-24 shrink-0">Symbol</span>
+          <span className="min-w-0 flex-1">Name</span>
+          <span className="w-24 shrink-0 text-right">Qty Δ</span>
+          <span className="w-28 shrink-0 text-right">Value Δ</span>
+          <span className="w-20 shrink-0 text-right">State</span>
+        </div>
+        {rows.map((r) => {
+          const key = r.symbol ?? r.cusip ?? r.isin ?? 'row';
+          const ident = r.symbol ?? r.cusip ?? r.isin ?? '—';
+          return (
+            <div
+              key={key}
+              className="flex items-center gap-3 border-t border-border px-3 py-2 text-sm"
+            >
+              <span className="w-24 shrink-0 truncate font-mono text-xs" title={r.cusip ?? r.isin ?? ''}>
+                {ident}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-muted-foreground" title={r.name ?? ''}>
+                {r.name ?? ''}
+              </span>
+              <span className="w-24 shrink-0 text-right font-mono text-xs tabular-nums">
+                {r.qtyDelta ?? '—'}
+              </span>
+              <span className="w-28 shrink-0 text-right">
+                {r.valueDeltaMinor ? (
+                  <Money amountMinor={r.valueDeltaMinor} currency={currency} signed className="text-sm" />
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </span>
+              <span className="w-20 shrink-0 text-right">
+                <Badge
+                  variant={
+                    r.state === 'removed' ? 'destructive' : r.state === 'same' ? 'secondary' : 'default'
+                  }
+                  className="capitalize"
+                >
+                  {r.state}
+                </Badge>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function StatementCard({
   statement: s,
   accountName,
@@ -725,6 +871,15 @@ function StatementCard({
             <CardPaymentSection
               statementId={s.statementId}
               endingMinor={s.endingMinor}
+              currency={s.currency}
+              householdId={householdId}
+              userId={userId}
+            />
+          ) : null}
+
+          {accountSubtype && looksLikeInvestmentAccount(accountSubtype) ? (
+            <InvestmentHoldingsSection
+              statementId={s.statementId}
               currency={s.currency}
               householdId={householdId}
               userId={userId}
