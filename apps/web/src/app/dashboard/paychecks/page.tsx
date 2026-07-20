@@ -14,6 +14,8 @@ import {
   fetchDetectedPaycheckDismissals,
   fetchPaycheckTemplates,
   dismissDetectedPaycheck,
+  unapplyPaycheck,
+  applyPaycheckTemplate,
   keelCommand,
   newId,
   type RecurringClassificationRow,
@@ -26,6 +28,11 @@ import {
   PaycheckTemplateEditor,
   PaycheckAutonomyToggle,
 } from '@/components/keel/paycheck-template-editor';
+import {
+  previewPaycheckTemplate,
+  type PreviewLine,
+} from '@/lib/paycheck-template-math';
+import type { PaycheckTemplate } from '@/lib/keel-api';
 import { TxnPicker } from '@/components/keel/txn-picker';
 import { AttachmentsSection } from '@/components/keel/attachments-section';
 import { sha256Hex, parseSignedDollars, minorToDollars } from '@/lib/hash';
@@ -61,6 +68,9 @@ type PaycheckFull = {
   currency: string;
   status: 'active' | 'reversed';
   supersededByPaycheckId: string | null;
+  templateId: string | null;
+  templateVersion: number | null;
+  templateApplied: boolean;
   components: { componentId: string; key: string; kind: string; amountMinor: string }[];
   matches: { componentId: string; transactionId: string }[];
 };
@@ -541,6 +551,37 @@ function PaychecksBody() {
                         onChanged={reloadTemplates}
                       />
                     ) : null}
+                    {settings?.activeTemplateId ? (
+                      <ApplyTemplateButton
+                        householdId={householdId}
+                        userId={userId}
+                        seriesId={series.seriesId}
+                        serverTemplate={
+                          (templatesData?.templates ?? []).find(
+                            (t) => t.templateId === settings.activeTemplateId,
+                          ) ?? null
+                        }
+                        hasIncomeCategory={settings.incomeCategoryLedgerAccountId !== null}
+                        deposit={(() => {
+                          const netMinor = amount?.expectedAmountMinor ?? '';
+                          const match =
+                            netMinor !== ''
+                              ? txns.rows.find((t) => t.amountMinor === netMinor)
+                              : undefined;
+                          return match
+                            ? {
+                                depositTxnId: match.transactionId,
+                                netMinor,
+                                currency: amount?.currency ?? 'USD',
+                              }
+                            : null;
+                        })()}
+                        onApplied={() => {
+                          reloadTemplates();
+                          void refetch();
+                        }}
+                      />
+                    ) : null}
                   </div>
                 </div>
               );
@@ -692,19 +733,30 @@ function PaycheckCard({
     p.components.every((c) => V1_EDITABLE_KINDS.includes(c.kind)) &&
     p.components.filter((c) => c.kind === 'direct_deposit').length === 1;
 
+  // A template-applied paycheck's undo must go through paychecks.unapply (it also
+  // reverses the set_splits booking); a plain paychecks.reverse is blocked by the
+  // DB guard. Unapply needs no reason (the reversal is the whole action).
+  const templateApplied = p.templateApplied && !reversed;
+
   async function transition() {
-    if (!householdId || !userId || reason.trim().length === 0) return;
+    if (!householdId || !userId) return;
+    if (!templateApplied && reason.trim().length === 0) return;
     setBusy(true);
     try {
-      await keelCommand({
-        commandId: newId(),
-        command: reversed ? 'paychecks.restore' : 'paychecks.reverse',
-        economicEventKey: `paychecks.${reversed ? 'restore' : 'reverse'}:${p.paycheckId}:${newId()}`,
-        actor: { kind: 'user', userId },
-        householdId,
-        payload: { paycheckId: p.paycheckId, reason: reason.trim() },
-      });
-      toast.success(reversed ? 'Paycheck restored.' : 'Paycheck reversed.');
+      if (templateApplied) {
+        await unapplyPaycheck({ householdId, userId, paycheckId: p.paycheckId });
+        toast.success('Template unapplied — booking reversed.');
+      } else {
+        await keelCommand({
+          commandId: newId(),
+          command: reversed ? 'paychecks.restore' : 'paychecks.reverse',
+          economicEventKey: `paychecks.${reversed ? 'restore' : 'reverse'}:${p.paycheckId}:${newId()}`,
+          actor: { kind: 'user', userId },
+          householdId,
+          payload: { paycheckId: p.paycheckId, reason: reason.trim() },
+        });
+        toast.success(reversed ? 'Paycheck restored.' : 'Paycheck reversed.');
+      }
       setConfirming(false);
       setReason('');
       onChanged();
@@ -734,9 +786,15 @@ function PaycheckCard({
               net of <Money amountMinor={p.grossMinor} currency={p.currency} className="text-[11px]" />
             </p>
           </div>
-          <Badge variant={reversed ? 'outline' : 'secondary'} className="capitalize">
-            {p.status}
-          </Badge>
+          {p.templateApplied && !reversed ? (
+            <Badge variant="secondary" className="whitespace-nowrap">
+              Booked{p.templateVersion ? ` · v${p.templateVersion.toString()}` : ''}
+            </Badge>
+          ) : (
+            <Badge variant={reversed ? 'outline' : 'secondary'} className="capitalize">
+              {p.status}
+            </Badge>
+          )}
         </div>
       </button>
 
@@ -760,7 +818,26 @@ function PaycheckCard({
             kind="receipt"
           />
 
-          {confirming ? (
+          {templateApplied ? (
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs text-muted-foreground">
+                Booked to the ledger from a split template (gross income + taxes
+                {p.components.some((c) => c.kind === 'retirement_401k') ? ' + 401(k) transfer' : ''}).
+                Undo reverses the booking and this record.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => {
+                  void transition();
+                }}
+              >
+                {busy ? <Loader2 className="size-4 animate-spin" /> : <Undo2 className="size-4" />}
+                Undo
+              </Button>
+            </div>
+          ) : confirming ? (
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
               <div className="flex-1 space-y-1.5">
                 <Label htmlFor={`pc-reason-${p.paycheckId}`}>
@@ -1170,6 +1247,123 @@ function PaycheckFormDialog({
           >
             {busy ? <Loader2 className="size-4 animate-spin" /> : null}
             {editing ? 'Save correction' : 'Record paycheck'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * SLICE D — "Apply template to deposit" (class B, token-bound). Shows a live
+ * gross→net breakdown (the EXACT §D4 math via previewPaycheckTemplate, the same
+ * algorithm the server computes) and, on confirm, runs the issue→apply two-step
+ * (applyPaycheckTemplate): mint an approval token bound to the server-computed
+ * split payload, then apply with the redeemed token — the server books it via
+ * set_splits (Law 7). The client never sends the leg amounts.
+ */
+function ApplyTemplateButton({
+  householdId,
+  userId,
+  seriesId,
+  serverTemplate,
+  hasIncomeCategory,
+  deposit,
+  onApplied,
+}: {
+  householdId: string | null;
+  userId: string | null;
+  seriesId: string;
+  serverTemplate: PaycheckTemplate | null;
+  hasIncomeCategory: boolean;
+  deposit: { depositTxnId: string; netMinor: string; currency: string } | null;
+  onApplied: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  // Not applicable without a template, a matched deposit, or an income category.
+  if (serverTemplate === null || deposit === null || !hasIncomeCategory) return null;
+
+  const previewLines: PreviewLine[] = serverTemplate.lines.map((l) => ({
+    lineKey: l.lineKey,
+    role: l.role as PreviewLine['role'],
+    kind: l.kind,
+    amountKind: l.amountKind as PreviewLine['amountKind'],
+    ...(l.amountMinor !== null ? { amountMinor: l.amountMinor } : {}),
+    ...(l.bps !== null ? { bps: l.bps } : {}),
+  }));
+  const preview = previewPaycheckTemplate(previewLines, deposit.netMinor);
+
+  async function apply() {
+    if (!householdId || !userId || serverTemplate === null || deposit === null) return;
+    setBusy(true);
+    try {
+      await applyPaycheckTemplate({
+        householdId,
+        userId,
+        seriesId,
+        depositTxnId: deposit.depositTxnId,
+        templateId: serverTemplate.templateId,
+        templateVersion: serverTemplate.templateVersion,
+      });
+      toast.success('Template applied — booked to the ledger.');
+      setOpen(false);
+      onApplied();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Apply failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { setOpen(true); }}>
+        <Banknote className="size-3.5" />
+        Apply template to deposit
+      </Button>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Apply split template</DialogTitle>
+          <DialogDescription>
+            Books this deposit as gross income, taxes, and any 401(k)/HSA transfer —
+            one ledger line, undoable. Reviewed before it posts (Law 11).
+          </DialogDescription>
+        </DialogHeader>
+        {preview.ok ? (
+          <div className="space-y-1.5 rounded-lg border border-border px-3 py-2 text-sm">
+            <div className="flex items-center justify-between font-medium">
+              <span>Gross income</span>
+              <Money amountMinor={preview.grossMinor} currency={deposit.currency} />
+            </div>
+            {preview.lines
+              .filter((l) => l.role !== 'earning' && l.role !== 'net_deposit')
+              .map((l) => (
+                <div key={l.lineKey} className="flex items-center justify-between text-muted-foreground">
+                  <span>{KIND_LABELS[l.kind] ?? l.kind}</span>
+                  <span>
+                    −<Money amountMinor={l.amountMinor} currency={deposit.currency} className="text-muted-foreground" />
+                  </span>
+                </div>
+              ))}
+            <div className="flex items-center justify-between border-t border-border/60 pt-1.5 font-medium">
+              <span>Net deposit</span>
+              <Money amountMinor={preview.netMinor} currency={deposit.currency} />
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-destructive">
+            This template does not reconcile to the deposit amount. Edit the template first.
+          </p>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => { setOpen(false); }} disabled={busy}>
+            Cancel
+          </Button>
+          <Button onClick={() => { void apply(); }} disabled={busy || !preview.ok}>
+            {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+            Apply &amp; book
           </Button>
         </DialogFooter>
       </DialogContent>
