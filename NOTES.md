@@ -66,6 +66,50 @@ pre-existing unrelated warnings). `npx vitest run src/lib` → 405/405 green
 prepared and flagged for the human.
 
 ---
+## 2026-07-20 — feat(ui): Personal/Business entity breakdown in the sidebar + drop dashboard account list
+
+Founder ask: the left rail's account list should be broken down by entity
+(Personal vs Business) EXACTLY like the Accounts page, and the flat account
+list card on the dashboard is redundant now that the rail + Accounts page cover
+it.
+
+- **Sidebar entity split reuses the Accounts-page read model, not a new path
+  (Law 7).** `SidebarAccounts` (app-shell.tsx) already read
+  `ledger.trial_balance` for balances and `entity.list`-derived data lives in
+  the shared `useEntityLens()` context. The rail now takes `entities` from that
+  context (via `NavLinks`) — no second `fetchEntities`/balance read — and, when
+  `entities.length > 1`, buckets accounts by `entityId` and renders one section
+  per entity in `entities.list` order, each with the same Assets / Liabilities /
+  Other three-way split and per-currency subtotals it already used. This mirrors
+  `EntityGroupedAccounts` on the Accounts page (accounts/page.tsx): same gate
+  (`entities.length > 1`), same deterministic order, same trailing "Other
+  entity" bucket for accounts pointing at an entity the list doesn't know (so
+  they never silently drop from the household total). Single-entity households
+  (`entities.length <= 1`) keep the flat layout byte-for-byte.
+- **Collapsible sections, default-open.** No collapsible primitive exists in
+  `components/ui`, so `SidebarEntitySection` is a hand-rolled `useState` toggle
+  (matching the codebase's hand-rolled disclosure pattern), default-open so the
+  breakdown is visible without a click (the founder wanted it visible), but
+  foldable so a several-entity household can shorten the rail. Header carries the
+  entity name + its net subtotal + a chevron; body is the existing groups.
+  Net-worth foot (household-wide, dominant currency) is unchanged and still
+  pinned below all sections.
+- **Sidebar arithmetic unchanged.** Balances still come from the shared
+  `ledger.trial_balance` read; per-entity/per-group subtotals reuse the existing
+  `currencySubtotal` helper (dominant-currency-only, never sums across
+  currencies — Law 4). The account-row markup was extracted into one `accountRow`
+  closure so the flat and per-entity layouts render identically.
+- **Dashboard: removed the flat `AccountsSummaryCard`.** Founder: "I honestly
+  don't see a reason we should even have accounts on the dashboard." Chose to
+  remove (task default) rather than replace: the entity-grouped rail + the
+  Accounts page now cover "what accounts and balances do I have" better than a
+  truncated top-5 card, and the net-worth hero already carries the headline. The
+  card component + its only call site are deleted; `accountList`/`balanceByLedger`
+  stay (they still feed the net-worth hero's `netMinor`), and no imports went
+  unused (verified).
+- **Verification RAN:** `pnpm install --frozen-lockfile` then
+  `cd apps/web && pnpm build` — green (ESLint enforced; typecheck + 24 routes
+  built). No DB/migration/live changes (pure UI, both reads pre-existing).
 
 ## 2026-07-19 — feat(recurring): semi-monthly (15th & 30th) schedule option
 
