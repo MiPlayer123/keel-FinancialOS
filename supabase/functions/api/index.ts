@@ -176,6 +176,8 @@ const QUERY_TO_PROC: Record<string, string> = {
   'recurring.schedule_links': 'keel_list_recurring_schedule_links',
   'paychecks.list': 'keel_list_paychecks',
   'paychecks.detected_dismissals': 'keel_list_detected_paycheck_dismissals',
+  'paychecks.templates': 'keel_list_paycheck_templates',
+  'paychecks.split_suggestions': 'keel_list_paycheck_split_suggestions',
   'reimbursements.list': 'keel_list_reimbursements',
   'statements.list': 'keel_list_statements',
   'statements.drafts': 'keel_list_statement_drafts',
@@ -2832,6 +2834,8 @@ export default {
         query.query === 'recurring.schedule_links' ||
         query.query === 'paychecks.list' ||
         query.query === 'paychecks.detected_dismissals' ||
+        query.query === 'paychecks.templates' ||
+        query.query === 'paychecks.split_suggestions' ||
         query.query === 'reimbursements.list' ||
         query.query === 'statements.list' ||
         query.query === 'statements.drafts' ||

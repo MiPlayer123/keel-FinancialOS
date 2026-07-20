@@ -1887,6 +1887,90 @@ export type ReimbursementRow = {
   kind: string;
 };
 
+// ---- Paycheck split templates SLICE B (paycheck-split-templates-v2.md §3) ----
+// Read-only fetchers over the two viewer read models. The template editor,
+// autonomy toggle, and suggestion review cards (Slices C–E) consume these.
+export type PaycheckTemplateLine = {
+  lineId: string;
+  lineKey: string;
+  kind: string;
+  role: string;
+  amountKind: string;
+  amountMinor: string | null;
+  bps: number | null;
+  categoryLedgerAccountId: string | null;
+  destinationAccountId: string | null;
+  position: number;
+};
+
+export type PaycheckTemplate = {
+  templateId: string;
+  employerId: string;
+  employerName: string;
+  templateVersion: number;
+  formulaVersion: string;
+  createdAt: string;
+  lines: PaycheckTemplateLine[];
+};
+
+export type PaycheckSeriesSettings = {
+  seriesId: string;
+  employerId: string;
+  activeTemplateId: string | null;
+  bookingEnabled: boolean;
+  incomeCategoryLedgerAccountId: string | null;
+  autonomy: 'off' | 'suggest' | 'auto_with_log';
+  updatedAt: string;
+};
+
+export type PaycheckTemplatesResult = {
+  scope: { householdId: string };
+  asOf: string;
+  templates: PaycheckTemplate[];
+  seriesSettings: PaycheckSeriesSettings[];
+};
+
+export async function fetchPaycheckTemplates(
+  householdId: string,
+): Promise<PaycheckTemplatesResult> {
+  return invoke<PaycheckTemplatesResult>('api/queries', {
+    query: 'paychecks.templates',
+    householdId,
+  });
+}
+
+export type PaycheckSplitSuggestionRow = {
+  suggestionId: string;
+  seriesId: string;
+  templateId: string;
+  templateVersion: number;
+  depositTxnId: string;
+  computedComponents: unknown;
+  computedGrossMinor: string;
+  computedNetMinor: string;
+  source: 'detector' | 'agent';
+  status: 'suggested' | 'accepted' | 'dismissed' | 'stale';
+  appliedPaycheckId: string | null;
+  tldr: string | null;
+  confidence: number | null;
+  verdict: string | null;
+  aiResponse: unknown;
+  depositDate: string;
+  depositDescription: string;
+  createdAt: string;
+  decidedAt: string | null;
+};
+
+export async function fetchPaycheckSplitSuggestions(
+  householdId: string,
+): Promise<PaycheckSplitSuggestionRow[]> {
+  const res = await keelQuery<PaycheckSplitSuggestionRow>(
+    'paychecks.split_suggestions',
+    householdId,
+  );
+  return res.rows;
+}
+
 export type StatementLine = {
   lineId: string;
   lineKey: string;
