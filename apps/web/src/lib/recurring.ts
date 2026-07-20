@@ -76,6 +76,106 @@ export async function recurringTransition(input: {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Editable cadence (recurring.reclassify_cadence). Lets a user correct a
+// detected/confirmed series' cadence — e.g. a semi-monthly payroll (15th & the
+// last calendar day of each month) that detection misread as biweekly. The
+// command mints a new manual candidate version (append-only, audited, reversible
+// — Law 2) and re-projects occurrences; a later detector run will NOT revert it
+// (the candidate carries manualCadenceOverride — Law 9 explicit ownership).
+// ---------------------------------------------------------------------------
+
+/** The cadences a user can pick when correcting a series (Class B, suggest→approve). */
+export type EditableCadence =
+  | 'weekly' | 'biweekly' | 'semimonthly' | 'monthly' | 'quarterly' | 'annual';
+
+/** Detector CadenceAnchor shape (mirrors packages/detectors/src/types.ts). */
+export type CadenceAnchorInput =
+  | { kind: 'epoch_grid'; intervalDays: 7 | 14; anchorEpochDay: number }
+  | { kind: 'day_of_month'; day: number; intervalMonths: 1 | 3 | 12; phase: number }
+  | { kind: 'day_pair'; days: [number, number] };
+
+/** Whole days from 1970-01-01 for an ISO date (UTC, matches the SQL epoch grid). */
+export function epochDayOf(dateIso: string): number {
+  const [y = 1970, m = 1, d = 1] = dateIso.split('-').map(Number);
+  return Math.floor(Date.UTC(y, m - 1, d) / 86_400_000);
+}
+
+/**
+ * Build the CadenceAnchor for an editable cadence from a reference date +
+ * (for monthly-family / semimonthly) chosen day(s) of month. Deterministic;
+ * the SQL command re-validates the anchor before storing. For semimonthly the
+ * two days are normalized ascending, defaulting to the 15th & 31st (the 31
+ * month-end-clamps to Feb 28/29, Apr 30, etc. in keel_recurring_cadence_dates).
+ */
+export function buildCadenceAnchor(
+  cadence: EditableCadence,
+  referenceDateIso: string,
+  days?: { day?: number | undefined; day2?: number | undefined },
+): CadenceAnchorInput {
+  switch (cadence) {
+    case 'weekly':
+      return { kind: 'epoch_grid', intervalDays: 7, anchorEpochDay: epochDayOf(referenceDateIso) };
+    case 'biweekly':
+      return { kind: 'epoch_grid', intervalDays: 14, anchorEpochDay: epochDayOf(referenceDateIso) };
+    case 'semimonthly': {
+      const a = days?.day ?? 15;
+      const b = days?.day2 ?? 31;
+      const [lo, hi] = a <= b ? [a, b] : [b, a];
+      return { kind: 'day_pair', days: [lo, hi] };
+    }
+    case 'monthly':
+      return { kind: 'day_of_month', day: days?.day ?? Number(referenceDateIso.slice(8, 10)), intervalMonths: 1, phase: 0 };
+    case 'quarterly':
+    case 'annual': {
+      const intervalMonths = cadence === 'quarterly' ? 3 : 12;
+      const [y = 0, m = 1] = referenceDateIso.split('-').map(Number);
+      const phase = ((y * 12 + m - 1) % intervalMonths + intervalMonths) % intervalMonths;
+      return { kind: 'day_of_month', day: days?.day ?? Number(referenceDateIso.slice(8, 10)), intervalMonths, phase };
+    }
+  }
+}
+
+/**
+ * Correct a recurring series' cadence. Payload is camelCase; the API snake-cases
+ * it and the SQL command (keel_recurring_reclassify_cadence) re-validates the
+ * cadence↔anchor pairing, mints the manual candidate version, and re-projects.
+ */
+export async function reclassifyCadence(input: {
+  seriesId: string;
+  cadence: EditableCadence;
+  cadenceAnchor: CadenceAnchorInput;
+  householdId: string;
+  userId: string;
+  horizonDays?: number;
+}): Promise<unknown> {
+  const effectiveDate = new Date().toISOString().slice(0, 10);
+  return keelCommand({
+    commandId: newId(),
+    command: 'recurring.reclassify_cadence',
+    economicEventKey: `recurring.reclassify_cadence:${input.seriesId}:${effectiveDate}:${input.cadence}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: {
+      seriesId: input.seriesId,
+      cadence: input.cadence,
+      cadenceAnchor: input.cadenceAnchor,
+      effectiveDate,
+      horizonDays: input.horizonDays ?? 120,
+    },
+  });
+}
+
+/** Human-facing cadence names for the edit picker. */
+export const EDITABLE_CADENCE_LABELS: Record<EditableCadence, string> = {
+  weekly: 'Weekly',
+  biweekly: 'Every 2 weeks',
+  semimonthly: 'Twice a month (15th & last day)',
+  monthly: 'Monthly',
+  quarterly: 'Quarterly',
+  annual: 'Annually',
+};
+
 /** Next expected occurrence on/after today (occurrences may include the past). */
 export function nextOccurrence(series: RecurringSeriesRow, todayIso: string) {
   return series.occurrences

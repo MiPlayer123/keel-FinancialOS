@@ -38,6 +38,7 @@ export {
   type ChatUsage,
   type ConverseInput,
   type ExecutedToolCall,
+  type ImageInput,
   type JsonSchema,
   type RunAgentInput,
   type ToolCall,

@@ -22,7 +22,9 @@ import {
   detachReceiptMatch,
   fetchEntities,
   fetchReceiptsInbox,
+  fetchStorageSummary,
   uploadReceipt,
+  type DocumentStorageSummary,
   type ReceiptInboxRow,
 } from '@/lib/keel-api';
 import { shortDateWithYear } from '@/lib/relative-date';
@@ -39,6 +41,43 @@ import {
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const ACCEPTED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
+
+/** Human byte size from a BIGINT-safe string count. */
+function formatByteString(byteStr: string): string {
+  const n = Number(byteStr);
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  if (n < 1024) return `${String(n)} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+/**
+ * Storage hygiene strip. KEEL keeps document BYTES in Supabase Storage (not
+ * inline in Postgres like Quicken), so growth is just the sum of uploaded
+ * file sizes — surfaced here so it never silently balloons. Dedup: identical
+ * re-uploads collapse to one stored object.
+ */
+function StorageSummaryBar({ summary }: { summary: DocumentStorageSummary | null }) {
+  if (!summary || summary.liveDocuments === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+      <span>
+        <span className="font-medium text-foreground">{formatByteString(summary.liveBytes)}</span>{' '}
+        in Storage
+      </span>
+      <span>
+        {summary.liveDocuments} {summary.liveDocuments === 1 ? 'document' : 'documents'}
+      </span>
+      {summary.distinctContent < summary.versionCount ? (
+        <span>{summary.distinctContent} unique (duplicates deduped)</span>
+      ) : null}
+      {summary.deletedDocuments > 0 ? (
+        <span>{summary.deletedDocuments} removed (kept for export/audit)</span>
+      ) : null}
+    </div>
+  );
+}
 
 export default function ReceiptsPage() {
   return (
@@ -69,6 +108,7 @@ const REASON_LABEL: Record<string, string> = {
 function ReceiptsBody() {
   const { householdId, userId } = useHousehold();
   const [rows, setRows] = useState<ReceiptInboxRow[] | null>(null);
+  const [storage, setStorage] = useState<DocumentStorageSummary | null>(null);
   const [entityId, setEntityId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [busyMatch, setBusyMatch] = useState<string | null>(null);
@@ -88,6 +128,13 @@ function ReceiptsBody() {
       })
       .catch(() => {
         if (requestKeyRef.current === requestKey) setRows([]);
+      });
+    void fetchStorageSummary(householdId)
+      .then((s) => {
+        if (requestKeyRef.current === requestKey) setStorage(s);
+      })
+      .catch(() => {
+        if (requestKeyRef.current === requestKey) setStorage(null);
       });
   }, [householdId]);
 
@@ -228,6 +275,7 @@ function ReceiptsBody() {
 
   return (
     <div className="space-y-6">
+      <StorageSummaryBar summary={storage} />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           {accountOptions.length > 0 ? (

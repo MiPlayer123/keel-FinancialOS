@@ -2685,13 +2685,18 @@ export type AiChatRecord = {
 };
 
 /** Ask KEEL one question; the agent may call read tools before answering. */
+/** An image attached to a chat question (base64, no data: prefix). */
+export type AskKeelImage = { mediaType: string; data: string };
+
 export async function askKeel(input: {
   householdId: string;
   question: string;
+  image?: AskKeelImage;
 }): Promise<AiChatRecord> {
   return invoke<AiChatRecord>('api/ai/chat', {
     householdId: input.householdId,
     question: input.question,
+    ...(input.image ? { image: input.image } : {}),
   });
 }
 
@@ -2822,6 +2827,76 @@ export async function detachDocument(input: {
     householdId: input.householdId,
     payload: { attachmentId: input.attachmentId, reason: input.reason },
   });
+}
+
+/**
+ * Attach an ALREADY-UPLOADED document to a target (e.g. a receipt already in
+ * the inbox onto a transaction). No bytes move — this just adds the same
+ * document_attachments link the fresh-upload flow creates. Idempotent
+ * server-side (re-attaching a live link returns the existing one).
+ */
+export async function attachExistingDocument(input: {
+  householdId: string;
+  userId: string;
+  documentId: string;
+  targetType: DocumentTargetType;
+  targetId: string;
+}): Promise<CommandResult> {
+  return keelCommand({
+    commandId: newId(),
+    command: 'documents.attach',
+    economicEventKey: `documents.attach:${input.documentId}:${input.targetId}:${newId()}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: {
+      documentId: input.documentId,
+      targetType: input.targetType,
+      targetId: input.targetId,
+    },
+  });
+}
+
+/** One row of the household-wide document list (storage-management + picker). */
+export type HouseholdDocumentRow = {
+  documentId: string;
+  kind: DocumentKind;
+  originalFilename: string;
+  storageBucket: string;
+  storagePath: string;
+  mimeType: string;
+  byteSize: number;
+  createdAt: string;
+  /** How many live (non-detached) attachments this document has right now. */
+  attachmentCount: number;
+  /** Short-lived signed read URL (5 min TTL). */
+  url: string | null;
+};
+
+/** Every live document in the household — powers the "pick existing" picker. */
+export async function fetchHouseholdDocuments(
+  householdId: string,
+): Promise<HouseholdDocumentRow[]> {
+  const res = await invoke<{ rows: HouseholdDocumentRow[] }>('api/documents/list-household', {
+    householdId,
+  });
+  return res.rows;
+}
+
+/** Storage hygiene numbers (all byte counts are strings — BIGINT minor-safe). */
+export type DocumentStorageSummary = {
+  liveDocuments: number;
+  deletedDocuments: number;
+  liveBytes: string;
+  totalBytes: string;
+  versionCount: number;
+  distinctContent: number;
+  asOf: string;
+};
+
+export async function fetchStorageSummary(
+  householdId: string,
+): Promise<DocumentStorageSummary> {
+  return invoke<DocumentStorageSummary>('api/documents/storage-summary', { householdId });
 }
 
 // ---------------------------------------------------------------------------

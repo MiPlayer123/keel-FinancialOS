@@ -126,6 +126,7 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'recurring.resume': 'keel_recurring_resume',
   'recurring.cancel': 'keel_recurring_cancel',
   'recurring.reject': 'keel_recurring_reject',
+  'recurring.reclassify_cadence': 'keel_recurring_reclassify_cadence',
   'recurring.link_schedule': 'keel_recurring_link_schedule',
   'recurring.unlink_schedule': 'keel_recurring_unlink_schedule',
   'paychecks.create': 'keel_paycheck_create',
@@ -141,6 +142,11 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'reimbursements.settle': 'keel_reimbursement_settle',
   'reimbursements.reverse_settlement': 'keel_reimbursement_reverse_settlement',
   'reimbursements.reverse_claim': 'keel_reimbursement_reverse_claim',
+  'expected_reimbursements.create': 'keel_expected_reimbursement_create',
+  'expected_reimbursements.record_receipt': 'keel_expected_reimbursement_record_receipt',
+  'expected_reimbursements.write_off': 'keel_expected_reimbursement_write_off',
+  'expected_reimbursements.reopen': 'keel_expected_reimbursement_reopen',
+  'expected_reimbursements.reverse_receipt': 'keel_expected_reimbursement_reverse_receipt',
   'statements.create': 'keel_statement_create',
   'statements.approve_draft': 'keel_cmd_statements_approve_draft',
   'statements.dismiss_draft': 'keel_cmd_statements_dismiss_draft',
@@ -160,6 +166,7 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'accounts.set_opening_balance': 'keel_cmd_set_opening_balance',
   'accounts.reanchor_balance': 'keel_cmd_reanchor_balance',
   'categorization.decide_suggestion': 'keel_cmd_decide_category_suggestion',
+  'documents.attach': 'keel_cmd_documents_attach',
   'documents.detach': 'keel_cmd_documents_detach',
   'documents.delete': 'keel_cmd_documents_delete',
   'receipts.decide_match': 'keel_cmd_receipts_decide_match',
@@ -189,6 +196,7 @@ const QUERY_TO_PROC: Record<string, string> = {
   'paychecks.templates': 'keel_list_paycheck_templates',
   'paychecks.split_suggestions': 'keel_list_paycheck_split_suggestions',
   'reimbursements.list': 'keel_list_reimbursements',
+  'expected_reimbursements.list': 'keel_list_expected_reimbursements',
   'statements.list': 'keel_list_statements',
   'statements.drafts': 'keel_list_statement_drafts',
   'statements.cadence': 'keel_statement_cadence',
@@ -417,6 +425,32 @@ export default {
         });
       }
 
+      // Optional attached image (vision). It is DATA-TIER (Law 5): the prompt
+      // treats it as information, never instructions. Allowlisted mime + size
+      // cap (~5MB image → ~7M base64 chars).
+      let agentImage: { mediaType: string; dataBase64: string } | undefined;
+      const rawImage = input['image'];
+      if (rawImage !== undefined && rawImage !== null) {
+        const img = rawImage as Record<string, unknown>;
+        const mediaType = img['mediaType'];
+        const data = img['data'];
+        const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+        if (
+          typeof mediaType !== 'string' ||
+          !allowed.includes(mediaType) ||
+          typeof data !== 'string' ||
+          data.length === 0 ||
+          data.length > 7_000_000
+        ) {
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Attached image failed validation.',
+            details: {},
+          });
+        }
+        agentImage = { mediaType, dataBase64: data };
+      }
+
       // Law 12: provider keys live ONLY in provider secret stores — the function
       // environment first, Supabase Vault second (service_role-only definer
       // keel_ai_provider_key). Anthropic preferred when configured (best tool
@@ -551,6 +585,7 @@ export default {
           system,
           tools: agentToolDefinitions(),
           userMessage: question.trim(),
+          ...(agentImage ? { image: agentImage } : {}),
           executeTool,
           maxSteps: 8,
           maxTokens: 1024,
@@ -567,6 +602,7 @@ export default {
             tools: run.toolCalls.map((t) => t.call.name),
             appliedCount: appliedActions.length,
             proposedCount: proposedActions.length,
+            hasImage: agentImage !== undefined,
             latencyMs: Date.now() - startedAt,
             inputTokens: run.usage.inputTokens,
             outputTokens: run.usage.outputTokens,
@@ -2646,6 +2682,74 @@ export default {
       return json(200, { rows: withUrls });
     }
 
+    // Storage hygiene / "attach an existing document" picker: every live
+    // document in the household + its storage pointer + a live-attachment
+    // count. Same signed-URL minting as /documents/list (Postgres can't sign).
+    if (path === '/documents/list-household') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      if (!householdId.success) {
+        return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });
+      }
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'documents.list_household', {
+        householdId: householdId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+      const { data, error } = await ctx.supabase.rpc('keel_documents_list_household', {
+        p_household_id: householdId.data,
+      });
+      if (error) return mapDbError(error);
+      const rows = (data as { rows: Record<string, unknown>[] })?.rows ?? [];
+      const withUrls = await Promise.all(
+        rows.map(async (row) => {
+          const bucket = row['storageBucket'];
+          const objectPath = row['storagePath'];
+          if (typeof bucket !== 'string' || typeof objectPath !== 'string') {
+            return { ...row, url: null };
+          }
+          const { data: signed } = await ctx.supabaseAdmin.storage
+            .from(bucket)
+            .createSignedUrl(
+              objectPath,
+              DOCUMENT_SIGNED_URL_TTL_S,
+              forceAttachmentBucket(bucket) ? { download: true } : undefined,
+            );
+          return { ...row, url: signed?.signedUrl ?? null };
+        }),
+      );
+      return json(200, { rows: withUrls });
+    }
+
+    // Storage hygiene summary: pure metadata (byte_size lives in
+    // document_versions; no bytes read). Total/live stored bytes + dedup
+    // (distinct content) so the user can see KEEL stays small vs Quicken bloat.
+    if (path === '/documents/storage-summary') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      if (!householdId.success) {
+        return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });
+      }
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'documents.storage_summary', {
+        householdId: householdId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+      const { data, error } = await ctx.supabase.rpc('keel_documents_storage_summary', {
+        p_household_id: householdId.data,
+      });
+      if (error) return mapDbError(error);
+      return json(200, data);
+    }
+
     // WS-J / F-030: receipts inbox — the receipts hub. Same shape as
     // /documents/list (proc returns storage pointers; this route mints the
     // per-row short-lived signed read URL Postgres cannot sign).
@@ -3004,6 +3108,7 @@ export default {
         query.query === 'paychecks.templates' ||
         query.query === 'paychecks.split_suggestions' ||
         query.query === 'reimbursements.list' ||
+        query.query === 'expected_reimbursements.list' ||
         query.query === 'statements.list' ||
         query.query === 'statements.drafts' ||
         query.query === 'statements.cadence' ||

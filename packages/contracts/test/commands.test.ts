@@ -168,6 +168,28 @@ describe('command envelope', () => {
     })).toMatchObject({ amountMinor: '400000' });
   });
 
+  it('documents.attach links an existing document to a target', () => {
+    const uuid2 = '11111111-2222-4333-8444-555555555555';
+    expect(parseCommandPayload('documents.attach', {
+      documentId: uuid, targetType: 'transaction', targetId: uuid2,
+    })).toMatchObject({ documentId: uuid, targetType: 'transaction', targetId: uuid2 });
+    // Every target type is accepted (symmetry with confirm_upload/list).
+    expect(parseCommandPayload('documents.attach', {
+      documentId: uuid, targetType: 'paycheck', targetId: uuid2,
+    })).toMatchObject({ targetType: 'paycheck' });
+    // targetType must be a known enum member.
+    expect(() => parseCommandPayload('documents.attach', {
+      documentId: uuid, targetType: 'account', targetId: uuid2,
+    })).toThrow();
+    // No smuggled extra keys (strict) and required fields enforced.
+    expect(() => parseCommandPayload('documents.attach', {
+      documentId: uuid, targetType: 'transaction', targetId: uuid2, accountId: uuid2,
+    })).toThrow();
+    expect(() => parseCommandPayload('documents.attach', {
+      documentId: uuid, targetType: 'transaction',
+    })).toThrow();
+  });
+
   it('rejects agent actors without onBehalfOf (Law 2: attribution)', () => {
     expect(
       CommandEnvelopeSchema.safeParse({
@@ -331,6 +353,74 @@ describe('command payloads', () => {
     ).toContain('typo');
     expect(() =>
       parseCommandPayload('transactions.manual_void', { transactionId: uuid, reason: '' }),
+    ).toThrow();
+  });
+
+  it('recurring.reclassify_cadence accepts semimonthly day_pair + rejects cadence/anchor mismatch', () => {
+    // Valid: semi-monthly with a 15th & last-day (31) anchor pair.
+    const semi = parseCommandPayload('recurring.reclassify_cadence', {
+      seriesId: uuid,
+      cadence: 'semimonthly',
+      cadenceAnchor: { kind: 'day_pair', days: [15, 31] },
+      effectiveDate: '2026-07-20',
+      horizonDays: 120,
+    });
+    expect(semi.cadence).toBe('semimonthly');
+    expect(semi.cadenceAnchor).toMatchObject({ kind: 'day_pair', days: [15, 31] });
+
+    // Valid: biweekly epoch grid.
+    expect(
+      parseCommandPayload('recurring.reclassify_cadence', {
+        seriesId: uuid,
+        cadence: 'biweekly',
+        cadenceAnchor: { kind: 'epoch_grid', intervalDays: 14, anchorEpochDay: 20400 },
+        effectiveDate: '2026-07-20',
+        horizonDays: 90,
+      }).cadence,
+    ).toBe('biweekly');
+
+    // Reject: cadence semimonthly but anchor is an epoch grid (mismatch).
+    expect(() =>
+      parseCommandPayload('recurring.reclassify_cadence', {
+        seriesId: uuid,
+        cadence: 'semimonthly',
+        cadenceAnchor: { kind: 'epoch_grid', intervalDays: 14, anchorEpochDay: 20400 },
+        effectiveDate: '2026-07-20',
+        horizonDays: 120,
+      }),
+    ).toThrow();
+
+    // Reject: biweekly cadence with a 7-day (weekly) interval.
+    expect(() =>
+      parseCommandPayload('recurring.reclassify_cadence', {
+        seriesId: uuid,
+        cadence: 'biweekly',
+        cadenceAnchor: { kind: 'epoch_grid', intervalDays: 7, anchorEpochDay: 20400 },
+        effectiveDate: '2026-07-20',
+        horizonDays: 120,
+      }),
+    ).toThrow();
+
+    // Reject: semimonthly with two identical days.
+    expect(() =>
+      parseCommandPayload('recurring.reclassify_cadence', {
+        seriesId: uuid,
+        cadence: 'semimonthly',
+        cadenceAnchor: { kind: 'day_pair', days: [15, 15] },
+        effectiveDate: '2026-07-20',
+        horizonDays: 120,
+      }),
+    ).toThrow();
+
+    // Reject: day out of range.
+    expect(() =>
+      parseCommandPayload('recurring.reclassify_cadence', {
+        seriesId: uuid,
+        cadence: 'monthly',
+        cadenceAnchor: { kind: 'day_of_month', day: 32, intervalMonths: 1, phase: 0 },
+        effectiveDate: '2026-07-20',
+        horizonDays: 120,
+      }),
     ).toThrow();
   });
 

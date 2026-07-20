@@ -18,6 +18,8 @@ import {
   EmployerIdSchema,
   ReimbursementClaimIdSchema,
   SettlementIdSchema,
+  ExpectedReimbursementIdSchema,
+  ExpectedReimbursementReceiptIdSchema,
   StatementIdSchema,
   StatementDraftIdSchema,
   ApprovalTokenIdSchema,
@@ -130,6 +132,78 @@ export const RecurringResumePayloadSchema = RecurringTransitionPayloadSchema.ext
 }).strict();
 export const RecurringCancelPayloadSchema = RecurringTransitionPayloadSchema;
 export const RecurringRejectPayloadSchema = RecurringTransitionPayloadSchema;
+
+// recurring.reclassify_cadence — user correction of a series' cadence + anchor
+// (Law 2 reversible/audited, Law 9 explicit ownership: the new candidate is
+// stamped manual so a later detector run does not silently revert it, Law 10
+// Class B suggest→approve). The anchor is a discriminated union mirroring the
+// detector's CadenceAnchor (packages/detectors/src/types.ts) and what
+// keel_recurring_cadence_dates (SQL) interprets:
+//   epoch_grid   -> weekly (7) / biweekly (14)
+//   day_of_month -> monthly (1) / quarterly (3) / annual (12)
+//   day_pair     -> semimonthly (two days per month, month-end-clamped)
+const DayOfMonthSchema = z.number().int().min(1).max(31);
+export const CadenceAnchorSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('epoch_grid'),
+    intervalDays: z.union([z.literal(7), z.literal(14)]),
+    anchorEpochDay: z.number().int(),
+  }).strict(),
+  z.object({
+    kind: z.literal('day_of_month'),
+    day: DayOfMonthSchema,
+    intervalMonths: z.union([z.literal(1), z.literal(3), z.literal(12)]),
+    phase: z.number().int().min(0).max(11),
+  }).strict(),
+  z.object({
+    kind: z.literal('day_pair'),
+    days: z.tuple([DayOfMonthSchema, DayOfMonthSchema]),
+  }).strict(),
+]);
+export const RecurringCadenceSchema = z.enum([
+  'weekly', 'biweekly', 'semimonthly', 'monthly', 'quarterly', 'annual',
+]);
+export const RecurringReclassifyCadencePayloadSchema = z.object({
+  seriesId: RecurringSeriesIdSchema,
+  cadence: RecurringCadenceSchema,
+  cadenceAnchor: CadenceAnchorSchema,
+  effectiveDate: IsoDateSchema,
+  horizonDays: z.number().int().min(1).max(366),
+}).strict().superRefine((value, ctx) => {
+  // Cadence <-> anchor.kind agreement (mirrors the SQL guard so a mismatch is a
+  // 400 before it ever reaches the DB). Same authoritative mapping, one contract.
+  const kind = value.cadenceAnchor.kind;
+  const ok =
+    ((value.cadence === 'weekly' || value.cadence === 'biweekly') && kind === 'epoch_grid') ||
+    ((value.cadence === 'monthly' || value.cadence === 'quarterly' || value.cadence === 'annual') && kind === 'day_of_month') ||
+    (value.cadence === 'semimonthly' && kind === 'day_pair');
+  if (!ok) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `cadence ${value.cadence} does not match anchor kind ${kind}`,
+      path: ['cadenceAnchor', 'kind'],
+    });
+    return;
+  }
+  if (value.cadenceAnchor.kind === 'epoch_grid') {
+    const want = value.cadence === 'weekly' ? 7 : 14;
+    if (value.cadenceAnchor.intervalDays !== want) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'epoch interval does not match cadence', path: ['cadenceAnchor', 'intervalDays'] });
+    }
+  }
+  if (value.cadenceAnchor.kind === 'day_of_month') {
+    const want = value.cadence === 'monthly' ? 1 : value.cadence === 'quarterly' ? 3 : 12;
+    if (value.cadenceAnchor.intervalMonths !== want) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'intervalMonths does not match cadence', path: ['cadenceAnchor', 'intervalMonths'] });
+    }
+  }
+  if (value.cadenceAnchor.kind === 'day_pair') {
+    const [a, b] = value.cadenceAnchor.days;
+    if (a === b) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'semimonthly requires two distinct days', path: ['cadenceAnchor', 'days'] });
+    }
+  }
+});
 
 // F-028: link a detected series to a manual scheduled transaction so the
 // projection stops double-counting. schedule_id / link_id are plain UUIDs
@@ -273,6 +347,28 @@ export const SettleReimbursementPayloadSchema=z.object({
 }).strict();
 export const ReverseSettlementPayloadSchema=z.object({settlementId:SettlementIdSchema,reason:z.string().min(1).max(500)}).strict();
 export const ReverseClaimPayloadSchema=z.object({claimId:ReimbursementClaimIdSchema,reason:z.string().min(1).max(500)}).strict();
+// Expected (future-dated / pending) reimbursements — an accounts-receivable
+// line tracked BEFORE the money arrives. Standalone or carved from an expense
+// (optional sourceTransactionId). Never an economic event (no postings).
+const ExpectedDateSchema=z.string().regex(/^\d{4}-\d{2}-\d{2}$/u,'expectedDate must be YYYY-MM-DD');
+export const CreateExpectedReimbursementPayloadSchema=z.object({
+  counterpartyName:z.string().min(1).max(200),
+  kind:z.enum(['friend','employer','client','insurance','household']),
+  amountMinor:MinorUnitsStringSchema.regex(/^\d+$/u),
+  currency:CurrencyCodeSchema,
+  expectedDate:ExpectedDateSchema,
+  description:z.string().min(1).max(500),
+  sourceTransactionId:CanonicalTransactionIdSchema.optional(),
+}).strict();
+export const RecordExpectedReimbursementReceiptPayloadSchema=z.object({
+  expectedId:ExpectedReimbursementIdSchema,
+  transactionId:CanonicalTransactionIdSchema,
+  amountMinor:MinorUnitsStringSchema.regex(/^\d+$/u),
+  note:z.string().min(1).max(500),
+}).strict();
+export const WriteOffExpectedReimbursementPayloadSchema=z.object({expectedId:ExpectedReimbursementIdSchema,reason:z.string().min(1).max(500)}).strict();
+export const ReopenExpectedReimbursementPayloadSchema=z.object({expectedId:ExpectedReimbursementIdSchema,reason:z.string().min(1).max(500)}).strict();
+export const ReverseExpectedReimbursementReceiptPayloadSchema=z.object({receiptId:ExpectedReimbursementReceiptIdSchema,reason:z.string().min(1).max(500)}).strict();
 // [A6] statement balance-check mode: strict (opening+Σ=ending) or anchor
 // (investment/valuation ending is a mark-to-market, not a line sum — carries a
 // typed reason + a stored gap explanation, gate-8 provenance).
@@ -550,6 +646,17 @@ export const DetachDocumentPayloadSchema = z.object({
   reason: z.string().min(1).max(500),
 }).strict();
 
+/**
+ * Attach an ALREADY-UPLOADED document to a target (e.g. a receipt from the
+ * inbox onto a transaction). Reuses the same document_attachments link the
+ * fresh-upload confirm flow creates; no bytes move. Idempotent server-side.
+ */
+export const AttachExistingDocumentPayloadSchema = z.object({
+  documentId: DocumentIdSchema,
+  targetType: DocumentTargetTypeSchema,
+  targetId: z.uuid(),
+}).strict();
+
 /** Soft-delete only — the storage object and versions persist for the export/audit window. */
 export const DeleteDocumentPayloadSchema = z.object({
   documentId: DocumentIdSchema,
@@ -645,6 +752,7 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'recurring.resume': RecurringResumePayloadSchema,
   'recurring.cancel': RecurringCancelPayloadSchema,
   'recurring.reject': RecurringRejectPayloadSchema,
+  'recurring.reclassify_cadence': RecurringReclassifyCadencePayloadSchema,
   'recurring.link_schedule': RecurringLinkSchedulePayloadSchema,
   'recurring.unlink_schedule': RecurringUnlinkSchedulePayloadSchema,
   'paychecks.create': CreatePaycheckPayloadSchema,
@@ -660,6 +768,11 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'reimbursements.settle':SettleReimbursementPayloadSchema,
   'reimbursements.reverse_settlement':ReverseSettlementPayloadSchema,
   'reimbursements.reverse_claim':ReverseClaimPayloadSchema,
+  'expected_reimbursements.create':CreateExpectedReimbursementPayloadSchema,
+  'expected_reimbursements.record_receipt':RecordExpectedReimbursementReceiptPayloadSchema,
+  'expected_reimbursements.write_off':WriteOffExpectedReimbursementPayloadSchema,
+  'expected_reimbursements.reopen':ReopenExpectedReimbursementPayloadSchema,
+  'expected_reimbursements.reverse_receipt':ReverseExpectedReimbursementReceiptPayloadSchema,
   'statements.create':CreateStatementPayloadSchema,
   'statements.approve_draft':ApproveStatementDraftPayloadSchema,
   'statements.dismiss_draft':DismissStatementDraftPayloadSchema,
@@ -678,6 +791,7 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'accounts.set_opening_balance': SetOpeningBalancePayloadSchema,
   'accounts.reanchor_balance': ReanchorBalancePayloadSchema,
   'categorization.decide_suggestion': DecideCategorySuggestionPayloadSchema,
+  'documents.attach': AttachExistingDocumentPayloadSchema,
   'documents.detach': DetachDocumentPayloadSchema,
   'documents.delete': DeleteDocumentPayloadSchema,
   'receipts.decide_match': DecideReceiptMatchPayloadSchema,

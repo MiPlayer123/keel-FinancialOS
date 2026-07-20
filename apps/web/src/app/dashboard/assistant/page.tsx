@@ -1,6 +1,14 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import {
   AssistantRuntimeProvider,
   AuiIf,
@@ -18,6 +26,7 @@ import {
   ArrowUp,
   CircleStop,
   Check,
+  ImagePlus,
   Loader2,
   MessageSquareText,
   ShieldCheck,
@@ -196,8 +205,53 @@ export default function AssistantPage() {
   );
 }
 
+/** An image the user attached, ready to send (base64) + a data URL for preview. */
+type PendingImage = { dataUrl: string; mediaType: string; data: string; name: string };
+
+const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const IMAGE_ALLOWED = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+
+/** Shared attached-image state between the composer (sets it) and the adapter (sends it). */
+const PendingImageContext = createContext<{
+  image: PendingImage | null;
+  setImage: (img: PendingImage | null) => void;
+} | null>(null);
+
+/** Read a File into a PendingImage, or throw a user-facing error. */
+function fileToPendingImage(file: File): Promise<PendingImage> {
+  return new Promise((resolve, reject) => {
+    if (!IMAGE_ALLOWED.includes(file.type)) {
+      reject(new Error('Please attach a JPEG, PNG, WebP, or GIF image.'));
+      return;
+    }
+    if (file.size > IMAGE_MAX_BYTES) {
+      reject(new Error('That image is over 5MB — please attach a smaller one.'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => {
+      reject(new Error('Could not read that image.'));
+    };
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+      const comma = dataUrl.indexOf(',');
+      if (comma < 0) {
+        reject(new Error('Could not read that image.'));
+        return;
+      }
+      resolve({ dataUrl, mediaType: file.type, data: dataUrl.slice(comma + 1), name: file.name });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 function AssistantChat() {
   const { householdId } = useHousehold();
+  const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
+  const pendingImageRef = useRef<PendingImage | null>(null);
+  useEffect(() => {
+    pendingImageRef.current = pendingImage;
+  }, [pendingImage]);
   // The adapter must stay referentially stable for LocalRuntime; the current
   // household is read through a ref at run time instead.
   const householdRef = useRef(householdId);
@@ -210,23 +264,40 @@ function AssistantChat() {
       async run({ messages, abortSignal }) {
         const question = latestUserQuestion(messages);
         const targetHousehold = householdRef.current;
+        // Consume any attached image once, for this send.
+        const img = pendingImageRef.current;
+        if (img) {
+          setPendingImage(null);
+          pendingImageRef.current = null;
+        }
         if (targetHousehold === null) {
           return failedRun('No household is selected — pick one in the sidebar, then ask again.');
         }
-        if (question.length === 0) {
+        // With an image, an empty question is fine — default to a look-at-this ask.
+        const effectiveQuestion =
+          question.length > 0 ? question : img ? 'Please look at this attached image and help me.' : '';
+        if (effectiveQuestion.length === 0) {
           return failedRun('Type a question to ask the assistant.');
         }
-        const proposal = parseAssistantProposal(question);
-        if (proposal !== null) {
-          return {
-            content: [{ type: 'text', text: 'I drafted a task. Review it before I save anything.' }],
-            metadata: { custom: { [PROPOSAL_KEY]: proposal } },
-          };
+        // The task-shortcut draft path is bypassed when an image is attached
+        // (the agent handles the image directly).
+        if (!img) {
+          const proposal = parseAssistantProposal(question);
+          if (proposal !== null) {
+            return {
+              content: [{ type: 'text', text: 'I drafted a task. Review it before I save anything.' }],
+              metadata: { custom: { [PROPOSAL_KEY]: proposal } },
+            };
+          }
         }
 
         let record: AiChatRecord;
         try {
-          record = await askKeel({ householdId: targetHousehold, question });
+          record = await askKeel({
+            householdId: targetHousehold,
+            question: effectiveQuestion,
+            ...(img ? { image: { mediaType: img.mediaType, data: img.data } } : {}),
+          });
         } catch (err) {
           return failedRun(friendlyError(err));
         }
@@ -249,9 +320,11 @@ function AssistantChat() {
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <div className="mx-auto flex h-[calc(100dvh-9.5rem)] min-h-[520px] w-full max-w-3xl flex-col px-4 py-5 sm:px-6 lg:h-[calc(100dvh-6rem)]">
-        <ChatThread />
-      </div>
+      <PendingImageContext.Provider value={{ image: pendingImage, setImage: setPendingImage }}>
+        <div className="mx-auto flex h-[calc(100dvh-9.5rem)] min-h-[520px] w-full max-w-3xl flex-col px-4 py-5 sm:px-6 lg:h-[calc(100dvh-6rem)]">
+          <ChatThread />
+        </div>
+      </PendingImageContext.Provider>
     </AssistantRuntimeProvider>
   );
 }
@@ -818,9 +891,44 @@ function AppliedActionRow({ action }: { action: AgentAppliedAction }) {
 }
 
 function Composer() {
+  const pending = useContext(PendingImageContext);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function onPick(file: File | undefined) {
+    if (!file || pending === null) return;
+    try {
+      pending.setImage(await fileToPendingImage(file));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not attach that image.');
+    }
+  }
+
   return (
     <div className="flex flex-col gap-2">
       <ComposerPrimitive.Root className="rounded-2xl border bg-card p-2 shadow-sm transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
+        {pending?.image ? (
+          <div className="mx-1 mb-2 flex items-center gap-2 rounded-lg border bg-secondary/30 p-1.5">
+            <img
+              src={pending.image.dataUrl}
+              alt={pending.image.name}
+              className="size-12 shrink-0 rounded object-cover"
+            />
+            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+              {pending.image.name}
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Remove image"
+              onClick={() => {
+                pending.setImage(null);
+              }}
+            >
+              <X />
+            </Button>
+          </div>
+        ) : null}
         <ComposerPrimitive.Input
           minRows={1}
           maxRows={5}
@@ -829,10 +937,29 @@ function Composer() {
           aria-label="Question for KEEL Assistant"
           className="max-h-36 min-h-12 w-full resize-none bg-transparent px-2 py-2 text-base outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
         />
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          className="hidden"
+          onChange={(e) => {
+            void onPick(e.target.files?.[0]);
+            e.target.value = '';
+          }}
+        />
         <div className="flex items-center justify-between gap-2 px-1 pb-1">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Attach an image"
+              onClick={() => fileRef.current?.click()}
+            >
+              <ImagePlus />
+            </Button>
             <Sparkles className="size-3.5" />
-            Note edits are undoable; financial changes need your approval
+            Attach an image, or ask. Financial changes need your approval.
           </div>
           <AuiIf condition={(s) => !s.thread.isRunning}>
             <ComposerPrimitive.Send asChild>

@@ -13,6 +13,7 @@ export const WRITE_ACTIONS = [
   'recurring.resume',
   'recurring.cancel',
   'recurring.reject',
+  'recurring.reclassify_cadence',
   'recurring.link_schedule',
   'recurring.unlink_schedule',
   'paychecks.create',
@@ -28,6 +29,11 @@ export const WRITE_ACTIONS = [
   'reimbursements.settle',
   'reimbursements.reverse_settlement',
   'reimbursements.reverse_claim',
+  'expected_reimbursements.create',
+  'expected_reimbursements.record_receipt',
+  'expected_reimbursements.write_off',
+  'expected_reimbursements.reopen',
+  'expected_reimbursements.reverse_receipt',
   'statements.create',
   'statements.approve_draft',
   'statements.dismiss_draft',
@@ -47,6 +53,7 @@ export const WRITE_ACTIONS = [
   'accounts.reanchor_balance',
   'categorization.decide_suggestion',
   'documents.confirm_upload',
+  'documents.attach',
   'documents.detach',
   'documents.delete',
   'receipts.decide_match',
@@ -73,6 +80,7 @@ export const READ_ACTIONS = [
   'paychecks.templates',
   'paychecks.split_suggestions',
   'reimbursements.list',
+  'expected_reimbursements.list',
   'statements.list',
   'statements.drafts',
   'statements.cadence',
@@ -80,6 +88,8 @@ export const READ_ACTIONS = [
   'statements.payment_links',
   'statements.holdings_diff',
   'documents.list_for_target',
+  'documents.list_household',
+  'documents.storage_summary',
   'receipts.inbox',
   'budgets.month',
   'audit.read',
@@ -124,15 +134,6 @@ export const AGENT_WRITE_ACTIONS = [
   // context into every member's agent session, so writing it is partner-tier —
   // a viewer must not be able to plant instructions in a partner/owner's agent.
   'ai_profile.save',
-  // More agent writes (bespoke-route procs enforce membership only, so these
-  // Actions add the partner-tier floor). Recategorize + category create/rename
-  // are Class B (proposal-gated in the UI); tasks are Class A (auto+undo, notes
-  // sibling).
-  'transactions.categorize',
-  'categories.create',
-  'categories.rename',
-  'tasks.save',
-  'tasks.set_status',
 ] as const;
 
 export const ACTIONS = [...WRITE_ACTIONS, ...READ_ACTIONS, ...AGENT_WRITE_ACTIONS] as const;
@@ -156,6 +157,7 @@ export const ACTION_MINIMUM_ROLES = {
   'recurring.resume': 'partner',
   'recurring.cancel': 'partner',
   'recurring.reject': 'partner',
+  'recurring.reclassify_cadence': 'partner',
   'recurring.link_schedule': 'partner',
   'recurring.unlink_schedule': 'partner',
   'paychecks.create': 'partner',
@@ -175,6 +177,11 @@ export const ACTION_MINIMUM_ROLES = {
   'paychecks.unapply': 'partner',
   'reimbursements.create_claim':'partner',
   'reimbursements.settle':'partner',
+  'expected_reimbursements.create':'partner',
+  'expected_reimbursements.record_receipt':'partner',
+  'expected_reimbursements.write_off':'partner',
+  'expected_reimbursements.reopen':'partner',
+  'expected_reimbursements.reverse_receipt':'partner',
   'reimbursements.reverse_settlement':'partner',
   'reimbursements.reverse_claim':'partner',
   'statements.create':'partner','statements.approve_draft':'partner','statements.dismiss_draft':'partner','statements.set_cadence':'partner','statements.decide_payment_link':'partner','statements.detach_payment_link':'partner','statements.apply_holdings':'partner','statements.unapply_holdings':'partner','reconciliations.close':'partner','reconciliations.reopen':'partner',
@@ -187,6 +194,7 @@ export const ACTION_MINIMUM_ROLES = {
   'accounts.reanchor_balance': 'partner',
   'categorization.decide_suggestion': 'partner',
   'documents.confirm_upload': 'partner',
+  'documents.attach': 'partner',
   'documents.detach': 'partner',
   'documents.delete': 'partner',
   'receipts.decide_match': 'partner',
@@ -206,6 +214,7 @@ export const ACTION_MINIMUM_ROLES = {
   'paychecks.templates': 'viewer',
   'paychecks.split_suggestions': 'viewer',
   'reimbursements.list':'viewer',
+  'expected_reimbursements.list':'viewer',
   'statements.list':'viewer',
   'statements.drafts':'viewer',
   'statements.cadence':'viewer',
@@ -213,6 +222,8 @@ export const ACTION_MINIMUM_ROLES = {
   'statements.payment_links':'viewer',
   'statements.holdings_diff':'viewer',
   'documents.list_for_target': 'viewer',
+  'documents.list_household': 'viewer',
+  'documents.storage_summary': 'viewer',
   'receipts.inbox': 'viewer',
   'audit.read': 'viewer',
   // AI-agent read reconciliation (viewer tier — see READ_ACTIONS above).
@@ -239,11 +250,6 @@ export const ACTION_MINIMUM_ROLES = {
   'notes.archive': 'partner',
   'notes.unarchive': 'partner',
   'ai_profile.save': 'partner',
-  'transactions.categorize': 'partner',
-  'categories.create': 'partner',
-  'categories.rename': 'partner',
-  'tasks.save': 'partner',
-  'tasks.set_status': 'partner',
   'admin.export_all': 'owner',
 } as const satisfies Readonly<Record<Action, MinimumRole>>;
 

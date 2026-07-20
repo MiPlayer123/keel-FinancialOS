@@ -24,6 +24,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Sparkles,
+  ChevronDown,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -39,6 +40,7 @@ import { KeelLogo, KeelMark } from '@/components/keel/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { useHousehold } from '@/components/keel/household-context';
 import { EntityLensSwitcher } from '@/components/keel/entity-lens-switcher';
+import { useEntityLens } from '@/components/keel/entity-lens-context';
 import {
   fetchAccounts,
   fetchConnections,
@@ -46,6 +48,7 @@ import {
   keelQuery,
   type AccountRow,
   type ConnectionRow,
+  type EntityRow,
   type TrialBalanceRow,
 } from '@/lib/keel-api';
 import { relativeSyncLabel } from '@/lib/relative-date';
@@ -127,6 +130,12 @@ function NavItemLink({
 
 function NavLinks({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: () => void }) {
   const pathname = usePathname();
+  // Entity list rides the shared lens context (which reads entities.list once
+  // per household) — the rail reuses it rather than opening a second entities
+  // read, so its Personal/Business split is the SAME set, order, and names the
+  // Accounts page groups by. `entities` is [] until that read resolves; the
+  // rail falls back to the flat (single-entity) layout until then.
+  const { entities } = useEntityLens();
   return (
     <nav aria-label="Main navigation" className="flex flex-col gap-0.5">
       {PRIMARY_NAV.map((item) =>
@@ -138,7 +147,7 @@ function NavLinks({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: 
               collapsed={collapsed}
               onNavigate={onNavigate}
             />
-            <SidebarAccounts pathname={pathname} onNavigate={onNavigate} />
+            <SidebarAccounts pathname={pathname} onNavigate={onNavigate} entities={entities} />
           </div>
         ) : (
           <NavItemLink
@@ -236,13 +245,23 @@ function currencySubtotal(
  * overflow-y-auto; the mobile drawer is min-h-0 overflow-y-auto — see
  * AppShell); balances hide when the sidebar is collapsed because the whole
  * subnav is (see NavLinks).
+ *
+ * Multi-entity households additionally get the Accounts-page Personal /
+ * Business split: one collapsible section per entity (in entities.list order,
+ * with a trailing "Other entity" for accounts pointing at an entity the list
+ * doesn't know), each with its own Assets / Liabilities / Other groups and a
+ * per-entity subtotal — mirroring EntityGroupedAccounts on the Accounts page
+ * so the rail reads the same way (founder ask 2026-07-20). Single-entity
+ * households (entities.length <= 1) keep the flat layout unchanged.
  */
 function SidebarAccounts({
   pathname,
   onNavigate,
+  entities,
 }: {
   pathname: string;
   onNavigate?: (() => void) | undefined;
+  entities: EntityRow[];
 }) {
   const { householdId } = useHousehold();
   // Queried under the shared 'keel-query' cache-key prefix (see
@@ -278,22 +297,64 @@ function SidebarAccounts({
   const connById = new Map((data?.connections ?? []).map((c) => [c.id, c]));
 
   if (accounts.length === 0) return null;
+
+  // One account row — the stretched-link row shared by the flat layout and
+  // every per-entity section, so both render identically.
+  const accountRow = (a: AccountRow) => {
+    const href = `/dashboard/accounts/${a.id}`;
+    const active = pathname === href;
+    const bal = byLedger.get(a.ledgerAccountId);
+    const conn = a.connectionId ? connById.get(a.connectionId) : undefined;
+    // C8 freshness in the rail: hover/tooltip only — the 11px row has no room
+    // for visible text without breaking the calm alignment; the Accounts page
+    // and detail carry the visible "Updated Nh ago".
+    const updated = conn?.lastSuccessfulSyncAt
+      ? relativeSyncLabel(conn.lastSuccessfulSyncAt, new Date().toISOString())
+      : null;
+    return (
+      // Stretched-link row so the compact reauth link can sit above the
+      // account link (z-10) without nesting anchors.
+      <div
+        key={a.id}
+        className={cn(
+          'relative flex items-center justify-between gap-2 rounded-md py-1 pl-6 pr-3 text-xs transition-colors',
+          active
+            ? 'bg-secondary text-foreground'
+            : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
+        )}
+        title={updated ? `${a.name} — updated ${updated}` : a.name}
+      >
+        <Link
+          href={href}
+          onClick={() => onNavigate?.()}
+          className="min-w-0 truncate focus-visible:outline-none"
+        >
+          <span className="absolute inset-0" aria-hidden="true" />
+          {a.name}
+        </Link>
+        {conn?.status === 'reauth_required' ? (
+          <ReauthLink compact className="relative z-10" onNavigate={onNavigate} />
+        ) : null}
+        {bal ? (
+          <Money
+            amountMinor={bal.balanceMinor}
+            currency={a.currency}
+            className="shrink-0 text-[11px]"
+          />
+        ) : (
+          // Missing from the read model — a genuine 0 stays a real balance, so
+          // only an absent one shows the em dash.
+          <span className="shrink-0 font-mono text-muted-foreground/70">—</span>
+        )}
+      </div>
+    );
+  };
+
   // Mirror the Accounts page's three-way split (asset / liability / other) so
   // each group subtotal reconciles with that page (review finding); folding
-  // 'other' kinds into Assets made the per-group subtotals disagree.
-  const assets = accounts.filter((a) => kinds.get(a.ledgerAccountId) === 'asset');
-  const liabilities = accounts.filter((a) => kinds.get(a.ledgerAccountId) === 'liability');
-  const other = accounts.filter((a) => {
-    const kind = kinds.get(a.ledgerAccountId);
-    return kind !== 'asset' && kind !== 'liability';
-  });
-
-  // Net worth across every account in the dominant currency. Equals the
-  // Accounts-page net worth for single-currency households (the common case);
-  // for mixed-currency households the rail deliberately shows the dominant
-  // currency only rather than mis-summing across currencies (Law 4).
-  const netWorth = currencySubtotal(accounts, byLedger);
-
+  // 'other' kinds into Assets made the per-group subtotals disagree. Takes an
+  // arbitrary account set so the same renderer serves the flat layout and each
+  // per-entity section.
   const group = (title: string, rows: AccountRow[]) => {
     if (rows.length === 0) return null;
     const subtotal = currencySubtotal(rows, byLedger);
@@ -311,79 +372,154 @@ function SidebarAccounts({
             />
           ) : null}
         </div>
-        {rows.map((a) => {
-          const href = `/dashboard/accounts/${a.id}`;
-          const active = pathname === href;
-          const bal = byLedger.get(a.ledgerAccountId);
-          const conn = a.connectionId ? connById.get(a.connectionId) : undefined;
-          // C8 freshness in the rail: hover/tooltip only — the 11px row has no
-          // room for visible text without breaking the calm alignment; the
-          // Accounts page and detail carry the visible "Updated Nh ago".
-          const updated = conn?.lastSuccessfulSyncAt
-            ? relativeSyncLabel(conn.lastSuccessfulSyncAt, new Date().toISOString())
-            : null;
-          return (
-            // Stretched-link row so the compact reauth link can sit above the
-            // account link (z-10) without nesting anchors.
-            <div
-              key={a.id}
-              className={cn(
-                'relative flex items-center justify-between gap-2 rounded-md py-1 pl-6 pr-3 text-xs transition-colors',
-                active
-                  ? 'bg-secondary text-foreground'
-                  : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
-              )}
-              title={updated ? `${a.name} — updated ${updated}` : a.name}
-            >
-              <Link
-                href={href}
-                onClick={() => onNavigate?.()}
-                className="min-w-0 truncate focus-visible:outline-none"
-              >
-                <span className="absolute inset-0" aria-hidden="true" />
-                {a.name}
-              </Link>
-              {conn?.status === 'reauth_required' ? (
-                <ReauthLink compact className="relative z-10" onNavigate={onNavigate} />
-              ) : null}
-              {bal ? (
-                <Money
-                  amountMinor={bal.balanceMinor}
-                  currency={a.currency}
-                  className="shrink-0 text-[11px]"
-                />
-              ) : (
-                // Missing from the read model — a genuine 0 stays a real
-                // balance, so only an absent one shows the em dash.
-                <span className="shrink-0 font-mono text-muted-foreground/70">—</span>
-              )}
-            </div>
-          );
-        })}
+        {rows.map(accountRow)}
       </div>
     );
   };
 
+  // The three-way split over an arbitrary account set (whole household for the
+  // flat layout, one entity's accounts for a section).
+  const groupsFor = (rows: AccountRow[]) => {
+    const assets = rows.filter((a) => kinds.get(a.ledgerAccountId) === 'asset');
+    const liabilities = rows.filter((a) => kinds.get(a.ledgerAccountId) === 'liability');
+    const other = rows.filter((a) => {
+      const kind = kinds.get(a.ledgerAccountId);
+      return kind !== 'asset' && kind !== 'liability';
+    });
+    return (
+      <>
+        {group('Assets', assets)}
+        {group('Liabilities', liabilities)}
+        {group('Other', other)}
+      </>
+    );
+  };
+
+  // Net worth across every account in the dominant currency. Equals the
+  // Accounts-page net worth for single-currency households (the common case);
+  // for mixed-currency households the rail deliberately shows the dominant
+  // currency only rather than mis-summing across currencies (Law 4).
+  const netWorth = currencySubtotal(accounts, byLedger);
+
+  const netWorthFoot = (
+    <div className="mt-1.5 flex items-baseline justify-between border-t border-border/60 px-3 pt-1.5">
+      <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+        Net worth
+      </span>
+      {netWorth ? (
+        <Money
+          amountMinor={netWorth.minor}
+          currency={netWorth.currency}
+          className="text-[11px] font-medium"
+          muteZero={false}
+        />
+      ) : (
+        <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70">—</span>
+      )}
+    </div>
+  );
+
+  // Single-entity household (or entities not yet loaded): the flat layout,
+  // unchanged. The Accounts page gates its per-entity view on the same
+  // entities.length > 1, so the rail and the page agree on when to split.
+  if (entities.length <= 1) {
+    return (
+      <div className="mb-1">
+        {groupsFor(accounts)}
+        {netWorthFoot}
+      </div>
+    );
+  }
+
+  // Multi-entity: the Accounts-page Personal / Business split. Bucket accounts
+  // by entity, then render one section per entity in entities.list order (the
+  // same deterministic order the Accounts page uses), with a trailing "Other
+  // entity" section for accounts pointing at an entity the list doesn't know
+  // (an archived entity still owning live accounts) rather than dropping them
+  // from the household total.
+  const byEntity = new Map<string, AccountRow[]>();
+  for (const a of accounts) {
+    const list = byEntity.get(a.entityId) ?? [];
+    list.push(a);
+    byEntity.set(a.entityId, list);
+  }
+  const known = new Set(entities.map((e) => e.entityId));
+  const orphanIds = [...byEntity.keys()].filter((id) => !known.has(id)).sort();
+  const sections = [
+    ...entities.map((e) => ({ entityId: e.entityId, name: e.name })),
+    ...orphanIds.map((id) => ({ entityId: id, name: 'Other entity' })),
+  ]
+    .map((s) => ({ ...s, rows: byEntity.get(s.entityId) ?? [] }))
+    .filter((s) => s.rows.length > 0);
+
   return (
     <div className="mb-1">
-      {group('Assets', assets)}
-      {group('Liabilities', liabilities)}
-      {group('Other', other)}
-      <div className="mt-1.5 flex items-baseline justify-between border-t border-border/60 px-3 pt-1.5">
-        <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
-          Net worth
+      {sections.map((s) => (
+        <SidebarEntitySection
+          key={s.entityId}
+          name={s.name}
+          subtotal={currencySubtotal(s.rows, byLedger)}
+        >
+          {groupsFor(s.rows)}
+        </SidebarEntitySection>
+      ))}
+      {netWorthFoot}
+    </div>
+  );
+}
+
+/**
+ * One collapsible entity section in the rail: an entity name header carrying
+ * the entity's net subtotal and a disclosure chevron, over its Assets /
+ * Liabilities / Other groups. Default-open (the founder wants the breakdown
+ * visible, not hidden behind a click) but collapsible so a household with
+ * several entities can fold the ones it isn't looking at and keep the rail
+ * short. Purely presentational — every balance is computed by the caller from
+ * the shared ledger.trial_balance read.
+ */
+function SidebarEntitySection({
+  name,
+  subtotal,
+  children,
+}: {
+  name: string;
+  subtotal: { minor: string; currency: string } | null;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="mt-1.5 first:mt-1">
+      <button
+        type="button"
+        onClick={() => {
+          setOpen((v) => !v);
+        }}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-2 rounded-md px-3 py-1 text-left transition-colors hover:bg-secondary/60"
+      >
+        <span className="flex min-w-0 items-center gap-1">
+          <ChevronDown
+            className={cn(
+              'size-3 shrink-0 text-muted-foreground/70 transition-transform',
+              open ? '' : '-rotate-90',
+            )}
+          />
+          <span className="truncate text-[11px] font-semibold uppercase tracking-wide text-foreground/80">
+            {name}
+          </span>
         </span>
-        {netWorth ? (
+        {subtotal ? (
           <Money
-            amountMinor={netWorth.minor}
-            currency={netWorth.currency}
-            className="text-[11px] font-medium"
+            amountMinor={subtotal.minor}
+            currency={subtotal.currency}
+            className="shrink-0 text-[11px] font-medium"
             muteZero={false}
           />
         ) : (
           <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70">—</span>
         )}
-      </div>
+      </button>
+      {open ? children : null}
     </div>
   );
 }
