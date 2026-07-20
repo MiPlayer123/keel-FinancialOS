@@ -4,6 +4,73 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-20 — SLICE 8 (statement-ingestion-v2 §5 [A7]): card-payment ↔ statement links
+
+Deterministic exact-only matcher (Law 1) that, for a LIABILITY (credit-card)
+statement, finds the card-side payment credit that settled the balance and links
+it — a Class B suggest→approve loop (Law 10). Rescued from a prior agent's
+salvage (`/tmp/salvage_s8_*.sql`) that died pre-PR on a STALE main; rebased onto
+current origin/main and fixed.
+
+- **Matcher (as built, V1 EXACT-ONLY)** — `keel_statement_suggest_payments`
+  (SECURITY DEFINER, own membership check): candidate = a canonical txn on the
+  statement's liability account (backing ledger `kind='liability'`, not the
+  display subtype) whose live non-reversed cash-side posting (`is_category=false`)
+  is an INFLOW (`amount_minor>0`), SAME currency, status posted|reviewed, not
+  voided, `effective_date ∈ [period_end, period_end+35d]` INCLUSIVE both ends,
+  `abs(amount)=abs(ending_minor)` EXACT. score 100. Tie-break (transfer-pair →
+  nearest date → lowest id) is defined for provenance; **>1 exact ⇒ ABSTAIN**
+  (writes nothing, audits `statements.payment_abstained` reason `ambiguous`).
+  Never resurrects a `rejected` pair (unique + on-conflict do nothing). NEVER
+  auto-confirms — always inserts `suggested`.
+- **Never-auto-confirm guarantee (Law 10)** — the decide command's confirm path
+  may only run `keel_detect_transfers` (which writes transfer status `suggested`
+  only) to surface a funding-leg suggestion on Review; it NEVER calls
+  `keel_decide_transfer(...,true)`. pgTAP asserts by construction that neither the
+  decide command nor the suggester's `pg_get_functiondef` contains
+  `keel_decide_transfer`. detach is `confirmed → detached` (Law 2 undo, not delete).
+- **DEVIATION/BUG FOUND & FIXED (blocking)** — the salvage built `reason_codes`
+  with `v_reasons := v_reasons || 'transfer_pair'` where `v_reasons text[]`. An
+  UNTYPED literal makes Postgres resolve `||` as string concat, not array-append,
+  and the assignment fails at runtime with `22P02 malformed array literal` on the
+  **happy path** (every single-candidate match). Reproduced live in a rolled-back
+  probe; fixed to `|| 'transfer_pair'::text` / `|| 'date_proximity'::text`.
+  Validated end-to-end against the real journal-join shape in a rolled-back txn:
+  1 link on the exact +$500 inflow (not the outflow, not the out-of-window late
+  payment), status `suggested`, score 100, reasons `exact_amount,date_proximity`,
+  replay writes 0.
+- **Salvage fixups vs current main** — (1) `keel_grant_create_reassign` does NOT
+  exist on live (verified); replaced every call with the inline
+  `grant create → alter function owner → revoke create` idiom used by sibling
+  Slice 5/6/7 migrations (owners keel_api for the procs, keel_export for the
+  export fn). (2) Export rewrap: the CURRENT outermost `keel_export_household`
+  wraps `keel_export_household_pre_statement_outbox` (Slice 6); renamed the
+  current outermost to `_pre_statement_payment_links` and wrapped THAT (the
+  salvage assumed a stale pre-layer). Full chain re-composition validated in a
+  rolled-back apply (reaches the deepest defensive guard through the new wrapper).
+- **Export manifest counts (advanced on main)** — added `statement_payment_links`
+  to `packages/exports/src/manifest.ts` INCLUDE + keel_export grant/RLS. Read
+  current main and incremented by exactly 1: manifest.test.ts `INCLUDE` 85→86,
+  formats.property.test.ts CSV files 85→86, `008_export.sql` expected/snapshot
+  table counts 79→80 (+ the new `expected_export_tables` row). No secrets — the
+  table is tenant scope + a link between an already-exported statement and an
+  already-exported canonical txn.
+- **Wiring (re-applied cleanly on current main, salvage diffs discarded)** —
+  contracts `Decide/DetachStatementPaymentLink` payload schemas + map;
+  authz commands `statements.decide_payment_link`/`.detach_payment_link` at
+  partner, queries `statements.find_payment`/`.payment_links` at viewer (+ test);
+  api COMMAND_TO_PROC +2, QUERY_TO_PROC +2, the `/queries` authz allowlist + a
+  `p_statement_id` param branch for the two statement-scoped queries; web
+  `CardPaymentSection` on credit-card statement detail (Find payment / Confirm /
+  Reject / Detach) + keel-api fetchers.
+- **Tests/build** — authz 104, contracts 44, exports 80 (100% cov) green;
+  `node scripts/build-functions.mjs` + `cd apps/web && pnpm build` green (one
+  boolean-in-template lint fixed). Live has 0 liability statements (none uploaded
+  yet), so the matcher's real-data surface is exercised only by the rolled-back
+  probe + pgTAP `035`.
+
+---
+
 ## 2026-07-19 — SLICE 6 (statement-ingestion-v2): discriminated confirm-upload + atomic ingest-begin + drafts route + outbox export [A3/A4/A12]
 
 Ships the PRODUCER side that Slices 3–5 left open: confirm-upload now creates the
