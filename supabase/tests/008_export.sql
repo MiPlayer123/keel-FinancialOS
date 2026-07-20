@@ -118,6 +118,13 @@ insert into expected_export_tables(table_name,allowed_columns,omitted_columns) v
 -- keel_export_household rewrap all ship in 20260720270000_statement_holdings_apply.sql).
 insert into expected_export_tables(table_name,allowed_columns,omitted_columns) values
  ('statement_holding_applications',array['household_id','id','statement_id','extraction_id','account_id','applied_by','approval_token_id','period_end','revoked_at','revoked_by','created_at'],'{}');
+-- SLICE B (paycheck-split-templates-v2.md §3 [AMENDED 6]): paycheck split
+-- templates export layer (INCLUDE entry + keel_export grant/RLS +
+-- keel_export_household rewrap all ship in 20260721180000_paycheck_split_templates.sql).
+insert into expected_export_tables(table_name,allowed_columns,omitted_columns) values
+ ('paycheck_template_lines',array['household_id','id','template_id','line_key','kind','role','amount_kind','amount_minor','bps','category_ledger_account_id','destination_account_id','position','created_at'],'{}'),
+ ('paycheck_series_settings',array['household_id','series_id','employer_id','active_template_id','booking_enabled','income_category_ledger_account_id','autonomy','updated_at'],'{}'),
+ ('paycheck_split_suggestions',array['household_id','id','series_id','template_id','template_version','deposit_txn_id','computed_components','computed_gross_minor','computed_net_minor','source','ai_response','status','applied_paycheck_id','created_at','decided_at','decided_by'],'{}');
 
 create temporary table excluded_export_tables(table_name text primary key) on commit drop;
 insert into excluded_export_tables(table_name) values
@@ -150,8 +157,8 @@ select ok(
 select is(
   (select count(*)::int from expected_export_tables
     where has_table_privilege('keel_export', format('public.%I', table_name), 'SELECT')),
-  81,
-  'keel_export can SELECT all 81 included tables'
+  84,
+  'keel_export can SELECT all 84 included tables'
 );
 select is(
   (select count(*)::int
@@ -282,8 +289,8 @@ reset role;
 select is(
   (select count(*)::int from jsonb_object_keys(
     public.keel_export_household('00000000-0000-4000-8000-00000000a001')->'tables')),
-  81,
-  'snapshot contains all 81 included table arrays'
+  84,
+  'snapshot contains all 84 included table arrays'
 );
 select is(
   (select count(*)::int from excluded_export_tables e
