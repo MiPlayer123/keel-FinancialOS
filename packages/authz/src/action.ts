@@ -74,10 +74,46 @@ export const READ_ACTIONS = [
   'receipts.inbox',
   'budgets.month',
   'audit.read',
+  // AI-agent read reconciliation (Law 7): every read the agent can perform is
+  // an explicit, compiler-checked Action gated at viewer tier, not merely a
+  // proc-side membership check. These query names already exist in
+  // QUERY_TO_PROC and are read-only; the UI's /queries dispatch is unchanged
+  // (it authorizes its own hardcoded subset), so adding them here is additive.
+  'balances.latest',
+  'categories.list',
+  'entities.list',
+  'budgets.list',
+  'notes_tasks.list',
+  'transfers.list',
+  'transactions.rich',
+  'transactions.rich_page',
+  'transactions.search',
+  'dashboard.net_worth',
+  'dashboard.cash_flow',
+  'dashboard.cash_flow_forecast',
+  'holdings.list',
+  'investments.overview',
+  'goals.list',
+  'rules.list',
+  'tags.list',
   ...EXPORT_ACTIONS,
 ] as const;
 
-export const ACTIONS = [...WRITE_ACTIONS, ...READ_ACTIONS] as const;
+/**
+ * AI-agent write actions (Law 10 Class A — auto+undo). The agent applies these
+ * directly (notes are lightweight, non-ledger planning records) and every write
+ * is audited + reversible. They are NOT envelope commands (the agent calls the
+ * existing audited note procs directly), so they are intentionally not in
+ * WRITE_ACTIONS / CommandName — but they ARE explicit, compiler-checked Actions
+ * gated at partner tier, so a read-only role's agent cannot write (Law 7).
+ */
+export const AGENT_WRITE_ACTIONS = [
+  'notes.save',
+  'notes.archive',
+  'notes.unarchive',
+] as const;
+
+export const ACTIONS = [...WRITE_ACTIONS, ...READ_ACTIONS, ...AGENT_WRITE_ACTIONS] as const;
 
 export type WriteAction = (typeof WRITE_ACTIONS)[number];
 export type ReadAction = (typeof READ_ACTIONS)[number];
@@ -145,6 +181,29 @@ export const ACTION_MINIMUM_ROLES = {
   'documents.list_for_target': 'viewer',
   'receipts.inbox': 'viewer',
   'audit.read': 'viewer',
+  // AI-agent read reconciliation (viewer tier — see READ_ACTIONS above).
+  'balances.latest': 'viewer',
+  'categories.list': 'viewer',
+  'entities.list': 'viewer',
+  'budgets.list': 'viewer',
+  'notes_tasks.list': 'viewer',
+  'transfers.list': 'viewer',
+  'transactions.rich': 'viewer',
+  'transactions.rich_page': 'viewer',
+  'transactions.search': 'viewer',
+  'dashboard.net_worth': 'viewer',
+  'dashboard.cash_flow': 'viewer',
+  'dashboard.cash_flow_forecast': 'viewer',
+  'holdings.list': 'viewer',
+  'investments.overview': 'viewer',
+  'goals.list': 'viewer',
+  'rules.list': 'viewer',
+  'tags.list': 'viewer',
+  // AI-agent Class A writes (notes) — partner tier (a read-only role's agent
+  // cannot write). See AGENT_WRITE_ACTIONS.
+  'notes.save': 'partner',
+  'notes.archive': 'partner',
+  'notes.unarchive': 'partner',
   'admin.export_all': 'owner',
 } as const satisfies Readonly<Record<Action, MinimumRole>>;
 
