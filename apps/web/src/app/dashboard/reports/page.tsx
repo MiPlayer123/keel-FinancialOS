@@ -525,6 +525,9 @@ function taxSchedule(
     if (t.currency !== currency) continue;
     if (t.splits && t.splits.length > 0) {
       for (const sp of t.splits) {
+        // Account-transfer legs (distributions) have no category and are money
+        // moving between the user's own accounts — never a tax line.
+        if (sp.categoryLedgerAccountId === null) continue;
         const line = taxByCategory.get(sp.categoryLedgerAccountId);
         // Split amounts offset the cash leg; negate to read as cash effect.
         if (line) bump(line, -BigInt(sp.amountMinor || '0'));
@@ -646,6 +649,9 @@ function monthIncomeAndSpending(
     if (monthKey(t.effectiveDate) !== month) continue;
     if (t.splits && t.splits.length > 0) {
       for (const s of t.splits) {
+        // Account-transfer legs (distributions, e.g. a 401k) move money between
+        // the user's own accounts — neither spend nor income.
+        if (s.legType === 'account' || s.categoryLedgerAccountId === null) continue;
         const share = BigInt(s.amountMinor || '0');
         if (s.kind === 'expense') {
           bumpCategory(s.categoryLedgerAccountId, s.name, share);

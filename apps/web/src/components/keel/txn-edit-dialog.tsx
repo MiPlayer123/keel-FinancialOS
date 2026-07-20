@@ -37,6 +37,7 @@ import {
   type CategoryRow,
   type RichTransactionRow,
   type TagRow,
+  type TransactionSplit,
 } from '@/lib/keel-api';
 import {
   buildSplitsPayload,
@@ -102,6 +103,17 @@ export { isUncategorized } from '@/lib/needs-attention';
  */
 function isTransferCategoryRow(c: Pick<CategoryRow, 'name' | 'pfcKey'>): boolean {
   return c.pfcKey === 'transfers' || c.name.trim().toLowerCase() === 'transfers';
+}
+
+/**
+ * Label one split leg for the compact "Split · N" chip tooltip. An ACCOUNT leg
+ * (a distribution moving money into another real account, e.g. a paycheck's
+ * 401(k) share) reads as "Transfer to {account}", not as a plain category name —
+ * so the summary matches how the leg renders in the detail Sheet and in the
+ * destination account's register.
+ */
+function splitSummaryLabel(s: TransactionSplit): string {
+  return s.legType === 'account' ? `Transfer to ${s.name}` : s.name;
 }
 
 export type ListCallbacks = {
@@ -271,7 +283,11 @@ export function TxnRow({
               </p>
             ) : null}
           </button>
-          {t.transferStatus === 'confirmed' ? (
+          {t.transferStatus === 'confirmed' || t.distributionTransfer ? (
+            // A distribution's transfer leg (a paycheck's 401(k) inflow landing
+            // in the Roth account) reads exactly like a confirmed transfer —
+            // ArrowLeftRight + "→/← {source account}" — but carries no
+            // transferLinkId, so the detail Sheet offers no undo/unlink.
             <Badge
               variant="secondary"
               className="hidden max-w-40 shrink-0 gap-1 sm:inline-flex"
@@ -293,7 +309,7 @@ export function TxnRow({
             <Badge
               variant="secondary"
               className="hidden shrink-0 gap-1 sm:inline-flex"
-              title={t.splits.map((s) => s.name).join(' · ')}
+              title={t.splits.map(splitSummaryLabel).join(' · ')}
             >
               <Split className="size-3" />
               Split · {t.splits.length}
@@ -917,8 +933,15 @@ function TxnEditForm({
     setUndoingTransfer(false);
     // Multi-split rows open straight into the editor, seeded from the real
     // postings; single-category rows start in picker mode with a "Split…"
-    // affordance.
-    setSplitRows(row.splits && row.splits.length > 0 ? seedRowsFromSplits(row.splits) : null);
+    // affordance. A distribution (a split with an account-transfer leg, e.g. a
+    // paycheck's 401k into a retirement account) is NOT editable by the
+    // category-only editor — it opens read-only (see the Splits block below).
+    const rowHasAccountLeg = (row.splits ?? []).some((s) => s.legType === 'account');
+    setSplitRows(
+      row.splits && row.splits.length > 0 && !rowHasAccountLeg
+        ? seedRowsFromSplits(row.splits)
+        : null,
+    );
     setSplitBusy(false);
     setSplitAttemptKey(crypto.randomUUID());
     setRowTags(row.tags ?? []);
@@ -1060,6 +1083,12 @@ function TxnEditForm({
   const splitRemainder = splitRows ? splitRemainderMinor(row.amountMinor, splitRows) : '0';
   const splitSaveReady = splitRows !== null && splitsReady(row.amountMinor, splitRows);
   const isExistingSplit = (row.splits?.length ?? 0) > 0;
+  // A distribution: at least one leg is a transfer INTO another real account
+  // (e.g. a paycheck's 401k). It reads as one ledger line with the transfer
+  // shown inside it, and is displayed read-only here (the category-only editor
+  // can't represent an account leg).
+  const accountLegs = (row.splits ?? []).filter((s) => s.legType === 'account');
+  const hasAccountLeg = accountLegs.length > 0;
 
   function splitCategoryName(categoryId: string | null): string | null {
     if (categoryId === null) return null;
@@ -1196,6 +1225,34 @@ function TxnEditForm({
             </p>
           ) : null}
         </div>
+        {hasAccountLeg && row.transferStatus !== 'confirmed' ? (
+          // A distribution: one ledger line whose splits include a transfer into
+          // another account (e.g. a paycheck's 401k). Shown read-only — the
+          // transfer leg keeps this a single transaction, and its counterparty
+          // balance grows from the same batch.
+          <div className="space-y-2">
+            <Label>Splits</Label>
+            <div className="space-y-1.5 rounded-md border border-border px-3 py-2">
+              {(row.splits ?? []).map((s, i) => (
+                <div key={i} className="flex items-center justify-between gap-3 text-sm">
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    {s.legType === 'account' ? (
+                      <ArrowLeftRight className="size-3.5 shrink-0 text-muted-foreground" />
+                    ) : null}
+                    <span className="min-w-0 truncate">
+                      {s.legType === 'account' ? `Transfer to ${s.name}` : s.name}
+                    </span>
+                  </span>
+                  <Money amountMinor={s.amountMinor} currency={row.currency} signed className="text-sm" />
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Excluded from income and spending — the transfer moves money between your
+              accounts inside this one entry.
+            </p>
+          </div>
+        ) : null}
         {splitRows !== null && row.transferStatus !== 'confirmed' ? (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -1311,7 +1368,13 @@ function TxnEditForm({
             </div>
           </div>
         ) : null}
-        {row.transferStatus === 'confirmed' ? (
+        {row.transferStatus === 'confirmed' || row.distributionTransfer ? (
+          // A distribution's transfer leg (a paycheck's 401(k) inflow landing
+          // here) renders like a confirmed transfer — "To/From {source
+          // account}" + the excluded-from-income-and-spending note — but has no
+          // transferLinkId, so the row.transferLinkId guard below drops the
+          // undo/unlink button: this leg is part of its header transaction and
+          // is only editable there, not unwound from the destination register.
           <div className="space-y-1.5">
             <Label>Transfer</Label>
             <div className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
@@ -1344,7 +1407,7 @@ function TxnEditForm({
             </div>
           </div>
         ) : null}
-        {row.transferStatus !== 'confirmed' && splitRows === null && categoryOptions.length > 0 ? (
+        {row.transferStatus !== 'confirmed' && !row.distributionTransfer && splitRows === null && !hasAccountLeg && categoryOptions.length > 0 ? (
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <Label>Category</Label>
