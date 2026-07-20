@@ -99,6 +99,10 @@ export const INCLUDE = [
   // Slice 5 with export DEFERRED to here (where the confirm-upload writer lands);
   // this is the export layer. No secrets: tenant scope + delivery bookkeeping.
   include({schema:'public',table:'statement_outbox',columns:['id','household_id','document_version_id','account_id','status','enqueue_count','last_enqueued_at','delivered_at','created_at'],sortKey:['id'],timestampColumns:['last_enqueued_at','delivered_at','created_at'],bigintColumns:[]}),
+  // SLICE 8 (statement-ingestion-v2.md §5 [A7]). Card-payment ↔ statement links.
+  // No secrets: tenant scope + a link between an already-exported statement and
+  // an already-exported canonical transaction (Law 6 export contract).
+  include({schema:'public',table:'statement_payment_links',columns:['household_id','id','statement_id','canonical_transaction_id','transfer_link_id','status','score','matcher_version','reason_codes','decided_by','decided_at','created_at'],sortKey:['household_id','id'],timestampColumns:['decided_at','created_at'],bigintColumns:[]}),
   include({ schema: 'public', table: 'holdings', columns: ['id', 'household_id', 'account_id', 'as_of', 'symbol', 'name', 'qty', 'price_minor', 'value_minor', 'cost_basis_minor', 'currency', 'source', 'security_type', 'created_at', 'updated_at'], sortKey: ['id'], timestampColumns: ['created_at', 'updated_at'], bigintColumns: ['price_minor', 'value_minor', 'cost_basis_minor'] }),
   include({ schema: 'public', table: 'holdings_snapshots', columns: ['id', 'household_id', 'account_id', 'snapshot_date', 'symbol', 'name', 'qty', 'price_minor', 'value_minor', 'cost_basis_minor', 'currency', 'source', 'created_at'], sortKey: ['id'], timestampColumns: ['created_at'], bigintColumns: ['price_minor', 'value_minor', 'cost_basis_minor'] }),
   include({ schema: 'public', table: 'investment_sync_state', columns: ['connection_id', 'household_id', 'last_pulled_through', 'window_from', 'window_to', 'continuation_offset', 'last_synced_at', 'created_at', 'updated_at'], sortKey: ['connection_id'], timestampColumns: ['last_synced_at', 'created_at', 'updated_at'], bigintColumns: [] }),
