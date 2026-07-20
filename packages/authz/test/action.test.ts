@@ -41,6 +41,11 @@ describe('action vocabulary', () => {
       'reimbursements.settle',
       'reimbursements.reverse_settlement',
       'reimbursements.reverse_claim',
+      'expected_reimbursements.create',
+      'expected_reimbursements.record_receipt',
+      'expected_reimbursements.write_off',
+      'expected_reimbursements.reopen',
+      'expected_reimbursements.reverse_receipt',
       'statements.create',
       'statements.approve_draft',
       'statements.dismiss_draft',
@@ -78,6 +83,7 @@ describe('action vocabulary', () => {
       'paychecks.templates',
       'paychecks.split_suggestions',
       'reimbursements.list',
+      'expected_reimbursements.list',
       'statements.list',
       'statements.drafts',
       'statements.cadence',
@@ -135,6 +141,12 @@ describe('action vocabulary', () => {
     expect(ACTION_MINIMUM_ROLES['reimbursements.reverse_settlement']).toBe('partner');
     expect(ACTION_MINIMUM_ROLES['reimbursements.reverse_claim']).toBe('partner');
     expect(ACTION_MINIMUM_ROLES['reimbursements.list']).toBe('viewer');
+    expect(ACTION_MINIMUM_ROLES['expected_reimbursements.create']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['expected_reimbursements.record_receipt']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['expected_reimbursements.write_off']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['expected_reimbursements.reopen']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['expected_reimbursements.reverse_receipt']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['expected_reimbursements.list']).toBe('viewer');
   });
 
   it('requires partner for recurring mutations and viewer for scoped recurring reads', () => {

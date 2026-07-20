@@ -4,6 +4,79 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-20 — feat(reimbursements): expected / future-dated reimbursements (AR)
+
+"Someone owes me money" tracked BEFORE it arrives — an accounts-receivable line
+that settles when the real inbound transaction lands, or stays open / gets
+written off if it never comes. Builds ON the existing reimbursement domain
+(20260712140000), does not duplicate it.
+
+- **Why a NEW surface, not the existing `reimbursement_claims`.** The existing
+  claim REQUIRES an `original_transaction_id` (a real, already-posted expense)
+  and carves an `expense_share` capped at that expense's live posting. The
+  founder wants (a) STANDALONE expectations ("Leo owes me for cruise tickets" —
+  no source expense need exist) and (b) a FUTURE `expected_date`. Neither fits
+  the claim model without weakening its invariants, so expected reimbursements
+  are a distinct, lighter layer that REUSES `public.counterparties` and the
+  `keel_live_real_posting` capacity helper. From-an-expense creation is still
+  supported (optional `source_transaction_id`, capped at the source outflow).
+- **Not an economic event (Law 2/9).** Money hasn't moved, so an expected
+  reimbursement writes ZERO journal postings — same stance as claims/settlements
+  (`incomeImpactMinor` always `'0'`). It's visible as an upcoming/receivable
+  line only. The integration test asserts `journal_postings` count is unchanged
+  across create + record_receipt.
+- **New migration `20260723000000_expected_reimbursements.sql`** (⚑ human applies
+  live; after 20260722310000, so it ships in the PR for the orchestrator). Three
+  tables (`expected_reimbursements`, `_receipts`, `_status_events`), receipts +
+  events append-only via `keel_forbid_mutation`. Five commands on the standard
+  command spine (`keel_finish_command` → audit_log + domain_events +
+  command_executions; idempotency via `keel_idempotency_check`):
+  `expected_reimbursements.{create,record_receipt,write_off,reopen,reverse_receipt}`
+  + a `.list` AR read model (reproducible-numbers envelope, formula
+  `expected-reimbursement-v1`). All reversible: reopen undoes write-off/full-
+  receipt close; reverse_receipt undoes a match and reopens the parent.
+- **Settlement = suggest→approve match to a REAL inbound txn** (partner-tier,
+  Class B). Partial receipts leave a remainder (status stays `open`); full
+  coverage auto-closes to `received`. Receipt allocation is capped at both the
+  txn's live inflow AND the expectation's remaining balance.
+- **Access.** `keel_expected_reimbursement_access`: carved-from-expense rows
+  gate on the source expense's account (via `keel_recurring_account_access`);
+  standalone rows gate on household membership+role (null-safe JWT sub). RLS +
+  `keel_api`/`keel_export` grants + definer-owner guard mirror the reimbursement
+  domain exactly. Export chained onto `keel_export_household` (Law 6) — verified
+  live head is `keel_export_household(uuid,timestamptz)` owned by `keel_export`.
+- **Contracts/authz/API.** New Zod payload schemas + 2 branded ids in
+  `@keel/contracts`; 6 new Actions in `@keel/authz` (5 writes partner-tier, 1
+  read viewer-tier); `COMMAND_TO_PROC` + `QUERY_TO_PROC` + the /queries
+  authorize-allowlist in `supabase/functions/api/index.ts`. The generic
+  `/commands` dispatch is fully data-driven, so no bespoke route needed.
+- **UI.** New "Expected — money owed to you" section at the TOP of the
+  reimbursements page: outstanding total, open vs resolved rows, create dialog
+  (Standalone / From-an-expense toggle, counterparty, amount, expected date,
+  note), record-receipt dialog (pick inbound txn, prefilled to remaining),
+  write-off / reopen / undo-receipt with reasons. Existing claims section below
+  is unchanged.
+- **Tests.** Unit (RUNS here): `packages/reimbursements` gained a pure
+  `reconcileExpected` (remaining-balance + status derivation mirroring the DB)
+  with 10 cases covering create→partial→full→received, reversed-receipt reopen,
+  never-arrives→written-off, over-allocation + written-off-with-receipt
+  violations, malformed money — 18/18 green. Integration (needs local stack;
+  written, not runnable here): `tests/integration/44-expected-reimbursements.test.ts`
+  walks standalone+from-expense create, partial then full receipt (asserts no
+  postings), reverse-receipt reopen, write-off→reopen, append-only audit, and
+  cross-tenant 404.
+- **Deviation / hygiene.** While editing `packages/authz/test/action.test.ts` I
+  brought its hardcoded `ACTIONS` snapshot current — my branch base had drifted
+  (the AI-agent read actions were in source but not the test's expected array).
+  Only additive; the min-role invariants test is unchanged. (During this I hit a
+  `git checkout main -- …` that briefly clobbered my authz edits; recovered from
+  stash, re-verified. No functional impact.)
+- **Verification RAN:** `cd apps/web && pnpm build` green (ESLint enforced;
+  reimbursements route 10.2 kB). `node scripts/build-functions.mjs` green.
+  `packages/{reimbursements,contracts,authz}` unit suites green. Read-only psql
+  confirmed every live dependency exists and `expected_reimbursements` is a clean
+  create. No live DB apply performed — migration prepared + flagged for the human.
+
 ## 2026-07-19 — feat(recurring): semi-monthly (15th & 30th) schedule option
 
 Adds a `semimonthly` `schedule_frequency` so a user can declare "Twice a month
