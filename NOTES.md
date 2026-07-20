@@ -4,6 +4,74 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-07-20 — feat(reports): credit-card rewards vs annual-fee break-even
+
+Founder workflow (rough transcript): track credit-card rewards against annual
+fees to see if a card "pays for itself." Mental model: a "Bank Charges" bucket
+holds the annual fee ($795 Sapphire Reserve); a reward / statement credit /
+cashback should OFFSET that fee; at year-end, rewards ≥ fees = break-even. He
+wanted to (a) create his own "Credit card rewards" category, (b) log rewards so
+they offset the fee, (c) see the net per card. Rewards today land in
+"Uncategorized/Other Income".
+
+**INVESTIGATION (live read-only SELECTs, founder household a1ba3759-…):**
+- Category creation ALREADY EXISTS and is smooth: `keel_create_category`
+  (20260713090000:937) → `/api/categories/create` → `createCategory()` in
+  keel-api.ts, with an inline "create category" affordance in the txn picker
+  (txn-edit-dialog.tsx) carrying an expense/income kind toggle. NOT duplicated.
+- Categories are `ledger_accounts` (is_category=true) with a `kind`
+  (income/expense). `keel_categorize_transaction` (20260712200000:239) enforces
+  SAME-KIND only: an expense posting can only move to an expense category.
+- **Sign reality vs. the founder's instinct:** the live fee row (ANNUAL
+  MEMBERSHIP FEE, $795) is an EXPENSE (debit, +79500 posting); a reward
+  (CASHBACK BONUS REDEMPTION, e.g. $24.58) is INCOME (credit, −2458 posting).
+  So the founder literally CANNOT "post a positive reward into the expense
+  Bank-Charges category" — the kind guard forbids it, and it must: an income
+  credit and an expense debit have opposite signs in the Σ=0 postings invariant
+  and in cash-flow (keel_cash_flow: inflow = −Σ income, outflow = Σ expense).
+  His desired OFFSET is already achieved by kinds: a reward as income reduces
+  net cash-flow / net spend against the fee. No sign change, no schema change.
+
+**DESIGN (smallest correct — a category + a report view, no new schema):**
+1. CATEGORY: seed a top-level INCOME category "Credit card rewards"
+   (pfc_key `income_card_rewards`) so recategorizing a reward is one click and
+   it reads as an income offset (not crammed into an expense bucket). Migration
+   `20260723030000_credit_card_rewards_category.sql`: adds the row to
+   `keel_seed_entity_categories` (byte-identical copy of the live 20260720140000
+   body + one parent row; verified the live body matches before copying) and
+   idempotently backfills all existing entities (dedupe by pfc_key + live
+   name-ci collision guard, mirroring the seed's own contract). No `alter
+   function … owner` → no grant-drift wrapper needed. **Timestamp > 20260723020000
+   → orchestrator applies (not applied by this agent).**
+2. BREAK-EVEN VIEW: pure client-side helper `apps/web/src/lib/card-breakeven.ts`
+   (`cardBreakEven`) + card `components/keel/card-breakeven-card.tsx`, wired into
+   the Reports page after "Income vs spending by month". Derived from the SAME
+   scoped `rangedRows` every reports widget uses (honors the scope bar), so it
+   is deterministic (Law 1, pure BigInt — Law 4) and reproducible (Law 9 — the
+   card footnote states scopeText = accounts + [from,to] + entity). Per credit
+   card (liability accounts, canonical Plaid subtype `credit card` — never
+   memo-derived, Law 5): REWARDS = income the user CONFIRMED as rewards (pfc
+   `income_card_rewards` or a reward-named category) vs FEES = expense in the
+   Fees pfc family (`fees`/`fees_*`, or an unkeyed fee-named category). Net =
+   rewards − fees; ≥ 0 ⇒ "paid for itself". Red only on a negative net (Law 8).
+
+**KEY RULING (Law 9, explicit-ownership — deliberate deviation from "count all
+card income as rewards"):** rewards count ONLY income the user explicitly filed
+as rewards, NOT every income row on the card. Live data showed the reason: all
+card "income" today is `Uncategorized Income` — one-sided card PAYMENTS from
+checking (unconfirmed transfers, e.g. $21,775 on the Delta card), not rewards.
+Counting them would fabricate rewards the user never earned. So the card stays
+empty until the founder recategorizes — which is exactly the workflow he asked
+for, and the honest behavior. A card with neither rewards nor fees in-scope is
+omitted (returns null), so no clutter pre-categorization.
+
+**TESTS:** `apps/web/src/lib/card-breakeven.test.ts` (12) — founder Sapphire
+scenario ($795 fee vs $150 credit + cashback → net −$620.42), paid-for-itself
+positive net, credit-card-only scoping, Uncategorized-Income-is-not-a-reward,
+per-card grouping + worst-net-first order, BigInt beyond Number precision,
+split-aware fee/reward shares, defensive sign guards. `pnpm build` (ESLint gate)
+green.
+
 ## 2026-07-20 — feat(recurring): semi-monthly cadence detection fix + editable cadence
 
 Founder feedback: his Deeptune payroll pays on the **15th and the last calendar
