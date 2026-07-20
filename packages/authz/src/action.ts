@@ -63,6 +63,11 @@ export const READ_ACTIONS = [
   'recurring.schedule_links',
   'paychecks.list',
   'paychecks.detected_dismissals',
+  // Paycheck split templates SLICE B (paycheck-split-templates-v2.md §3):
+  // viewer-tier read queries — templates+lines+series-settings and the class-B
+  // split suggestions review list.
+  'paychecks.templates',
+  'paychecks.split_suggestions',
   'reimbursements.list',
   'statements.list',
   'statements.drafts',
@@ -135,6 +140,8 @@ export const ACTION_MINIMUM_ROLES = {
   'recurring.schedule_links': 'viewer',
   'paychecks.list': 'viewer',
   'paychecks.detected_dismissals': 'viewer',
+  'paychecks.templates': 'viewer',
+  'paychecks.split_suggestions': 'viewer',
   'reimbursements.list':'viewer',
   'statements.list':'viewer',
   'statements.drafts':'viewer',

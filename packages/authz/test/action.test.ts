@@ -43,6 +43,8 @@ describe('action vocabulary', () => {
       'statements.set_cadence',
       'statements.decide_payment_link',
       'statements.detach_payment_link',
+      'statements.apply_holdings',
+      'statements.unapply_holdings',
       'reconciliations.close',
       'reconciliations.reopen',
       'transactions.manual_create',
@@ -69,12 +71,15 @@ describe('action vocabulary', () => {
       'recurring.schedule_links',
       'paychecks.list',
       'paychecks.detected_dismissals',
+      'paychecks.templates',
+      'paychecks.split_suggestions',
       'reimbursements.list',
       'statements.list',
       'statements.drafts',
       'statements.cadence',
       'statements.find_payment',
       'statements.payment_links',
+      'statements.holdings_diff',
       'documents.list_for_target',
       'receipts.inbox',
       'budgets.month',
@@ -91,6 +96,8 @@ describe('action vocabulary', () => {
     expect(ACTION_MINIMUM_ROLES['paychecks.dismiss_detected']).toBe('partner');
     expect(ACTION_MINIMUM_ROLES['paychecks.list']).toBe('viewer');
     expect(ACTION_MINIMUM_ROLES['paychecks.detected_dismissals']).toBe('viewer');
+    expect(ACTION_MINIMUM_ROLES['paychecks.templates']).toBe('viewer');
+    expect(ACTION_MINIMUM_ROLES['paychecks.split_suggestions']).toBe('viewer');
   });
 
   it('requires partner for reimbursement mutations and viewer for reads',()=>{
