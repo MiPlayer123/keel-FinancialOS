@@ -16,8 +16,11 @@ export function formatMoney(amountMinor: string, options: FormatMoneyOptions = {
   const currency = options.currency ?? 'USD';
   const digits = MINOR_DIGITS[currency] ?? 2;
 
-  const negative = amountMinor.trim().startsWith('-');
-  const magnitude = BigInt(amountMinor.replace('-', '') || '0');
+  // Strip EVERY '-' before taking the magnitude: a stray double sign (e.g. an
+  // upstream "-" prepended to an already-negative "-699" → "--699") must never
+  // leak into the dollars/cents split as "-6.-99". Sign is decided once, below.
+  const magnitude = BigInt(amountMinor.replace(/-/g, '') || '0');
+  const negative = amountMinor.trim().startsWith('-') && magnitude > 0n;
 
   const divisor = 10n ** BigInt(digits);
   const whole = magnitude / divisor;

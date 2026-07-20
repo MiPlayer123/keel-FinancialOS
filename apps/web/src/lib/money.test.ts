@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
-import { minorToDollarsInput, parseDollarsToMinorString } from '@/lib/money';
+import { formatMoney, minorToDollarsInput, parseDollarsToMinorString } from '@/lib/money';
+
+describe('formatMoney', () => {
+  it('formats positive, negative, and signed amounts', () => {
+    expect(formatMoney('699')).toBe('$6.99');
+    expect(formatMoney('-699')).toBe('−$6.99');
+    expect(formatMoney('699', { signed: true })).toBe('+$6.99');
+    expect(formatMoney('0')).toBe('$0.00');
+  });
+
+  it('never leaks a stray double sign into the dollars/cents split', () => {
+    // Regression: an upstream "-" prepended to an already-negative "-699"
+    // produced "--699", which formatted as "−$-6.−99". Magnitude now strips
+    // every dash, sign is decided once.
+    expect(formatMoney('--699')).toBe('−$6.99');
+    expect(formatMoney('--699', { signed: true })).toBe('−$6.99');
+  });
+});
 
 /**
  * C18 residual (rules amount-range condition): these two round-trip helpers
