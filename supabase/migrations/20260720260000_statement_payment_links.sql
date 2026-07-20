@@ -220,7 +220,16 @@ begin
                  and tl.status in ('suggested', 'confirmed')
                  and (tl.txn_out = ct.id or tl.txn_in = ct.id)
                order by tl.created_at, tl.id limit 1) as transfer_link_id,
-             abs(ct.effective_date - v_s.period_end) as date_gap
+             abs(ct.effective_date - v_s.period_end) as date_gap,
+             -- Tie-break signal as a bare boolean column: an ORDER BY expression
+             -- cannot reference the `transfer_link_id` scalar-subquery alias
+             -- (Postgres resolves the identifier against the FROM tables and
+             -- raises 42703), so compute the "has a transfer pair" flag here and
+             -- order by the plain column name below.
+             exists (select 1 from public.transfer_links tl
+               where tl.household_id = p_household_id
+                 and tl.status in ('suggested', 'confirmed')
+                 and (tl.txn_out = ct.id or tl.txn_in = ct.id)) as has_transfer
         from public.canonical_transactions ct
         join public.journal_batches jb
           on jb.canonical_transaction_id = ct.id and jb.reverses_batch_id is null
@@ -240,7 +249,7 @@ begin
          and abs(p.amount_minor) = v_target
          and ct.effective_date >= v_s.period_end
          and ct.effective_date <= v_s.period_end + interval '35 days'
-       order by (transfer_link_id is not null) desc, date_gap, ct.id
+       order by has_transfer desc, date_gap, ct.id
        limit 1
     ) c;
 
