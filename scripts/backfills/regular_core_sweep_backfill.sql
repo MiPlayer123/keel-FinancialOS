@@ -135,11 +135,21 @@ begin
   -- cash-management account) so a future connection with several cash-
   -- management accounts only re-anchors the ones actually touched by THIS
   -- run. Dropped automatically at transaction end (--single-transaction).
-  create temp table tmp_core_sweep_reanchor_accounts (
+  -- IF NOT EXISTS + explicit TRUNCATE: this is ON COMMIT DROP, so a normal
+  -- single invocation (psql --single-transaction per this script's own
+  -- documented usage) never collides — the table is gone before any second
+  -- invocation's connection could start. The guard only matters if this file
+  -- is ever sourced twice within one uncommitted session (e.g. manual
+  -- dry-run testing): without IF NOT EXISTS the CREATE itself fails, and
+  -- without the TRUNCATE a second run's INSERT would violate the account_id
+  -- primary key against rows left over from the first run in the same
+  -- session.
+  create temp table if not exists tmp_core_sweep_reanchor_accounts (
     account_id uuid primary key,
     before_active_suppressions int not null,
     after_active_suppressions int
   ) on commit drop;
+  truncate table tmp_core_sweep_reanchor_accounts;
 
   insert into tmp_core_sweep_reanchor_accounts (account_id, before_active_suppressions)
   select a.id, count(s.id)
