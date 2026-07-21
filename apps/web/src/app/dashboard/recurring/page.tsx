@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import Link from 'next/link';
-import { Repeat, Loader2, CalendarClock, Plus, Pause, Play, CheckCircle2, SkipForward, XCircle, Banknote, ArrowRight } from 'lucide-react';
+import { Repeat, Loader2, Plus, Pause, Play, CheckCircle2, SkipForward, XCircle, Banknote, ArrowRight } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
@@ -41,8 +41,12 @@ import {
   changedToday,
   stepScheduleDue,
   annualizedEstimate,
+  inferCadence,
+  type RecurringCadence,
   type RecurringCommand,
 } from '@/lib/recurring';
+import { cadenceLabel } from '@/lib/recurring-evidence';
+import { merchantDisplayName } from '@/lib/merchant-name';
 import { RECURRING_BUCKET_BADGE_LABELS } from '@/lib/recurring-bucket';
 import { EditCadenceDialog } from '@/components/edit-cadence-dialog';
 import { Badge } from '@/components/ui/badge';
@@ -86,6 +90,99 @@ export default function RecurringPage() {
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+// Human cadence labels for detected series, phrased to match the manual
+// FREQUENCY_LABELS the scheduled rows use (Bill & Income parity). The keys are
+// the strict cadences inferCadence() can return plus the fuzzier bands
+// cadenceLabel() produces for the descriptive fallback.
+const CADENCE_LABELS: Record<RecurringCadence, string> = {
+  weekly: 'Weekly',
+  biweekly: 'Every 2 weeks',
+  monthly: 'Monthly',
+  annual: 'Yearly',
+};
+
+// Map the display-only cadenceLabel() bands to FREQUENCY_LABELS phrasing so a
+// detected series reads the same as a manual schedule ("Every 2 weeks", not
+// "every 2 weeks"; "Twice a month", "Quarterly"). Unknown "~every N days"
+// bands pass through capitalized rather than being dropped.
+const CADENCE_BAND_LABELS: Record<string, string> = {
+  daily: 'Daily',
+  weekly: 'Weekly',
+  'every 2 weeks': 'Every 2 weeks',
+  monthly: 'Monthly',
+  quarterly: 'Quarterly',
+};
+
+/**
+ * Human cadence label for a detected series' subtitle. Prefers the strict
+ * inferred cadence (weekly/biweekly/monthly/annual); falls back to the fuzzier
+ * banded label (which also covers semi-monthly-ish, quarterly, "~every N days")
+ * so the subtitle is never blank when there's any cadence signal at all. Pure
+ * date arithmetic — Law 1, no money/ledger math.
+ */
+function detectedCadenceLabel(series: RecurringSeriesRow): string | null {
+  const dates = series.occurrences.map((o) => o.expectedDate);
+  const strict = inferCadence(dates);
+  if (strict) return CADENCE_LABELS[strict];
+  const banded = cadenceLabel(dates);
+  if (!banded) return null;
+  const mapped = CADENCE_BAND_LABELS[banded];
+  if (mapped) return mapped;
+  // "~every N days" and any other catch-all: capitalize the first letter.
+  return banded.charAt(0).toUpperCase() + banded.slice(1);
+}
+
+/**
+ * Shared row shell — the visual structure the manual scheduled bills use, so
+ * detected series render as the same component family (Bill & Income parity):
+ * a fixed date pill, a clean primary name with a `cadence · account · category`
+ * subtitle, status badges, the signed amount, and an inline action cluster.
+ * Presentational only; callers own the data shaping and the actions.
+ */
+function BillRow({
+  dateLabel,
+  name,
+  nameTitle,
+  subtitle,
+  badges,
+  amountMinor,
+  currency,
+  actions,
+  dimmed,
+  first,
+}: {
+  dateLabel: string;
+  name: string;
+  nameTitle?: string;
+  subtitle?: ReactNode;
+  badges?: ReactNode;
+  amountMinor: string;
+  currency: string;
+  actions?: ReactNode;
+  dimmed?: boolean;
+  first?: boolean;
+}) {
+  return (
+    <div
+      className={`flex flex-wrap items-center gap-3 px-4 py-2.5 ${first ? '' : 'border-t border-border'} ${dimmed ? 'opacity-60' : ''}`}
+    >
+      <span className="w-16 shrink-0 font-mono text-xs text-muted-foreground">{dateLabel}</span>
+      <p className="min-w-0 flex-1 truncate text-sm" title={nameTitle ?? name}>
+        {name}
+        {subtitle ? <span className="ml-2 text-xs text-muted-foreground">{subtitle}</span> : null}
+      </p>
+      {badges}
+      <Money
+        amountMinor={amountMinor}
+        currency={currency}
+        signed
+        className="shrink-0 text-sm"
+      />
+      {actions ? <span className="flex shrink-0 items-center gap-0.5">{actions}</span> : null}
+    </div>
+  );
 }
 
 function RecurringBody() {
@@ -235,31 +332,35 @@ function RecurringBody() {
         <section className="space-y-2">
           <h2 className="text-sm font-medium text-muted-foreground">Coming up</h2>
           <div className="overflow-hidden rounded-lg border border-border">
-            {upcoming.map(({ series, occ }, i) => (
-              <div
-                key={occ.occurrenceId}
-                className={`flex items-center gap-3 px-4 py-2.5 ${i > 0 ? 'border-t border-border' : ''}`}
-              >
-                <CalendarClock className="size-4 shrink-0 text-muted-foreground" />
-                <span className="w-16 shrink-0 font-mono text-xs text-muted-foreground">
-                  {occ.expectedDate.slice(5)}
-                </span>
-                <p className="min-w-0 flex-1 truncate text-sm">{series.counterpartyKey}</p>
-                <Money
+            {upcoming.map(({ series, occ }, i) => {
+              const cadence = detectedCadenceLabel(series);
+              const acct = accountName(series.accountId);
+              const subtitle = [cadence, acct].filter(Boolean).join(' · ');
+              return (
+                <BillRow
+                  key={occ.occurrenceId}
+                  first={i === 0}
+                  dateLabel={occ.expectedDate.slice(5)}
+                  name={merchantDisplayName(series.counterpartyKey)}
+                  nameTitle={series.counterpartyKey}
+                  subtitle={subtitle || undefined}
+                  badges={
+                    <Badge variant="outline" className="text-muted-foreground">
+                      Detected
+                    </Badge>
+                  }
+                  // Sign comes from the series direction; use the MAGNITUDE of
+                  // the expected amount so an already-signed value can't double
+                  // up (outflow "-699" would otherwise become "--699").
                   amountMinor={
-                    // Sign comes from the series direction; use the MAGNITUDE of
-                    // the expected amount so an already-signed value can't double
-                    // up (outflow "-699" would otherwise become "--699").
                     series.sign === 'outflow'
                       ? `-${occ.expectedAmountMinor.replace(/-/g, '')}`
                       : occ.expectedAmountMinor.replace(/-/g, '')
                   }
                   currency={occ.currency}
-                  signed
-                  className="shrink-0 text-sm"
                 />
-              </div>
-            ))}
+              );
+            })}
           </div>
         </section>
       ) : null}
@@ -561,6 +662,9 @@ function SeriesCard({
   const [linkBusy, setLinkBusy] = useState(false);
   const [editingCadence, setEditingCadence] = useState(false);
   const next = nextOccurrence(series, todayIso());
+  // Human cadence label for the subtitle (Bill & Income parity with the manual
+  // scheduled rows' FREQUENCY_LABELS). Null when no cadence is inferable.
+  const cadenceLabelText = detectedCadenceLabel(series) ?? '';
   // Reference date for the edit dialog: the most recent projected occurrence,
   // else today. Used to anchor epoch-grid cadences + default the day-of-month.
   const cadenceReferenceDate =
@@ -633,7 +737,11 @@ function SeriesCard({
       <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="truncate text-sm font-medium">{series.counterpartyKey}</p>
+            {/* Clean display name (raw bank memo kept as the title tooltip so
+                the source string is never hidden — Law 9 / merchant-name.ts). */}
+            <p className="truncate text-sm font-medium" title={series.counterpartyKey}>
+              {merchantDisplayName(series.counterpartyKey)}
+            </p>
             {bucket === 'paycheck' ? (
               <>
                 {/* PAYROLL/WAGES: clearly marked as a paycheck, and linked to the
@@ -666,10 +774,12 @@ function SeriesCard({
             )}
           </div>
           <p className="text-xs text-muted-foreground">
-            {accountName}
+            {/* cadence · account — mirrors the manual scheduled rows' subtitle
+                (category isn't on the recurring read model; see PR notes). */}
+            {[cadenceLabelText, accountName].filter(Boolean).join(' · ')}
             {next ? (
               <>
-                {accountName ? ' · ' : ''}
+                {cadenceLabelText || accountName ? ' · ' : ''}
                 next <Money amountMinor={next.expectedAmountMinor} currency={next.currency} /> on{' '}
                 <span className="font-mono">{next.expectedDate}</span>
                 {relativeDueLabel(next.expectedDate, todayIso()) ? (
@@ -781,7 +891,7 @@ function SeriesCard({
           }}
           onDone={onDone}
           seriesId={series.seriesId}
-          seriesLabel={series.counterpartyKey}
+          seriesLabel={merchantDisplayName(series.counterpartyKey)}
           householdId={householdId}
           userId={userId}
           referenceDate={cadenceReferenceDate}
@@ -819,7 +929,7 @@ function OccurrenceCalendar({ rows }: { rows: RecurringSeriesRow[] }) {
       const day = Number(o.expectedDate.slice(8, 10));
       const list = byDay.get(day) ?? [];
       list.push({
-        name: s.counterpartyKey,
+        name: merchantDisplayName(s.counterpartyKey),
         signedMinor:
           s.sign === 'outflow' ? `-${o.expectedAmountMinor}` : o.expectedAmountMinor,
         currency: o.currency,
@@ -1155,105 +1265,115 @@ function ScheduledSection({
               s.autoEnterDays !== null &&
               s.autoEnterDays > 0 &&
               (Date.parse(s.nextDueDate) - Date.parse(today)) / 86400000 <= s.autoEnterDays;
+            const subtitle = [
+              FREQUENCY_LABELS[s.frequency],
+              accountNames.get(s.accountId) ?? '',
+              s.categoryName ?? '',
+            ]
+              .filter(Boolean)
+              .join(' · ');
             return (
-              <div
+              <BillRow
                 key={s.scheduleId}
-                className={`flex flex-wrap items-center gap-3 px-4 py-2.5 ${i > 0 ? 'border-t border-border' : ''} ${s.status === 'paused' ? 'opacity-60' : ''}`}
-              >
-                <span className="w-16 shrink-0 font-mono text-xs text-muted-foreground">
-                  {s.nextDueDate.slice(5)}
-                </span>
-                <p className="min-w-0 flex-1 truncate text-sm" title={s.description}>
-                  {s.description}
-                  <span className="ml-2 text-xs text-muted-foreground">
-                    {FREQUENCY_LABELS[s.frequency]} · {accountNames.get(s.accountId) ?? ''}
-                    {s.categoryName ? ` · ${s.categoryName}` : ''}
-                  </span>
-                </p>
-                {isDue ? (
-                  <Badge variant="secondary">
-                    {s.nextDueDate < today
-                      ? `Overdue · ${relativeDueLabel(s.nextDueDate, today) ?? s.nextDueDate}`
-                      : 'Due today'}
-                  </Badge>
-                ) : null}
-                {dueSoon ? (
-                  <Badge variant="outline">{relativeDueLabel(s.nextDueDate, today) ?? 'Due soon'}</Badge>
-                ) : null}
-                {s.status === 'paused' ? <Badge variant="outline">Paused</Badge> : null}
-                <Money
-                  amountMinor={s.amountMinor}
-                  currency={s.currency}
-                  signed
-                  className="shrink-0 text-sm"
-                />
-                <span className="flex shrink-0 items-center gap-0.5">
-                  {s.status === 'active' ? (
-                    <>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`Enter ${s.description}`}
-                        title={
-                          tooFarOut
-                            ? 'Too far out to post — the ledger takes dates up to a year ahead'
-                            : 'Enter into the ledger'
-                        }
-                        disabled={busyId === s.scheduleId || tooFarOut}
-                        onClick={() => {
-                          void enter(s);
-                        }}
-                      >
-                        {busyId === s.scheduleId ? (
-                          <Loader2 className="size-3.5 animate-spin" />
-                        ) : (
-                          <CheckCircle2 className="size-3.5" />
-                        )}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`Skip ${s.description}`}
-                        title="Skip this occurrence"
-                        disabled={busyId === s.scheduleId}
-                        onClick={() => {
-                          void skip(s);
-                        }}
-                      >
-                        <SkipForward className="size-3.5" />
-                      </Button>
-                    </>
-                  ) : null}
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={s.status === 'paused' ? 'Resume schedule' : 'Pause schedule'}
-                    title={s.status === 'paused' ? 'Resume' : 'Pause'}
-                    disabled={busyId === s.scheduleId}
-                    onClick={() => {
-                      void setStatus(s, s.status === 'paused' ? 'active' : 'paused');
-                    }}
-                  >
-                    {s.status === 'paused' ? (
-                      <Play className="size-3.5" />
-                    ) : (
-                      <Pause className="size-3.5" />
-                    )}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={`End ${s.description}`}
-                    title="End this schedule"
-                    disabled={busyId === s.scheduleId}
-                    onClick={() => {
-                      void setStatus(s, 'ended');
-                    }}
-                  >
-                    <XCircle className="size-3.5" />
-                  </Button>
-                </span>
-              </div>
+                first={i === 0}
+                dimmed={s.status === 'paused'}
+                dateLabel={s.nextDueDate.slice(5)}
+                name={s.description}
+                subtitle={subtitle}
+                amountMinor={s.amountMinor}
+                currency={s.currency}
+                badges={
+                  <>
+                    {/* Subtle chip marking this as a user-declared schedule —
+                        the detected rows carry a "Detected" chip in the same
+                        slot (Bill & Income parity). */}
+                    <Badge variant="outline" className="text-muted-foreground">
+                      Scheduled
+                    </Badge>
+                    {isDue ? (
+                      <Badge variant="secondary">
+                        {s.nextDueDate < today
+                          ? `Overdue · ${relativeDueLabel(s.nextDueDate, today) ?? s.nextDueDate}`
+                          : 'Due today'}
+                      </Badge>
+                    ) : null}
+                    {dueSoon ? (
+                      <Badge variant="outline">
+                        {relativeDueLabel(s.nextDueDate, today) ?? 'Due soon'}
+                      </Badge>
+                    ) : null}
+                    {s.status === 'paused' ? <Badge variant="outline">Paused</Badge> : null}
+                  </>
+                }
+                actions={
+                  <>
+                    {s.status === 'active' ? (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Enter ${s.description}`}
+                          title={
+                            tooFarOut
+                              ? 'Too far out to post — the ledger takes dates up to a year ahead'
+                              : 'Enter into the ledger'
+                          }
+                          disabled={busyId === s.scheduleId || tooFarOut}
+                          onClick={() => {
+                            void enter(s);
+                          }}
+                        >
+                          {busyId === s.scheduleId ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <CheckCircle2 className="size-3.5" />
+                          )}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Skip ${s.description}`}
+                          title="Skip this occurrence"
+                          disabled={busyId === s.scheduleId}
+                          onClick={() => {
+                            void skip(s);
+                          }}
+                        >
+                          <SkipForward className="size-3.5" />
+                        </Button>
+                      </>
+                    ) : null}
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={s.status === 'paused' ? 'Resume schedule' : 'Pause schedule'}
+                      title={s.status === 'paused' ? 'Resume' : 'Pause'}
+                      disabled={busyId === s.scheduleId}
+                      onClick={() => {
+                        void setStatus(s, s.status === 'paused' ? 'active' : 'paused');
+                      }}
+                    >
+                      {s.status === 'paused' ? (
+                        <Play className="size-3.5" />
+                      ) : (
+                        <Pause className="size-3.5" />
+                      )}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`End ${s.description}`}
+                      title="End this schedule"
+                      disabled={busyId === s.scheduleId}
+                      onClick={() => {
+                        void setStatus(s, 'ended');
+                      }}
+                    >
+                      <XCircle className="size-3.5" />
+                    </Button>
+                  </>
+                }
+              />
             );
           })}
         </div>
