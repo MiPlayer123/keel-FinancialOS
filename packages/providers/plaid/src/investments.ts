@@ -119,6 +119,15 @@ export interface KeelPlaidInvestmentTxn {
    *  for source fidelity. */
   readonly plaidType: string;
   readonly plaidSubtype: string | null;
+  /** True when the transacted security is a cash-equivalent (Plaid security
+   *  `type === 'cash'`, e.g. the SPAXX core money-market sweep). In a
+   *  cash-management account the core money market IS the account's own cash,
+   *  so a buy/sell of it is a "core sweep": the paired real EFT/transfer is
+   *  ingested separately, and booking the sweep too would phantom-swing the
+   *  per-line running balance and mis-detect as a same-account self-transfer.
+   *  The RPC uses this flag (with a CORE ACCOUNT description fallback) to
+   *  SUPPRESS such sweeps. Descriptive only — never used for math. */
+  readonly isCashEquivalent: boolean;
 }
 
 export type KeelInvestmentFlow =
@@ -246,6 +255,12 @@ export const mapInvestmentsTransactionsToKeel = (body: unknown): MappedPlaidInve
     const providerName = optionalString(value, 'name');
     const securityName = security ? optionalString(security, 'name') : null;
     const description = (providerName ?? securityName ?? `${type} transaction`).slice(0, 500);
+    // Cash-equivalent flag: the transacted security is a money-market / core
+    // sweep (Plaid security `type: 'cash'`). Mirrors the holdings mapper's
+    // cash-equivalent skip. When there is no joined security (a pure cash
+    // deposit/withdrawal/fee has no security_id) this is false — only a
+    // buy/sell CAN be a core sweep, and those always carry a security.
+    const isCashEquivalent = security ? security['type'] === 'cash' : false;
 
     result.transactions.push({
       accountExternalRef,
@@ -259,6 +274,7 @@ export const mapInvestmentsTransactionsToKeel = (body: unknown): MappedPlaidInve
       flow: classifyFlow(type, subtype),
       plaidType: type,
       plaidSubtype: subtype,
+      isCashEquivalent,
     });
   }
   return result;
