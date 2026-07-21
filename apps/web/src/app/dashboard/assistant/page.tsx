@@ -111,6 +111,22 @@ const TOOL_LABELS: Record<string, string> = {
   list_goals: 'Goals',
   list_rules: 'Rules',
   list_tags: 'Tags',
+  list_recurring_classification: 'Recurring classification',
+  list_recurring_schedule_links: 'Recurring schedule links',
+  list_dismissed_paycheck_detections: 'Dismissed paycheck detections',
+  list_paycheck_templates: 'Paycheck templates',
+  list_paycheck_split_suggestions: 'Paycheck split suggestions',
+  list_expected_reimbursements: 'Expected reimbursements',
+  list_statement_drafts: 'Statement drafts',
+  get_statement_cadence: 'Statement cadence',
+  suggest_statement_payments: 'Statement payment suggestions',
+  get_statement_payment_links: 'Statement payment links',
+  get_statement_holdings_diff: 'Statement holdings diff',
+  list_documents_for_household: 'Documents',
+  list_documents_for_target: 'Documents for item',
+  get_document_storage_summary: 'Document storage summary',
+  get_receipts_inbox: 'Receipts inbox',
+  get_latest_balances: 'Latest balances',
 };
 
 const prettifyTool = (name: string): string =>

@@ -346,6 +346,174 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     buildArgs: householdOnly,
     capResult: capRows(200),
   },
+  {
+    name: 'list_recurring_classification',
+    description: 'List recurring series classified by outflow bucket (bill, subscription, income, etc.).',
+    action: 'recurring.classification',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(100),
+  },
+  {
+    name: 'list_recurring_schedule_links',
+    description: 'List links between recurring series and their detected payment schedules.',
+    action: 'recurring.schedule_links',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(100),
+  },
+  {
+    name: 'list_dismissed_paycheck_detections',
+    description: 'List paycheck detections the user has dismissed as not actually a paycheck.',
+    action: 'paychecks.detected_dismissals',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(60),
+  },
+  {
+    name: 'list_paycheck_templates',
+    description: 'List saved paycheck split templates (the gross-up rules used to decompose a deposit into gross pay, taxes, and contributions).',
+    action: 'paychecks.templates',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(60),
+  },
+  {
+    name: 'list_paycheck_split_suggestions',
+    description: 'List suggested paycheck splits awaiting a template match or application.',
+    action: 'paychecks.split_suggestions',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(60),
+  },
+  {
+    name: 'list_expected_reimbursements',
+    description: 'List expected future reimbursements (amounts the user expects back) — a separate tracker from claim-based reimbursements (use list_reimbursements for those).',
+    action: 'expected_reimbursements.list',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(80),
+  },
+  {
+    name: 'list_statement_drafts',
+    description: 'List draft statement imports awaiting the user’s approval or dismissal.',
+    action: 'statements.drafts',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(40),
+  },
+  {
+    name: 'get_statement_cadence',
+    description: 'Get the expected-statement cadence configuration (which accounts, how often).',
+    action: 'statements.cadence',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(60),
+  },
+  {
+    name: 'suggest_statement_payments',
+    description: 'Compute/refresh payment-match suggestions for one statement; returns how many were found. Follow up with get_statement_payment_links to see them. Get the statementId from list_statements.',
+    action: 'statements.find_payment',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['statementId'],
+      properties: { statementId: { type: 'string', description: 'The statement id (uuid).' } },
+    },
+    buildArgs: (args, householdId) => {
+      const id = typeof args['statementId'] === 'string' && UUID_RE.test(args['statementId']) ? args['statementId'] : null;
+      if (id === null) return { __error: 'statementId must be a uuid' };
+      return { p_household_id: householdId, p_statement_id: id };
+    },
+  },
+  {
+    name: 'get_statement_payment_links',
+    description: 'List a statement’s suggested/decided payment links. Get the statementId from list_statements.',
+    action: 'statements.payment_links',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['statementId'],
+      properties: { statementId: { type: 'string', description: 'The statement id (uuid).' } },
+    },
+    buildArgs: (args, householdId) => {
+      const id = typeof args['statementId'] === 'string' && UUID_RE.test(args['statementId']) ? args['statementId'] : null;
+      if (id === null) return { __error: 'statementId must be a uuid' };
+      return { p_household_id: householdId, p_statement_id: id };
+    },
+    capResult: capRows(60),
+  },
+  {
+    name: 'get_statement_holdings_diff',
+    description: 'Diff an investment statement’s reported holdings against current portfolio positions. Get the statementId from list_statements.',
+    action: 'statements.holdings_diff',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['statementId'],
+      properties: { statementId: { type: 'string', description: 'The statement id (uuid).' } },
+    },
+    buildArgs: (args, householdId) => {
+      const id = typeof args['statementId'] === 'string' && UUID_RE.test(args['statementId']) ? args['statementId'] : null;
+      if (id === null) return { __error: 'statementId must be a uuid' };
+      return { p_household_id: householdId, p_statement_id: id };
+    },
+    capResult: capRows(120),
+  },
+  {
+    name: 'list_documents_for_household',
+    description: 'List every document (receipts, statements, etc.) attached anywhere in the household.',
+    action: 'documents.list_household',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(100),
+  },
+  {
+    name: 'list_documents_for_target',
+    description: 'List documents attached to one specific transaction, paycheck, reimbursement claim, or statement.',
+    action: 'documents.list_for_target',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['targetType', 'targetId'],
+      properties: {
+        targetType: { type: 'string', enum: ['transaction', 'paycheck', 'reimbursement_claim', 'statement'] },
+        targetId: { type: 'string', description: 'The target row id (uuid).' },
+      },
+    },
+    buildArgs: (args, householdId) => {
+      const targetTypes = ['transaction', 'paycheck', 'reimbursement_claim', 'statement'];
+      const targetType = typeof args['targetType'] === 'string' && targetTypes.includes(args['targetType']) ? args['targetType'] : null;
+      const targetId = typeof args['targetId'] === 'string' && UUID_RE.test(args['targetId']) ? args['targetId'] : null;
+      if (targetType === null) return { __error: 'targetType must be one of transaction|paycheck|reimbursement_claim|statement' };
+      if (targetId === null) return { __error: 'targetId must be a uuid' };
+      return { p_household_id: householdId, p_target_type: targetType, p_target_id: targetId };
+    },
+    capResult: capRows(60),
+  },
+  {
+    name: 'get_document_storage_summary',
+    description: 'Get a storage-usage summary for the household’s uploaded documents.',
+    action: 'documents.storage_summary',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+  },
+  {
+    name: 'get_receipts_inbox',
+    description: 'List receipts awaiting a transaction match (the receipts inbox).',
+    action: 'receipts.inbox',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(60),
+  },
+  {
+    name: 'get_latest_balances',
+    description: 'Get the latest per-account balance snapshot (a lighter, faster read than get_account_balances’ full trial balance).',
+    action: 'balances.latest',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(100),
+  },
 ];
 
 const READ_TOOL_BY_NAME: Readonly<Record<string, ReadToolSpec>> = Object.fromEntries(

@@ -57,6 +57,27 @@ Deno.test('read tool catalog exposes the broad read surface', () => {
   for (const name of ['get_account_balances', 'list_transactions', 'list_budgets', 'list_reimbursements']) {
     assert(READ_TOOL_NAMES.includes(name), `missing tool ${name}`);
   }
+  // The reachability-gap batch (previously-authorized actions with no tool).
+  for (const name of [
+    'list_recurring_classification',
+    'list_recurring_schedule_links',
+    'list_dismissed_paycheck_detections',
+    'list_paycheck_templates',
+    'list_paycheck_split_suggestions',
+    'list_expected_reimbursements',
+    'list_statement_drafts',
+    'get_statement_cadence',
+    'suggest_statement_payments',
+    'get_statement_payment_links',
+    'get_statement_holdings_diff',
+    'list_documents_for_household',
+    'list_documents_for_target',
+    'get_document_storage_summary',
+    'get_receipts_inbox',
+    'get_latest_balances',
+  ]) {
+    assert(READ_TOOL_NAMES.includes(name), `missing tool ${name}`);
+  }
   // Every definition carries a JSON-schema object.
   for (const d of defs) {
     assert((d.parameters as Record<string, unknown>)['type'] === 'object', `tool ${d.name} bad schema`);
@@ -181,6 +202,72 @@ Deno.test('large results are bounded so context cannot be blown', async () => {
   // Either row-capped or truncated, but never the full 5000-row blob.
   assert(raw.length < 200_000, 'result was not bounded');
   assert(parsed.truncated === true || (parsed.rows && parsed.rows.length <= 100));
+});
+
+const STMT_ID = '22222222-2222-2222-2222-222222222222';
+
+Deno.test('statement-scoped reads require a valid statementId, never hit the proc otherwise', async () => {
+  for (const tool of ['suggest_statement_payments', 'get_statement_payment_links', 'get_statement_holdings_diff']) {
+    let called = false;
+    const exec = makeExecuteReadTool({
+      authorize: allow,
+      authzCtx: {},
+      householdId: 'h1',
+      rpc: (_p, _a) => {
+        called = true;
+        return Promise.resolve({ data: { rows: [] }, error: null });
+      },
+      queryToProc: TEST_QUERY_TO_PROC,
+      todayIso: '2026-07-19',
+    });
+    const missing = JSON.parse(await exec(call(tool, {})));
+    assert(missing.error === 'invalid_arguments', `${tool}: missing statementId should be rejected`);
+    const bad = JSON.parse(await exec(call(tool, { statementId: 'not-a-uuid' })));
+    assert(bad.error === 'invalid_arguments', `${tool}: bad statementId should be rejected`);
+    assert(called === false, `${tool}: must never reach the proc without a valid statementId`);
+  }
+});
+
+Deno.test('statement-scoped reads inject the fixed household alongside the given statementId', async () => {
+  let seenArgs: Record<string, unknown> = {};
+  const exec = makeExecuteReadTool({
+    authorize: allow,
+    authzCtx: {},
+    householdId: 'h-real',
+    rpc: (_p, args) => {
+      seenArgs = args;
+      return Promise.resolve({ data: { rows: [] }, error: null });
+    },
+    queryToProc: TEST_QUERY_TO_PROC,
+    todayIso: '2026-07-19',
+  });
+  await exec(call('get_statement_payment_links', { statementId: STMT_ID, p_household_id: 'h-evil' }));
+  assert(seenArgs['p_household_id'] === 'h-real', 'household must be server-injected');
+  assert(seenArgs['p_statement_id'] === STMT_ID);
+});
+
+Deno.test('list_documents_for_target requires a known targetType and a valid targetId', async () => {
+  let called = false;
+  const exec = makeExecuteReadTool({
+    authorize: allow,
+    authzCtx: {},
+    householdId: 'h1',
+    rpc: (_p, _a) => {
+      called = true;
+      return Promise.resolve({ data: { rows: [] }, error: null });
+    },
+    queryToProc: TEST_QUERY_TO_PROC,
+    todayIso: '2026-07-19',
+  });
+  const badType = JSON.parse(await exec(call('list_documents_for_target', { targetType: 'account', targetId: STMT_ID })));
+  assert(badType.error === 'invalid_arguments');
+  const badId = JSON.parse(await exec(call('list_documents_for_target', { targetType: 'transaction', targetId: 'nope' })));
+  assert(badId.error === 'invalid_arguments');
+  assert(called === false, 'must never reach the proc with an invalid targetType/targetId');
+  const ok = JSON.parse(
+    await exec(call('list_documents_for_target', { targetType: 'transaction', targetId: STMT_ID })),
+  );
+  assert(ok.rows !== undefined || Array.isArray(ok), 'a valid call should reach the proc');
 });
 
 // ---------------------------------------------------------------------------
