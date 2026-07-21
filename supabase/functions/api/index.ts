@@ -466,6 +466,45 @@ export default {
         agentImage = { mediaType, dataBase64: data };
       }
 
+      // Prior turns from THIS SAME open conversation (kept client-side by
+      // LocalRuntime, never persisted here — a page reload starts fresh).
+      // Plain conversational text only: the client only ever sees a turn's
+      // final tldr/body, never raw tool results, so replaying it can't smuggle
+      // data-tier content past the spotlighting boundary (Law 5 untouched —
+      // it still governs the CURRENT turn's own tool-use loop). Bounded
+      // server-side regardless of what the client sends (Law 12 discipline).
+      const HISTORY_MAX_TURNS = 20;
+      const HISTORY_TURN_MAX_CHARS = 4000;
+      const HISTORY_TOTAL_MAX_CHARS = 12000;
+      let history: { role: 'user' | 'assistant'; text: string }[] = [];
+      const rawHistory = input['history'];
+      if (Array.isArray(rawHistory)) {
+        const cleaned: { role: 'user' | 'assistant'; text: string }[] = [];
+        for (const raw of rawHistory) {
+          if (typeof raw !== 'object' || raw === null) continue;
+          const rec = raw as Record<string, unknown>;
+          const role = rec['role'];
+          const text = rec['text'];
+          if (
+            (role === 'user' || role === 'assistant') &&
+            typeof text === 'string' &&
+            text.trim().length > 0 &&
+            text.length <= HISTORY_TURN_MAX_CHARS
+          ) {
+            cleaned.push({ role, text });
+          }
+        }
+        // Keep only the most recent turns, then trim from the oldest end
+        // until the aggregate character budget is met too.
+        let windowed = cleaned.slice(-HISTORY_MAX_TURNS);
+        let total = windowed.reduce((sum, h) => sum + h.text.length, 0);
+        while (total > HISTORY_TOTAL_MAX_CHARS && windowed.length > 0) {
+          total -= windowed[0]!.text.length;
+          windowed = windowed.slice(1);
+        }
+        history = windowed;
+      }
+
       // Law 12: provider keys live ONLY in provider secret stores — the function
       // environment first, Supabase Vault second (service_role-only definer
       // keel_ai_provider_key). Anthropic preferred when configured (best tool
@@ -674,6 +713,7 @@ export default {
           tools: agentToolDefinitions(),
           userMessage: question.trim(),
           ...(agentImage ? { image: agentImage } : {}),
+          ...(history.length > 0 ? { history } : {}),
           executeTool,
           maxSteps: 8,
           maxTokens: 1024,
@@ -691,6 +731,7 @@ export default {
             appliedCount: appliedActions.length,
             proposedCount: proposedActions.length,
             hasImage: agentImage !== undefined,
+            historyTurns: history.length,
             latencyMs: Date.now() - startedAt,
             inputTokens: run.usage.inputTokens,
             outputTokens: run.usage.outputTokens,
