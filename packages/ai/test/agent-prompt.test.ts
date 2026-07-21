@@ -24,6 +24,22 @@ describe('buildAgentSystemPrompt', () => {
     expect(buildAgentSystemPrompt()).not.toContain('preview-only');
   });
 
+  it('instructs the model to handle multi-part requests completely, not narrowly', () => {
+    const p = buildAgentSystemPrompt({ dataBoundary: 'kd-multi' });
+    expect(p).toContain('Be complete on multi-part requests');
+    expect(p).toContain('Never re-ask for a number, category, or detail they already gave you');
+    expect(p).toContain('call list_categories first');
+    expect(p).toContain('percentBp directly');
+    expect(p).toContain('never compute a dollar');
+    expect(p).toContain('amount from a percentage yourself');
+  });
+
+  it('forbids claiming a proposal was staged without actually calling its tool', () => {
+    const p = buildAgentSystemPrompt({ dataBoundary: 'kd-narr' });
+    expect(p).toContain('Never describe a proposal as staged unless you actually called its');
+    expect(p).toContain('never summarize an intention as if it were');
+  });
+
   it('injects the authored profile and derived context only when present', () => {
     const withNone = buildAgentSystemPrompt({ dataBoundary: 'kd-0000' });
     expect(withNone).not.toContain('ABOUT THIS USER');
