@@ -652,5 +652,117 @@ select is(
     where id = 'e8000000-0000-4000-8000-0000000000a1'),
   'voided', '(h) Beta''s candidate is voided once Beta''s own connection is reconciled');
 
+-- ===========================================================================
+-- (i) Apply-key bug regression (independent Codex code review of this PR):
+-- the reconcile loop's idempotency apply_key must vary with the (candidate,
+-- counterpart) PAIR, not just the candidate id. Candidate a1 was already
+-- restored in (g) (un-voided, back to 'posted') and its ORIGINAL counterpart
+-- a2 remains live/untouched. Here a2 is excluded via a legitimate CONFIRMED
+-- transfer_links row (same idiom as (d)'s decoy exclusion -- simulating the
+-- real scenario where a2 got matched/superseded elsewhere), and a BRAND NEW
+-- counterpart (f1) is introduced on the SAME account/day with the exact
+-- opposite amount of a1's live batch. This is precisely the scenario the old
+-- candidate-only apply_key (`'core-sweep-suppress:' || candidate_txn`) could
+-- not handle: the new (a1, f1) pairing's evidence_hash differs from the
+-- (a1, a2) pairing already recorded in command_executions under the OLD key,
+-- so before the fix, keel_idempotency_check would raise
+-- KEEL_IDEMPOTENCY_CONFLICT -- an uncaught exception that aborts the ENTIRE
+-- reconcile call. Fresh dedicated ids (the 'f' band -- valid hex, unlike a
+-- literal 'i') are used for the new fixtures to keep this scenario isolated
+-- from every earlier assertion in this file.
+-- ---------------------------------------------------------------------------
+
+-- Exclude a2 from the counterpart pool via a CONFIRMED transfer_links row
+-- against a dedicated decoy (mirrors (d)'s d9 pattern) -- otherwise a1 would
+-- ambiguously match BOTH a2 and the new f1 counterpart below (same day, same
+-- account, same magnitude) and never reach the suppression path at all.
+insert into public.canonical_transactions
+  (id, household_id, entity_id, account_id, status, source, description, effective_date, economic_event_key)
+values
+  ('e7000000-0000-4000-8000-0000000000f9', '00000000-0000-4000-8000-00000000a001',
+   '00000000-0000-4000-8000-00000000a101', 'e7000000-0000-4000-8000-000000000021',
+   'posted', 'manual', 'Unrelated decoy transaction (excludes a2 from the counterpart pool)',
+   '2026-06-01', 'txn:pgtap:coresweep:decoy:f9');
+
+insert into public.transfer_links (household_id, txn_out, txn_in, status, decided_by, decided_at)
+values (
+  '00000000-0000-4000-8000-00000000a001',
+  'e7000000-0000-4000-8000-0000000000a2', 'e7000000-0000-4000-8000-0000000000f9',
+  'confirmed', '00000000-0000-4000-8000-000000000001', now()
+);
+
+-- New counterpart f1: same account, same day as a1, exact opposite amount of
+-- a1's (restored) live +50000 cash leg.
+insert into public.raw_provider_events
+  (household_id, connection_id, provider, provider_event_id, account_external_ref, body, received_at)
+values
+  ('00000000-0000-4000-8000-00000000a001', 'e7000000-0000-4000-8000-000000000001', 'plaid',
+   'transfer-f:raw', 'pgtap:coresweep:acct', '{}'::jsonb, now());
+
+insert into public.canonical_transactions
+  (id, household_id, entity_id, account_id, status, source, description, effective_date, economic_event_key)
+values
+  ('e7000000-0000-4000-8000-0000000000f1', '00000000-0000-4000-8000-00000000a001',
+   '00000000-0000-4000-8000-00000000a101', 'e7000000-0000-4000-8000-000000000021',
+   'posted', 'sync', 'TRANSFERRED TO VS Z37-626027-1', '2026-06-01',
+   'txn:plaid:pgtap:coresweep:item:transfer-f');
+
+insert into public.journal_batches (household_id, canonical_transaction_id, description, effective_date, command_id)
+values
+  ('00000000-0000-4000-8000-00000000a001', 'e7000000-0000-4000-8000-0000000000f1',
+   'TRANSFERRED TO VS Z37-626027-1', '2026-06-01', gen_random_uuid());
+
+insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency)
+select b.id, 'e7000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-00000000a101', -50000, 'USD'
+  from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000f1'
+union all
+select b.id, '00000000-0000-4000-8000-00000000a317', '00000000-0000-4000-8000-00000000a101', 50000, 'USD'
+  from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000f1';
+
+insert into public.normalized_source_records
+  (raw_event_id, household_id, account_id, provider_transaction_id, amount_minor, currency,
+   effective_date, description, pending, pfc_primary)
+select r.id, '00000000-0000-4000-8000-00000000a001', 'e7000000-0000-4000-8000-000000000021',
+       'transfer-f', -50000, 'USD', '2026-06-01', 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
+  from public.raw_provider_events r where r.provider_event_id = 'transfer-f:raw';
+
+insert into public.transaction_source_links (canonical_transaction_id, normalized_source_record_id)
+select 'e7000000-0000-4000-8000-0000000000f1', n.id
+  from public.normalized_source_records n where n.provider_transaction_id = 'transfer-f';
+
+-- The reconcile call must SUCCEED (no uncaught KEEL_IDEMPOTENCY_CONFLICT) --
+-- this is the exact call that raised before the apply-key fix.
+select lives_ok($$
+  select public.keel_reconcile_regular_core_sweeps(
+    '00000000-0000-4000-8000-00000000a001', 'e7000000-0000-4000-8000-000000000001')
+$$, '(i) reconcile succeeds when a restored candidate re-pairs with a DIFFERENT counterpart '
+    || '(apply-key bug fix: the key must vary with the pair, not just the candidate)');
+
+select is(
+  (select status::text from public.canonical_transactions
+    where id = 'e7000000-0000-4000-8000-0000000000a1'),
+  'voided', '(i) candidate a1 is voided again, this time paired with the NEW counterpart f1');
+select is(
+  (select count(*)::int from public.regular_core_sweep_suppressions
+    where candidate_transaction_id = 'e7000000-0000-4000-8000-0000000000a1'
+      and counterpart_transaction_id = 'e7000000-0000-4000-8000-0000000000f1'
+      and released_at is null),
+  1, '(i) a NEW active suppression row records the (a1, f1) pairing');
+select is(
+  (select count(*)::int from public.regular_core_sweep_suppressions
+    where candidate_transaction_id = 'e7000000-0000-4000-8000-0000000000a1'),
+  2, '(i) candidate a1 now has TWO suppression rows total: the original released one (a1,a2) '
+     || 'and the new active one (a1,f1)');
+select is(
+  (select count(distinct evidence_hash)::int from public.regular_core_sweep_suppressions
+    where candidate_transaction_id = 'e7000000-0000-4000-8000-0000000000a1'),
+  2, '(i) the two suppression rows carry DIFFERENT evidence hashes (proves the new pairing '
+     || 'was not treated as a replay of the old one)');
+select is(
+  (select status::text from public.canonical_transactions
+    where id = 'e7000000-0000-4000-8000-0000000000a2'),
+  'posted', '(i) the ORIGINAL counterpart a2 remains untouched throughout (excluded via its own '
+    || 'confirmed transfer_links row, never voided by this pass)');
+
 select * from finish();
 rollback;

@@ -44,6 +44,25 @@
 -- suppression is reversible via keel_cmd_restore_regular_core_sweep (Law 2);
 -- idempotent (Law 9 — advisory lock + evidence-hash fingerprinting + a partial
 -- unique index prevent double-suppression on replay).
+--
+-- Post-review fix (independent Codex code review of this PR, applied in a
+-- follow-up commit): the reconcile loop's idempotency apply_key originally
+-- encoded ONLY the candidate transaction id, while its accompanying hash
+-- (evidence_hash, see the `scored` CTE in step 3 below) encoded BOTH the
+-- candidate AND counterpart ids. Restore (step 4) legitimately un-voids a
+-- candidate so it can re-pair with a DIFFERENT counterpart later (e.g. the
+-- original counterpart got removed/modified by Plaid and a new matching
+-- transaction arrived) — under the old candidate-only key that second,
+-- distinct pairing would collide with the FIRST pairing's already-recorded
+-- command_executions row and make keel_idempotency_check raise
+-- KEEL_IDEMPOTENCY_CONFLICT, an uncaught exception that would abort the
+-- ENTIRE reconcile call (every other unrelated pair in the same pass too),
+-- not just that one candidate. Fixed by suffixing the apply_key with the full
+-- evidence_hash itself, mirroring the investment ingest/classifier procs'
+-- `'inv-ingest:' || provider_transaction_id || ':' || v_hash` idiom
+-- (20260718121000, 20260721060000) rather than inventing a bespoke "v1"-style
+-- tag. Regression covered by `supabase/tests/037_regular_core_sweep_suppression.sql`
+-- (restore-then-repair-with-a-different-counterpart scenario).
 
 -- ===========================================================================
 -- 1. Allowlist table. Append-only (no legitimate reason to un-list a
@@ -179,6 +198,12 @@ declare
   v_reversal_id uuid;
   v_live_batch_id uuid;
   v_result jsonb;
+  -- Codex-review hardening: dedupe set for the ambiguousSkipped summary
+  -- counter (see the loop below) — tracks distinct candidate_txn ids already
+  -- counted so a candidate with multiple ambiguous edges (candidate_degree >
+  -- 1, i.e. it joins more than one counterpart) is counted once, not once per
+  -- ambiguous pair-row.
+  v_ambiguous_candidates uuid[] := '{}';
 begin
   if auth.uid() is not null and not exists (
     select 1 from public.household_memberships
@@ -444,8 +469,18 @@ begin
     order by candidate_txn
   loop
     -- Strict 1:1 uniqueness: skip (never guess) if either side is ambiguous.
+    -- Codex-review fix: count DISTINCT ambiguous candidate_txn values, not one
+    -- per ambiguous pair-ROW — a single candidate with candidate_degree > 1
+    -- (it joined more than one counterpart) produces multiple rows here, and
+    -- incrementing per-row would over-count relative to "how many candidates
+    -- couldn't be resolved" (the intuitive read of this summary field). This
+    -- is purely a reporting fix: the `continue` below still fires for every
+    -- ambiguous row, so WHICH pairs get skipped vs suppressed is unchanged.
     if r.candidate_degree > 1 or r.counterpart_degree > 1 then
-      v_ambiguous_skipped := v_ambiguous_skipped + 1;
+      if not (r.candidate_txn = any(v_ambiguous_candidates)) then
+        v_ambiguous_skipped := v_ambiguous_skipped + 1;
+        v_ambiguous_candidates := array_append(v_ambiguous_candidates, r.candidate_txn);
+      end if;
       continue;
     end if;
 
@@ -504,8 +539,27 @@ begin
     end if;
 
     v_command_id := gen_random_uuid();
-    v_apply_key := 'core-sweep-suppress:' || r.candidate_txn::text;
+    -- Codex-review fix: the apply_key MUST vary with the (candidate,
+    -- counterpart) PAIR, not just the candidate. A candidate can legitimately
+    -- be restored (keel_cmd_restore_regular_core_sweep un-voids it, clears
+    -- voided_at) and later re-pair with a DIFFERENT counterpart — e.g. the
+    -- original counterpart got removed/modified by Plaid and a new same-
+    -- account/same-day/exact-opposite-amount transaction arrived. That second
+    -- pairing produces a different v_hash (evidence_hash already encodes both
+    -- candidateTxnId and counterpartTxnId — see the `scored` CTE above), but a
+    -- candidate-only key would collide with the FIRST pairing's already-
+    -- recorded command_executions row and make keel_idempotency_check raise
+    -- KEEL_IDEMPOTENCY_CONFLICT — an uncaught exception inside this FOR loop
+    -- that would abort the entire reconcile call, not just this one candidate.
+    -- Suffixing the key with the hash itself (rather than a bare counterpart
+    -- id) follows the same house idiom as the investment ingest/classifier
+    -- procs' `'inv-ingest:' || provider_transaction_id || ':' || v_hash`
+    -- (20260718121000, 20260721060000): the id gives a readable/greppable
+    -- prefix, and appending the full hash automatically versions the key on
+    -- every field the hash covers (both transaction ids here) without a
+    -- separate manual "v1"-style tag.
     v_hash := r.evidence_hash;
+    v_apply_key := 'core-sweep-suppress:' || r.candidate_txn::text || ':' || v_hash;
     v_replay := public.keel_idempotency_check(p_household_id, v_apply_key, v_hash);
     if v_replay is not null then
       continue;  -- already processed by an earlier concurrent/replayed pass
