@@ -61,7 +61,6 @@ interface ReadToolSpec {
   readonly name: string;
   readonly description: string;
   readonly action: ActionName;
-  readonly proc: string;
   readonly parameters: JsonSchema;
   /** Build proc args from model args + fixed session context. */
   readonly buildArgs: (args: Record<string, unknown>, householdId: string, todayIso: string) => BuildResult;
@@ -98,7 +97,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_entities',
     description: 'List the legal/logical entities (people, businesses) in the current household.',
     action: 'entities.list',
-    proc: 'keel_list_entities',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
   },
@@ -106,7 +104,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'get_account_balances',
     description: 'Get every account and its current deterministic ledger balance (trial balance). Use this for "how much do I have" questions.',
     action: 'ledger.trial_balance',
-    proc: 'keel_trial_balance',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
   },
@@ -114,7 +111,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_transactions',
     description: 'List recent transactions, optionally filtered. Returns one bounded page (newest first).',
     action: 'transactions.rich_page',
-    proc: 'keel_list_transactions_rich_page',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -143,7 +139,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'search_transactions',
     description: 'Search transactions by keyword (merchant, memo). Use when the user names a payee or description.',
     action: 'transactions.search',
-    proc: 'keel_search_transactions',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -169,7 +164,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_categories',
     description: 'List the household spending/income categories.',
     action: 'categories.list',
-    proc: 'keel_list_categories',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(200),
@@ -178,7 +172,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'get_budget_month',
     description: 'Get the budget plan for a month (targets, expected income, spent-so-far). Defaults to the current month.',
     action: 'budgets.month',
-    proc: 'keel_budget_month',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -195,7 +188,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_budgets',
     description: 'List per-category budget rows for a month (budgeted vs spent). Defaults to the current month.',
     action: 'budgets.list',
-    proc: 'keel_list_budgets',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -213,7 +205,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_reimbursements',
     description: 'List reimbursement claims and settlements (who owes whom, and what is settled).',
     action: 'reimbursements.list',
-    proc: 'keel_list_reimbursements',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(80),
@@ -222,7 +213,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_notes_and_tasks',
     description: 'List household notes and tasks/reminders.',
     action: 'notes_tasks.list',
-    proc: 'keel_list_notes_tasks',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(100),
@@ -231,7 +221,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_recurring',
     description: 'List detected/confirmed recurring series (subscriptions, bills, income).',
     action: 'recurring.list',
-    proc: 'keel_list_recurring',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(80),
@@ -240,7 +229,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_paychecks',
     description: 'List paychecks and their decomposition.',
     action: 'paychecks.list',
-    proc: 'keel_list_paychecks',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(60),
@@ -249,7 +237,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_statements',
     description: 'List imported financial statements.',
     action: 'statements.list',
-    proc: 'keel_list_statements',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(60),
@@ -258,7 +245,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_transfers',
     description: 'List transfers between the household’s own accounts.',
     action: 'transfers.list',
-    proc: 'keel_list_transfers',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(80),
@@ -267,7 +253,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_holdings',
     description: 'List investment holdings (positions), optionally for one account.',
     action: 'holdings.list',
-    proc: 'keel_list_holdings',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -284,7 +269,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'get_investments_overview',
     description: 'Investment portfolio overview (total value, allocation).',
     action: 'investments.overview',
-    proc: 'keel_investments_overview',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
   },
@@ -292,7 +276,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'get_net_worth',
     description: 'Net worth as of a date (assets minus liabilities). Defaults to today.',
     action: 'dashboard.net_worth',
-    proc: 'keel_net_worth_as_of',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -307,7 +290,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'get_cash_flow',
     description: 'Income vs spending over a date range. Defaults to the last 30 days.',
     action: 'dashboard.cash_flow',
-    proc: 'keel_cash_flow',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -330,7 +312,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'get_cash_flow_forecast',
     description: 'Forward cash-flow forecast for the next N days (preview only — Class C).',
     action: 'dashboard.cash_flow_forecast',
-    proc: 'keel_cash_flow_forecast',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -345,7 +326,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_goals',
     description: 'List savings/financial goals and their progress.',
     action: 'goals.list',
-    proc: 'keel_list_goals',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(60),
@@ -354,7 +334,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_rules',
     description: 'List categorization/automation rules.',
     action: 'rules.list',
-    proc: 'keel_list_rules',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(100),
@@ -363,7 +342,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_tags',
     description: 'List tags used across transactions.',
     action: 'tags.list',
-    proc: 'keel_list_tags',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(200),
@@ -380,6 +358,15 @@ export const readToolDefinitions = (): ToolDefinition[] =>
 
 /** Names of every read tool (for logging/telemetry). */
 export const READ_TOOL_NAMES: readonly string[] = READ_TOOL_SPECS.map((t) => t.name);
+
+/**
+ * Tool name -> authz action, for callers that need to cross-check every read
+ * tool has a proc mapping (e.g. against `QUERY_TO_PROC` in api/index.ts) —
+ * the proc name itself is no longer duplicated here; see `ReadToolDeps.queryToProc`.
+ */
+export const READ_TOOL_ACTIONS: Readonly<Record<string, string>> = Object.fromEntries(
+  READ_TOOL_SPECS.map((t) => [t.name, t.action]),
+);
 
 const boundJson = (value: unknown): string => {
   let text: string;
@@ -406,6 +393,12 @@ export interface ReadToolDeps {
   readonly householdId: string;
   /** Calls a read proc through the user's client (auth.uid() reaches the DB). */
   readonly rpc: (proc: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
+  /**
+   * Action -> proc name, injected by the caller (the SAME `QUERY_TO_PROC` table
+   * api/index.ts already uses to dispatch `/queries`) — this catalog only ever
+   * names an action; it never hand-maintains its own copy of the proc string.
+   */
+  readonly queryToProc: Readonly<Record<string, string>>;
   /** ISO date (YYYY-MM-DD) for defaulting ranges. */
   readonly todayIso: string;
 }
@@ -432,7 +425,15 @@ export const makeExecuteReadTool = (deps: ReadToolDeps) => async (call: ToolCall
     return JSON.stringify({ error: 'invalid_arguments', detail: built.__error });
   }
 
-  const { data, error } = await deps.rpc(spec.proc, built);
+  const proc = deps.queryToProc[spec.action];
+  if (!proc) {
+    // Fail closed: a read tool whose action has no proc mapping is a wiring
+    // bug (drift between this catalog and the injected map), never a reason
+    // to guess a proc name.
+    return JSON.stringify({ error: 'unmapped_tool', tool: call.name });
+  }
+
+  const { data, error } = await deps.rpc(proc, built);
   if (error) {
     // Never surface DB error internals to the model (Law 12); a constant code.
     return JSON.stringify({ error: 'query_failed', tool: call.name });

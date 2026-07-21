@@ -177,7 +177,7 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'budgets.set_expected_income': 'keel_cmd_budgets_set_expected_income',
 };
 
-const QUERY_TO_PROC: Record<string, string> = {
+export const QUERY_TO_PROC: Record<string, string> = {
   'ledger.trial_balance': 'keel_trial_balance',
   'transactions.list': 'keel_list_transactions',
   'transactions.rich': 'keel_list_transactions_rich',
@@ -644,6 +644,7 @@ export default {
         authzCtx,
         householdId: householdId.data,
         rpc: (proc, args) => ctx.supabase.rpc(proc, args),
+        queryToProc: QUERY_TO_PROC,
         todayIso,
         onApplied: (action) => appliedActions.push(action),
         onProposed: (action) => proposedActions.push(action),

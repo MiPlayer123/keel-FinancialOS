@@ -2,6 +2,7 @@ import {
   agentToolDefinitions,
   makeExecuteAgentTool,
   makeExecuteReadTool,
+  READ_TOOL_ACTIONS,
   READ_TOOL_NAMES,
   readToolDefinitions,
   WRITE_TOOL_NAMES,
@@ -27,6 +28,16 @@ const stubRpc =
   (_proc: string, _args: Record<string, unknown>) =>
     Promise.resolve({ data, error });
 
+/**
+ * Stub action -> proc map for every read tool the catalog currently defines.
+ * Derived from READ_TOOL_ACTIONS (not hand-copied) so it can never drift out
+ * of sync with the catalog; the actual proc string doesn't matter to these
+ * unit tests since `rpc` is always stubbed, only that a mapping exists.
+ */
+const TEST_QUERY_TO_PROC: Readonly<Record<string, string>> = Object.fromEntries(
+  Object.values(READ_TOOL_ACTIONS).map((action) => [action, `stub_proc__${action}`]),
+);
+
 Deno.test('read tool catalog exposes the broad read surface', () => {
   const defs = readToolDefinitions();
   assert(defs.length >= 15, 'expected a broad read surface');
@@ -46,6 +57,7 @@ Deno.test('unknown tool returns an error payload, never throws', async () => {
     authzCtx: {},
     householdId: 'h1',
     rpc: stubRpc({ rows: [] }),
+    queryToProc: TEST_QUERY_TO_PROC,
     todayIso: '2026-07-19',
   });
   const out = JSON.parse(await exec(call('does_not_exist')));
@@ -62,6 +74,7 @@ Deno.test('authz denial returns not_authorized and never calls the proc', async 
       called = true;
       return Promise.resolve({ data: null, error: null });
     },
+    queryToProc: TEST_QUERY_TO_PROC,
     todayIso: '2026-07-19',
   });
   const out = JSON.parse(await exec(call('get_account_balances')));
@@ -79,6 +92,7 @@ Deno.test('injects the fixed householdId; the model cannot pass another', async 
       seenArgs = args;
       return Promise.resolve({ data: { rows: [] }, error: null });
     },
+    queryToProc: TEST_QUERY_TO_PROC,
     todayIso: '2026-07-19',
   });
   // Attempt to smuggle a different household via args — it must be ignored.
@@ -96,6 +110,7 @@ Deno.test('invalid arguments are rejected before hitting the proc', async () => 
       called = true;
       return Promise.resolve({ data: null, error: null });
     },
+    queryToProc: TEST_QUERY_TO_PROC,
     todayIso: '2026-07-19',
   });
   // search_transactions requires a non-empty search term.
@@ -110,11 +125,33 @@ Deno.test('proc errors surface a constant code, never DB internals (Law 12)', as
     authzCtx: {},
     householdId: 'h1',
     rpc: stubRpc(null, { message: 'relation secret_table does not exist', code: '42P01' }),
+    queryToProc: TEST_QUERY_TO_PROC,
     todayIso: '2026-07-19',
   });
   const raw = await exec(call('get_account_balances'));
   assert(!raw.includes('secret_table'), 'must not leak DB internals');
   assert(JSON.parse(raw).error === 'query_failed');
+});
+
+Deno.test('a read tool whose action has no proc mapping fails closed, never guesses', async () => {
+  let called = false;
+  const exec = makeExecuteReadTool({
+    authorize: allow,
+    authzCtx: {},
+    householdId: 'h1',
+    rpc: (_p, _a) => {
+      called = true;
+      return Promise.resolve({ data: null, error: null });
+    },
+    // Deliberately empty: every read tool's action is unmapped here, simulating
+    // the exact drift this fix exists to catch (catalog says one thing, the
+    // injected proc table says another/nothing).
+    queryToProc: {},
+    todayIso: '2026-07-19',
+  });
+  const out = JSON.parse(await exec(call('get_account_balances')));
+  assert(out.error === 'unmapped_tool');
+  assert(called === false, 'must never call rpc with a guessed/undefined proc name');
 });
 
 Deno.test('large results are bounded so context cannot be blown', async () => {
@@ -124,6 +161,7 @@ Deno.test('large results are bounded so context cannot be blown', async () => {
     authzCtx: {},
     householdId: 'h1',
     rpc: stubRpc({ rows }),
+    queryToProc: TEST_QUERY_TO_PROC,
     todayIso: '2026-07-19',
   });
   const raw = await exec(call('list_transactions', { limit: 100 }));
@@ -168,6 +206,7 @@ const agentDeps = (
   authzCtx: {},
   householdId: 'h1',
   rpc,
+  queryToProc: TEST_QUERY_TO_PROC,
   todayIso: '2026-07-19',
   onApplied: (a: AppliedAction) => applied.push(a),
   onProposed: (p: ProposedAction) => proposed.push(p),
