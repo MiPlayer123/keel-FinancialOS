@@ -1203,6 +1203,11 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
                   p_effective_date: t.date,
                   p_description: t.description,
                   p_flow: t.flow,
+                  // Core-sweep flag: a buy/sell of the account's own cash
+                  // money-market (SPAXX). The RPC suppresses these (no canonical)
+                  // so they don't phantom-swing the register running balance or
+                  // mis-detect as same-account self-transfers.
+                  p_is_cash_equivalent: t.isCashEquivalent,
                 });
                 // Finding 3 (re-review N1): any ingest error fails this window —
                 // do NOT advance the checkpoint, and resume from THIS page's

@@ -241,7 +241,56 @@ describe('mapInvestmentsTransactionsToKeel', () => {
       flow: 'dividend_interest',
       plaidType: 'cash',
       plaidSubtype: 'dividend',
+      // No joined security (securities: []) -> not a cash-equivalent.
+      isCashEquivalent: false,
     });
+  });
+
+  it('flags a buy of a cash-equivalent core sweep (SPAXX) as isCashEquivalent', () => {
+    // A "PURCHASE INTO CORE ACCOUNT (SPAXX)" sweep: type=buy on a security
+    // whose Plaid type is 'cash'. The RPC suppresses these.
+    const result = mapInvestmentsTransactionsToKeel({
+      investment_transactions: [
+        invTxn('sweep-buy', {
+          type: 'buy',
+          subtype: 'buy',
+          security_id: 'sec-core',
+          amount: 250,
+          name: 'PURCHASE INTO CORE ACCOUNT (SPAXX)',
+        }),
+      ],
+      securities: [security('sec-core', { ticker_symbol: 'SPAXX', type: 'cash' })],
+    });
+    expect(result.transactions).toHaveLength(1);
+    expect(result.transactions[0]?.flow).toBe('buy');
+    expect(result.transactions[0]?.isCashEquivalent).toBe(true);
+  });
+
+  it('does NOT flag a buy of a real equity as cash-equivalent', () => {
+    const result = mapInvestmentsTransactionsToKeel({
+      investment_transactions: [
+        invTxn('eq-buy', {
+          type: 'buy',
+          subtype: 'buy',
+          security_id: 'sec-eq',
+          amount: 500,
+          name: 'BUY FSKAX',
+        }),
+      ],
+      securities: [security('sec-eq', { ticker_symbol: 'FSKAX', type: 'mutual fund' })],
+    });
+    expect(result.transactions[0]?.isCashEquivalent).toBe(false);
+  });
+
+  it('leaves isCashEquivalent false for a cash deposit with no joined security', () => {
+    const result = mapInvestmentsTransactionsToKeel({
+      investment_transactions: [
+        invTxn('dep', { type: 'cash', subtype: 'deposit', amount: -25000, security_id: null }),
+      ],
+      securities: [],
+    });
+    expect(result.transactions[0]?.flow).toBe('deposit');
+    expect(result.transactions[0]?.isCashEquivalent).toBe(false);
   });
 
   it('maps a buy (cash out) to a negative account-effect amount', () => {

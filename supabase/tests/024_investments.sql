@@ -11,8 +11,8 @@ select no_plan();
 -- Function existence + ownership/grant shape.
 -- ---------------------------------------------------------------------------
 select has_function('public','keel_worker_ingest_investment_txn',
-  array['uuid','uuid','text','text','bigint','text','date','text','text'],
-  'investment-txn ingest proc exists');
+  array['uuid','uuid','text','text','bigint','text','date','text','text','boolean'],
+  'investment-txn ingest proc exists (flow-classifier signature)');
 select has_function('public','keel_worker_snapshot_holdings', array['uuid','uuid'],
   'holdings snapshot proc exists');
 select has_function('public','keel_worker_record_holdings_error',
@@ -29,12 +29,12 @@ select has_function('public','keel_is_investment_subtype', array['text'],
 -- Worker procs are service_role-only (a missing revoke was a real hole).
 select ok(
   not has_function_privilege('authenticated',
-    'public.keel_worker_ingest_investment_txn(uuid,uuid,text,text,bigint,text,date,text,text)',
+    'public.keel_worker_ingest_investment_txn(uuid,uuid,text,text,bigint,text,date,text,text,boolean)',
     'EXECUTE'),
   'authenticated cannot execute the ingest proc');
 select ok(
   has_function_privilege('service_role',
-    'public.keel_worker_ingest_investment_txn(uuid,uuid,text,text,bigint,text,date,text,text)',
+    'public.keel_worker_ingest_investment_txn(uuid,uuid,text,text,bigint,text,date,text,text,boolean)',
     'EXECUTE'),
   'service_role can execute the ingest proc');
 
