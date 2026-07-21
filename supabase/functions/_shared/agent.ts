@@ -394,9 +394,11 @@ export interface ReadToolDeps {
   /** Calls a read proc through the user's client (auth.uid() reaches the DB). */
   readonly rpc: (proc: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
   /**
-   * Action -> proc name, injected by the caller (the SAME `QUERY_TO_PROC` table
-   * api/index.ts already uses to dispatch `/queries`) — this catalog only ever
-   * names an action; it never hand-maintains its own copy of the proc string.
+   * Action -> proc name, injected by the caller (index.ts merges the SAME
+   * `QUERY_TO_PROC` it uses for `/queries` with `AGENT_WRITE_TO_PROC` for the
+   * notes/tasks actions its bespoke `/notes/*` + `/tasks/*` routes also
+   * dispatch through) — this catalog only ever names an action; it never
+   * hand-maintains its own copy of a proc string.
    */
   readonly queryToProc: Readonly<Record<string, string>>;
   /** ISO date (YYYY-MM-DD) for defaulting ranges. */
@@ -496,6 +498,8 @@ interface WriteExecCtx {
   readonly householdId: string;
   readonly todayIso: string;
   readonly rpc: (proc: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
+  /** Same injected map read tools use — for the handful of write tools that call a READ proc as a validation/undo-capture helper (never for the write itself). */
+  readonly queryToProc: Readonly<Record<string, string>>;
   readonly attachReceipt?: AttachReceiptFn;
 }
 
@@ -545,10 +549,13 @@ const displayMinor = (minor: string): string => {
  */
 const resolveCategoryName = async (
   rpc: (proc: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>,
+  queryToProc: Readonly<Record<string, string>>,
   householdId: string,
   categoryLedgerAccountId: string,
 ): Promise<string | null> => {
-  const { data, error } = await rpc('keel_list_categories', { p_household_id: householdId });
+  const proc = queryToProc['categories.list'];
+  if (!proc) return null;
+  const { data, error } = await rpc(proc, { p_household_id: householdId });
   if (error) return null;
   const rows = (Array.isArray(data)
     ? data
@@ -568,10 +575,13 @@ const taskTitle = (v: unknown): string | null => {
 /** Find a task's current row (for edit/status undo capture) via the list proc. */
 const resolveTaskRow = async (
   rpc: (proc: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>,
+  queryToProc: Readonly<Record<string, string>>,
   householdId: string,
   taskId: string,
 ): Promise<Record<string, unknown> | null> => {
-  const { data, error } = await rpc('keel_list_notes_tasks', { p_household_id: householdId });
+  const proc = queryToProc['notes_tasks.list'];
+  if (!proc) return null;
+  const { data, error } = await rpc(proc, { p_household_id: householdId });
   if (error) return null;
   const rows = (((data as { rows?: unknown[] } | null)?.rows) ?? []) as Record<string, unknown>[];
   return rows.find((r) => r['type'] === 'task' && r['id'] === taskId) ?? null;
@@ -596,7 +606,9 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       const body = noteBody(args['body']);
       if (body === null) return { ok: false, error: 'invalid_arguments', detail: 'body must be 1..1000 chars' };
       const pinned = args['pinned'] === true;
-      const { data, error } = await ctx.rpc('keel_note_save', {
+      const proc = ctx.queryToProc['notes.save'];
+      if (!proc) return { ok: false, error: 'unmapped_tool' };
+      const { data, error } = await ctx.rpc(proc, {
         p_household_id: ctx.householdId,
         p_note_id: null,
         p_body: body,
@@ -636,7 +648,10 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       if (id === null) return { ok: false, error: 'invalid_arguments', detail: 'noteId must be a uuid' };
       if (body === null) return { ok: false, error: 'invalid_arguments', detail: 'body must be 1..1000 chars' };
       // Capture prior state so the UI can offer an edit-undo (re-apply it).
-      const { data: listData } = await ctx.rpc('keel_list_notes_tasks', { p_household_id: ctx.householdId });
+      const notesTasksProc = ctx.queryToProc['notes_tasks.list'];
+      const { data: listData } = notesTasksProc
+        ? await ctx.rpc(notesTasksProc, { p_household_id: ctx.householdId })
+        : { data: null };
       const rows = (((listData as { rows?: unknown[] } | null)?.rows ?? []) as Record<string, unknown>[]).filter(
         (r) => r['type'] === 'note' && r['id'] === id,
       );
@@ -644,7 +659,9 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       const priorBody = prior && typeof prior['body'] === 'string' ? (prior['body'] as string) : undefined;
       const priorPinned = prior && typeof prior['pinned'] === 'boolean' ? (prior['pinned'] as boolean) : undefined;
       const pinned = typeof args['pinned'] === 'boolean' ? (args['pinned'] as boolean) : (priorPinned ?? false);
-      const { error } = await ctx.rpc('keel_note_save', {
+      const saveProc = ctx.queryToProc['notes.save'];
+      if (!saveProc) return { ok: false, error: 'unmapped_tool' };
+      const { error } = await ctx.rpc(saveProc, {
         p_household_id: ctx.householdId,
         p_note_id: id,
         p_body: body,
@@ -675,7 +692,9 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
     execute: async (args, ctx) => {
       const id = noteId(args['noteId']);
       if (id === null) return { ok: false, error: 'invalid_arguments', detail: 'noteId must be a uuid' };
-      const { error } = await ctx.rpc('keel_note_archive', { p_household_id: ctx.householdId, p_note_id: id });
+      const proc = ctx.queryToProc['notes.archive'];
+      if (!proc) return { ok: false, error: 'unmapped_tool' };
+      const { error } = await ctx.rpc(proc, { p_household_id: ctx.householdId, p_note_id: id });
       if (error) return { ok: false, error: 'write_failed' };
       return {
         ok: true,
@@ -702,7 +721,9 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
     execute: async (args, ctx) => {
       const id = noteId(args['noteId']);
       if (id === null) return { ok: false, error: 'invalid_arguments', detail: 'noteId must be a uuid' };
-      const { error } = await ctx.rpc('keel_note_unarchive', { p_household_id: ctx.householdId, p_note_id: id });
+      const proc = ctx.queryToProc['notes.unarchive'];
+      if (!proc) return { ok: false, error: 'unmapped_tool' };
+      const { error } = await ctx.rpc(proc, { p_household_id: ctx.householdId, p_note_id: id });
       if (error) return { ok: false, error: 'write_failed' };
       return {
         ok: true,
@@ -746,7 +767,7 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
         return { ok: false, error: 'invalid_arguments', detail: 'provide exactly one of amountMinor or percentBp' };
       }
       // Resolve + validate the real category (Law 11: summary must match payload).
-      const name = await resolveCategoryName(ctx.rpc, ctx.householdId, cat);
+      const name = await resolveCategoryName(ctx.rpc, ctx.queryToProc, ctx.householdId, cat);
       if (name === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live budget category in this household' };
       const rollover = args['rollover'] === true;
       const payload: Record<string, unknown> =
@@ -839,7 +860,7 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       const cat = noteId(args['categoryLedgerAccountId']);
       if (cat === null) return { ok: false, error: 'invalid_arguments', detail: 'categoryLedgerAccountId must be a uuid' };
       const month = isoDate(args['month']) ?? currentMonthIso(ctx.todayIso);
-      const name = await resolveCategoryName(ctx.rpc, ctx.householdId, cat);
+      const name = await resolveCategoryName(ctx.rpc, ctx.queryToProc, ctx.householdId, cat);
       if (name === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live budget category in this household' };
       return {
         ok: true,
@@ -925,7 +946,7 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       const cat = noteId(args['categoryLedgerAccountId']);
       if (txId === null) return { ok: false, error: 'invalid_arguments', detail: 'transactionId must be a uuid' };
       if (cat === null) return { ok: false, error: 'invalid_arguments', detail: 'categoryLedgerAccountId must be a uuid' };
-      const name = await resolveCategoryName(ctx.rpc, ctx.householdId, cat);
+      const name = await resolveCategoryName(ctx.rpc, ctx.queryToProc, ctx.householdId, cat);
       if (name === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live category in this household' };
       return {
         ok: true,
@@ -989,7 +1010,7 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       if (cat === null) return { ok: false, error: 'invalid_arguments', detail: 'categoryLedgerAccountId must be a uuid' };
       const name = typeof args['name'] === 'string' ? args['name'].trim() : '';
       if (name.length === 0 || name.length > 80) return { ok: false, error: 'invalid_arguments', detail: 'name 1..80 chars' };
-      const oldName = await resolveCategoryName(ctx.rpc, ctx.householdId, cat);
+      const oldName = await resolveCategoryName(ctx.rpc, ctx.queryToProc, ctx.householdId, cat);
       if (oldName === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live category in this household' };
       return {
         ok: true,
@@ -1025,7 +1046,9 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       const description = typeof args['description'] === 'string' && args['description'].length <= 1000 ? args['description'] : null;
       const dueOn = isoDate(args['dueOn']);
       const priority = typeof args['priority'] === 'string' && TASK_PRIORITIES.includes(args['priority']) ? args['priority'] : 'normal';
-      const { data, error } = await ctx.rpc('keel_task_save', {
+      const saveProc = ctx.queryToProc['tasks.save'];
+      if (!saveProc) return { ok: false, error: 'unmapped_tool' };
+      const { data, error } = await ctx.rpc(saveProc, {
         p_household_id: ctx.householdId,
         p_task_id: null,
         p_title: title,
@@ -1068,11 +1091,13 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       const title = taskTitle(args['title']);
       if (id === null) return { ok: false, error: 'invalid_arguments', detail: 'taskId must be a uuid' };
       if (title === null) return { ok: false, error: 'invalid_arguments', detail: 'title 1..160 chars' };
-      const prior = await resolveTaskRow(ctx.rpc, ctx.householdId, id);
+      const prior = await resolveTaskRow(ctx.rpc, ctx.queryToProc, ctx.householdId, id);
       const description = typeof args['description'] === 'string' && args['description'].length <= 1000 ? args['description'] : null;
       const dueOn = isoDate(args['dueOn']);
       const priority = typeof args['priority'] === 'string' && TASK_PRIORITIES.includes(args['priority']) ? args['priority'] : 'normal';
-      const { error } = await ctx.rpc('keel_task_save', {
+      const saveProc = ctx.queryToProc['tasks.save'];
+      if (!saveProc) return { ok: false, error: 'unmapped_tool' };
+      const { error } = await ctx.rpc(saveProc, {
         p_household_id: ctx.householdId,
         p_task_id: id,
         p_title: title,
@@ -1119,12 +1144,14 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       if (id === null) return { ok: false, error: 'invalid_arguments', detail: 'taskId must be a uuid' };
       if (status === null) return { ok: false, error: 'invalid_arguments', detail: 'status must be open|done|dismissed' };
       // Capture prior status BEFORE mutating (for undo).
-      const prior = await resolveTaskRow(ctx.rpc, ctx.householdId, id);
+      const prior = await resolveTaskRow(ctx.rpc, ctx.queryToProc, ctx.householdId, id);
       const priorStatus =
         prior && typeof prior['status'] === 'string' && TASK_STATUSES.includes(prior['status'] as string)
           ? (prior['status'] as 'open' | 'done' | 'dismissed')
           : 'open';
-      const { error } = await ctx.rpc('keel_task_set_status', {
+      const statusProc = ctx.queryToProc['tasks.set_status'];
+      if (!statusProc) return { ok: false, error: 'unmapped_tool' };
+      const { error } = await ctx.rpc(statusProc, {
         p_household_id: ctx.householdId,
         p_task_id: id,
         p_status: status,
@@ -1330,6 +1357,7 @@ export const makeExecuteAgentTool = (deps: AgentToolDeps) => {
       householdId: deps.householdId,
       todayIso: deps.todayIso,
       rpc: deps.rpc,
+      queryToProc: deps.queryToProc,
       ...(deps.attachReceipt ? { attachReceipt: deps.attachReceipt } : {}),
     });
     if (!res.ok) {

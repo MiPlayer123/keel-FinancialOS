@@ -227,6 +227,21 @@ export const QUERY_TO_PROC: Record<string, string> = {
   'receipts.inbox': 'keel_receipts_inbox',
 };
 
+/**
+ * Proc names for the AGENT_WRITE_ACTIONS (notes/tasks) — these aren't
+ * CommandName so they don't go through COMMAND_TO_PROC/the /commands
+ * envelope; the bespoke /notes/* + /tasks/* routes below AND the agent tool
+ * executor (agent.ts) both dispatch through this same map, so the proc name
+ * is named once, not hand-copied into each caller.
+ */
+export const AGENT_WRITE_TO_PROC: Record<string, string> = {
+  'notes.save': 'keel_note_save',
+  'notes.archive': 'keel_note_archive',
+  'notes.unarchive': 'keel_note_unarchive',
+  'tasks.save': 'keel_task_save',
+  'tasks.set_status': 'keel_task_set_status',
+};
+
 // deno-lint-ignore no-explicit-any
 type UserClient = any;
 
@@ -644,7 +659,7 @@ export default {
         authzCtx,
         householdId: householdId.data,
         rpc: (proc, args) => ctx.supabase.rpc(proc, args),
-        queryToProc: QUERY_TO_PROC,
+        queryToProc: { ...QUERY_TO_PROC, ...AGENT_WRITE_TO_PROC },
         todayIso,
         onApplied: (action) => appliedActions.push(action),
         onProposed: (action) => proposedActions.push(action),
@@ -1611,7 +1626,7 @@ export default {
             details: {},
           });
         }
-        const { data, error } = await ctx.supabase.rpc('keel_note_save', {
+        const { data, error } = await ctx.supabase.rpc(AGENT_WRITE_TO_PROC['notes.save']!, {
           p_household_id: householdId.data,
           p_note_id: noteId,
           p_body: bodyText,
@@ -1629,7 +1644,7 @@ export default {
             details: {},
           });
         }
-        const { error } = await ctx.supabase.rpc('keel_note_archive', {
+        const { error } = await ctx.supabase.rpc(AGENT_WRITE_TO_PROC['notes.archive']!, {
           p_household_id: householdId.data,
           p_note_id: noteId,
         });
@@ -1646,7 +1661,7 @@ export default {
             details: {},
           });
         }
-        const { error } = await ctx.supabase.rpc('keel_note_unarchive', {
+        const { error } = await ctx.supabase.rpc(AGENT_WRITE_TO_PROC['notes.unarchive']!, {
           p_household_id: householdId.data,
           p_note_id: noteId,
         });
@@ -1675,7 +1690,7 @@ export default {
             details: {},
           });
         }
-        const { data, error } = await ctx.supabase.rpc('keel_task_save', {
+        const { data, error } = await ctx.supabase.rpc(AGENT_WRITE_TO_PROC['tasks.save']!, {
           p_household_id: householdId.data,
           p_task_id: taskId,
           p_title: title,
@@ -1699,7 +1714,7 @@ export default {
           details: {},
         });
       }
-      const { error } = await ctx.supabase.rpc('keel_task_set_status', {
+      const { error } = await ctx.supabase.rpc(AGENT_WRITE_TO_PROC['tasks.set_status']!, {
         p_household_id: householdId.data,
         p_task_id: taskId,
         p_status: status,

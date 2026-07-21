@@ -31,12 +31,24 @@ const stubRpc =
 /**
  * Stub action -> proc map for every read tool the catalog currently defines.
  * Derived from READ_TOOL_ACTIONS (not hand-copied) so it can never drift out
- * of sync with the catalog; the actual proc string doesn't matter to these
- * unit tests since `rpc` is always stubbed, only that a mapping exists.
+ * of sync with the catalog; most tests don't care about the exact proc
+ * string since `rpc` is always stubbed — EXCEPT the actions `noteRpc` below
+ * pattern-matches on by real proc name (a couple of write tools resolve
+ * `categories.list`/`notes_tasks.list` through this same map as a
+ * validation/undo-capture helper, and the note/task write tools resolve
+ * their own write proc through it too) — those keep real values, matching
+ * QUERY_TO_PROC + AGENT_WRITE_TO_PROC in api/index.ts.
  */
-const TEST_QUERY_TO_PROC: Readonly<Record<string, string>> = Object.fromEntries(
-  Object.values(READ_TOOL_ACTIONS).map((action) => [action, `stub_proc__${action}`]),
-);
+const TEST_QUERY_TO_PROC: Readonly<Record<string, string>> = {
+  ...Object.fromEntries(Object.values(READ_TOOL_ACTIONS).map((action) => [action, `stub_proc__${action}`])),
+  'categories.list': 'keel_list_categories',
+  'notes_tasks.list': 'keel_list_notes_tasks',
+  'notes.save': 'keel_note_save',
+  'notes.archive': 'keel_note_archive',
+  'notes.unarchive': 'keel_note_unarchive',
+  'tasks.save': 'keel_task_save',
+  'tasks.set_status': 'keel_task_set_status',
+};
 
 Deno.test('read tool catalog exposes the broad read surface', () => {
   const defs = readToolDefinitions();
@@ -335,6 +347,29 @@ Deno.test('propose_budget_target rejects an id that is not a live category', asy
   const out = JSON.parse(await exec(call('propose_budget_target', { categoryLedgerAccountId: CAT_ID, amountMinor: '60000' })));
   assert(out.error === 'invalid_arguments');
   assert(proposed.length === 0);
+});
+
+Deno.test('propose_budget_target fails closed when categories.list has no proc mapping', async () => {
+  const proposed: ProposedAction[] = [];
+  let called = false;
+  const exec = makeExecuteAgentTool({
+    ...agentDeps(
+      allow,
+      (proc, args) => {
+        called = true;
+        return noteRpc({ calls: [], catRows: [{ ledgerAccountId: CAT_ID, name: 'Groceries' }] })(proc, args);
+      },
+      [],
+      proposed,
+    ),
+    // No categories.list entry: the category-name resolver must refuse to
+    // guess a proc name, not silently call rpc with something undefined.
+    queryToProc: {},
+  });
+  const out = JSON.parse(await exec(call('propose_budget_target', { categoryLedgerAccountId: CAT_ID, amountMinor: '60000' })));
+  assert(out.error === 'invalid_arguments');
+  assert(proposed.length === 0);
+  assert(called === false, 'must never call rpc with an unmapped proc name');
 });
 
 Deno.test('propose_budget_target requires exactly one of amountMinor / percentBp', async () => {
