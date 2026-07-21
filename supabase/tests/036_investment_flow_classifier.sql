@@ -190,6 +190,40 @@ select is(
   0::bigint, 'the voided sweep nets to zero on the investments account');
 
 -- ===========================================================================
+-- SWEEP -> REAL flip: a provider restatement flips a VOIDED (suppressed) sweep
+-- back to a real economic event. Regression for the Codex-review bug where
+-- this unconditionally raised KEEL_IMMUTABLE (the voided canonical has no
+-- "live batch" by construction — see the suppression branch — so the un-void
+-- path could never be reached). Reuses 'flow-flip', now voided above.
+-- ===========================================================================
+select lives_ok($$
+  select public.keel_worker_ingest_investment_txn(
+    '00000000-0000-4000-8000-00000000a001','df000000-0000-4000-8000-000000000001',
+    'pgtap:flow:acct','flow-flip', -15000, 'USD',
+    '2026-06-09'::date, 'BUY (restated real)', 'buy', false)
+$$, 'restating the voided sweep back to a real buy does NOT raise KEEL_IMMUTABLE');
+select is(
+  (select voided_at is null from public.canonical_transactions
+    where economic_event_key = 'inv:pgtap:flow:item:flow-flip'),
+  true, 'the sweep-to-real-flipped canonical is un-voided (live again)');
+select is(
+  (select p.amount_minor from public.journal_postings p
+     join public.journal_batches b on b.id = p.batch_id
+     join public.canonical_transactions ct on ct.id = b.canonical_transaction_id
+    where ct.economic_event_key = 'inv:pgtap:flow:item:flow-flip'
+      and b.reverses_batch_id is null
+      and not exists (select 1 from public.journal_revisions r where r.original_batch_id = b.id)
+      and p.ledger_account_id = 'df000000-0000-4000-8000-000000000021'),
+  -15000::bigint, 'the live batch reflects the restated (real) amount on the cash ledger');
+select is(
+  (select count(*)::int from public.journal_batches b
+     join public.canonical_transactions ct on ct.id = b.canonical_transaction_id
+    where ct.economic_event_key = 'inv:pgtap:flow:item:flow-flip'
+      and b.reverses_batch_id is null
+      and not exists (select 1 from public.journal_revisions r where r.original_batch_id = b.id)),
+  1, 'exactly one live (non-reversed, non-superseded) batch exists after the flip');
+
+-- ===========================================================================
 -- BALANCE CONSERVATION: deposit -> sweep -> buy. The account's cash ledger
 -- balance after a deposit, a (suppressed) sweep, and a buy equals deposit - buy.
 --   deposit +40000 (cash in)      -> account +40000

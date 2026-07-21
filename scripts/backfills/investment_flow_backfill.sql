@@ -1,14 +1,24 @@
 -- ###########################################################################
 -- ##  REVIEW BEFORE APPLYING — data migration on the LIVE ledger.          ##
 -- ##                                                                       ##
--- ##  This migration REPROCESSES existing investment canonical            ##
--- ##  transactions: it VOIDS core sweeps and RE-OFFSETS buys/sells/       ##
--- ##  dividends/fees onto the new investment ledger accounts. It writes    ##
--- ##  compensating REVERSAL + corrected batches (Law 2) and NEVER          ##
--- ##  UPDATEs/DELETEs prior postings. It is idempotent (a second run is a  ##
--- ##  no-op once every row already points at its correct offset), but it   ##
--- ##  is deliberately NOT auto-applied — a human applies it manually after ##
--- ##  reviewing, per the F-013 flow-classifier plan.                       ##
+-- ##  DELIBERATELY LIVES OUTSIDE supabase/migrations/ (Codex review — P1): ##
+-- ##  the Supabase GitHub integration auto-applies everything under        ##
+-- ##  supabase/migrations/ on merge to main (see deploy-functions.yml       ##
+-- ##  header comment). A backfill that reprocesses live ledger data must   ##
+-- ##  NEVER be able to run un-reviewed just because a PR merged — apply it ##
+-- ##  by hand: `source supabase/.env.remote && psql                        ##
+-- ##  "postgresql://postgres@db.<ref>.supabase.co:5432/postgres"           ##
+-- ##  -v ON_ERROR_STOP=1 --single-transaction -f                           ##
+-- ##  scripts/backfills/investment_flow_backfill.sql` (per CLAUDE.md ops   ##
+-- ##  facts — no local Docker step; this project applies migrations        ##
+-- ##  straight to the live cloud project).                                 ##
+-- ##                                                                       ##
+-- ##  This script REPROCESSES existing investment canonical transactions: ##
+-- ##  it VOIDS core sweeps and RE-OFFSETS buys/sells/dividends/fees onto   ##
+-- ##  the new investment ledger accounts. It writes compensating REVERSAL  ##
+-- ##  + corrected batches (Law 2) and NEVER UPDATEs/DELETEs prior          ##
+-- ##  postings. It is idempotent (a second run is a no-op once every row   ##
+-- ##  already points at its correct offset).                              ##
 -- ##                                                                       ##
 -- ##  It depends on 20260721060000 (the classifier migration) having been  ##
 -- ##  applied first: it needs the per-entity investments / investment_     ##
@@ -61,6 +71,7 @@ declare
   v_voided int := 0;
   v_reoffset int := 0;
   v_skipped int := 0;
+  v_confirmed_links_left int := 0;
 begin
   for r in
     select ct.id as txn_id, ct.household_id, ct.entity_id, ct.account_id,
@@ -144,17 +155,19 @@ begin
            set status = 'voided', voided_at = now() where id = r.txn_id;
       end if;
 
-      -- Clear any transfer links this sweep participated in (the phantom
-      -- "self-transfer" — actually the sweep leg paired against another leg on
-      -- the same account, before the pinned detector's same-account guard).
-      -- transfer_links is a DERIVED SUGGESTION table (re-derivable by
-      -- keel_detect_transfers), not canonical financial truth, and its CHECK
-      -- forbids setting a system-suggested link (decided_by null) to 'rejected'
-      -- without a decider — so the correct, schema-honest clear is to remove the
-      -- link rows referencing a now-voided sweep. The real economic legs are
-      -- untouched; the detector will re-evaluate the remaining rows cleanly.
+      -- Clear only SUGGESTED transfer links this sweep participated in: a
+      -- suggested link has no decider, so removing it destroys no decision
+      -- and keel_detect_transfers freely re-derives it. A CONFIRMED link is a
+      -- real decision (possibly synthesized via keel_book_transfer_counterparty,
+      -- whose booked_txn points at a live counterparty batch a bare delete
+      -- would orphan) and is deliberately left untouched — Codex review (both
+      -- the local review and the GitHub PR review) flagged the original
+      -- unconditional DELETE as unsafe on exactly this point. A household with
+      -- confirmed links on a to-be-voided sweep needs a human to review those
+      -- specific rows, not an automatic unwind.
       delete from public.transfer_links
        where household_id = v_household
+         and status = 'suggested'
          and (txn_out = r.txn_id or txn_in = r.txn_id);
 
       v_voided := v_voided + 1;
@@ -249,6 +262,17 @@ begin
     v_reoffset := v_reoffset + 1;
   end loop;
 
-  raise notice 'investment flow backfill: voided=% re-offset=% skipped=%',
-    v_voided, v_reoffset, v_skipped;
+  -- Surface any CONFIRMED transfer_links still touching a now-voided sweep:
+  -- these were deliberately left untouched above (a decided link, possibly
+  -- synthesized via keel_book_transfer_counterparty) and need human review,
+  -- not an automatic unwind.
+  select count(*) into v_confirmed_links_left
+    from public.transfer_links tl
+    join public.canonical_transactions ct on ct.id in (tl.txn_out, tl.txn_in)
+   where tl.status = 'confirmed'
+     and ct.voided_at is not null
+     and ct.economic_event_key like 'inv:%';
+
+  raise notice 'investment flow backfill: voided=% re-offset=% skipped=% confirmed_links_needing_review=%',
+    v_voided, v_reoffset, v_skipped, v_confirmed_links_left;
 end $$;

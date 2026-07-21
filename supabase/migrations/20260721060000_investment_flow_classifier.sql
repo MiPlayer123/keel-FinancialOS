@@ -187,6 +187,7 @@ declare
   v_offset_key text;
   v_is_core_sweep boolean;
   v_txn_id uuid;
+  v_prev_txn_voided_at timestamptz;
   v_batch_id uuid;
   v_nsr_id uuid;
   v_prev_batch_id uuid;
@@ -224,15 +225,24 @@ begin
 
   -- CORE SWEEP detection. The account's own core money-market (SPAXX) IS the
   -- account cash, so a buy/sell of it double-counts the paired real EFT/transfer
-  -- that is ingested separately. Two signals: (a) the security is a cash-
-  -- equivalent on a buy/sell, or (b) the description names the core account.
-  v_is_core_sweep :=
-    (p_flow in ('buy', 'sell') and coalesce(p_is_cash_equivalent, false))
-    or coalesce(p_description, '') ilike '%CORE ACCOUNT%';
+  -- that is ingested separately. Restricted to buy/sell flows (Codex review —
+  -- false-positive risk: an un-gated description check could suppress a
+  -- deposit/withdrawal/transfer whose description merely names the core
+  -- account). Two signals within buy/sell: (a) the security is a cash-
+  -- equivalent, or (b) the description names the core account.
+  v_is_core_sweep := p_flow in ('buy', 'sell')
+    and (coalesce(p_is_cash_equivalent, false)
+         or coalesce(p_description, '') ilike '%CORE ACCOUNT%');
 
   v_economic_key := 'inv:' || v_conn.external_ref || ':' || p_provider_transaction_id;
+  -- Hash versions on the CLASSIFICATION-determining fields too (flow,
+  -- cash-equivalence), not just amount/date (Codex review — idempotency risk:
+  -- a provider restatement that changes only flow/sweep classification, not
+  -- amount or date, must be treated as a genuine restatement and reclassify,
+  -- not short-circuit as an identical replay).
   v_hash := public.keel_payload_hash(jsonb_build_object(
-    'econ', v_economic_key, 'amt', p_amount_minor::text, 'date', p_effective_date));
+    'econ', v_economic_key, 'amt', p_amount_minor::text, 'date', p_effective_date,
+    'flow', coalesce(p_flow, ''), 'cashEquiv', coalesce(p_is_cash_equivalent, false)));
   v_apply_key := 'inv-ingest:' || p_provider_transaction_id || ':' || v_hash;
 
   -- Command-level idempotency, versioned by hash: an IDENTICAL replay short-
@@ -250,14 +260,19 @@ begin
 
   -- Does the canonical already exist? Needed BEFORE the suppression branch so a
   -- row that FLIPS to a core sweep on restatement is VOIDED, not left stale.
-  select id into v_txn_id
+  -- voided_at is captured too: it distinguishes a canonical with NO live batch
+  -- because it was legitimately sweep-voided (recoverable on a real-flip
+  -- restatement below) from one with no live batch due to actual corruption.
+  select id, voided_at into v_txn_id, v_prev_txn_voided_at
     from public.canonical_transactions
    where household_id = p_household_id and economic_event_key = v_economic_key;
 
   -- ---- CORE SWEEP: suppress. ------------------------------------------------
   if v_is_core_sweep then
-    -- Record the source version + normalized record (source preservation, Law 9)
-    -- so the suppression is auditable and idempotent, but create NO canonical.
+    -- Record the source raw-event VERSION (source preservation, Law 9) so the
+    -- suppression is auditable and idempotent, but create NO canonical and NO
+    -- normalized_source_record (there is no economic transaction to link one
+    -- to).
     select id into v_raw_id
       from public.raw_provider_events
      where connection_id = p_connection_id
@@ -320,6 +335,18 @@ begin
         update public.canonical_transactions
            set status = 'voided', voided_at = now()
          where id = v_txn_id;
+
+        -- Clear any SYSTEM-SUGGESTED transfer link this now-voided sweep
+        -- participated in (a suggested link has no decider, so removing it
+        -- destroys no user decision — keel_detect_transfers freely re-derives
+        -- suggestions). A CONFIRMED link is a real user/system decision and is
+        -- deliberately left untouched here (Codex review — do not silently
+        -- unwind a decided link from the ingest path; that needs a reviewed,
+        -- explicit correction, not an automatic side effect of a sync event).
+        delete from public.transfer_links
+         where household_id = p_household_id
+           and status = 'suggested'
+           and (txn_out = v_txn_id or txn_in = v_txn_id);
       end if;
     end if;
 
@@ -405,7 +432,8 @@ begin
   returning id into v_nsr_id;
 
   if v_txn_id is not null then
-    -- Restatement: reverse the live batch + post a corrected replacement.
+    -- Restatement: reverse the live batch (if any) + post a corrected
+    -- replacement.
     select b.id, b.effective_date into v_prev_batch_id, v_prev_effective
       from public.journal_batches b
      where b.canonical_transaction_id = v_txn_id
@@ -415,23 +443,36 @@ begin
      order by b.posted_at desc
      limit 1;
 
-    if v_prev_batch_id is null then
+    -- No live batch is expected in exactly one legitimate case: this
+    -- canonical was previously VOIDED by the core-sweep suppression branch
+    -- above (its original batch was reversed with a journal_revisions row
+    -- whose replacement_batch_id is null — by construction neither that
+    -- original nor its reversal can match the "live batch" query above).
+    -- A restatement now flipping it back to a real economic event has
+    -- nothing live to reverse; skip the reversal and post a fresh batch
+    -- below (Codex review — sweep-to-real-flip bug: this used to
+    -- unconditionally raise KEEL_IMMUTABLE here, permanently blocking the
+    -- un-void). Any OTHER cause of a missing live batch is genuine
+    -- corruption and still raises.
+    if v_prev_batch_id is null and v_prev_txn_voided_at is null then
       raise exception 'KEEL_IMMUTABLE: no live batch to correct for txn %', v_txn_id
         using errcode = 'P0001';
     end if;
 
-    insert into public.journal_batches
-      (household_id, canonical_transaction_id, description, effective_date,
-       reverses_batch_id, command_id)
-    values
-      (p_household_id, v_txn_id, 'REVERSAL: investment restatement',
-       v_prev_effective, v_prev_batch_id, v_command_id)
-    returning id into v_reversal_id;
+    if v_prev_batch_id is not null then
+      insert into public.journal_batches
+        (household_id, canonical_transaction_id, description, effective_date,
+         reverses_batch_id, command_id)
+      values
+        (p_household_id, v_txn_id, 'REVERSAL: investment restatement',
+         v_prev_effective, v_prev_batch_id, v_command_id)
+      returning id into v_reversal_id;
 
-    insert into public.journal_postings
-      (batch_id, ledger_account_id, entity_id, amount_minor, currency)
-    select v_reversal_id, p.ledger_account_id, p.entity_id, -p.amount_minor, p.currency
-      from public.journal_postings p where p.batch_id = v_prev_batch_id;
+      insert into public.journal_postings
+        (batch_id, ledger_account_id, entity_id, amount_minor, currency)
+      select v_reversal_id, p.ledger_account_id, p.entity_id, -p.amount_minor, p.currency
+        from public.journal_postings p where p.batch_id = v_prev_batch_id;
+    end if;
 
     insert into public.journal_batches
       (household_id, canonical_transaction_id, description, effective_date, command_id)
@@ -451,9 +492,18 @@ begin
         'currency', p_currency)
     ));
 
-    insert into public.journal_revisions
-      (original_batch_id, reversal_batch_id, replacement_batch_id, reason)
-    values (v_prev_batch_id, v_reversal_id, v_batch_id, 'investment restatement');
+    -- Only link a journal_revisions row when an actual live batch was
+    -- reversed above. A sweep-to-real recovery has no live batch to
+    -- correct — its history is already fully captured by the earlier
+    -- suppression's own journal_revisions row (replacement_batch_id=null)
+    -- plus this event's raw_provider_events version and command_executions
+    -- entry; the voided_at -> null flip on canonical_transactions itself is
+    -- the audit signal that it was un-suppressed.
+    if v_prev_batch_id is not null then
+      insert into public.journal_revisions
+        (original_batch_id, reversal_batch_id, replacement_batch_id, reason)
+      values (v_prev_batch_id, v_reversal_id, v_batch_id, 'investment restatement');
+    end if;
 
     insert into public.transaction_source_links
       (canonical_transaction_id, normalized_source_record_id)
