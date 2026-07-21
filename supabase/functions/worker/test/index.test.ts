@@ -90,6 +90,7 @@ const queryFor = (
         const generation = connectionGeneration();
         return {
           data: {
+            household_id: 'household-live',
             external_ref: 'plaid-item-live',
             provider: 'plaid',
             sync_committed_generation: generation.committed,
@@ -171,6 +172,12 @@ describe('C5c worker durable sync orchestration', () => {
           return { data: `normalized-${normalized}`, error: null };
         }
         if (name === 'keel_worker_apply_action') return { data: {}, error: null };
+        if (name === 'keel_reconcile_regular_core_sweeps') {
+          return {
+            data: { suppressed: 0, candidatesConsidered: 0, ambiguousSkipped: 0, allowlisted: false },
+            error: null,
+          };
+        }
         if (name === 'keel_worker_complete_attempt') {
           completions.push(args);
           committedGeneration = desiredGeneration;
@@ -424,6 +431,12 @@ describe('C5c worker durable sync orchestration', () => {
         if (name === 'keel_worker_archive_page') return { data: rawPageId, error: null };
         if (name === 'keel_worker_record_ingestion_skip') return { data: null, error: null };
         if (name === 'keel_worker_lookup_state') return { data: [], error: null };
+        if (name === 'keel_reconcile_regular_core_sweeps') {
+          return {
+            data: { suppressed: 0, candidatesConsidered: 0, ambiguousSkipped: 0, allowlisted: false },
+            error: null,
+          };
+        }
         if (name === 'keel_worker_complete_attempt') return { data: {}, error: null };
         throw new Error(`unexpected RPC ${name}`);
       },

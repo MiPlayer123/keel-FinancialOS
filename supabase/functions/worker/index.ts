@@ -391,7 +391,7 @@ export const processSyncNotification = async (
 
     const { data: connection, error: connectionError } = await admin
       .from('connections')
-      .select('external_ref, provider, sync_committed_generation, sync_desired_generation')
+      .select('household_id, external_ref, provider, sync_committed_generation, sync_desired_generation')
       .eq('id', connectionId)
       .single();
     if (connectionError || !connection) {
@@ -788,6 +788,21 @@ export const processSyncNotification = async (
         p_apply_key: `${originalEconomicEventKey}:${providerTransactionId}`,
       });
       if (applyError) return sourceFailure(`sync apply failed: ${applyError.message}`);
+    }
+
+    // Regular-sync core-account sweep suppression (Fidelity SPAXX cash-
+    // management double-booking fix): pair-gated, allowlist-scoped, and a
+    // no-op for every non-allowlisted connection, so it is safe to call
+    // unconditionally here. Best-effort — a failure must never fail the sync
+    // attempt; the periodic refresh-balances pass (processRefreshBalances)
+    // is the recovery/catch-up call if the counterpart transaction lands in
+    // a later, separate sync attempt than this one.
+    const { error: sweepError } = await admin.rpc('keel_reconcile_regular_core_sweeps', {
+      p_household_id: connection.household_id,
+      p_connection_id: connectionId,
+    });
+    if (sweepError) {
+      console.log(`core_sweep_reconcile_failed conn=${connectionId} error=${sweepError.message}`);
     }
 
     await renewLiveLease();
@@ -1302,6 +1317,28 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
     }
   }
 
+  // Regular-sync core-account sweep suppression (Fidelity SPAXX cash-
+  // management double-booking fix): recovery/catch-up pass. This reuses the
+  // EXISTING periodic refresh-balances cycle (no new cron job) so a candidate
+  // and its real-transfer counterpart that synced in separate attempts still
+  // get paired and suppressed once both have landed. The RPC itself gates on
+  // a (household, connection) allowlist and is a cheap no-op for every
+  // connection not on it, so calling it unconditionally for every active
+  // Plaid connection here is safe. Best-effort — never fails the refresh.
+  const coreSweepResults: Array<{ connectionId: string; suppressed?: number; error?: string }> = [];
+  for (const c of (conns ?? []) as Array<{ id: string; household_id: string }>) {
+    const { data: sweepData, error: sweepError } = await admin.rpc(
+      'keel_reconcile_regular_core_sweeps',
+      { p_household_id: c.household_id, p_connection_id: c.id },
+    );
+    if (sweepError) {
+      coreSweepResults.push({ connectionId: c.id, error: sweepError.message });
+      continue;
+    }
+    const summary = sweepData as { suppressed?: number } | null;
+    coreSweepResults.push({ connectionId: c.id, suppressed: summary?.suppressed ?? 0 });
+  }
+
   // Deterministic classification passes for whatever the drain just landed:
   // PFC auto-categorization (never overrides user edits) and transfer-pair
   // SUGGESTIONS (nothing excluded until the user confirms). Best-effort —
@@ -1336,6 +1373,7 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
     refreshed: results,
     holdings: holdingsResults,
     investmentTransactions: investmentTxnResults,
+    coreSweepsReconciled: coreSweepResults,
     classified,
   });
 };
