@@ -194,4 +194,61 @@ describe('runAgent image', () => {
       expect(first.image?.mediaType).toBe('image/jpeg');
     }
   });
+
+  it('prepends prior conversation history before the new question, oldest first', async () => {
+    const provider = new ScriptedProvider([
+      { kind: 'message', text: 'Yes, that account.', modelVersion: 'm', usage: { inputTokens: 1, outputTokens: 1 } },
+    ]);
+    await runAgent({
+      provider,
+      system: 'sys',
+      tools: [],
+      userMessage: 'is that the checking account?',
+      history: [
+        { role: 'user', text: 'what is my balance' },
+        { role: 'assistant', text: 'Your balance is $10.' },
+      ],
+      executeTool: () => Promise.resolve('{}'),
+      maxSteps: 3,
+    });
+    const transcript = provider.seen[0]!.transcript;
+    expect(transcript).toHaveLength(3);
+    expect(transcript[0]).toMatchObject({ role: 'user', text: 'what is my balance' });
+    expect(transcript[1]).toMatchObject({ role: 'assistant_text', text: 'Your balance is $10.' });
+    expect(transcript[2]).toMatchObject({ role: 'user', text: 'is that the checking account?' });
+  });
+
+  it('drops blank/whitespace-only history turns rather than replaying junk', async () => {
+    const provider = new ScriptedProvider([
+      { kind: 'message', text: 'ok', modelVersion: 'm', usage: { inputTokens: 1, outputTokens: 1 } },
+    ]);
+    await runAgent({
+      provider,
+      system: 'sys',
+      tools: [],
+      userMessage: 'question',
+      history: [
+        { role: 'user', text: '   ' },
+        { role: 'assistant', text: '' },
+      ],
+      executeTool: () => Promise.resolve('{}'),
+      maxSteps: 3,
+    });
+    expect(provider.seen[0]!.transcript).toHaveLength(1);
+  });
+
+  it('a fresh conversation with no history behaves exactly as before', async () => {
+    const provider = new ScriptedProvider([
+      { kind: 'message', text: 'ok', modelVersion: 'm', usage: { inputTokens: 1, outputTokens: 1 } },
+    ]);
+    await runAgent({
+      provider,
+      system: 'sys',
+      tools: [],
+      userMessage: 'question',
+      executeTool: () => Promise.resolve('{}'),
+      maxSteps: 3,
+    });
+    expect(provider.seen[0]!.transcript).toHaveLength(1);
+  });
 });

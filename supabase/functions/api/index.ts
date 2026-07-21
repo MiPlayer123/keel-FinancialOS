@@ -177,7 +177,7 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'budgets.set_expected_income': 'keel_cmd_budgets_set_expected_income',
 };
 
-const QUERY_TO_PROC: Record<string, string> = {
+export const QUERY_TO_PROC: Record<string, string> = {
   'ledger.trial_balance': 'keel_trial_balance',
   'transactions.list': 'keel_list_transactions',
   'transactions.rich': 'keel_list_transactions_rich',
@@ -225,6 +225,21 @@ const QUERY_TO_PROC: Record<string, string> = {
   'connections.list_reconnect_matches': 'keel_list_reconnect_matches',
   'connections.list_archived_duplicate_matches': 'keel_list_archived_duplicate_matches',
   'receipts.inbox': 'keel_receipts_inbox',
+};
+
+/**
+ * Proc names for the AGENT_WRITE_ACTIONS (notes/tasks) — these aren't
+ * CommandName so they don't go through COMMAND_TO_PROC/the /commands
+ * envelope; the bespoke /notes/* + /tasks/* routes below AND the agent tool
+ * executor (agent.ts) both dispatch through this same map, so the proc name
+ * is named once, not hand-copied into each caller.
+ */
+export const AGENT_WRITE_TO_PROC: Record<string, string> = {
+  'notes.save': 'keel_note_save',
+  'notes.archive': 'keel_note_archive',
+  'notes.unarchive': 'keel_note_unarchive',
+  'tasks.save': 'keel_task_save',
+  'tasks.set_status': 'keel_task_set_status',
 };
 
 // deno-lint-ignore no-explicit-any
@@ -451,6 +466,45 @@ export default {
         agentImage = { mediaType, dataBase64: data };
       }
 
+      // Prior turns from THIS SAME open conversation (kept client-side by
+      // LocalRuntime, never persisted here — a page reload starts fresh).
+      // Plain conversational text only: the client only ever sees a turn's
+      // final tldr/body, never raw tool results, so replaying it can't smuggle
+      // data-tier content past the spotlighting boundary (Law 5 untouched —
+      // it still governs the CURRENT turn's own tool-use loop). Bounded
+      // server-side regardless of what the client sends (Law 12 discipline).
+      const HISTORY_MAX_TURNS = 20;
+      const HISTORY_TURN_MAX_CHARS = 4000;
+      const HISTORY_TOTAL_MAX_CHARS = 12000;
+      let history: { role: 'user' | 'assistant'; text: string }[] = [];
+      const rawHistory = input['history'];
+      if (Array.isArray(rawHistory)) {
+        const cleaned: { role: 'user' | 'assistant'; text: string }[] = [];
+        for (const raw of rawHistory) {
+          if (typeof raw !== 'object' || raw === null) continue;
+          const rec = raw as Record<string, unknown>;
+          const role = rec['role'];
+          const text = rec['text'];
+          if (
+            (role === 'user' || role === 'assistant') &&
+            typeof text === 'string' &&
+            text.trim().length > 0 &&
+            text.length <= HISTORY_TURN_MAX_CHARS
+          ) {
+            cleaned.push({ role, text });
+          }
+        }
+        // Keep only the most recent turns, then trim from the oldest end
+        // until the aggregate character budget is met too.
+        let windowed = cleaned.slice(-HISTORY_MAX_TURNS);
+        let total = windowed.reduce((sum, h) => sum + h.text.length, 0);
+        while (total > HISTORY_TOTAL_MAX_CHARS && windowed.length > 0) {
+          total -= windowed[0]!.text.length;
+          windowed = windowed.slice(1);
+        }
+        history = windowed;
+      }
+
       // Law 12: provider keys live ONLY in provider secret stores — the function
       // environment first, Supabase Vault second (service_role-only definer
       // keel_ai_provider_key). Anthropic preferred when configured (best tool
@@ -644,6 +698,7 @@ export default {
         authzCtx,
         householdId: householdId.data,
         rpc: (proc, args) => ctx.supabase.rpc(proc, args),
+        queryToProc: { ...QUERY_TO_PROC, ...AGENT_WRITE_TO_PROC },
         todayIso,
         onApplied: (action) => appliedActions.push(action),
         onProposed: (action) => proposedActions.push(action),
@@ -658,6 +713,7 @@ export default {
           tools: agentToolDefinitions(),
           userMessage: question.trim(),
           ...(agentImage ? { image: agentImage } : {}),
+          ...(history.length > 0 ? { history } : {}),
           executeTool,
           maxSteps: 8,
           maxTokens: 1024,
@@ -675,6 +731,7 @@ export default {
             appliedCount: appliedActions.length,
             proposedCount: proposedActions.length,
             hasImage: agentImage !== undefined,
+            historyTurns: history.length,
             latencyMs: Date.now() - startedAt,
             inputTokens: run.usage.inputTokens,
             outputTokens: run.usage.outputTokens,
@@ -1610,7 +1667,7 @@ export default {
             details: {},
           });
         }
-        const { data, error } = await ctx.supabase.rpc('keel_note_save', {
+        const { data, error } = await ctx.supabase.rpc(AGENT_WRITE_TO_PROC['notes.save']!, {
           p_household_id: householdId.data,
           p_note_id: noteId,
           p_body: bodyText,
@@ -1628,7 +1685,7 @@ export default {
             details: {},
           });
         }
-        const { error } = await ctx.supabase.rpc('keel_note_archive', {
+        const { error } = await ctx.supabase.rpc(AGENT_WRITE_TO_PROC['notes.archive']!, {
           p_household_id: householdId.data,
           p_note_id: noteId,
         });
@@ -1645,7 +1702,7 @@ export default {
             details: {},
           });
         }
-        const { error } = await ctx.supabase.rpc('keel_note_unarchive', {
+        const { error } = await ctx.supabase.rpc(AGENT_WRITE_TO_PROC['notes.unarchive']!, {
           p_household_id: householdId.data,
           p_note_id: noteId,
         });
@@ -1674,7 +1731,7 @@ export default {
             details: {},
           });
         }
-        const { data, error } = await ctx.supabase.rpc('keel_task_save', {
+        const { data, error } = await ctx.supabase.rpc(AGENT_WRITE_TO_PROC['tasks.save']!, {
           p_household_id: householdId.data,
           p_task_id: taskId,
           p_title: title,
@@ -1698,7 +1755,7 @@ export default {
           details: {},
         });
       }
-      const { error } = await ctx.supabase.rpc('keel_task_set_status', {
+      const { error } = await ctx.supabase.rpc(AGENT_WRITE_TO_PROC['tasks.set_status']!, {
         p_household_id: householdId.data,
         p_task_id: taskId,
         p_status: status,

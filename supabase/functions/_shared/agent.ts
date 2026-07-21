@@ -61,7 +61,6 @@ interface ReadToolSpec {
   readonly name: string;
   readonly description: string;
   readonly action: ActionName;
-  readonly proc: string;
   readonly parameters: JsonSchema;
   /** Build proc args from model args + fixed session context. */
   readonly buildArgs: (args: Record<string, unknown>, householdId: string, todayIso: string) => BuildResult;
@@ -98,7 +97,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_entities',
     description: 'List the legal/logical entities (people, businesses) in the current household.',
     action: 'entities.list',
-    proc: 'keel_list_entities',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
   },
@@ -106,7 +104,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'get_account_balances',
     description: 'Get every account and its current deterministic ledger balance (trial balance). Use this for "how much do I have" questions.',
     action: 'ledger.trial_balance',
-    proc: 'keel_trial_balance',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
   },
@@ -114,7 +111,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_transactions',
     description: 'List recent transactions, optionally filtered. Returns one bounded page (newest first).',
     action: 'transactions.rich_page',
-    proc: 'keel_list_transactions_rich_page',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -143,7 +139,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'search_transactions',
     description: 'Search transactions by keyword (merchant, memo). Use when the user names a payee or description.',
     action: 'transactions.search',
-    proc: 'keel_search_transactions',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -169,7 +164,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_categories',
     description: 'List the household spending/income categories.',
     action: 'categories.list',
-    proc: 'keel_list_categories',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(200),
@@ -178,7 +172,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'get_budget_month',
     description: 'Get the budget plan for a month (targets, expected income, spent-so-far). Defaults to the current month.',
     action: 'budgets.month',
-    proc: 'keel_budget_month',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -195,7 +188,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_budgets',
     description: 'List per-category budget rows for a month (budgeted vs spent). Defaults to the current month.',
     action: 'budgets.list',
-    proc: 'keel_list_budgets',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -213,7 +205,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_reimbursements',
     description: 'List reimbursement claims and settlements (who owes whom, and what is settled).',
     action: 'reimbursements.list',
-    proc: 'keel_list_reimbursements',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(80),
@@ -222,7 +213,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_notes_and_tasks',
     description: 'List household notes and tasks/reminders.',
     action: 'notes_tasks.list',
-    proc: 'keel_list_notes_tasks',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(100),
@@ -231,7 +221,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_recurring',
     description: 'List detected/confirmed recurring series (subscriptions, bills, income).',
     action: 'recurring.list',
-    proc: 'keel_list_recurring',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(80),
@@ -240,7 +229,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_paychecks',
     description: 'List paychecks and their decomposition.',
     action: 'paychecks.list',
-    proc: 'keel_list_paychecks',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(60),
@@ -249,7 +237,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_statements',
     description: 'List imported financial statements.',
     action: 'statements.list',
-    proc: 'keel_list_statements',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(60),
@@ -258,7 +245,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_transfers',
     description: 'List transfers between the household’s own accounts.',
     action: 'transfers.list',
-    proc: 'keel_list_transfers',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(80),
@@ -267,7 +253,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_holdings',
     description: 'List investment holdings (positions), optionally for one account.',
     action: 'holdings.list',
-    proc: 'keel_list_holdings',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -284,7 +269,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'get_investments_overview',
     description: 'Investment portfolio overview (total value, allocation).',
     action: 'investments.overview',
-    proc: 'keel_investments_overview',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
   },
@@ -292,7 +276,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'get_net_worth',
     description: 'Net worth as of a date (assets minus liabilities). Defaults to today.',
     action: 'dashboard.net_worth',
-    proc: 'keel_net_worth_as_of',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -307,7 +290,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'get_cash_flow',
     description: 'Income vs spending over a date range. Defaults to the last 30 days.',
     action: 'dashboard.cash_flow',
-    proc: 'keel_cash_flow',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -330,7 +312,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'get_cash_flow_forecast',
     description: 'Forward cash-flow forecast for the next N days (preview only — Class C).',
     action: 'dashboard.cash_flow_forecast',
-    proc: 'keel_cash_flow_forecast',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -345,7 +326,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_goals',
     description: 'List savings/financial goals and their progress.',
     action: 'goals.list',
-    proc: 'keel_list_goals',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(60),
@@ -354,7 +334,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_rules',
     description: 'List categorization/automation rules.',
     action: 'rules.list',
-    proc: 'keel_list_rules',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(100),
@@ -363,10 +342,177 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     name: 'list_tags',
     description: 'List tags used across transactions.',
     action: 'tags.list',
-    proc: 'keel_list_tags',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(200),
+  },
+  {
+    name: 'list_recurring_classification',
+    description: 'List recurring series classified by outflow bucket (bill, subscription, income, etc.).',
+    action: 'recurring.classification',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(100),
+  },
+  {
+    name: 'list_recurring_schedule_links',
+    description: 'List links between recurring series and their detected payment schedules.',
+    action: 'recurring.schedule_links',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(100),
+  },
+  {
+    name: 'list_dismissed_paycheck_detections',
+    description: 'List paycheck detections the user has dismissed as not actually a paycheck.',
+    action: 'paychecks.detected_dismissals',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(60),
+  },
+  {
+    name: 'list_paycheck_templates',
+    description: 'List saved paycheck split templates (the gross-up rules used to decompose a deposit into gross pay, taxes, and contributions).',
+    action: 'paychecks.templates',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(60),
+  },
+  {
+    name: 'list_paycheck_split_suggestions',
+    description: 'List suggested paycheck splits awaiting a template match or application.',
+    action: 'paychecks.split_suggestions',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(60),
+  },
+  {
+    name: 'list_expected_reimbursements',
+    description: 'List expected future reimbursements (amounts the user expects back) — a separate tracker from claim-based reimbursements (use list_reimbursements for those).',
+    action: 'expected_reimbursements.list',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(80),
+  },
+  {
+    name: 'list_statement_drafts',
+    description: 'List draft statement imports awaiting the user’s approval or dismissal.',
+    action: 'statements.drafts',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(40),
+  },
+  {
+    name: 'get_statement_cadence',
+    description: 'Get the expected-statement cadence configuration (which accounts, how often).',
+    action: 'statements.cadence',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(60),
+  },
+  {
+    name: 'suggest_statement_payments',
+    description: 'Compute/refresh payment-match suggestions for one statement; returns how many were found. Follow up with get_statement_payment_links to see them. Get the statementId from list_statements.',
+    action: 'statements.find_payment',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['statementId'],
+      properties: { statementId: { type: 'string', description: 'The statement id (uuid).' } },
+    },
+    buildArgs: (args, householdId) => {
+      const id = typeof args['statementId'] === 'string' && UUID_RE.test(args['statementId']) ? args['statementId'] : null;
+      if (id === null) return { __error: 'statementId must be a uuid' };
+      return { p_household_id: householdId, p_statement_id: id };
+    },
+  },
+  {
+    name: 'get_statement_payment_links',
+    description: 'List a statement’s suggested/decided payment links. Get the statementId from list_statements.',
+    action: 'statements.payment_links',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['statementId'],
+      properties: { statementId: { type: 'string', description: 'The statement id (uuid).' } },
+    },
+    buildArgs: (args, householdId) => {
+      const id = typeof args['statementId'] === 'string' && UUID_RE.test(args['statementId']) ? args['statementId'] : null;
+      if (id === null) return { __error: 'statementId must be a uuid' };
+      return { p_household_id: householdId, p_statement_id: id };
+    },
+    capResult: capRows(60),
+  },
+  {
+    name: 'get_statement_holdings_diff',
+    description: 'Diff an investment statement’s reported holdings against current portfolio positions. Get the statementId from list_statements.',
+    action: 'statements.holdings_diff',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['statementId'],
+      properties: { statementId: { type: 'string', description: 'The statement id (uuid).' } },
+    },
+    buildArgs: (args, householdId) => {
+      const id = typeof args['statementId'] === 'string' && UUID_RE.test(args['statementId']) ? args['statementId'] : null;
+      if (id === null) return { __error: 'statementId must be a uuid' };
+      return { p_household_id: householdId, p_statement_id: id };
+    },
+    capResult: capRows(120),
+  },
+  {
+    name: 'list_documents_for_household',
+    description: 'List every document (receipts, statements, etc.) attached anywhere in the household.',
+    action: 'documents.list_household',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(100),
+  },
+  {
+    name: 'list_documents_for_target',
+    description: 'List documents attached to one specific transaction, paycheck, reimbursement claim, or statement.',
+    action: 'documents.list_for_target',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['targetType', 'targetId'],
+      properties: {
+        targetType: { type: 'string', enum: ['transaction', 'paycheck', 'reimbursement_claim', 'statement'] },
+        targetId: { type: 'string', description: 'The target row id (uuid).' },
+      },
+    },
+    buildArgs: (args, householdId) => {
+      const targetTypes = ['transaction', 'paycheck', 'reimbursement_claim', 'statement'];
+      const targetType = typeof args['targetType'] === 'string' && targetTypes.includes(args['targetType']) ? args['targetType'] : null;
+      const targetId = typeof args['targetId'] === 'string' && UUID_RE.test(args['targetId']) ? args['targetId'] : null;
+      if (targetType === null) return { __error: 'targetType must be one of transaction|paycheck|reimbursement_claim|statement' };
+      if (targetId === null) return { __error: 'targetId must be a uuid' };
+      return { p_household_id: householdId, p_target_type: targetType, p_target_id: targetId };
+    },
+    capResult: capRows(60),
+  },
+  {
+    name: 'get_document_storage_summary',
+    description: 'Get a storage-usage summary for the household’s uploaded documents.',
+    action: 'documents.storage_summary',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+  },
+  {
+    name: 'get_receipts_inbox',
+    description: 'List receipts awaiting a transaction match (the receipts inbox).',
+    action: 'receipts.inbox',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(60),
+  },
+  {
+    name: 'get_latest_balances',
+    description: 'Get the latest per-account balance snapshot (a lighter, faster read than get_account_balances’ full trial balance).',
+    action: 'balances.latest',
+    parameters: NO_PARAMS,
+    buildArgs: householdOnly,
+    capResult: capRows(100),
   },
 ];
 
@@ -380,6 +526,15 @@ export const readToolDefinitions = (): ToolDefinition[] =>
 
 /** Names of every read tool (for logging/telemetry). */
 export const READ_TOOL_NAMES: readonly string[] = READ_TOOL_SPECS.map((t) => t.name);
+
+/**
+ * Tool name -> authz action, for callers that need to cross-check every read
+ * tool has a proc mapping (e.g. against `QUERY_TO_PROC` in api/index.ts) —
+ * the proc name itself is no longer duplicated here; see `ReadToolDeps.queryToProc`.
+ */
+export const READ_TOOL_ACTIONS: Readonly<Record<string, string>> = Object.fromEntries(
+  READ_TOOL_SPECS.map((t) => [t.name, t.action]),
+);
 
 const boundJson = (value: unknown): string => {
   let text: string;
@@ -406,6 +561,14 @@ export interface ReadToolDeps {
   readonly householdId: string;
   /** Calls a read proc through the user's client (auth.uid() reaches the DB). */
   readonly rpc: (proc: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
+  /**
+   * Action -> proc name, injected by the caller (index.ts merges the SAME
+   * `QUERY_TO_PROC` it uses for `/queries` with `AGENT_WRITE_TO_PROC` for the
+   * notes/tasks actions its bespoke `/notes/*` + `/tasks/*` routes also
+   * dispatch through) — this catalog only ever names an action; it never
+   * hand-maintains its own copy of a proc string.
+   */
+  readonly queryToProc: Readonly<Record<string, string>>;
   /** ISO date (YYYY-MM-DD) for defaulting ranges. */
   readonly todayIso: string;
 }
@@ -432,7 +595,15 @@ export const makeExecuteReadTool = (deps: ReadToolDeps) => async (call: ToolCall
     return JSON.stringify({ error: 'invalid_arguments', detail: built.__error });
   }
 
-  const { data, error } = await deps.rpc(spec.proc, built);
+  const proc = deps.queryToProc[spec.action];
+  if (!proc) {
+    // Fail closed: a read tool whose action has no proc mapping is a wiring
+    // bug (drift between this catalog and the injected map), never a reason
+    // to guess a proc name.
+    return JSON.stringify({ error: 'unmapped_tool', tool: call.name });
+  }
+
+  const { data, error } = await deps.rpc(proc, built);
   if (error) {
     // Never surface DB error internals to the model (Law 12); a constant code.
     return JSON.stringify({ error: 'query_failed', tool: call.name });
@@ -495,6 +666,8 @@ interface WriteExecCtx {
   readonly householdId: string;
   readonly todayIso: string;
   readonly rpc: (proc: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
+  /** Same injected map read tools use — for the handful of write tools that call a READ proc as a validation/undo-capture helper (never for the write itself). */
+  readonly queryToProc: Readonly<Record<string, string>>;
   readonly attachReceipt?: AttachReceiptFn;
 }
 
@@ -544,10 +717,13 @@ const displayMinor = (minor: string): string => {
  */
 const resolveCategoryName = async (
   rpc: (proc: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>,
+  queryToProc: Readonly<Record<string, string>>,
   householdId: string,
   categoryLedgerAccountId: string,
 ): Promise<string | null> => {
-  const { data, error } = await rpc('keel_list_categories', { p_household_id: householdId });
+  const proc = queryToProc['categories.list'];
+  if (!proc) return null;
+  const { data, error } = await rpc(proc, { p_household_id: householdId });
   if (error) return null;
   const rows = (Array.isArray(data)
     ? data
@@ -555,6 +731,69 @@ const resolveCategoryName = async (
   const match = rows.find((r) => r['ledgerAccountId'] === categoryLedgerAccountId);
   return match && typeof match['name'] === 'string' ? (match['name'] as string) : null;
 };
+
+/**
+ * Resolve a recurring series id to its real counterparty label server-side
+ * (Law 11, same reasoning as resolveCategoryName). Returns null when the id
+ * is not a live series in this household.
+ */
+const resolveRecurringSeriesLabel = async (
+  rpc: (proc: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>,
+  queryToProc: Readonly<Record<string, string>>,
+  householdId: string,
+  seriesId: string,
+): Promise<string | null> => {
+  const proc = queryToProc['recurring.list'];
+  if (!proc) return null;
+  const { data, error } = await rpc(proc, { p_household_id: householdId });
+  if (error) return null;
+  const rows = (((data as { rows?: unknown[] } | null)?.rows) ?? []) as Record<string, unknown>[];
+  const match = rows.find((r) => r['seriesId'] === seriesId);
+  return match && typeof match['counterpartyKey'] === 'string' ? (match['counterpartyKey'] as string) : null;
+};
+
+/**
+ * Resolve an expected-reimbursement id to its real counterparty + description
+ * server-side (Law 11). Returns null when the id is not live in this household.
+ */
+const resolveExpectedReimbursement = async (
+  rpc: (proc: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>,
+  queryToProc: Readonly<Record<string, string>>,
+  householdId: string,
+  expectedId: string,
+): Promise<Record<string, unknown> | null> => {
+  const proc = queryToProc['expected_reimbursements.list'];
+  if (!proc) return null;
+  const { data, error } = await rpc(proc, { p_household_id: householdId });
+  if (error) return null;
+  const rows = (((data as { rows?: unknown[] } | null)?.rows) ?? []) as Record<string, unknown>[];
+  return rows.find((r) => r['expectedId'] === expectedId) ?? null;
+};
+
+/** Same list, but finds the expected reimbursement OWNING a given receiptId (for reverse_receipt). */
+const resolveExpectedReimbursementByReceipt = async (
+  rpc: (proc: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>,
+  queryToProc: Readonly<Record<string, string>>,
+  householdId: string,
+  receiptId: string,
+): Promise<Record<string, unknown> | null> => {
+  const proc = queryToProc['expected_reimbursements.list'];
+  if (!proc) return null;
+  const { data, error } = await rpc(proc, { p_household_id: householdId });
+  if (error) return null;
+  const rows = (((data as { rows?: unknown[] } | null)?.rows) ?? []) as Record<string, unknown>[];
+  return (
+    rows.find((r) => {
+      const receipts = (r['receipts'] ?? []) as Record<string, unknown>[];
+      return Array.isArray(receipts) && receipts.some((rec) => rec['receiptId'] === receiptId);
+    }) ?? null
+  );
+};
+
+const expectedReimbursementLabel = (row: Record<string, unknown>): string =>
+  typeof row['counterpartyName'] === 'string' && row['counterpartyName'].length > 0
+    ? row['counterpartyName']
+    : 'an expected reimbursement';
 
 // --- task helpers (Class A, notes sibling) ---
 const TASK_PRIORITIES = ['low', 'normal', 'high'];
@@ -567,10 +806,13 @@ const taskTitle = (v: unknown): string | null => {
 /** Find a task's current row (for edit/status undo capture) via the list proc. */
 const resolveTaskRow = async (
   rpc: (proc: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>,
+  queryToProc: Readonly<Record<string, string>>,
   householdId: string,
   taskId: string,
 ): Promise<Record<string, unknown> | null> => {
-  const { data, error } = await rpc('keel_list_notes_tasks', { p_household_id: householdId });
+  const proc = queryToProc['notes_tasks.list'];
+  if (!proc) return null;
+  const { data, error } = await rpc(proc, { p_household_id: householdId });
   if (error) return null;
   const rows = (((data as { rows?: unknown[] } | null)?.rows) ?? []) as Record<string, unknown>[];
   return rows.find((r) => r['type'] === 'task' && r['id'] === taskId) ?? null;
@@ -595,7 +837,9 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       const body = noteBody(args['body']);
       if (body === null) return { ok: false, error: 'invalid_arguments', detail: 'body must be 1..1000 chars' };
       const pinned = args['pinned'] === true;
-      const { data, error } = await ctx.rpc('keel_note_save', {
+      const proc = ctx.queryToProc['notes.save'];
+      if (!proc) return { ok: false, error: 'unmapped_tool' };
+      const { data, error } = await ctx.rpc(proc, {
         p_household_id: ctx.householdId,
         p_note_id: null,
         p_body: body,
@@ -635,7 +879,10 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       if (id === null) return { ok: false, error: 'invalid_arguments', detail: 'noteId must be a uuid' };
       if (body === null) return { ok: false, error: 'invalid_arguments', detail: 'body must be 1..1000 chars' };
       // Capture prior state so the UI can offer an edit-undo (re-apply it).
-      const { data: listData } = await ctx.rpc('keel_list_notes_tasks', { p_household_id: ctx.householdId });
+      const notesTasksProc = ctx.queryToProc['notes_tasks.list'];
+      const { data: listData } = notesTasksProc
+        ? await ctx.rpc(notesTasksProc, { p_household_id: ctx.householdId })
+        : { data: null };
       const rows = (((listData as { rows?: unknown[] } | null)?.rows ?? []) as Record<string, unknown>[]).filter(
         (r) => r['type'] === 'note' && r['id'] === id,
       );
@@ -643,7 +890,9 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       const priorBody = prior && typeof prior['body'] === 'string' ? (prior['body'] as string) : undefined;
       const priorPinned = prior && typeof prior['pinned'] === 'boolean' ? (prior['pinned'] as boolean) : undefined;
       const pinned = typeof args['pinned'] === 'boolean' ? (args['pinned'] as boolean) : (priorPinned ?? false);
-      const { error } = await ctx.rpc('keel_note_save', {
+      const saveProc = ctx.queryToProc['notes.save'];
+      if (!saveProc) return { ok: false, error: 'unmapped_tool' };
+      const { error } = await ctx.rpc(saveProc, {
         p_household_id: ctx.householdId,
         p_note_id: id,
         p_body: body,
@@ -674,7 +923,9 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
     execute: async (args, ctx) => {
       const id = noteId(args['noteId']);
       if (id === null) return { ok: false, error: 'invalid_arguments', detail: 'noteId must be a uuid' };
-      const { error } = await ctx.rpc('keel_note_archive', { p_household_id: ctx.householdId, p_note_id: id });
+      const proc = ctx.queryToProc['notes.archive'];
+      if (!proc) return { ok: false, error: 'unmapped_tool' };
+      const { error } = await ctx.rpc(proc, { p_household_id: ctx.householdId, p_note_id: id });
       if (error) return { ok: false, error: 'write_failed' };
       return {
         ok: true,
@@ -701,7 +952,9 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
     execute: async (args, ctx) => {
       const id = noteId(args['noteId']);
       if (id === null) return { ok: false, error: 'invalid_arguments', detail: 'noteId must be a uuid' };
-      const { error } = await ctx.rpc('keel_note_unarchive', { p_household_id: ctx.householdId, p_note_id: id });
+      const proc = ctx.queryToProc['notes.unarchive'];
+      if (!proc) return { ok: false, error: 'unmapped_tool' };
+      const { error } = await ctx.rpc(proc, { p_household_id: ctx.householdId, p_note_id: id });
       if (error) return { ok: false, error: 'write_failed' };
       return {
         ok: true,
@@ -745,7 +998,7 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
         return { ok: false, error: 'invalid_arguments', detail: 'provide exactly one of amountMinor or percentBp' };
       }
       // Resolve + validate the real category (Law 11: summary must match payload).
-      const name = await resolveCategoryName(ctx.rpc, ctx.householdId, cat);
+      const name = await resolveCategoryName(ctx.rpc, ctx.queryToProc, ctx.householdId, cat);
       if (name === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live budget category in this household' };
       const rollover = args['rollover'] === true;
       const payload: Record<string, unknown> =
@@ -838,7 +1091,7 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       const cat = noteId(args['categoryLedgerAccountId']);
       if (cat === null) return { ok: false, error: 'invalid_arguments', detail: 'categoryLedgerAccountId must be a uuid' };
       const month = isoDate(args['month']) ?? currentMonthIso(ctx.todayIso);
-      const name = await resolveCategoryName(ctx.rpc, ctx.householdId, cat);
+      const name = await resolveCategoryName(ctx.rpc, ctx.queryToProc, ctx.householdId, cat);
       if (name === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live budget category in this household' };
       return {
         ok: true,
@@ -924,7 +1177,7 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       const cat = noteId(args['categoryLedgerAccountId']);
       if (txId === null) return { ok: false, error: 'invalid_arguments', detail: 'transactionId must be a uuid' };
       if (cat === null) return { ok: false, error: 'invalid_arguments', detail: 'categoryLedgerAccountId must be a uuid' };
-      const name = await resolveCategoryName(ctx.rpc, ctx.householdId, cat);
+      const name = await resolveCategoryName(ctx.rpc, ctx.queryToProc, ctx.householdId, cat);
       if (name === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live category in this household' };
       return {
         ok: true,
@@ -988,7 +1241,7 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       if (cat === null) return { ok: false, error: 'invalid_arguments', detail: 'categoryLedgerAccountId must be a uuid' };
       const name = typeof args['name'] === 'string' ? args['name'].trim() : '';
       if (name.length === 0 || name.length > 80) return { ok: false, error: 'invalid_arguments', detail: 'name 1..80 chars' };
-      const oldName = await resolveCategoryName(ctx.rpc, ctx.householdId, cat);
+      const oldName = await resolveCategoryName(ctx.rpc, ctx.queryToProc, ctx.householdId, cat);
       if (oldName === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live category in this household' };
       return {
         ok: true,
@@ -1024,7 +1277,9 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       const description = typeof args['description'] === 'string' && args['description'].length <= 1000 ? args['description'] : null;
       const dueOn = isoDate(args['dueOn']);
       const priority = typeof args['priority'] === 'string' && TASK_PRIORITIES.includes(args['priority']) ? args['priority'] : 'normal';
-      const { data, error } = await ctx.rpc('keel_task_save', {
+      const saveProc = ctx.queryToProc['tasks.save'];
+      if (!saveProc) return { ok: false, error: 'unmapped_tool' };
+      const { data, error } = await ctx.rpc(saveProc, {
         p_household_id: ctx.householdId,
         p_task_id: null,
         p_title: title,
@@ -1067,11 +1322,13 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       const title = taskTitle(args['title']);
       if (id === null) return { ok: false, error: 'invalid_arguments', detail: 'taskId must be a uuid' };
       if (title === null) return { ok: false, error: 'invalid_arguments', detail: 'title 1..160 chars' };
-      const prior = await resolveTaskRow(ctx.rpc, ctx.householdId, id);
+      const prior = await resolveTaskRow(ctx.rpc, ctx.queryToProc, ctx.householdId, id);
       const description = typeof args['description'] === 'string' && args['description'].length <= 1000 ? args['description'] : null;
       const dueOn = isoDate(args['dueOn']);
       const priority = typeof args['priority'] === 'string' && TASK_PRIORITIES.includes(args['priority']) ? args['priority'] : 'normal';
-      const { error } = await ctx.rpc('keel_task_save', {
+      const saveProc = ctx.queryToProc['tasks.save'];
+      if (!saveProc) return { ok: false, error: 'unmapped_tool' };
+      const { error } = await ctx.rpc(saveProc, {
         p_household_id: ctx.householdId,
         p_task_id: id,
         p_title: title,
@@ -1118,12 +1375,14 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       if (id === null) return { ok: false, error: 'invalid_arguments', detail: 'taskId must be a uuid' };
       if (status === null) return { ok: false, error: 'invalid_arguments', detail: 'status must be open|done|dismissed' };
       // Capture prior status BEFORE mutating (for undo).
-      const prior = await resolveTaskRow(ctx.rpc, ctx.householdId, id);
+      const prior = await resolveTaskRow(ctx.rpc, ctx.queryToProc, ctx.householdId, id);
       const priorStatus =
         prior && typeof prior['status'] === 'string' && TASK_STATUSES.includes(prior['status'] as string)
           ? (prior['status'] as 'open' | 'done' | 'dismissed')
           : 'open';
-      const { error } = await ctx.rpc('keel_task_set_status', {
+      const statusProc = ctx.queryToProc['tasks.set_status'];
+      if (!statusProc) return { ok: false, error: 'unmapped_tool' };
+      const { error } = await ctx.rpc(statusProc, {
         p_household_id: ctx.householdId,
         p_task_id: id,
         p_status: status,
@@ -1279,6 +1538,611 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
       };
     },
   },
+  // --- Expected reimbursements: Class B (suggest→approve). A separate
+  // tracker from claim-based reimbursements (list_reimbursements). ---
+  {
+    name: 'propose_expected_reimbursement',
+    description:
+      'Propose logging an expected future reimbursement (an amount you expect back from a counterparty, not yet tied to a specific transaction). Requires the user’s approval.',
+    action: 'expected_reimbursements.create',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['counterpartyName', 'kind', 'amountMinor', 'expectedDate', 'description'],
+      properties: {
+        counterpartyName: { type: 'string', minLength: 1, maxLength: 200, description: 'Who owes / will reimburse.' },
+        kind: { type: 'string', enum: ['friend', 'employer', 'client', 'insurance', 'household'] },
+        amountMinor: { type: 'string', description: 'Expected amount in minor units.' },
+        currency: { type: 'string', description: '3-letter code; defaults USD.' },
+        expectedDate: { type: 'string', description: 'ISO date the reimbursement is expected by.' },
+        description: { type: 'string', minLength: 1, maxLength: 500 },
+      },
+    },
+    execute: (args) => {
+      const counterparty = typeof args['counterpartyName'] === 'string' ? args['counterpartyName'].trim() : '';
+      if (counterparty.length === 0 || counterparty.length > 200) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'counterpartyName 1..200 chars' });
+      const kinds = ['friend', 'employer', 'client', 'insurance', 'household'];
+      const kind = typeof args['kind'] === 'string' && kinds.includes(args['kind']) ? args['kind'] : null;
+      if (kind === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'kind must be one of friend|employer|client|insurance|household' });
+      const amount = minorDigits(args['amountMinor']);
+      if (amount === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'amountMinor must be a non-negative minor-unit string' });
+      const expectedDate = isoDate(args['expectedDate']);
+      if (expectedDate === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'expectedDate must be an ISO date (YYYY-MM-DD)' });
+      const description = typeof args['description'] === 'string' ? args['description'].trim() : '';
+      if (description.length === 0 || description.length > 500) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'description 1..500 chars' });
+      const currency = typeof args['currency'] === 'string' && /^[A-Za-z]{3}$/.test(args['currency']) ? args['currency'].toUpperCase() : 'USD';
+      return Promise.resolve({
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'expected_reimbursements.create',
+          command: 'expected_reimbursements.create',
+          summary: `Log an expected ${displayMinor(amount)} reimbursement from ${counterparty} by ${expectedDate}`,
+          payload: { counterpartyName: counterparty, kind, amountMinor: amount, currency, expectedDate, description },
+        },
+      });
+    },
+  },
+  {
+    name: 'propose_record_expected_reimbursement_receipt',
+    description:
+      'Propose recording that money was received against an expected reimbursement. Requires the user’s approval. Get expectedId from list_expected_reimbursements and transactionId from list_transactions.',
+    action: 'expected_reimbursements.record_receipt',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['expectedId', 'transactionId', 'amountMinor', 'note'],
+      properties: {
+        expectedId: { type: 'string', description: 'The expected reimbursement id (uuid).' },
+        transactionId: { type: 'string', description: 'The deposit transaction id (uuid).' },
+        amountMinor: { type: 'string', description: 'Amount received, in minor units.' },
+        note: { type: 'string', minLength: 1, maxLength: 500 },
+      },
+    },
+    execute: async (args, ctx) => {
+      const expectedId = noteId(args['expectedId']);
+      const transactionId = noteId(args['transactionId']);
+      if (expectedId === null) return { ok: false, error: 'invalid_arguments', detail: 'expectedId must be a uuid' };
+      if (transactionId === null) return { ok: false, error: 'invalid_arguments', detail: 'transactionId must be a uuid' };
+      const amount = minorDigits(args['amountMinor']);
+      if (amount === null) return { ok: false, error: 'invalid_arguments', detail: 'amountMinor must be a non-negative minor-unit string' };
+      const note = typeof args['note'] === 'string' ? args['note'].trim() : '';
+      if (note.length === 0 || note.length > 500) return { ok: false, error: 'invalid_arguments', detail: 'note 1..500 chars' };
+      const expected = await resolveExpectedReimbursement(ctx.rpc, ctx.queryToProc, ctx.householdId, expectedId);
+      if (expected === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live expected reimbursement in this household' };
+      return {
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'expected_reimbursements.record_receipt',
+          command: 'expected_reimbursements.record_receipt',
+          summary: `Record ${displayMinor(amount)} received from ${expectedReimbursementLabel(expected)}`,
+          payload: { expectedId, transactionId, amountMinor: amount, note },
+        },
+      };
+    },
+  },
+  {
+    name: 'propose_write_off_expected_reimbursement',
+    description:
+      'Propose writing off an expected reimbursement (mark it as not going to be paid). Requires the user’s approval. Get expectedId from list_expected_reimbursements.',
+    action: 'expected_reimbursements.write_off',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['expectedId', 'reason'],
+      properties: {
+        expectedId: { type: 'string', description: 'The expected reimbursement id (uuid).' },
+        reason: { type: 'string', minLength: 1, maxLength: 500 },
+      },
+    },
+    execute: async (args, ctx) => {
+      const expectedId = noteId(args['expectedId']);
+      if (expectedId === null) return { ok: false, error: 'invalid_arguments', detail: 'expectedId must be a uuid' };
+      const reason = typeof args['reason'] === 'string' ? args['reason'].trim() : '';
+      if (reason.length === 0 || reason.length > 500) return { ok: false, error: 'invalid_arguments', detail: 'reason 1..500 chars' };
+      const expected = await resolveExpectedReimbursement(ctx.rpc, ctx.queryToProc, ctx.householdId, expectedId);
+      if (expected === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live expected reimbursement in this household' };
+      return {
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'expected_reimbursements.write_off',
+          command: 'expected_reimbursements.write_off',
+          summary: `Write off the expected reimbursement from ${expectedReimbursementLabel(expected)}`,
+          payload: { expectedId, reason },
+        },
+      };
+    },
+  },
+  {
+    name: 'propose_reopen_expected_reimbursement',
+    description:
+      'Propose reopening a written-off expected reimbursement. Requires the user’s approval. Get expectedId from list_expected_reimbursements.',
+    action: 'expected_reimbursements.reopen',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['expectedId', 'reason'],
+      properties: {
+        expectedId: { type: 'string', description: 'The expected reimbursement id (uuid).' },
+        reason: { type: 'string', minLength: 1, maxLength: 500 },
+      },
+    },
+    execute: async (args, ctx) => {
+      const expectedId = noteId(args['expectedId']);
+      if (expectedId === null) return { ok: false, error: 'invalid_arguments', detail: 'expectedId must be a uuid' };
+      const reason = typeof args['reason'] === 'string' ? args['reason'].trim() : '';
+      if (reason.length === 0 || reason.length > 500) return { ok: false, error: 'invalid_arguments', detail: 'reason 1..500 chars' };
+      const expected = await resolveExpectedReimbursement(ctx.rpc, ctx.queryToProc, ctx.householdId, expectedId);
+      if (expected === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live expected reimbursement in this household' };
+      return {
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'expected_reimbursements.reopen',
+          command: 'expected_reimbursements.reopen',
+          summary: `Reopen the expected reimbursement from ${expectedReimbursementLabel(expected)}`,
+          payload: { expectedId, reason },
+        },
+      };
+    },
+  },
+  {
+    name: 'propose_reverse_expected_reimbursement_receipt',
+    description:
+      'Propose reversing (undoing) a recorded receipt against an expected reimbursement. Requires the user’s approval. Get receiptId from list_expected_reimbursements.',
+    action: 'expected_reimbursements.reverse_receipt',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['receiptId', 'reason'],
+      properties: {
+        receiptId: { type: 'string', description: 'The receipt id (uuid).' },
+        reason: { type: 'string', minLength: 1, maxLength: 500 },
+      },
+    },
+    execute: async (args, ctx) => {
+      const receiptId = noteId(args['receiptId']);
+      if (receiptId === null) return { ok: false, error: 'invalid_arguments', detail: 'receiptId must be a uuid' };
+      const reason = typeof args['reason'] === 'string' ? args['reason'].trim() : '';
+      if (reason.length === 0 || reason.length > 500) return { ok: false, error: 'invalid_arguments', detail: 'reason 1..500 chars' };
+      const expected = await resolveExpectedReimbursementByReceipt(ctx.rpc, ctx.queryToProc, ctx.householdId, receiptId);
+      if (expected === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live receipt in this household' };
+      return {
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'expected_reimbursements.reverse_receipt',
+          command: 'expected_reimbursements.reverse_receipt',
+          summary: `Reverse a receipt recorded against the expected reimbursement from ${expectedReimbursementLabel(expected)}`,
+          payload: { receiptId, reason },
+        },
+      };
+    },
+  },
+  // --- Recurring series lifecycle: Class B (suggest→approve). ---
+  {
+    name: 'propose_confirm_recurring',
+    description:
+      'Propose confirming a detected recurring series (subscription, bill, or income) as real. Requires the user’s approval. Get seriesId from list_recurring.',
+    action: 'recurring.confirm',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['seriesId'],
+      properties: {
+        seriesId: { type: 'string', description: 'The recurring series id (uuid).' },
+        effectiveDate: { type: 'string', description: 'ISO date; defaults to today.' },
+        horizonDays: { type: 'integer', minimum: 1, maximum: 366, description: 'Forecast horizon in days (default 90).' },
+      },
+    },
+    execute: async (args, ctx) => {
+      const seriesId = noteId(args['seriesId']);
+      if (seriesId === null) return { ok: false, error: 'invalid_arguments', detail: 'seriesId must be a uuid' };
+      if (args['effectiveDate'] !== undefined && isoDate(args['effectiveDate']) === null) {
+        return { ok: false, error: 'invalid_arguments', detail: 'effectiveDate must be an ISO date (YYYY-MM-DD)' };
+      }
+      const horizonDays = typeof args['horizonDays'] === 'number' ? Math.trunc(args['horizonDays']) : 90;
+      if (horizonDays < 1 || horizonDays > 366) return { ok: false, error: 'invalid_arguments', detail: 'horizonDays must be 1..366' };
+      const label = await resolveRecurringSeriesLabel(ctx.rpc, ctx.queryToProc, ctx.householdId, seriesId);
+      if (label === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live recurring series in this household' };
+      const effectiveDate = isoDate(args['effectiveDate']) ?? ctx.todayIso;
+      return {
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'recurring.confirm',
+          command: 'recurring.confirm',
+          summary: `Confirm ${label} as a recurring series`,
+          payload: { seriesId, effectiveDate, horizonDays },
+        },
+      };
+    },
+  },
+  {
+    name: 'propose_pause_recurring',
+    description: 'Propose pausing a confirmed recurring series (temporarily stop expecting it). Requires the user’s approval. Get seriesId from list_recurring.',
+    action: 'recurring.pause',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['seriesId'],
+      properties: {
+        seriesId: { type: 'string', description: 'The recurring series id (uuid).' },
+        effectiveDate: { type: 'string', description: 'ISO date; defaults to today.' },
+      },
+    },
+    execute: async (args, ctx) => {
+      const seriesId = noteId(args['seriesId']);
+      if (seriesId === null) return { ok: false, error: 'invalid_arguments', detail: 'seriesId must be a uuid' };
+      if (args['effectiveDate'] !== undefined && isoDate(args['effectiveDate']) === null) {
+        return { ok: false, error: 'invalid_arguments', detail: 'effectiveDate must be an ISO date (YYYY-MM-DD)' };
+      }
+      const label = await resolveRecurringSeriesLabel(ctx.rpc, ctx.queryToProc, ctx.householdId, seriesId);
+      if (label === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live recurring series in this household' };
+      const effectiveDate = isoDate(args['effectiveDate']) ?? ctx.todayIso;
+      return {
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'recurring.pause',
+          command: 'recurring.pause',
+          summary: `Pause the recurring series for ${label}`,
+          payload: { seriesId, effectiveDate },
+        },
+      };
+    },
+  },
+  {
+    name: 'propose_resume_recurring',
+    description: 'Propose resuming a paused recurring series. Requires the user’s approval. Get seriesId from list_recurring.',
+    action: 'recurring.resume',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['seriesId'],
+      properties: {
+        seriesId: { type: 'string', description: 'The recurring series id (uuid).' },
+        effectiveDate: { type: 'string', description: 'ISO date; defaults to today.' },
+        horizonDays: { type: 'integer', minimum: 1, maximum: 366, description: 'Forecast horizon in days (default 90).' },
+      },
+    },
+    execute: async (args, ctx) => {
+      const seriesId = noteId(args['seriesId']);
+      if (seriesId === null) return { ok: false, error: 'invalid_arguments', detail: 'seriesId must be a uuid' };
+      if (args['effectiveDate'] !== undefined && isoDate(args['effectiveDate']) === null) {
+        return { ok: false, error: 'invalid_arguments', detail: 'effectiveDate must be an ISO date (YYYY-MM-DD)' };
+      }
+      const horizonDays = typeof args['horizonDays'] === 'number' ? Math.trunc(args['horizonDays']) : 90;
+      if (horizonDays < 1 || horizonDays > 366) return { ok: false, error: 'invalid_arguments', detail: 'horizonDays must be 1..366' };
+      const label = await resolveRecurringSeriesLabel(ctx.rpc, ctx.queryToProc, ctx.householdId, seriesId);
+      if (label === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live recurring series in this household' };
+      const effectiveDate = isoDate(args['effectiveDate']) ?? ctx.todayIso;
+      return {
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'recurring.resume',
+          command: 'recurring.resume',
+          summary: `Resume the recurring series for ${label}`,
+          payload: { seriesId, effectiveDate, horizonDays },
+        },
+      };
+    },
+  },
+  {
+    name: 'propose_cancel_recurring',
+    description:
+      'Propose cancelling a recurring series permanently (e.g. the subscription was cancelled). Requires the user’s approval. Get seriesId from list_recurring.',
+    action: 'recurring.cancel',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['seriesId'],
+      properties: {
+        seriesId: { type: 'string', description: 'The recurring series id (uuid).' },
+        effectiveDate: { type: 'string', description: 'ISO date; defaults to today.' },
+      },
+    },
+    execute: async (args, ctx) => {
+      const seriesId = noteId(args['seriesId']);
+      if (seriesId === null) return { ok: false, error: 'invalid_arguments', detail: 'seriesId must be a uuid' };
+      if (args['effectiveDate'] !== undefined && isoDate(args['effectiveDate']) === null) {
+        return { ok: false, error: 'invalid_arguments', detail: 'effectiveDate must be an ISO date (YYYY-MM-DD)' };
+      }
+      const label = await resolveRecurringSeriesLabel(ctx.rpc, ctx.queryToProc, ctx.householdId, seriesId);
+      if (label === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live recurring series in this household' };
+      const effectiveDate = isoDate(args['effectiveDate']) ?? ctx.todayIso;
+      return {
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'recurring.cancel',
+          command: 'recurring.cancel',
+          summary: `Cancel the recurring series for ${label}`,
+          payload: { seriesId, effectiveDate },
+        },
+      };
+    },
+  },
+  {
+    name: 'propose_reject_recurring',
+    description:
+      'Propose rejecting a detected recurring series that isn’t actually recurring. Requires the user’s approval. Get seriesId from list_recurring.',
+    action: 'recurring.reject',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['seriesId'],
+      properties: {
+        seriesId: { type: 'string', description: 'The recurring series id (uuid).' },
+        effectiveDate: { type: 'string', description: 'ISO date; defaults to today.' },
+      },
+    },
+    execute: async (args, ctx) => {
+      const seriesId = noteId(args['seriesId']);
+      if (seriesId === null) return { ok: false, error: 'invalid_arguments', detail: 'seriesId must be a uuid' };
+      if (args['effectiveDate'] !== undefined && isoDate(args['effectiveDate']) === null) {
+        return { ok: false, error: 'invalid_arguments', detail: 'effectiveDate must be an ISO date (YYYY-MM-DD)' };
+      }
+      const label = await resolveRecurringSeriesLabel(ctx.rpc, ctx.queryToProc, ctx.householdId, seriesId);
+      if (label === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live recurring series in this household' };
+      const effectiveDate = isoDate(args['effectiveDate']) ?? ctx.todayIso;
+      return {
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'recurring.reject',
+          command: 'recurring.reject',
+          summary: `Reject the detected recurring series for ${label}`,
+          payload: { seriesId, effectiveDate },
+        },
+      };
+    },
+  },
+  // --- Decide-on-a-suggestion actions: Class B. Opaque ids only (no name to
+  // mislabel), matching the existing precedent of the reverse-reimbursement
+  // tools' generic summaries. ---
+  {
+    name: 'propose_decide_category_suggestion',
+    description:
+      'Propose accepting or rejecting a suggested transaction categorization. Requires the user’s approval.',
+    action: 'categorization.decide_suggestion',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['suggestionId', 'accept'],
+      properties: {
+        suggestionId: { type: 'string', description: 'The category suggestion id (uuid).' },
+        accept: { type: 'boolean' },
+      },
+    },
+    execute: (args) => {
+      const suggestionId = noteId(args['suggestionId']);
+      if (suggestionId === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'suggestionId must be a uuid' });
+      if (typeof args['accept'] !== 'boolean') return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'accept must be a boolean' });
+      const accept = args['accept'];
+      return Promise.resolve({
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'categorization.decide_suggestion',
+          command: 'categorization.decide_suggestion',
+          summary: accept ? 'Accept a categorization suggestion' : 'Reject a categorization suggestion',
+          payload: { suggestionId, accept },
+        },
+      });
+    },
+  },
+  {
+    name: 'propose_decide_receipt_match',
+    description:
+      'Propose confirming or rejecting a suggested receipt-to-transaction match. Requires the user’s approval. Get matchId from get_receipts_inbox.',
+    action: 'receipts.decide_match',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['matchId', 'confirm'],
+      properties: {
+        matchId: { type: 'string', description: 'The receipt match id (uuid).' },
+        confirm: { type: 'boolean' },
+      },
+    },
+    execute: (args) => {
+      const matchId = noteId(args['matchId']);
+      if (matchId === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'matchId must be a uuid' });
+      if (typeof args['confirm'] !== 'boolean') return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'confirm must be a boolean' });
+      const confirm = args['confirm'];
+      return Promise.resolve({
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'receipts.decide_match',
+          command: 'receipts.decide_match',
+          summary: confirm ? 'Confirm a receipt-to-transaction match' : 'Reject a receipt-to-transaction match',
+          payload: { matchId, confirm },
+        },
+      });
+    },
+  },
+  {
+    name: 'propose_detach_receipt_match',
+    description:
+      'Propose detaching (undoing) a confirmed receipt-to-transaction match. Requires the user’s approval. Get matchId from get_receipts_inbox.',
+    action: 'receipts.detach_match',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['matchId'],
+      properties: { matchId: { type: 'string', description: 'The receipt match id (uuid).' } },
+    },
+    execute: (args) => {
+      const matchId = noteId(args['matchId']);
+      if (matchId === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'matchId must be a uuid' });
+      return Promise.resolve({
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'receipts.detach_match',
+          command: 'receipts.detach_match',
+          summary: 'Detach a receipt-to-transaction match',
+          payload: { matchId },
+        },
+      });
+    },
+  },
+  {
+    name: 'propose_dismiss_statement_draft',
+    description: 'Propose dismissing a draft statement import. Requires the user’s approval. Get draftId from list_statement_drafts.',
+    action: 'statements.dismiss_draft',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['draftId'],
+      properties: { draftId: { type: 'string', description: 'The statement draft id (uuid).' } },
+    },
+    execute: (args) => {
+      const draftId = noteId(args['draftId']);
+      if (draftId === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'draftId must be a uuid' });
+      return Promise.resolve({
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'statements.dismiss_draft',
+          command: 'statements.dismiss_draft',
+          summary: 'Dismiss a draft statement import',
+          payload: { draftId },
+        },
+      });
+    },
+  },
+  {
+    name: 'propose_decide_statement_payment_link',
+    description:
+      'Propose confirming or rejecting a suggested card-payment-to-statement link. Requires the user’s approval. Get linkId from get_statement_payment_links.',
+    action: 'statements.decide_payment_link',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['linkId', 'confirm'],
+      properties: {
+        linkId: { type: 'string', description: 'The payment link id (uuid).' },
+        confirm: { type: 'boolean' },
+      },
+    },
+    execute: (args) => {
+      const linkId = noteId(args['linkId']);
+      if (linkId === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'linkId must be a uuid' });
+      if (typeof args['confirm'] !== 'boolean') return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'confirm must be a boolean' });
+      const confirm = args['confirm'];
+      return Promise.resolve({
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'statements.decide_payment_link',
+          command: 'statements.decide_payment_link',
+          summary: confirm ? 'Confirm a statement payment link' : 'Reject a statement payment link',
+          payload: { linkId, confirm },
+        },
+      });
+    },
+  },
+  {
+    name: 'propose_detach_statement_payment_link',
+    description:
+      'Propose detaching (undoing) a confirmed statement payment link. Requires the user’s approval. Get linkId from get_statement_payment_links.',
+    action: 'statements.detach_payment_link',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['linkId'],
+      properties: { linkId: { type: 'string', description: 'The payment link id (uuid).' } },
+    },
+    execute: (args) => {
+      const linkId = noteId(args['linkId']);
+      if (linkId === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'linkId must be a uuid' });
+      return Promise.resolve({
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'statements.detach_payment_link',
+          command: 'statements.detach_payment_link',
+          summary: 'Detach a statement payment link',
+          payload: { linkId },
+        },
+      });
+    },
+  },
+  {
+    name: 'propose_set_statement_cadence',
+    description:
+      'Propose setting (or clearing) the expected statement cadence for an account. Requires the user’s approval. Get accountId from get_account_balances.',
+    action: 'statements.set_cadence',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['accountId'],
+      properties: {
+        accountId: { type: 'string', description: 'The account id (uuid).' },
+        closeDay: { type: 'integer', minimum: 1, maximum: 31, description: 'Statement close day-of-month; omit to clear the cadence.' },
+      },
+    },
+    execute: (args) => {
+      const accountId = noteId(args['accountId']);
+      if (accountId === null) return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'accountId must be a uuid' });
+      let closeDay: number | null = null;
+      if (args['closeDay'] !== undefined) {
+        if (typeof args['closeDay'] !== 'number' || !Number.isInteger(args['closeDay']) || args['closeDay'] < 1 || args['closeDay'] > 31) {
+          return Promise.resolve({ ok: false, error: 'invalid_arguments', detail: 'closeDay must be an integer 1..31' });
+        }
+        closeDay = args['closeDay'];
+      }
+      return Promise.resolve({
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'statements.set_cadence',
+          command: 'statements.set_cadence',
+          summary: closeDay === null ? 'Clear the statement cadence for an account' : `Set the statement cadence to close on day ${closeDay} of the month`,
+          payload: { accountId, closeDay },
+        },
+      });
+    },
+  },
+  {
+    name: 'propose_dismiss_detected_paycheck',
+    description:
+      'Propose dismissing one detected-paycheck occurrence as not actually a paycheck. Requires the user’s approval. Get seriesId from list_recurring and occurrenceDate from list_paychecks or list_dismissed_paycheck_detections.',
+    action: 'paychecks.dismiss_detected',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['seriesId', 'occurrenceDate'],
+      properties: {
+        seriesId: { type: 'string', description: 'The recurring series id (uuid).' },
+        occurrenceDate: { type: 'string', description: 'ISO date of the detected occurrence.' },
+      },
+    },
+    execute: async (args, ctx) => {
+      const seriesId = noteId(args['seriesId']);
+      if (seriesId === null) return { ok: false, error: 'invalid_arguments', detail: 'seriesId must be a uuid' };
+      const occurrenceDate = isoDate(args['occurrenceDate']);
+      if (occurrenceDate === null) return { ok: false, error: 'invalid_arguments', detail: 'occurrenceDate must be an ISO date (YYYY-MM-DD)' };
+      const label = await resolveRecurringSeriesLabel(ctx.rpc, ctx.queryToProc, ctx.householdId, seriesId);
+      if (label === null) return { ok: false, error: 'invalid_arguments', detail: 'not a live recurring series in this household' };
+      return {
+        ok: true,
+        modelResult: { ok: true, proposed: true },
+        proposed: {
+          kind: 'paychecks.dismiss_detected',
+          command: 'paychecks.dismiss_detected',
+          summary: `Dismiss the detected paycheck for ${label} on ${occurrenceDate}`,
+          payload: { seriesId, occurrenceDate },
+        },
+      };
+    },
+  },
 ];
 
 const WRITE_TOOL_BY_NAME: Readonly<Record<string, WriteToolSpec>> = Object.fromEntries(
@@ -1329,6 +2193,7 @@ export const makeExecuteAgentTool = (deps: AgentToolDeps) => {
       householdId: deps.householdId,
       todayIso: deps.todayIso,
       rpc: deps.rpc,
+      queryToProc: deps.queryToProc,
       ...(deps.attachReceipt ? { attachReceipt: deps.attachReceipt } : {}),
     });
     if (!res.ok) {

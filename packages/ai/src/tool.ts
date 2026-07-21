@@ -95,11 +95,30 @@ export interface AgentProvider {
   converse(input: ConverseInput): Promise<AgentTurn>;
 }
 
+/**
+ * One prior turn from earlier in the SAME open conversation. This is plain
+ * conversational text only — the client (LocalRuntime) only ever sees a
+ * turn's final tldr/body, never raw tool results, so no data-tier content
+ * is ever replayed through history (Law 5 is unaffected: the tool-result
+ * spotlighting boundary still applies fully within the CURRENT turn's own
+ * tool-use loop). Not persisted server-side — lost on page reload.
+ */
+export interface HistoryTurn {
+  readonly role: 'user' | 'assistant';
+  readonly text: string;
+}
+
 export interface RunAgentInput {
   readonly provider: AgentProvider;
   readonly system: string;
   readonly tools: readonly ToolDefinition[];
   readonly userMessage: string;
+  /**
+   * Prior turns from earlier in this open conversation, oldest first. Empty
+   * or omitted for a fresh conversation. The caller is responsible for
+   * bounding this (count + total length) before it reaches here.
+   */
+  readonly history?: readonly HistoryTurn[];
   /** Optional image the user attached with the question (data-tier, Law 5). */
   readonly image?: ImageInput;
   /**
@@ -149,7 +168,11 @@ export const runAgent = async (input: RunAgentInput): Promise<AgentRunResult> =>
   if (input.maxSteps < 1) {
     throw new Error('runAgent requires maxSteps >= 1');
   }
+  const historyEntries: TranscriptEntry[] = (input.history ?? [])
+    .filter((h) => h.text.trim().length > 0)
+    .map((h) => (h.role === 'user' ? { role: 'user' as const, text: h.text } : { role: 'assistant_text' as const, text: h.text }));
   const transcript: TranscriptEntry[] = [
+    ...historyEntries,
     { role: 'user', text: input.userMessage, ...(input.image ? { image: input.image } : {}) },
   ];
   const executed: ExecutedToolCall[] = [];

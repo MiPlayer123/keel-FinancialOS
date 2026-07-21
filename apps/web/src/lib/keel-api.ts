@@ -2703,15 +2703,21 @@ export type AiChatRecord = {
 /** An image attached to a chat question (base64, no data: prefix). */
 export type AskKeelImage = { mediaType: string; data: string };
 
+/** One prior turn from earlier in this same open chat (not persisted). */
+export type AskKeelHistoryTurn = { role: 'user' | 'assistant'; text: string };
+
 export async function askKeel(input: {
   householdId: string;
   question: string;
   image?: AskKeelImage;
+  /** Prior turns from this open conversation, oldest first. The server bounds this regardless. */
+  history?: AskKeelHistoryTurn[];
 }): Promise<AiChatRecord> {
   return invoke<AiChatRecord>('api/ai/chat', {
     householdId: input.householdId,
     question: input.question,
     ...(input.image ? { image: input.image } : {}),
+    ...(input.history && input.history.length > 0 ? { history: input.history } : {}),
   });
 }
 

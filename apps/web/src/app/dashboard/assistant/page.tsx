@@ -54,6 +54,7 @@ import {
   type AgentAppliedAction,
   type AgentProposedAction,
   type AiChatRecord,
+  type AskKeelHistoryTurn,
 } from '@/lib/keel-api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -79,7 +80,10 @@ import { toast } from 'sonner';
  *
  * This slice is read-only (writes — notes auto+undo, budgets/reimbursements as
  * approval cards — land in later slices). The thread is client-side state
- * (LocalRuntime keeps history); each run sends only the latest question.
+ * (LocalRuntime keeps it); each run also sends the prior turns of THIS open
+ * chat as plain text (never raw tool results — the client only ever sees a
+ * turn's final tldr/body) so the model has conversational memory within one
+ * open tab. Nothing is persisted server-side yet — a reload starts fresh.
  * Errors surface as typed states (ai_unavailable → "not configured" notice),
  * never as fabricated answers.
  */
@@ -107,6 +111,22 @@ const TOOL_LABELS: Record<string, string> = {
   list_goals: 'Goals',
   list_rules: 'Rules',
   list_tags: 'Tags',
+  list_recurring_classification: 'Recurring classification',
+  list_recurring_schedule_links: 'Recurring schedule links',
+  list_dismissed_paycheck_detections: 'Dismissed paycheck detections',
+  list_paycheck_templates: 'Paycheck templates',
+  list_paycheck_split_suggestions: 'Paycheck split suggestions',
+  list_expected_reimbursements: 'Expected reimbursements',
+  list_statement_drafts: 'Statement drafts',
+  get_statement_cadence: 'Statement cadence',
+  suggest_statement_payments: 'Statement payment suggestions',
+  get_statement_payment_links: 'Statement payment links',
+  get_statement_holdings_diff: 'Statement holdings diff',
+  list_documents_for_household: 'Documents',
+  list_documents_for_target: 'Documents for item',
+  get_document_storage_summary: 'Document storage summary',
+  get_receipts_inbox: 'Receipts inbox',
+  get_latest_balances: 'Latest balances',
 };
 
 const prettifyTool = (name: string): string =>
@@ -180,17 +200,42 @@ function parseAssistantProposal(question: string): AssistantProposal | null {
   return null;
 }
 
+/** This message's plain text content (user and assistant messages alike). */
+function messageText(m: ThreadMessage): string {
+  return m.content
+    .filter((part) => part.type === 'text')
+    .map((part) => part.text)
+    .join('\n')
+    .trim();
+}
+
 function latestUserQuestion(messages: readonly ThreadMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const m = messages[i];
     if (m === undefined || m.role !== 'user') continue;
-    return m.content
-      .filter((part) => part.type === 'text')
-      .map((part) => part.text)
-      .join('\n')
-      .trim();
+    return messageText(m);
   }
   return '';
+}
+
+/** How many prior turns of this open chat we replay to the model. The server bounds this too. */
+const HISTORY_WINDOW = 20;
+
+/**
+ * Prior turns from earlier in THIS open chat — everything before the
+ * just-submitted question (which is always the last message here). Only
+ * ever plain final text (never raw tool results), so nothing data-tier is
+ * ever replayed (Law 5 is unaffected).
+ */
+function conversationHistory(messages: readonly ThreadMessage[]): AskKeelHistoryTurn[] {
+  const prior = messages.slice(0, -1);
+  const turns: AskKeelHistoryTurn[] = [];
+  for (const m of prior) {
+    if (m.role !== 'user' && m.role !== 'assistant') continue;
+    const text = messageText(m);
+    if (text.length > 0) turns.push({ role: m.role, text });
+  }
+  return turns.slice(-HISTORY_WINDOW);
 }
 
 export default function AssistantPage() {
@@ -264,6 +309,7 @@ function AssistantChat() {
     () => ({
       async run({ messages, abortSignal }) {
         const question = latestUserQuestion(messages);
+        const history = conversationHistory(messages);
         const targetHousehold = householdRef.current;
         // Consume any attached image once, for this send.
         const img = pendingImageRef.current;
@@ -298,6 +344,7 @@ function AssistantChat() {
             householdId: targetHousehold,
             question: effectiveQuestion,
             ...(img ? { image: { mediaType: img.mediaType, data: img.data } } : {}),
+            ...(history.length > 0 ? { history } : {}),
           });
         } catch (err) {
           return failedRun(friendlyError(err));
