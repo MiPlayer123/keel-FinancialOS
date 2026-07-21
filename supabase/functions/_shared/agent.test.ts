@@ -689,3 +689,179 @@ Deno.test('attach_receipt denied by authz never runs the capability', async () =
   assert(out.error === 'not_authorized');
   assert(called === false);
 });
+
+// ---------------------------------------------------------------------------
+// Reachability-gap write tools (batch 2)
+// ---------------------------------------------------------------------------
+
+const SERIES_ID = '55555555-5555-5555-5555-555555555555';
+const EXPECTED_ID = '66666666-6666-6666-6666-666666666666';
+const RECEIPT_ID = '77777777-7777-7777-7777-777777777777';
+
+/** Canned rpc: returns fixed rows for any proc call — the resolvers here only need *a* proc to look data up through, not a specific literal name. */
+const fixedRowsRpc = (rows: unknown[]) => (_proc: string, _args: Record<string, unknown>) =>
+  Promise.resolve({ data: { rows }, error: null });
+
+Deno.test('the reachability-gap write tools are all in the catalog', () => {
+  const names = agentToolDefinitions().map((d) => d.name);
+  for (const w of [
+    'propose_expected_reimbursement',
+    'propose_record_expected_reimbursement_receipt',
+    'propose_write_off_expected_reimbursement',
+    'propose_reopen_expected_reimbursement',
+    'propose_reverse_expected_reimbursement_receipt',
+    'propose_confirm_recurring',
+    'propose_pause_recurring',
+    'propose_resume_recurring',
+    'propose_cancel_recurring',
+    'propose_reject_recurring',
+    'propose_decide_category_suggestion',
+    'propose_decide_receipt_match',
+    'propose_detach_receipt_match',
+    'propose_dismiss_statement_draft',
+    'propose_decide_statement_payment_link',
+    'propose_detach_statement_payment_link',
+    'propose_set_statement_cadence',
+    'propose_dismiss_detected_paycheck',
+  ]) {
+    assert(WRITE_TOOL_NAMES.includes(w), `missing write tool ${w}`);
+    assert(names.includes(w), `catalog missing ${w}`);
+  }
+});
+
+Deno.test('propose_expected_reimbursement stages a create payload (no resolver needed — fresh fields)', async () => {
+  const proposed: ProposedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, fixedRowsRpc([]), [], proposed));
+  const out = JSON.parse(
+    await exec(
+      call('propose_expected_reimbursement', {
+        counterpartyName: 'Acme Corp',
+        kind: 'employer',
+        amountMinor: '5000',
+        expectedDate: '2026-08-01',
+        description: 'Travel expense reimbursement',
+      }),
+    ),
+  );
+  assert(out.proposed === true);
+  assert(proposed[0]!.command === 'expected_reimbursements.create');
+  assert(proposed[0]!.payload['counterpartyName'] === 'Acme Corp');
+  assert(proposed[0]!.payload['currency'] === 'USD');
+});
+
+Deno.test('expected-reimbursement tools resolve the real counterparty and reject an unknown id', async () => {
+  const row = { expectedId: EXPECTED_ID, counterpartyName: 'Acme Corp', receipts: [{ receiptId: RECEIPT_ID }] };
+  const proposed: ProposedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, fixedRowsRpc([row]), [], proposed));
+
+  const receipt = JSON.parse(
+    await exec(
+      call('propose_record_expected_reimbursement_receipt', {
+        expectedId: EXPECTED_ID,
+        transactionId: NOTE_ID,
+        amountMinor: '5000',
+        note: 'refund',
+      }),
+    ),
+  );
+  assert(receipt.proposed === true);
+  assert(proposed.at(-1)!.summary.includes('Acme Corp'));
+
+  const writeOff = JSON.parse(await exec(call('propose_write_off_expected_reimbursement', { expectedId: EXPECTED_ID, reason: 'never coming' })));
+  assert(writeOff.proposed === true);
+  assert(proposed.at(-1)!.summary.includes('Acme Corp'));
+
+  const reopen = JSON.parse(await exec(call('propose_reopen_expected_reimbursement', { expectedId: EXPECTED_ID, reason: 'actually it came' })));
+  assert(reopen.proposed === true);
+
+  const reverse = JSON.parse(await exec(call('propose_reverse_expected_reimbursement_receipt', { receiptId: RECEIPT_ID, reason: 'wrong receipt' })));
+  assert(reverse.proposed === true);
+  assert(proposed.at(-1)!.summary.includes('Acme Corp'));
+
+  const unknownExec = makeExecuteAgentTool(agentDeps(allow, fixedRowsRpc([]), [], []));
+  const unknown = JSON.parse(await unknownExec(call('propose_write_off_expected_reimbursement', { expectedId: EXPECTED_ID, reason: 'x' })));
+  assert(unknown.error === 'invalid_arguments');
+});
+
+Deno.test('recurring-lifecycle tools resolve the real counterparty, default effectiveDate/horizonDays, and reject an unknown series', async () => {
+  const row = { seriesId: SERIES_ID, counterpartyKey: 'Netflix' };
+  const proposed: ProposedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, fixedRowsRpc([row]), [], proposed));
+
+  const confirm = JSON.parse(await exec(call('propose_confirm_recurring', { seriesId: SERIES_ID })));
+  assert(confirm.proposed === true);
+  assert(proposed.at(-1)!.summary.includes('Netflix'));
+  assert(proposed.at(-1)!.payload['effectiveDate'] === '2026-07-19', 'effectiveDate should default to todayIso');
+  assert(proposed.at(-1)!.payload['horizonDays'] === 90, 'horizonDays should default to 90');
+
+  const pause = JSON.parse(await exec(call('propose_pause_recurring', { seriesId: SERIES_ID })));
+  assert(pause.proposed === true);
+
+  const resume = JSON.parse(await exec(call('propose_resume_recurring', { seriesId: SERIES_ID, horizonDays: 30 })));
+  assert(resume.proposed === true);
+  assert(proposed.at(-1)!.payload['horizonDays'] === 30);
+
+  const cancel = JSON.parse(await exec(call('propose_cancel_recurring', { seriesId: SERIES_ID })));
+  assert(cancel.proposed === true);
+
+  const reject = JSON.parse(await exec(call('propose_reject_recurring', { seriesId: SERIES_ID })));
+  assert(reject.proposed === true);
+
+  const dismissDetected = JSON.parse(
+    await exec(call('propose_dismiss_detected_paycheck', { seriesId: SERIES_ID, occurrenceDate: '2026-07-01' })),
+  );
+  assert(dismissDetected.proposed === true);
+  assert(proposed.at(-1)!.summary.includes('Netflix'));
+
+  const unknownExec = makeExecuteAgentTool(agentDeps(allow, fixedRowsRpc([]), [], []));
+  const unknown = JSON.parse(await unknownExec(call('propose_pause_recurring', { seriesId: SERIES_ID })));
+  assert(unknown.error === 'invalid_arguments');
+});
+
+Deno.test('opaque-id decide/detach/dismiss tools validate args and stage a generic summary', async () => {
+  const proposed: ProposedAction[] = [];
+  const exec = makeExecuteAgentTool(agentDeps(allow, fixedRowsRpc([]), [], proposed));
+
+  const cat = JSON.parse(await exec(call('propose_decide_category_suggestion', { suggestionId: NOTE_ID, accept: true })));
+  assert(cat.proposed === true);
+  assert(proposed.at(-1)!.command === 'categorization.decide_suggestion');
+
+  const badCat = JSON.parse(await exec(call('propose_decide_category_suggestion', { suggestionId: NOTE_ID, accept: 'yes' })));
+  assert(badCat.error === 'invalid_arguments');
+
+  const receiptMatch = JSON.parse(await exec(call('propose_decide_receipt_match', { matchId: NOTE_ID, confirm: false })));
+  assert(receiptMatch.proposed === true);
+
+  const detachReceipt = JSON.parse(await exec(call('propose_detach_receipt_match', { matchId: NOTE_ID })));
+  assert(detachReceipt.proposed === true);
+
+  const dismissDraft = JSON.parse(await exec(call('propose_dismiss_statement_draft', { draftId: NOTE_ID })));
+  assert(dismissDraft.proposed === true);
+
+  const paymentLink = JSON.parse(await exec(call('propose_decide_statement_payment_link', { linkId: NOTE_ID, confirm: true })));
+  assert(paymentLink.proposed === true);
+
+  const detachLink = JSON.parse(await exec(call('propose_detach_statement_payment_link', { linkId: NOTE_ID })));
+  assert(detachLink.proposed === true);
+
+  const cadence = JSON.parse(await exec(call('propose_set_statement_cadence', { accountId: NOTE_ID, closeDay: 15 })));
+  assert(cadence.proposed === true);
+  assert(proposed.at(-1)!.payload['closeDay'] === 15);
+
+  const clearCadence = JSON.parse(await exec(call('propose_set_statement_cadence', { accountId: NOTE_ID })));
+  assert(clearCadence.proposed === true);
+  assert(proposed.at(-1)!.payload['closeDay'] === null);
+
+  const badCadence = JSON.parse(await exec(call('propose_set_statement_cadence', { accountId: NOTE_ID, closeDay: 40 })));
+  assert(badCadence.error === 'invalid_arguments');
+});
+
+Deno.test('a denied reachability-gap write authorizes-off and stages nothing', async () => {
+  const proposed: ProposedAction[] = [];
+  const exec = makeExecuteAgentTool(
+    agentDeps(deny, fixedRowsRpc([{ seriesId: SERIES_ID, counterpartyKey: 'Netflix' }]), [], proposed),
+  );
+  const out = JSON.parse(await exec(call('propose_confirm_recurring', { seriesId: SERIES_ID })));
+  assert(out.error === 'not_authorized');
+  assert(proposed.length === 0);
+});
