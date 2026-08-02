@@ -4,6 +4,42 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-08-02 — feat(splits): allow CONTRA category legs (refunds / reimbursements)
+
+**Contract amendment (BC-v2.1 stabilized-not-frozen).** `keel_cmd_set_splits` had a
+per-leg direction rule (added `20260720230000`, tightened by code review
+r3603509629): `amount > 0 ⟺ expense`, `amount < 0 ⟺ income`. That made a refund
+impossible to express as a split — reducing an expense already paid needs a
+NEGATIVE amount on an EXPENSE category, which the rule rejected. Real refunds had
+nowhere to go and accumulated in Uncategorized Income (the STUBHUB CREDIT is the
+standing example). A roommate settling shared expenses back likewise could not be
+split into the categories it reimburses.
+
+Migration `20260802140000_set_splits_allow_contra_legs.sql` drops ONLY that
+sign⟺kind heuristic. Every real invariant remains: balanced postings
+(`v_split_sum = −cash`, Law 3), same-entity, same-currency, live-category, and
+no-duplicate-category. `keel_cmd_manual_transaction` never had the rule, so this
+also makes the two balanced-posting entry points consistent. Body restated from
+the live definition (matched `20260721050000` byte-for-byte) with only the block
+replaced; owner/grants re-asserted.
+
+Tests updated to the new behaviour: `supabase/tests/018_set_splits.sql` (the
+"income category on a cash-out rejects" throws_ok became a `lives_ok` contra
+acceptance, placed last so it does not perturb ...0001's batch-count assertions);
+`tests/integration/23-set-splits-balanced-mixed.test.ts` (formerly-rejected
+balanced mix now asserted accepted; added an unbalanced case that still throws
+P0002).
+
+Applied to live (psql, single-txn) and verified: direction rule gone, balance
+check intact, exec grants = {authenticated, service_role}, anon still excluded.
+First use: split the $23 Zelle roommate settlement (txn `6ac84d86`) into
+Bills & Utilities +85.00 / Food & Drink −55.83 / Entertainment −39.17 /
+Shopping −12.40 / Other Income −0.60 = −23.00, self-contained. NOTE: that deposit
+is still `pending`; if Plaid re-posts it the split may be reverted (same sync
+clobber logged for the paycheck) and need re-applying.
+
+---
+
 ## 2026-07-20 — feat(reports): credit-card rewards vs annual-fee break-even
 
 Founder workflow (rough transcript): track credit-card rewards against annual
