@@ -196,7 +196,7 @@ describe('CloudStatementExtractor', () => {
       baseUrl: 'https://example.test/v1',
       model: 'claude-sonnet',
       apiKey: 'super-secret-key',
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl: fetchImpl,
     });
     const result = await extractor.extract(doc('e'.repeat(64), 'BASE64BYTES'));
     expect(result.record.endingMinor).toBe('125000');
@@ -250,7 +250,7 @@ describe('CloudStatementExtractor', () => {
       baseUrl: 'https://example.test/v1',
       model: 'claude-sonnet',
       apiKey: 'k',
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl: fetchImpl,
     });
     const result = await extractor.extract(doc());
     // The injection text survives ONLY as verbatim inert strings — no code path
@@ -287,7 +287,7 @@ describe('CloudStatementExtractor', () => {
       baseUrl: 'https://example.test/v1',
       model: 'm',
       apiKey: 'k',
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl: fetchImpl,
     });
     const result = await extractor.extract(doc());
     expect(result.record.openingMinor).toBeNull();
@@ -304,7 +304,7 @@ describe('CloudStatementExtractor', () => {
       baseUrl: 'https://example.test/v1',
       model: 'm',
       apiKey: 'top-secret-key',
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl: fetchImpl,
     });
     await extractor.extract(doc()).catch((e: unknown) => {
       const msg = (e as Error).message;
@@ -322,7 +322,7 @@ describe('CloudStatementExtractor', () => {
         baseUrl: 'https://example.test/v1',
         model: 'm',
         apiKey: KEY,
-        fetchImpl: impl as unknown as typeof fetch,
+        fetchImpl: impl,
       });
     const cases = [
       make(() => {
@@ -353,7 +353,7 @@ describe('CloudStatementExtractor', () => {
         baseUrl: 'https://example.test/v1',
         model: 'm',
         apiKey: 'k',
-        fetchImpl: (async () => resp) as unknown as typeof fetch,
+        fetchImpl: async () => resp,
       });
     await expect(make(new Response('nope', { status: 500 })).extract(doc())).rejects.toThrow(
       AiProviderError,

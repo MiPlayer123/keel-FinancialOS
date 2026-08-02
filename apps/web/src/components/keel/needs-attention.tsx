@@ -72,7 +72,6 @@ export function NeedsAttention({
       detectTransfers(householdId),
       detectCategorySuggestions(householdId),
     ]).then(() => {
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- flag flips in cleanup
       if (active) setDetected(true);
     });
     return () => {

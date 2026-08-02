@@ -209,7 +209,7 @@ describe('vision: image serialization', () => {
     const userMsg = payload.messages.find((m) => m.role === 'user')!;
     const parts = userMsg.content as { type: string; source?: { media_type: string; data: string } }[];
     const image = parts.find((p) => p.type === 'image');
-    assertOk(image?.source?.media_type === 'image/png' && image?.source?.data === 'AAAA');
+    assertOk(image?.source?.media_type === 'image/png' && image.source.data === 'AAAA');
   });
 });
 

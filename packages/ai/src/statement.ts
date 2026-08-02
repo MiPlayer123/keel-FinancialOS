@@ -36,7 +36,6 @@ import {
   type StatementKindHint,
   type StatementLineRecord,
 } from '@keel/documents/statement';
-import { AiProviderError } from './provider.js';
 
 /** Prompt/policy version stamp carried on every model extraction (Law 9/11). */
 export const STATEMENT_PROMPT_VERSION = 'keel-statement-extract@v1';

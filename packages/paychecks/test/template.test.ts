@@ -426,8 +426,8 @@ describe('applyPaycheckTemplate — property tests (fast-check, Law 1/4/9)', () 
       fc.property(validTemplate, fc.bigInt({ min: 0n, max: 1_000_000_000_000n }), (r, n) => {
         const lines: PaycheckTemplateLine[] = [
           earning,
-          ...r.bpsList.map((bps, i) => percent(`p${i}`, bps)),
-          ...r.fixedList.map((amt, i) => fixed(`f${i}`, amt.toString())),
+          ...r.bpsList.map((bps, i) => percent(`p${String(i)}`, bps)),
+          ...r.fixedList.map((amt, i) => fixed(`f${String(i)}`, amt.toString())),
           takeHome,
         ];
         const tpl = template(lines);
@@ -467,7 +467,7 @@ describe('applyPaycheckTemplate — property tests (fast-check, Law 1/4/9)', () 
         fc.array(fc.integer({ min: 1, max: 1500 }), { minLength: 2, maxLength: 4 }).filter((a) => a.reduce((x, y) => x + y, 0) <= 6_000),
         fc.bigInt({ min: 0n, max: 300n }),
         (bpsList, n) => {
-          const lines = [earning, ...bpsList.map((bps, i) => percent(`p${i}`, bps)), takeHome];
+          const lines = [earning, ...bpsList.map((bps, i) => percent(`p${String(i)}`, bps)), takeHome];
           const netAt = (g: bigint): bigint =>
             g - bpsList.reduce((s, bps) => s + (g * BigInt(bps) + 5000n) / 10_000n, 0n);
           // ΣP <= 6000 ⇒ net(G) >= 0.4·G, so N<=300 is reached well within G <= 2000.
@@ -500,7 +500,7 @@ describe('applyPaycheckTemplate — property tests (fast-check, Law 1/4/9)', () 
         fc.array(fc.integer({ min: 1, max: 9999 }), { minLength: 2, maxLength: 6 }).filter((a) => a.reduce((x, y) => x + y, 0) >= 10_000),
         fc.bigInt({ min: 0n, max: 1_000_000n }),
         (bpsList, n) => {
-          const lines = [earning, ...bpsList.map((bps, i) => percent(`p${i}`, bps)), takeHome];
+          const lines = [earning, ...bpsList.map((bps, i) => percent(`p${String(i)}`, bps)), takeHome];
           expectRejection(
             () => applyPaycheckTemplate({ template: template(lines), netDepositMinor: n.toString() }),
             'aggregate_percent_out_of_range',
@@ -531,7 +531,7 @@ describe('applyPaycheckTemplate — property tests (fast-check, Law 1/4/9)', () 
   it('(d) exactly-one-remainder enforced across arbitrary line counts', () => {
     fc.assert(
       fc.property(fc.integer({ min: 0, max: 4 }), (extraDeposits) => {
-        const deposits = Array.from({ length: extraDeposits }, (_v, i) => ({ ...takeHome, lineKey: `dep${i}` }));
+        const deposits = Array.from({ length: extraDeposits }, (_v, i) => ({ ...takeHome, lineKey: `dep${String(i)}` }));
         const lines = [earning, ...deposits];
         if (extraDeposits === 0) {
           expectRejection(() => applyPaycheckTemplate({ template: template(lines), netDepositMinor: '10' }), 'no_remainder_line');

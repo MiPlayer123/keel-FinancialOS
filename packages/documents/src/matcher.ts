@@ -90,7 +90,10 @@ export const MATCHER_VERSION = 'keel-receipt-matcher@v1';
 const dayDiff = (a: string, b: string): number => {
   const toDays = (iso: string): number => {
     const [y, m, d] = iso.split('-').map((p) => Number(p));
-    return Math.floor(Date.UTC(y!, m! - 1, d!) / 86_400_000);
+    // A malformed ISO string previously reached Date.UTC as undefined and
+    // yielded NaN; returning NaN here preserves that exact behaviour.
+    if (y === undefined || m === undefined) return NaN;
+    return Math.floor(Date.UTC(y, m - 1, d) / 86_400_000);
   };
   return toDays(b) - toDays(a);
 };
@@ -140,6 +143,9 @@ const scoreMerchant = (
     // Grade fuzzy 10..20 across [floor, 1). This block is only entered when
     // floor ≤ sim < 1, so floor < 1 and span > 0 (no divide-by-zero possible).
     const span = 1 - config.merchantFuzzyFloor;
+    // Grades a 0..1 similarity ratio into integer match POINTS — no minor
+    // units involved, so the money-rounding ban does not apply.
+    // eslint-disable-next-line no-restricted-syntax -- not money: match points
     const graded = 10 + Math.round((10 * (sim - config.merchantFuzzyFloor)) / span);
     return { points: Math.min(20, graded), code: 'MERCHANT_FUZZY' };
   }
@@ -217,8 +223,8 @@ export const decideMatch = (
   config: MatcherConfig = DEFAULT_MATCHER_CONFIG,
 ): MatchOutcome => {
   const ranked = scoreCandidates(extraction, candidates, config);
-  if (ranked.length === 0) return { kind: 'none' };
-  const top = ranked[0]!;
+  const top = ranked[0];
+  if (top === undefined) return { kind: 'none' };
   const runnerUp = ranked[1];
   const gap = runnerUp ? top.score - runnerUp.score : Number.POSITIVE_INFINITY;
 

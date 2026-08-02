@@ -10,6 +10,13 @@ export default defineConfig(
       '**/.next/**',
       'supabase/functions/**', // Deno runtime; linted separately
       'coverage/**',
+      // Agent git worktrees are FULL copies of this repo. Linting them made
+      // `eslint .` walk the codebase once per worktree and OOM the V8 heap
+      // locally (CI never noticed — no worktrees on a fresh checkout).
+      '.claude/**',
+      // Throwaway reproduction scratch, deliberately outside every tsconfig —
+      // typed linting can only report it as a parsing error.
+      '.debug/**',
     ],
   },
   tseslint.configs.strictTypeChecked,
@@ -51,7 +58,15 @@ export default defineConfig(
     },
   },
   {
-    files: ['**/*.config.js', '**/*.config.ts', '**/*.config.mjs', 'scripts/**/*.mjs'],
+    files: [
+      '**/*.config.js',
+      '**/*.config.ts',
+      '**/*.config.mjs',
+      'scripts/**/*.mjs',
+      // Hand-written ambient types for the .mjs scripts above; deliberately
+      // outside every tsconfig, so typed linting can only fail to resolve it.
+      'scripts/**/*.d.mts',
+    ],
     extends: [tseslint.configs.disableTypeChecked],
   },
   {
@@ -62,6 +77,10 @@ export default defineConfig(
     files: ['**/*.test.ts'],
     rules: {
       '@typescript-eslint/no-non-null-assertion': 'off',
+      // A test double must MATCH an async signature (a fetch stub returns a
+      // Promise whether or not it awaits internally), so this fires on correct
+      // code and carries no safety value here. Still enforced in src/.
+      '@typescript-eslint/require-await': 'off',
     },
   },
   {

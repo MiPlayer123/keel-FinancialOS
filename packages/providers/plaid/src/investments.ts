@@ -51,6 +51,10 @@ const stringField = (record: Record<string, unknown>, key: string): string => {
 // /transactions/sync) -- same accepted boundary pattern as
 // supabase/functions/worker/index.ts's dollarsToMinor. Safe for realistic
 // magnitudes (well within 2^53).
+// /investments/holdings/get exposes only a parsed JSON number, so there is no
+// raw lexeme to parse exactly. This is the float→minor ENTRY POINT, not ledger
+// arithmetic; everything downstream is BIGINT minor units (Law 4).
+// eslint-disable-next-line no-restricted-syntax -- documented provider boundary
 const dollarsToMinorString = (value: number): string => Math.round(value * 100).toString();
 
 // Fractional-share quantities need more than 2 decimal places; capped at
