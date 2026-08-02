@@ -576,6 +576,14 @@ function PaychecksBody() {
                         bookingEnabled={settings.bookingEnabled}
                         incomeCategoryLedgerAccountId={settings.incomeCategoryLedgerAccountId}
                         autonomy={settings.autonomy}
+                        // Scope the income-anchor picker to the matched deposit's
+                        // entity — the server apply requires that entity (§D4).
+                        depositEntityId={
+                          seriesDepositMinor
+                            ? (txns.rows.find((t) => t.amountMinor === seriesDepositMinor)
+                                ?.entityId ?? null)
+                            : null
+                        }
                         onChanged={reloadTemplates}
                       />
                     ) : null}
