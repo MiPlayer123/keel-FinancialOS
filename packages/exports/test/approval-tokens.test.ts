@@ -74,6 +74,7 @@ describe('approval_tokens export', () => {
     const restored = fromJson(toJson(original));
     expect(restored.tables.approval_tokens).toHaveLength(1);
     const row = restored.tables.approval_tokens[0];
+    if (!row) throw new Error('expected a restored approval_tokens row');
     expect(row.token_id).toBe('11111111-1111-4111-8111-111111111111');
     expect(row.payload_sha256).toBe('a'.repeat(64));
     expect(row.status).toBe('issued');
