@@ -17,7 +17,7 @@
 //    autonomy control are calm text/segments, never red/green; red is reserved
 //    for the <Money> component's own negative styling.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Plus, Trash2, ChevronRight, History, Info } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -1077,6 +1077,7 @@ export function PaycheckAutonomyToggle({
   bookingEnabled,
   incomeCategoryLedgerAccountId,
   autonomy,
+  depositEntityId,
   onChanged,
 }: {
   householdId: string;
@@ -1088,16 +1089,75 @@ export function PaycheckAutonomyToggle({
   bookingEnabled: boolean;
   incomeCategoryLedgerAccountId: string | null;
   autonomy: AutonomyState;
+  /**
+   * Entity of the matched deposit. keel_paycheck_apply_payload requires the
+   * income anchor to be in the DEPOSIT's entity, so a cross-entity pick saves
+   * fine but makes every later apply reject — scope the options to it. Null
+   * (no matched deposit / pre-migration row) falls back to showing all, with
+   * the entity named on each option so the choice stays explicit.
+   */
+  depositEntityId?: string | null;
   onChanged: () => void;
 }) {
   // Pending selection awaiting confirmation (null = no dialog open).
   const [pending, setPending] = useState<AutonomyState | null>(null);
   const [saving, setSaving] = useState(false);
+  // Income category = the gross-pay anchor the server booking requires
+  // (keel_paycheck_apply_payload raises without it). There was no UI to set it,
+  // so it stayed null and silently disabled "Apply template to deposit". Owners
+  // pick it here, alongside the autonomy grant that turns booking on.
+  const [incomeCats, setIncomeCats] = useState<CategoryRow[]>([]);
+  const [selectedIncomeCat, setSelectedIncomeCat] = useState<string | null>(
+    incomeCategoryLedgerAccountId,
+  );
+  const [catsLoading, setCatsLoading] = useState(false);
+  // Load-once guard. Keying the fetch off `incomeCats.length`/`catsLoading`
+  // would re-fire forever when the load fails or the household genuinely has
+  // no income category (empty result → deps change back → effect re-runs).
+  const catsRequestedRef = useRef(false);
 
   const autoDisabled = activeTemplateId === null;
+  // Only booking states (Suggest / Auto-apply) need the anchor; Off never books.
+  const needsIncomeCat = pending !== null && pending !== 'off';
+
+  // Load income categories + seed the current selection when the confirm dialog
+  // opens for a booking state (not needed just to turn automation off).
+  useEffect(() => {
+    if (!needsIncomeCat) return;
+    setSelectedIncomeCat(incomeCategoryLedgerAccountId);
+    if (catsRequestedRef.current) return;
+    catsRequestedRef.current = true;
+    setCatsLoading(true);
+    void (async () => {
+      try {
+        const rows = await fetchCategories(householdId);
+        setIncomeCats(rows.filter((c) => c.kind === 'income'));
+      } catch {
+        // Allow one retry on the next open rather than looping on this one.
+        catsRequestedRef.current = false;
+        toast.error('Could not load income categories.');
+      } finally {
+        setCatsLoading(false);
+      }
+    })();
+  }, [needsIncomeCat, householdId, incomeCategoryLedgerAccountId]);
+
+  // Scope to the deposit's entity — the apply re-checks it (see prop doc).
+  const anchorOptions = useMemo(
+    () =>
+      depositEntityId
+        ? incomeCats.filter((c) => c.entityId === depositEntityId)
+        : incomeCats,
+    [incomeCats, depositEntityId],
+  );
 
   async function confirm() {
     if (pending === null) return;
+    // Booking states need the income anchor or the server apply rejects (§D4).
+    if (needsIncomeCat && !selectedIncomeCat) {
+      toast.error('Pick the income category KEEL should record the gross pay under.');
+      return;
+    }
     setSaving(true);
     try {
       await setPaycheckSeriesSettings({
@@ -1107,7 +1167,9 @@ export function PaycheckAutonomyToggle({
         employerId,
         activeTemplateId,
         bookingEnabled,
-        incomeCategoryLedgerAccountId,
+        // Off preserves whatever anchor was set; booking states use the picked one.
+        incomeCategoryLedgerAccountId:
+          pending === 'off' ? incomeCategoryLedgerAccountId : selectedIncomeCat,
         autonomy: pending,
       });
       toast.success(
@@ -1185,6 +1247,36 @@ export function PaycheckAutonomyToggle({
               {pending !== null ? autonomyGrantCopy(pending, employerName) : ''}
             </DialogDescription>
           </DialogHeader>
+          {needsIncomeCat ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="paycheck-income-cat">Record gross pay as</Label>
+              <Select
+                value={selectedIncomeCat ?? ''}
+                onValueChange={(v) => {
+                  setSelectedIncomeCat(v);
+                }}
+              >
+                <SelectTrigger id="paycheck-income-cat">
+                  <SelectValue
+                    placeholder={catsLoading ? 'Loading…' : 'Pick an income category'}
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {anchorOptions.map((c) => (
+                    <SelectItem key={c.ledgerAccountId} value={c.ledgerAccountId}>
+                      {c.name}
+                      {c.entityName ? ` · ${c.entityName}` : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {!catsLoading && anchorOptions.length === 0
+                  ? 'No income category exists for this paycheck’s entity yet — create one first.'
+                  : 'The gross-income anchor KEEL books each paycheck under. Taxes and any 401(k)/HSA transfer come from the template.'}
+              </p>
+            </div>
+          ) : null}
           <DialogFooter>
             <Button
               variant="outline"
@@ -1196,7 +1288,7 @@ export function PaycheckAutonomyToggle({
               Cancel
             </Button>
             <Button
-              disabled={saving}
+              disabled={saving || (needsIncomeCat && !selectedIncomeCat)}
               onClick={() => {
                 void confirm();
               }}
