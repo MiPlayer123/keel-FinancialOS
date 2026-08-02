@@ -46,7 +46,7 @@
 --   detection flip the user's terminal 'rejected' state.
 --
 -- REVERSIBILITY (Law 2): unchanged and intact. keel_recurring_transition_core
---   still allows 'rejected' -> 'confirmed' (20260719130000 line 121), so a user
+--   still allows 'rejected' -> 'confirmed' (20260719130100 line 121), so a user
 --   can UN-dismiss by confirming; the pinned current candidate is exactly what
 --   they rejected. This migration does not touch that path.
 --

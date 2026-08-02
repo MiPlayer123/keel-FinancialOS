@@ -32,7 +32,7 @@ describe('groupTransfersByAccountPair', () => {
     ];
     const groups = groupTransfersByAccountPair(rows);
     expect(groups).toHaveLength(1);
-    expect(groups[0].map((r) => r.linkId)).toEqual(['a', 'b', 'c']);
+    expect(groups[0]?.map((r) => r.linkId)).toEqual(['a', 'b', 'c']);
   });
 
   it('keeps distinct account pairs in separate groups, preserving first-seen order', () => {
@@ -43,8 +43,8 @@ describe('groupTransfersByAccountPair', () => {
     ];
     const groups = groupTransfersByAccountPair(rows);
     expect(groups).toHaveLength(2);
-    expect(groups[0].map((r) => r.linkId)).toEqual(['a', 'c']);
-    expect(groups[1].map((r) => r.linkId)).toEqual(['b']);
+    expect(groups[0]?.map((r) => r.linkId)).toEqual(['a', 'c']);
+    expect(groups[1]?.map((r) => r.linkId)).toEqual(['b']);
   });
 
   it('treats the reverse direction as a different pair', () => {

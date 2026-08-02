@@ -14,7 +14,10 @@ const row = (
 ): CategorySourceLike => ({ categorySource, splits });
 
 const approvable = (
-  categorySource: ApprovableLike['categorySource'],
+  // Narrowed exactly as `row` above: the optional `categorySource` admits
+  // `undefined`, which exactOptionalPropertyTypes forbids writing explicitly
+  // into the literal below. No caller passes undefined.
+  categorySource: 'user' | 'rule' | 'plaid_pfc' | 'transfer_confirm' | null,
   categoryLedgerAccountId: string | null,
   splits: ApprovableLike['splits'] = null,
 ): ApprovableLike => ({ categorySource, categoryLedgerAccountId, splits });

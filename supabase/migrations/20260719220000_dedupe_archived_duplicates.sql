@@ -5,7 +5,7 @@
 --
 -- PROBLEM (verified live, household a1ba3759, 2026-07-19): after the Fidelity
 -- disconnect->reconnect, the ARCHIVED account "Cash Management (Individual)"
--- (connection a08bc4aa, archived by 20260719120000) still carries NON-VOIDED
+-- (connection a08bc4aa, archived by 20260719120200) still carries NON-VOIDED
 -- canonical transactions that are exact duplicates of transactions the ACTIVE
 -- reconnected account "Fidelity (Individual)" (connection 7e9bdccf) re-pulled
 -- under its own economic-key namespace. Both copies are posted and categorized,

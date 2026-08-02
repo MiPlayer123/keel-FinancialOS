@@ -41,9 +41,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
       - uses: supabase/setup-cli@v1
         with:
           version: latest
+      - run: pnpm install --frozen-lockfile
+      # config.toml declares four edge functions, so `supabase start` bundles
+      # them and hard-fails on the git-ignored generated vendor bundle
+      # (_shared/vendor/keel-domain.mjs). It MUST be built first.
+      - run: pnpm build:functions
       - name: start stack
         run: supabase start
       - name: reset (migrations + seed)
@@ -71,11 +81,14 @@ jobs:
         with:
           version: latest
       - run: pnpm install --frozen-lockfile
+      # Must precede `supabase start`: starting the stack bundles the edge
+      # functions declared in config.toml, which import this generated
+      # (git-ignored) vendor bundle.
+      - run: pnpm build:functions
       - run: supabase start
       # provision:local aliases the RUNNING stack's key as the automations
       # secret, so it must come after `supabase start` (it hard-fails cold).
       - run: pnpm provision:local
-      - run: pnpm build:functions
       - run: supabase db reset
       - name: serve functions
         # Warm up EVERY function, not just one: each function boots its own

@@ -162,10 +162,14 @@ describe('statement-ingestion export (SLICE 3)', () => {
     });
     const restored = fromJson(toJson(original));
     expect(restored.tables.statement_extractions).toHaveLength(1);
-    expect(canonicalStringify(restored.tables.statement_extractions[0].raw_evidence)).toBe(
+    const extraction = restored.tables.statement_extractions[0];
+    if (!extraction) throw new Error('expected a restored statement_extractions row');
+    expect(canonicalStringify(extraction.raw_evidence)).toBe(
       canonicalStringify(extractionRow().raw_evidence),
     );
-    expect(restored.tables.statement_extraction_lines[0].amount_minor).toBe('2000');
+    const line = restored.tables.statement_extraction_lines[0];
+    if (!line) throw new Error('expected a restored statement_extraction_lines row');
+    expect(line.amount_minor).toBe('2000');
     const once = toJson(original);
     expect(toJson(fromJson(once))).toBe(once);
   });
