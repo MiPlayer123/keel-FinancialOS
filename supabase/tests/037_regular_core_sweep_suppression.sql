@@ -98,7 +98,7 @@ values
    'TRANSFERRED TO VS Z37-626027-1', '2026-06-01', gen_random_uuid());
 
 insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency)
-select b.id, 'e7000000-0000-4000-8000-000000000011'::uuid, '00000000-0000-4000-8000-00000000a101', 50000, 'USD'
+select b.id, 'e7000000-0000-4000-8000-000000000011'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, 50000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000a1'
 union all
 select b.id, '00000000-0000-4000-8000-00000000a318', '00000000-0000-4000-8000-00000000a101', -50000, 'USD'

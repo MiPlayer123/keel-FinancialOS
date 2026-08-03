@@ -171,7 +171,7 @@ from (values
 insert into public.journal_postings (id, batch_id, ledger_account_id, entity_id, amount_minor, currency)
 select ('d3000000-0000-4000-8000-0000007' || lpad(s::text,5,'0'))::uuid,
        ('d3000000-0000-4000-8000-0000005' || lpad(s::text,5,'0'))::uuid,
-       '00000000-0000-4000-8000-00000000a301','00000000-0000-4000-8000-00000000a101',-90000,'USD'
+       '00000000-0000-4000-8000-00000000a301'::uuid,'00000000-0000-4000-8000-00000000a101'::uuid,-90000,'USD'
 from generate_series(0,8) s
 union all
 select ('d3000000-0000-4000-8000-0000008' || lpad(s::text,5,'0'))::uuid,
