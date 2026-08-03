@@ -11,7 +11,7 @@ select has_table('public', 'scheduled_transactions', 'scheduled transactions exi
 select has_column('public', 'scheduled_transactions', 'anchor_day',
   'anchor day recorded for month-end recovery');
 select has_function('public', 'keel_schedule_save',
-  array['uuid','uuid','uuid','text','bigint','uuid','text','date','integer'],
+  array['uuid','uuid','uuid','text','bigint','uuid','text','date','integer','smallint','smallint'],
   'save (create/update) command exists');
 select has_function('public', 'keel_schedule_set_status',
   array['uuid','uuid','text'], 'set_status command exists');
@@ -29,7 +29,7 @@ select has_function('public', 'keel_list_schedules',
 -- ---------------------------------------------------------------------------
 select is(
   (select r.rolname from pg_proc p join pg_roles r on r.oid = p.proowner
-    where p.oid = 'public.keel_schedule_save(uuid,uuid,uuid,text,bigint,uuid,text,date,integer)'::regprocedure),
+    where p.oid = 'public.keel_schedule_save(uuid,uuid,uuid,text,bigint,uuid,text,date,integer,smallint,smallint)'::regprocedure),
   'keel_api', 'save owned by keel_api');
 select is(
   (select r.rolname from pg_proc p join pg_roles r on r.oid = p.proowner
@@ -54,10 +54,10 @@ select is(
 -- prove the ACL rows are still exactly what the house pattern expects.
 -- ---------------------------------------------------------------------------
 select ok(not has_function_privilege('anon',
-  'public.keel_schedule_save(uuid,uuid,uuid,text,bigint,uuid,text,date,integer)', 'EXECUTE'),
+  'public.keel_schedule_save(uuid,uuid,uuid,text,bigint,uuid,text,date,integer,smallint,smallint)', 'EXECUTE'),
   'anon cannot call save');
 select ok(has_function_privilege('authenticated',
-  'public.keel_schedule_save(uuid,uuid,uuid,text,bigint,uuid,text,date,integer)', 'EXECUTE'),
+  'public.keel_schedule_save(uuid,uuid,uuid,text,bigint,uuid,text,date,integer,smallint,smallint)', 'EXECUTE'),
   'authenticated can call save');
 select ok(not has_function_privilege('anon',
   'public.keel_schedule_set_status(uuid,uuid,text)', 'EXECUTE'),

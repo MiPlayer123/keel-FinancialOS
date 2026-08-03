@@ -36,12 +36,12 @@ values
    '00000000-0000-4000-8000-00000000a101', 'Transfers Out', 'expense', 'USD', true, 'transfers_out', true),
   ('cb000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-00000000a001',
    '00000000-0000-4000-8000-00000000a101', 'Transfers In', 'income', 'USD', true, 'transfers_in', true),
-  ('cb000000-0000-4000-8000-000000000012', '00000000-0000-4000-8000-00000000a001',
-   '00000000-0000-4000-8000-00000000a101', 'Uncat Expense (fx)', 'expense', 'USD', true, 'uncategorized_expense', true),
-  ('cb000000-0000-4000-8000-000000000013', '00000000-0000-4000-8000-00000000a001',
-   '00000000-0000-4000-8000-00000000a101', 'Uncat Income (fx)', 'income', 'USD', true, 'uncategorized_income', true),
   ('cb000000-0000-4000-8000-000000000014', '00000000-0000-4000-8000-00000000a001',
    '00000000-0000-4000-8000-00000000a101', 'Groceries (fx)', 'expense', 'USD', true, 'food_drink_groceries', true);
+-- NB: a101's uncategorized_expense (a317) and uncategorized_income (a318) are
+-- already seeded WITH their pfc_keys by supabase/seed.sql, so we reference those
+-- seeded accounts below instead of inserting duplicates (the (entity_id,
+-- pfc_key) uniqueness constraint would otherwise reject the insert).
 
 insert into public.canonical_transactions
   (id, household_id, entity_id, account_id, status, source, description, effective_date, economic_event_key)
@@ -61,11 +61,11 @@ values
 insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency) values
   ('cb000000-0000-4000-8000-000000000201', '00000000-0000-4000-8000-00000000a301',
    '00000000-0000-4000-8000-00000000a101', -20000, 'USD'),
-  ('cb000000-0000-4000-8000-000000000201', 'cb000000-0000-4000-8000-000000000012',
+  ('cb000000-0000-4000-8000-000000000201', '00000000-0000-4000-8000-00000000a317',
    '00000000-0000-4000-8000-00000000a101',  20000, 'USD'),
   ('cb000000-0000-4000-8000-000000000202', '00000000-0000-4000-8000-00000000a302',
    '00000000-0000-4000-8000-00000000a101',  20000, 'USD'),
-  ('cb000000-0000-4000-8000-000000000202', 'cb000000-0000-4000-8000-000000000013',
+  ('cb000000-0000-4000-8000-000000000202', '00000000-0000-4000-8000-00000000a318',
    '00000000-0000-4000-8000-00000000a101', -20000, 'USD');
 
 -- Give the INFLOW leg a TRANSFER_IN PFC record — WITHOUT the suppression
@@ -192,11 +192,11 @@ values
 insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency) values
   ('cb000000-0000-4000-8000-000000000501', '00000000-0000-4000-8000-00000000a301',
    '00000000-0000-4000-8000-00000000a101', -15000, 'USD'),
-  ('cb000000-0000-4000-8000-000000000501', 'cb000000-0000-4000-8000-000000000012',
+  ('cb000000-0000-4000-8000-000000000501', '00000000-0000-4000-8000-00000000a317',
    '00000000-0000-4000-8000-00000000a101',  15000, 'USD'),
   ('cb000000-0000-4000-8000-000000000502', '00000000-0000-4000-8000-00000000a302',
    '00000000-0000-4000-8000-00000000a101',  15000, 'USD'),
-  ('cb000000-0000-4000-8000-000000000502', 'cb000000-0000-4000-8000-000000000013',
+  ('cb000000-0000-4000-8000-000000000502', '00000000-0000-4000-8000-00000000a318',
    '00000000-0000-4000-8000-00000000a101', -15000, 'USD');
 -- User already filed the outflow leg as Groceries.
 insert into public.transaction_categories

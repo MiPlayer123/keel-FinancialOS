@@ -43,7 +43,7 @@ select ok(
 -- Fixtures. Alpha seed: household a001, entity a101, accounts a401 (checking,
 -- ledger a301) and a402 (card, ledger a302). Add the expense-kind Transfers Out
 -- and Loan Payments fixtures + an uncategorized-expense offset with a pfc_key
--- (the seed a317 carries none). a101 is excluded from the migration backfill as
+-- seeded with its pfc_key by supabase/seed.sql. a101 is excluded from the backfill as
 -- a fixture entity, so seed the transfers_out category explicitly.
 -- ---------------------------------------------------------------------------
 insert into public.ledger_accounts
@@ -54,10 +54,10 @@ values
    'transfers_out', true),
   ('ca000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-00000000a001',
    '00000000-0000-4000-8000-00000000a101', 'Loan Payments', 'expense', 'USD', true,
-   'loan_payments', true),
-  ('ca000000-0000-4000-8000-000000000012', '00000000-0000-4000-8000-00000000a001',
-   '00000000-0000-4000-8000-00000000a101', 'Uncategorized Expense (fx)', 'expense', 'USD',
-   true, 'uncategorized_expense', true);
+   'loan_payments', true);
+-- NB: the seed already stamps pfc_key 'uncategorized_expense' on a101's a317
+-- (supabase/seed.sql), so we reference that seeded account below rather than
+-- inserting a second one (the (entity_id, pfc_key) uniqueness would reject it).
 
 -- ---------------------------------------------------------------------------
 -- SLICE A cash-flow exclusion. A credit-card payment debit (-$500) on checking.
@@ -114,7 +114,7 @@ select ok(
 
 select is(
   public.keel_cash_flow('00000000-0000-4000-8000-00000000a001','2026-06-01','2026-06-30')->>'formulaVersion',
-  'cash-flow-v5-transfer-out-excluded', 'cash_flow formula version reflects the transfer-out exclusion');
+  'cash-flow-v7-sign-classified', 'cash_flow formula version reflects the transfer-out exclusion');
 -- Outflow = 180000 (mortgage, kept) only; the 50000 Transfers-Out is excluded
 -- WITHOUT any paired transfer_link (the one-sided unconnected-card case).
 select is(
@@ -129,7 +129,7 @@ select is(
   '180000', 'monthly cash flow also excludes the Transfers-Out card payment');
 select is(
   public.keel_cash_flow_monthly('00000000-0000-4000-8000-00000000a001','2026-06-01','2026-06-30')->>'formulaVersion',
-  'cash-flow-monthly-v4-transfer-out-excluded', 'monthly formula version bumped');
+  'cash-flow-monthly-v6-sign-classified', 'monthly formula version bumped');
 reset role;
 
 -- ---------------------------------------------------------------------------
@@ -157,11 +157,11 @@ values
 insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency) values
   ('ca000000-0000-4000-8000-000000000601', '00000000-0000-4000-8000-00000000a301',
    '00000000-0000-4000-8000-00000000a101', -30000, 'USD'),
-  ('ca000000-0000-4000-8000-000000000601', 'ca000000-0000-4000-8000-000000000012',
+  ('ca000000-0000-4000-8000-000000000601', '00000000-0000-4000-8000-00000000a317',
    '00000000-0000-4000-8000-00000000a101',  30000, 'USD'),
   ('ca000000-0000-4000-8000-000000000602', '00000000-0000-4000-8000-00000000a302',
    '00000000-0000-4000-8000-00000000a101',  30000, 'USD'),
-  ('ca000000-0000-4000-8000-000000000602', 'ca000000-0000-4000-8000-000000000012',
+  ('ca000000-0000-4000-8000-000000000602', '00000000-0000-4000-8000-00000000a317',
    '00000000-0000-4000-8000-00000000a101', -30000, 'USD');
 
 -- The seed card a402 subtype is 'credit_card' (underscore); the tier accepts

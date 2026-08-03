@@ -65,7 +65,7 @@ select is(
   '8000','monthly cash flow also excludes the settled deposit');
 
 -- Formula version is bumped so reproducibility stays honest.
-select is(public.keel_cash_flow('00000000-0000-4000-8000-00000000a001','2026-06-01','2026-06-30')->>'formulaVersion','cash-flow-v4-transfer-category-excluded','cash_flow formula version reflects the exclusion');
+select is(public.keel_cash_flow('00000000-0000-4000-8000-00000000a001','2026-06-01','2026-06-30')->>'formulaVersion','cash-flow-v7-sign-classified','cash_flow formula version reflects the exclusion');
 
 -- Reversing the settlement restores the deposit as income.
 select lives_ok($$select public.keel_reimbursement_reverse_settlement('c8000000-0000-4000-8000-000000000043','pgtap:xflow:reverse','{}','00000000-0000-4000-8000-00000000a001',jsonb_build_object('settlement_id',(select id from public.settlements where household_id='00000000-0000-4000-8000-00000000a001' and transaction_id='c8000000-0000-4000-8000-000000000003'),'reason','wrong payment'))$$,'settlement reversed');

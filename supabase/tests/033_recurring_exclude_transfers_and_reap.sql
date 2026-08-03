@@ -12,16 +12,16 @@ select ok('withdrawn' = any(enum_range(null::public.recurring_series_status)::te
 select ok('withdrawn' = any(enum_range(null::public.recurring_transition)::text[]),
   'recurring_transition gained withdrawn');
 select has_function('public', 'keel_recurring_reap_stale_suggestions',
-  array['uuid','uuid','uuid[]'], 'reap proc exists');
+  array['uuid','uuid','uuid[]','boolean'], 'reap proc exists');
 select is(
   (select r.rolname from pg_proc p join pg_roles r on r.oid = p.proowner
-    where p.oid = 'public.keel_recurring_reap_stale_suggestions(uuid,uuid,uuid[])'::regprocedure),
+    where p.oid = 'public.keel_recurring_reap_stale_suggestions(uuid,uuid,uuid[],boolean)'::regprocedure),
   'keel_api', 'reap proc is keel_api-owned definer (can flip series status)');
 select ok(has_function_privilege('service_role',
-  'public.keel_recurring_reap_stale_suggestions(uuid,uuid,uuid[])', 'EXECUTE'),
+  'public.keel_recurring_reap_stale_suggestions(uuid,uuid,uuid[],boolean)', 'EXECUTE'),
   'service role (worker admin client) can call the reap');
 select ok(not has_function_privilege('authenticated',
-  'public.keel_recurring_reap_stale_suggestions(uuid,uuid,uuid[])', 'EXECUTE'),
+  'public.keel_recurring_reap_stale_suggestions(uuid,uuid,uuid[],boolean)', 'EXECUTE'),
   'authenticated cannot call the reap directly');
 
 -- ---------------------------------------------------------------------------
@@ -243,7 +243,7 @@ select is(
   public.keel_recurring_reap_stale_suggestions(
     '00000000-0000-4000-8000-00000000a001',
     (select id from public.recurring_detector_runs where run_key='pgtap:reap:runA'),
-    array[]::uuid[]),
+    array[]::uuid[], true),
   1, 'reap withdraws exactly the one still-suggested, not-emitted series');
 reset role;
 
@@ -268,7 +268,7 @@ select is(
   public.keel_recurring_reap_stale_suggestions(
     '00000000-0000-4000-8000-00000000a001',
     (select id from public.recurring_detector_runs where run_key='pgtap:reap:runA'),
-    array[]::uuid[]),
+    array[]::uuid[], true),
   0, 'reap is idempotent — a second pass withdraws nothing');
 reset role;
 select is((select count(*)::int from public.recurring_status_events se
