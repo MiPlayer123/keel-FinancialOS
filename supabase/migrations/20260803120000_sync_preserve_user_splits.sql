@@ -14,8 +14,12 @@
 --
 -- Fix: in the 'revise' branch, if the live batch is USER-AUTHORED (carries a
 -- 'splits edited' revision, or has more than the 2 postings a flat sync batch
--- has) AND the cash amount is UNCHANGED, preserve the batch and move only the
--- status / description / effective_date. Everything else is untouched:
+-- has) AND the cash amount is UNCHANGED, preserve the split composition. Two
+-- sub-cases: if the effective_date is also unchanged, move ONLY the canonical
+-- status/description (no ledger write); if the date moved (a Jul-31 pending
+-- settling Aug-1), the batch date drives every ledger read model, so re-date by
+-- copying the split VERBATIM onto a new-dated reversal+replacement (Law 2),
+-- period-lock-checked. Everything else is untouched:
 --   * amount actually changed  -> falls through to the rebuild (the old split no
 --     longer reconciles to the new amount);
 --   * a removal ('void')       -> still reverses (the transaction is gone);
@@ -50,6 +54,7 @@ declare
   v_prev_batch record;
   v_prev_cash_minor bigint;
   v_user_authored boolean;
+  v_txn_entity uuid;
   v_result jsonb;
 begin
   select * into v_nsr
@@ -208,13 +213,79 @@ begin
         (canonical_transaction_id, normalized_source_record_id)
       values (v_txn_id, v_nsr.id);
 
-      update public.canonical_transactions
-         set status = case when v_nsr.pending then 'pending'::public.transaction_status
-                           else 'posted'::public.transaction_status end,
-             description = left(v_nsr.description, 500),
-             effective_date = v_nsr.effective_date,
-             voided_at = null
-       where id = v_txn_id;
+      if v_prev_batch.effective_date is not distinct from v_nsr.effective_date then
+        -- (a) DATE unchanged: pure metadata move, no ledger write at all.
+        update public.canonical_transactions
+           set status = case when v_nsr.pending then 'pending'::public.transaction_status
+                             else 'posted'::public.transaction_status end,
+               description = left(v_nsr.description, 500),
+               effective_date = v_nsr.effective_date,
+               voided_at = null
+         where id = v_txn_id;
+      else
+        -- (b) DATE moved (e.g. a Jul-31 pending settling Aug-1). Ledger read
+        -- models -- cash flow, budgets, reconciliation, export -- key off
+        -- journal_batches.effective_date, so a metadata-only date bump would
+        -- leave the money booked in the old period while views show the new
+        -- one. Re-date by copying the split VERBATIM onto a new-dated
+        -- replacement (Law 2 correction); the composition is unchanged, only
+        -- the date moves. Period-lock precheck on BOTH dates (the deferred
+        -- posting trigger is the backstop).
+        select entity_id into v_txn_entity
+          from public.canonical_transactions where id = v_txn_id;
+        if exists (
+          select 1 from public.period_locks l
+          where l.household_id = v_nsr.household_id
+            and (l.entity_id is null or l.entity_id = v_txn_entity)
+            and l.reopened_at is null
+            and (v_prev_batch.effective_date between l.start_date and l.end_date
+                 or v_nsr.effective_date between l.start_date and l.end_date)
+        ) then
+          raise exception 'KEEL_PERIOD_LOCKED: re-dating % into a locked period',
+            v_nsr.effective_date using errcode = 'P0003';
+        end if;
+
+        insert into public.journal_batches
+          (household_id, canonical_transaction_id, description, effective_date,
+           reverses_batch_id, command_id)
+        values
+          (v_nsr.household_id, v_txn_id, 'REVERSAL: sync revise (re-date)',
+           v_prev_batch.effective_date, v_prev_batch.id, v_command_id)
+        returning id into v_reversal_id;
+
+        insert into public.journal_postings
+          (batch_id, ledger_account_id, entity_id, amount_minor, currency)
+        select v_reversal_id, p.ledger_account_id, p.entity_id, -p.amount_minor, p.currency
+          from public.journal_postings p where p.batch_id = v_prev_batch.id;
+
+        insert into public.journal_batches
+          (household_id, canonical_transaction_id, description, effective_date, command_id)
+        values
+          (v_nsr.household_id, v_txn_id, left(v_nsr.description, 500),
+           v_nsr.effective_date, v_command_id)
+        returning id into v_batch_id;
+
+        -- Verbatim copy: same ledger accounts, same amounts -> the user's split
+        -- survives; only the date changes.
+        insert into public.journal_postings
+          (batch_id, ledger_account_id, entity_id, amount_minor, currency)
+        select v_batch_id, p.ledger_account_id, p.entity_id, p.amount_minor, p.currency
+          from public.journal_postings p where p.batch_id = v_prev_batch.id;
+
+        -- reason 'splits edited' keeps the replacement flagged user-authored, so
+        -- a later same-amount revise preserves it again.
+        insert into public.journal_revisions
+          (original_batch_id, reversal_batch_id, replacement_batch_id, reason)
+        values (v_prev_batch.id, v_reversal_id, v_batch_id, 'splits edited');
+
+        update public.canonical_transactions
+           set status = case when v_nsr.pending then 'pending'::public.transaction_status
+                             else 'posted'::public.transaction_status end,
+               description = left(v_nsr.description, 500),
+               effective_date = v_nsr.effective_date,
+               voided_at = null
+         where id = v_txn_id;
+      end if;
 
       v_result := jsonb_build_object(
         'commandId', v_command_id,
@@ -222,7 +293,8 @@ begin
         'idempotentReplay', false,
         'effects', jsonb_build_object(
           'kind', 'revise', 'canonicalTransactionId', v_txn_id,
-          'postingsPreserved', true),
+          'postingsPreserved', true,
+          'reDated', (v_prev_batch.effective_date is distinct from v_nsr.effective_date)),
         'asOf', to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
       );
       perform public.keel_finish_command(

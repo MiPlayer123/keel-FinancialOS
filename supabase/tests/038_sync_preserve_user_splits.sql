@@ -142,4 +142,66 @@ select is(
       and description like 'REVERSAL: sync%'),
   1, 'a plain sync batch is reversed + re-booked exactly as before');
 
+-- ===========================================================================
+-- CASE 3 — a user split whose settle also MOVES THE DATE (Jul-12 pending ->
+-- Jul-13 posted, same amount). The split must be preserved AND re-dated: a
+-- metadata-only date bump would strand the batch (and thus every ledger read
+-- model) in the old period. Verbatim copy onto a new-dated replacement.
+-- ===========================================================================
+insert into public.raw_provider_events
+  (household_id, connection_id, provider, provider_event_id, account_external_ref, body, received_at)
+values
+  ('00000000-0000-4000-8000-00000000a001', 'e9000000-0000-4000-8000-000000000001', 'plaid',
+   'redate1:raw', 'pgtap:preserve:acct', '{}'::jsonb, now());
+insert into public.canonical_transactions
+  (id, household_id, entity_id, account_id, status, source, description, effective_date, economic_event_key)
+values
+  ('e9000000-0000-4000-8000-0000000000a3', '00000000-0000-4000-8000-00000000a001',
+   '00000000-0000-4000-8000-00000000a101', 'e9000000-0000-4000-8000-000000000021',
+   'pending', 'sync', 'MARKET (pending)', '2026-07-12',
+   'txn:plaid:pgtap:preserve:item:redate1');
+insert into public.journal_batches (id, household_id, canonical_transaction_id, description, effective_date, command_id)
+values
+  ('e9000000-0000-4000-8000-0000000000b3', '00000000-0000-4000-8000-00000000a001',
+   'e9000000-0000-4000-8000-0000000000a3', 'MARKET (pending)', '2026-07-12', gen_random_uuid());
+insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency) values
+  ('e9000000-0000-4000-8000-0000000000b3', 'e9000000-0000-4000-8000-000000000011',
+   '00000000-0000-4000-8000-00000000a101', -6000, 'USD'),
+  ('e9000000-0000-4000-8000-0000000000b3', '00000000-0000-4000-8000-00000000a311',
+   '00000000-0000-4000-8000-00000000a101', 4000, 'USD'),
+  ('e9000000-0000-4000-8000-0000000000b3', '00000000-0000-4000-8000-00000000a314',
+   '00000000-0000-4000-8000-00000000a101', 2000, 'USD');
+insert into public.normalized_source_records
+  (raw_event_id, household_id, account_id, provider_transaction_id, amount_minor, currency,
+   effective_date, description, pending, kind)
+select r.id, '00000000-0000-4000-8000-00000000a001', 'e9000000-0000-4000-8000-000000000021',
+       'redate1', -6000, 'USD', '2026-07-13', 'MARKET #7', false, 'modified'
+  from public.raw_provider_events r where r.provider_event_id = 'redate1:raw';
+
+select is(
+  (public.keel_worker_apply_action(
+     (select id from public.normalized_source_records where provider_transaction_id = 'redate1'),
+     'revise', 'txn:plaid:pgtap:preserve:item:redate1', 'pgtap:apply:redate1'
+   )->'effects'->>'reDated'),
+  'true',
+  'a same-amount revise that MOVES the date reports reDated=true');
+select is(
+  (select count(*)::int from public.journal_postings jp
+     join public.journal_batches jb on jb.id = jp.batch_id
+    where jb.canonical_transaction_id = 'e9000000-0000-4000-8000-0000000000a3'
+      and jb.reverses_batch_id is null
+      and not exists (select 1 from public.journal_revisions r where r.original_batch_id = jb.id)),
+  3, 're-dated split keeps all 3 legs (verbatim copy)');
+select is(
+  (select jb.effective_date from public.journal_batches jb
+    where jb.canonical_transaction_id = 'e9000000-0000-4000-8000-0000000000a3'
+      and jb.reverses_batch_id is null
+      and not exists (select 1 from public.journal_revisions r where r.original_batch_id = jb.id)),
+  date '2026-07-13', 'the live split batch is moved to the settled date');
+select is(
+  (select sum(jp.amount_minor)::bigint from public.journal_postings jp
+     join public.journal_batches jb on jb.id = jp.batch_id
+    where jb.canonical_transaction_id = 'e9000000-0000-4000-8000-0000000000a3'),
+  0::bigint, 're-dated transaction still nets to zero (Law 3)');
+
 select * from finish();rollback;

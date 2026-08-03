@@ -22,8 +22,13 @@ points at it, or it has more than the 2 postings a flat sync batch carries) AND
 the cash amount is unchanged, preserve the batch and move only
 status/description/effective_date (a new `postingsPreserved: true` effect). A
 genuine amount change still falls through to the rebuild; a void still reverses;
-a plain 2-leg sync batch re-books as before. Body restated from the live
-definition (byte-for-byte match to 20260713090000) with two declares + the
+a plain 2-leg sync batch re-books as before. **Codex P1 (PR #159): a settle that
+also MOVES the date** (Jul-31 pending -> Aug-1 posted) can't be metadata-only —
+ledger read models key off `journal_batches.effective_date`, so a bare date bump
+strands the money in the old period. Handled: date-unchanged = metadata only;
+date-changed = re-date by copying the split VERBATIM onto a new-dated
+reversal+replacement (period-lock checked). Body restated from the live
+definition (byte-for-byte match to 20260713090000) with declares + the
 preserve block; keel_worker owner/grant ritual re-asserted.
 
 Applied to live. **Verified with a ROLLBACK-wrapped live smoke test** against the
