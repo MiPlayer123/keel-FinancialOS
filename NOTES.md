@@ -4,6 +4,46 @@ Record every decision, deviation, failed approach, command run, test result, mig
 
 ---
 
+## 2026-08-03 — fix(sync): preserve user-authored splits across a settle-revise
+
+**Root cause (systematic-debugging).** `keel_worker_apply_action`'s 'revise' path
+unconditionally reversed the transaction's live batch and re-booked a flat
+cash + Uncategorized pair from the provider payload. A pending→posted settle is
+a 'revise' that changes only status/description (NOT the amount), so any split a
+user had already made on a pending transaction — taxes, a 401(k) distribution
+leg, a refund/reimbursement — was silently destroyed. Observed live: the DEEPTUNE
+paycheck (b8941e45) reverted from its 9-leg split to Uncategorized when it
+settled; the Samay reimbursement split was at the same risk. Violates Law 2 (a
+correction must not lose the thing corrected) and Law 9 / "explicit ownership".
+
+**Fix** — migration `20260803120000_sync_preserve_user_splits.sql`: in the
+'revise' branch, if the live batch is USER-AUTHORED (a 'splits edited' revision
+points at it, or it has more than the 2 postings a flat sync batch carries) AND
+the cash amount is unchanged, preserve the batch and move only
+status/description/effective_date (a new `postingsPreserved: true` effect). A
+genuine amount change still falls through to the rebuild; a void still reverses;
+a plain 2-leg sync batch re-books as before. **Codex P1 (PR #159): a settle that
+also MOVES the date** (Jul-31 pending -> Aug-1 posted) can't be metadata-only —
+ledger read models key off `journal_batches.effective_date`, so a bare date bump
+strands the money in the old period. Handled: date-unchanged = metadata only;
+date-changed = re-date by copying the split VERBATIM onto a new-dated
+reversal+replacement (period-lock checked). Body restated from the live
+definition (byte-for-byte match to 20260713090000) with declares + the
+preserve block; keel_worker owner/grant ritual re-asserted.
+
+Applied to live. **Verified with a ROLLBACK-wrapped live smoke test** against the
+real paycheck: a same-amount revise left all 9 legs intact, created 0 new sync
+reversals, reported `postingsPreserved=true`, advanced status→posted — then
+rolled back (no permanent change). Regression test:
+`supabase/tests/038_sync_preserve_user_splits.sql` (preserve a 3-leg split;
+control: a plain 2-leg batch still re-books).
+
+Not covered: the pending→posted SUPERSESSION path (Plaid issues a NEW
+provider_transaction_id and voids the old canonical) — that's a genuinely new
+transaction, not a revise, so this guard can't carry the split across it. Deferred.
+
+---
+
 ## 2026-08-02 — feat(splits): allow CONTRA category legs (refunds / reimbursements)
 
 **Contract amendment (BC-v2.1 stabilized-not-frozen).** `keel_cmd_set_splits` had a
