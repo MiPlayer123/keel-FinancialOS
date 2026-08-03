@@ -148,6 +148,38 @@ insert into excluded_export_tables(table_name) values ('recurring_detection_clai
 insert into excluded_export_tables(table_name) values
   ('household_notes'), ('household_tasks');
 
+-- TEMP-DIAG (remove before final): dump the exact drift so CI reports names.
+select diag('DIAG_EXTRA_GRANT_TABLES: ' || coalesce((
+  select string_agg(c.relname, ',' order by c.relname)
+    from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace
+   where n.nspname='public' and c.relkind in ('r','p')
+     and not exists (select 1 from expected_export_tables e where e.table_name=c.relname)
+     and has_table_privilege('keel_export', c.oid, 'SELECT')), '<none>'));
+select diag('DIAG_UNCLASSIFIED_TABLES: ' || coalesce((
+  with actual as (
+    select c.relname as table_name from pg_catalog.pg_class c
+      join pg_catalog.pg_namespace n on n.oid=c.relnamespace
+     where n.nspname='public' and c.relkind in ('r','p')),
+  classified as (
+    select table_name, count(*) d from (
+      select table_name from expected_export_tables
+      union all select table_name from excluded_export_tables) z group by table_name)
+  select string_agg(coalesce(actual.table_name,classified.table_name)||'('||
+    case when actual.table_name is null then 'not-live'
+         when classified.table_name is null then 'unclassified'
+         else classified.d::text||'x' end||')', ',')
+    from actual full join classified using (table_name)
+   where actual.table_name is null or classified.table_name is null or classified.d<>1), '<none>'));
+select diag('DIAG_UNCLASSIFIED_COLUMNS: ' || coalesce((
+  select string_agg(c.table_name||'.'||c.column_name, ',' order by c.table_name,c.column_name)
+    from information_schema.columns c
+    join expected_export_tables e on e.table_name=c.table_name
+   where c.table_schema='public'
+     and not (c.column_name = any(e.allowed_columns) or c.column_name = any(e.omitted_columns))), '<none>'));
+select diag('DIAG_EMITTED_TABLE_COUNT: ' || (
+  select count(*)::text from jsonb_object_keys(
+    public.keel_export_household('00000000-0000-4000-8000-00000000a001')->'tables')));
+
 select has_role('keel_export', 'dedicated export role exists');
 select ok(
   (select not rolcanlogin and not rolsuper and not rolbypassrls
