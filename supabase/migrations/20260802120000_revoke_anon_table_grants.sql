@@ -56,3 +56,21 @@ begin
     end if;
   end loop;
 end $$;
+
+-- 4. ROOT CAUSE (Codex review on PR #157). Steps 1–3 only snapshot the tables
+--    that exist right now — they do nothing about the DEFAULT PRIVILEGES that
+--    made every new public table auto-grant anon/authenticated full DML in the
+--    first place. On this project both `postgres` and `supabase_admin` carry
+--    `GRANT ALL ON TABLES TO anon, authenticated` defaults in public, so the
+--    NEXT table that forgets the per-table revoke (as statement_outbox did)
+--    re-opens the hole. Migrations run as `postgres`, so revoke its public-schema
+--    TABLE defaults for the client roles: new tables now start with NO client
+--    grant, and each migration explicitly grants the RLS-gated SELECT it needs
+--    (the pattern the codebase already follows, e.g. 20260710210500). This is
+--    fail-CLOSED (a forgotten grant denies a read, never exposes a write).
+alter default privileges for role postgres in schema public
+  revoke all on tables from anon, authenticated;
+-- supabase_admin also carries the permissive default, but altering another
+-- role's defaults requires membership we don't reliably have here, and no KEEL
+-- migration creates tables as supabase_admin — every app table is created by
+-- `postgres`. Left as a noted residual rather than a fragile cross-role ALTER.
