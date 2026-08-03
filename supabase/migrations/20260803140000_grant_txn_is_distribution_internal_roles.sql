@@ -18,3 +18,9 @@ grant execute on function public.keel_txn_is_distribution(uuid) to keel_api, kee
 -- never granted SELECT on it -> 42501 "permission denied for table
 -- transaction_overrides" (pgTAP 035). Grant the read.
 grant select on public.transaction_overrides to keel_api;
+
+-- keel_cmd_statements_decide_payment_link (keel_api-owned SECURITY DEFINER,
+-- 20260720260000) PERFORMs keel_detect_transfers on confirm, but that function
+-- was granted only to authenticated/service_role -> 42501 "permission denied for
+-- function keel_detect_transfers" when keel_api runs it (pgTAP 035 confirm/detach).
+grant execute on function public.keel_detect_transfers(uuid) to keel_api;
