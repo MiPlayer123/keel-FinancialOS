@@ -4,7 +4,7 @@ import {
   buildSplitsPayload,
   hasDuplicateCategories,
   magnitudeMinor,
-  parseSplitMagnitude,
+  parseSplitAmount,
   seedRowsForNewSplit,
   seedRowsFromSplits,
   splitRemainderMinor,
@@ -15,34 +15,38 @@ import {
 const CAT_A = 'aaaaaaaa-0000-4000-8000-000000000001';
 const CAT_B = 'bbbbbbbb-0000-4000-8000-000000000002';
 
-describe('parseSplitMagnitude', () => {
+describe('parseSplitAmount', () => {
   it('parses plain dollars and cents into minor units', () => {
-    expect(parseSplitMagnitude('12.34')).toBe('1234');
-    expect(parseSplitMagnitude('12')).toBe('1200');
-    expect(parseSplitMagnitude('0.5')).toBe('50');
-    expect(parseSplitMagnitude('.5')).toBe('50');
-    expect(parseSplitMagnitude('0.05')).toBe('5');
+    expect(parseSplitAmount('12.34')).toBe('1234');
+    expect(parseSplitAmount('12')).toBe('1200');
+    expect(parseSplitAmount('0.5')).toBe('50');
+    expect(parseSplitAmount('.5')).toBe('50');
+    expect(parseSplitAmount('0.05')).toBe('5');
+  });
+
+  it('accepts a NEGATIVE amount (a refund / reimbursement credit leg)', () => {
+    expect(parseSplitAmount('-5')).toBe('-500');
+    expect(parseSplitAmount('-55.83')).toBe('-5583');
   });
 
   it('tolerates currency formatting the house parser accepts', () => {
-    expect(parseSplitMagnitude('$1,234.56')).toBe('123456');
-    expect(parseSplitMagnitude(' 43.00 ')).toBe('4300');
+    expect(parseSplitAmount('$1,234.56')).toBe('123456');
+    expect(parseSplitAmount(' 43.00 ')).toBe('4300');
   });
 
-  it('rejects blanks, negatives, zero, and junk', () => {
-    expect(parseSplitMagnitude('')).toBeNull();
-    expect(parseSplitMagnitude('   ')).toBeNull();
-    expect(parseSplitMagnitude('-5')).toBeNull();
-    expect(parseSplitMagnitude('0')).toBeNull();
-    expect(parseSplitMagnitude('0.00')).toBeNull();
-    expect(parseSplitMagnitude('abc')).toBeNull();
-    expect(parseSplitMagnitude('1.234')).toBeNull(); // three decimals
-    expect(parseSplitMagnitude('1.2.3')).toBeNull();
+  it('rejects blanks, zero, and junk', () => {
+    expect(parseSplitAmount('')).toBeNull();
+    expect(parseSplitAmount('   ')).toBeNull();
+    expect(parseSplitAmount('0')).toBeNull();
+    expect(parseSplitAmount('0.00')).toBeNull();
+    expect(parseSplitAmount('abc')).toBeNull();
+    expect(parseSplitAmount('1.234')).toBeNull(); // three decimals
+    expect(parseSplitAmount('1.2.3')).toBeNull();
   });
 
-  it('handles magnitudes past Number safe-integer range exactly (BigInt)', () => {
+  it('handles amounts past Number safe-integer range exactly (BigInt)', () => {
     // 2^53 = 9007199254740992 cents; one more cent must survive round-trip.
-    expect(parseSplitMagnitude('90071992547409.93')).toBe('9007199254740993');
+    expect(parseSplitAmount('90071992547409.93')).toBe('9007199254740993');
   });
 });
 
@@ -54,7 +58,7 @@ describe('magnitudeMinor', () => {
 });
 
 describe('splitRemainderMinor', () => {
-  it('is the full magnitude when nothing is entered', () => {
+  it('is the full offset (−cash) when nothing is entered', () => {
     expect(splitRemainderMinor('-4300', [{ categoryId: null, amount: '' }])).toBe('4300');
   });
 
@@ -81,8 +85,19 @@ describe('splitRemainderMinor', () => {
     ).toBe('0');
   });
 
-  it('works for income (positive cash) on the same magnitude arithmetic', () => {
-    expect(splitRemainderMinor('4300', [{ categoryId: CAT_A, amount: '43' }])).toBe('0');
+  it('balances an income split with a signed (credit) entry', () => {
+    // +cash inflow: the category leg is a credit, entered negative.
+    expect(splitRemainderMinor('4300', [{ categoryId: CAT_A, amount: '-43' }])).toBe('0');
+  });
+
+  it('balances a CONTRA / mixed split that nets to −cash', () => {
+    // A +$23 reimbursement: +$85 owed (debit) plus credits netting to −$23.
+    expect(
+      splitRemainderMinor('2300', [
+        { categoryId: CAT_A, amount: '85' },
+        { categoryId: CAT_B, amount: '-108' },
+      ]),
+    ).toBe('0');
   });
 
   it('stays exact beyond Number precision', () => {
@@ -119,6 +134,7 @@ describe('row completeness + duplicates', () => {
     expect(splitRowsComplete([{ categoryId: null, amount: '10' }])).toBe(false);
     expect(splitRowsComplete([{ categoryId: CAT_A, amount: '' }])).toBe(false);
     expect(splitRowsComplete([{ categoryId: CAT_A, amount: '10' }])).toBe(true);
+    expect(splitRowsComplete([{ categoryId: CAT_A, amount: '-10' }])).toBe(true); // credit leg
     expect(
       splitRowsComplete([
         { categoryId: CAT_A, amount: '10' },
@@ -155,9 +171,21 @@ describe('splitsReady + buildSplitsPayload', () => {
     ]);
   });
 
-  it('emits negative offsets for income (positive cash)', () => {
-    expect(buildSplitsPayload('4300', [{ categoryId: CAT_A, amount: '43' }])).toEqual([
+  it('emits the signed amount for an income credit leg', () => {
+    expect(buildSplitsPayload('4300', [{ categoryId: CAT_A, amount: '-43' }])).toEqual([
       { categoryLedgerAccountId: CAT_A, amountMinor: '-4300' },
+    ]);
+  });
+
+  it('emits a mixed CONTRA split exactly as signed (refund + owed)', () => {
+    expect(
+      buildSplitsPayload('2300', [
+        { categoryId: CAT_A, amount: '85' }, // debit: your share owed
+        { categoryId: CAT_B, amount: '-108' }, // credit: net reimbursement
+      ]),
+    ).toEqual([
+      { categoryLedgerAccountId: CAT_A, amountMinor: '8500' },
+      { categoryLedgerAccountId: CAT_B, amountMinor: '-10800' },
     ]);
   });
 
@@ -173,7 +201,7 @@ describe('splitsReady + buildSplitsPayload', () => {
 });
 
 describe('seeding', () => {
-  it('seeds editor rows from read-model splits as dollar magnitudes', () => {
+  it('seeds editor rows from read-model splits, preserving sign', () => {
     expect(
       seedRowsFromSplits([
         { categoryLedgerAccountId: CAT_A, amountMinor: '3000' },
@@ -185,15 +213,20 @@ describe('seeding', () => {
     ]);
   });
 
-  it('seeds income splits (negative offsets) as positive magnitudes', () => {
+  it('seeds a credit leg (negative offset) as a NEGATIVE amount', () => {
     expect(
       seedRowsFromSplits([{ categoryLedgerAccountId: CAT_A, amountMinor: '-4300' }]),
-    ).toEqual([{ categoryId: CAT_A, amount: '43.00' }]);
+    ).toEqual([{ categoryId: CAT_A, amount: '-43.00' }]);
   });
 
-  it('seeds a new split with the full amount on row 1 (teardown C7)', () => {
+  it('seeds a new split with the full offset on row 1 (teardown C7)', () => {
+    // Expense (cash −4300) → +43.00 debit; inflow (cash +4300) → −43.00 credit.
     expect(seedRowsForNewSplit('-4300', CAT_A)).toEqual([
       { categoryId: CAT_A, amount: '43.00' },
+      { categoryId: null, amount: '' },
+    ]);
+    expect(seedRowsForNewSplit('4300', CAT_A)).toEqual([
+      { categoryId: CAT_A, amount: '-43.00' },
       { categoryId: null, amount: '' },
     ]);
   });
