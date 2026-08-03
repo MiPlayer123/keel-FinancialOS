@@ -178,7 +178,6 @@ begin
 end;
 $$;
 
-alter function public.keel_schedule_save(uuid,uuid,uuid,text,bigint,uuid,text,date,integer,smallint,smallint) owner to keel_api;
 revoke all on function public.keel_schedule_save(uuid,uuid,uuid,text,bigint,uuid,text,date,integer,smallint,smallint) from public, anon;
 grant execute on function public.keel_schedule_save(uuid,uuid,uuid,text,bigint,uuid,text,date,integer,smallint,smallint) to authenticated;
 
@@ -305,7 +304,6 @@ begin
 end;
 $$;
 
-alter function public.keel_schedule_advance(uuid,uuid,date,text) owner to keel_api;
 revoke all on function public.keel_schedule_advance(uuid,uuid,date,text) from public, anon;
 grant execute on function public.keel_schedule_advance(uuid,uuid,date,text) to authenticated;
 
@@ -485,6 +483,5 @@ begin
 end;
 $function$;
 
-alter function public.keel_statement_suggest_payments(uuid,uuid) owner to keel_api;
 revoke all on function public.keel_statement_suggest_payments(uuid,uuid) from public, anon;
 grant execute on function public.keel_statement_suggest_payments(uuid,uuid) to authenticated, service_role;
