@@ -17,3 +17,8 @@
 drop function if exists public.keel_reimbursement_create_claim(uuid, text, jsonb, uuid, jsonb);
 drop function if exists public.keel_reimbursement_settle(uuid, text, jsonb, uuid, jsonb);
 drop function if exists public.keel_reimbursement_reverse_settlement(uuid, text, jsonb, uuid, jsonb);
+
+-- keel_reimbursement_reverse_claim also gained a 6-arg overload (line 115 of the
+-- token-binding migration) without dropping its original 5-arg form, so it is
+-- ambiguous too (pgTAP 011 "claim creation is reversible").
+drop function if exists public.keel_reimbursement_reverse_claim(uuid, text, jsonb, uuid, jsonb);

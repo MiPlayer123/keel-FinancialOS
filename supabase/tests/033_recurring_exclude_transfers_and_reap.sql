@@ -220,7 +220,7 @@ set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
 select lives_ok($$
   select public.keel_recurring_confirm(
-    'd3000000-0000-4000-8000-0000009000f','pgtap:reap:confirm0','{}',
+    'd3000000-0000-4000-8000-00000009000f','pgtap:reap:confirm0','{}',
     '00000000-0000-4000-8000-00000000a001',
     jsonb_build_object('series_id',(select id from public.recurring_series where series_key='reap-series-0'),
       'effective_date','2026-07-19','horizon_days',60))
@@ -228,7 +228,7 @@ $$, 'confirm reap-series-0 so the reap must leave it alone');
 -- Reject series #1 (so it is protected too) — via authorized owner command.
 select lives_ok($$
   select public.keel_recurring_reject(
-    'd3000000-0000-4000-8000-0000009001f','pgtap:reap:reject1','{}',
+    'd3000000-0000-4000-8000-00000009001f','pgtap:reap:reject1','{}',
     '00000000-0000-4000-8000-00000000a001',
     jsonb_build_object('series_id',(select id from public.recurring_series where series_key='reap-series-1'),
       'effective_date','2026-07-19'))

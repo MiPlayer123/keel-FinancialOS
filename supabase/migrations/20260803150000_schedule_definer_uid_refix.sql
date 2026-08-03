@@ -485,3 +485,14 @@ $function$;
 
 revoke all on function public.keel_statement_suggest_payments(uuid,uuid) from public, anon;
 grant execute on function public.keel_statement_suggest_payments(uuid,uuid) to authenticated, service_role;
+
+-- 20260719120100_schedule_semimonthly.sql changed keel_schedule_save's arity
+-- (9 -> 11 args), so its create-or-replace minted a NEW function owned by the
+-- migration-runner superuser rather than keel_api (pgTAP 014 "save owned by
+-- keel_api"; a needlessly large blast radius for a SECURITY DEFINER body).
+-- Reassign it to keel_api. The reassignment needs keel_api to briefly hold
+-- CREATE on schema public (the house wrap). advance/suggest_payments kept their
+-- keel_api ownership through create-or-replace, so only save needs this.
+grant create on schema public to keel_api;
+alter function public.keel_schedule_save(uuid,uuid,uuid,text,bigint,uuid,text,date,integer,smallint,smallint) owner to keel_api;
+revoke create on schema public from keel_api;

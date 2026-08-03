@@ -12,3 +12,9 @@
 -- job). Grant EXECUTE to the internal roles that run the callers.
 
 grant execute on function public.keel_txn_is_distribution(uuid) to keel_api, keel_worker;
+
+-- keel_list_statement_payment_links (keel_api-owned SECURITY DEFINER,
+-- 20260720260000) left-joins public.transaction_overrides, but keel_api was
+-- never granted SELECT on it -> 42501 "permission denied for table
+-- transaction_overrides" (pgTAP 035). Grant the read.
+grant select on public.transaction_overrides to keel_api;
