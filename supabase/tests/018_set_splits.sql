@@ -246,19 +246,12 @@ select throws_ok($$
           '00000000-0000-4000-8000-00000000a314', 'amount_minor', '0'))))
 $$, 'P0008', null, 'zero split amounts are rejected');
 
--- Direction rule (code review r3603509629): an income category on a
--- money-out transaction is rejected — direction is sign(cash), the same
--- convention as the promoter's landing pads and keel_apply_rules' kind guard.
-select throws_ok($$
-  select public.keel_cmd_set_splits(
-    'c6000000-0000-4000-8000-0000000000de', 'pgtap:splits:direction', '{}'::jsonb,
-    '00000000-0000-4000-8000-00000000a001',
-    jsonb_build_object(
-      'transaction_id', 'c6000000-0000-4000-8000-000000000001',
-      'amount_minor', '-4300',
-      'splits', jsonb_build_array(jsonb_build_object('category_ledger_account_id',
-        '00000000-0000-4000-8000-00000000a318', 'amount_minor', '4300'))))
-$$, 'P0009', null, 'an income category on a cash-out transaction is rejected (direction rule)');
+-- Contra legs (20260802140000): the per-leg direction rule (code review
+-- r3603509629) was DROPPED. A negative amount on an expense category (a refund
+-- reducing a spend) — or, mirrored here, an income category on a money-out
+-- offset — no longer rejects; only balance (Σ = −cash) is enforced. The
+-- new-behaviour acceptance assertion runs at the end of the file so it does not
+-- perturb the count-sensitive checks on transaction ...0001 above.
 
 -- Cross-household category smuggling (beta Groceries on an alpha txn).
 select throws_ok($$
@@ -366,5 +359,23 @@ select is(
     join public.journal_batches jb on jb.id = p.batch_id
     where jb.canonical_transaction_id = 'c6000000-0000-4000-8000-000000000001'),
   0::bigint, 'the full revision history still nets to zero (Law 3)');
+
+-- Contra-leg acceptance (20260802140000), placed LAST so its re-split does not
+-- disturb the batch-count / overlay assertions on ...0001 above. A single income
+-- category on a money-out (−4300) transaction — a +4300 offset — was the exact
+-- case the dropped direction rule rejected; it now succeeds (balanced).
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
+select lives_ok($$
+  select public.keel_cmd_set_splits(
+    'c6000000-0000-4000-8000-0000000000df', 'pgtap:splits:contra', '{}'::jsonb,
+    '00000000-0000-4000-8000-00000000a001',
+    jsonb_build_object(
+      'transaction_id', 'c6000000-0000-4000-8000-000000000001',
+      'amount_minor', '-4300',
+      'splits', jsonb_build_array(jsonb_build_object('category_ledger_account_id',
+        '00000000-0000-4000-8000-00000000a318', 'amount_minor', '4300'))))
+$$, 'a contra leg (income category on a money-out offset) is now accepted');
+reset role;
 
 select * from finish();rollback;

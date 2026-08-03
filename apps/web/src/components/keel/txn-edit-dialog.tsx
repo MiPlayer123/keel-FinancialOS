@@ -1358,6 +1358,10 @@ function TxnEditForm({
                 Add split
               </Button>
             </div>
+            <p className="text-xs text-muted-foreground">
+              Enter a negative amount for a refund or reimbursement (a credit that
+              reduces that category).
+            </p>
             {/* 390px: each row stacks category over amount; sm+ is one line. */}
             {splitRows.map((s, i) => (
               <div key={i} className="flex flex-col gap-2 sm:flex-row sm:items-center">
