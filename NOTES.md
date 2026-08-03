@@ -2,6 +2,36 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+
+## 2026-08-03 — fix(budgets): drop ambiguous 5-arg budget overloads + live migration reconcile
+
+While reconciling PR #160's pgTAP fixes onto the live DB, found the live cloud
+project was behind the repo on the approval-token-binding migrations
+(`20260721100000` budgets, `20260721110000` reimbursements) — they were untracked
+working-tree files for a while, so the manual live-apply flow never ran them.
+
+Reconciled live in ordered, single-transaction psql applies (all verified):
+- `20260803140000/150000/160000` (from #160) — internal-role grants on
+  keel_txn_is_distribution/keel_detect_transfers, schedule/statement definer
+  procs off auth.uid() -> request.jwt, statement-link one-row read model. These
+  fixed REAL live bugs (permission-denied, auth.uid() failures in the edge fns).
+- `20260721110000` + `20260803130000` — created the 6-arg token-bound
+  reimbursement commands then dropped the 5-arg (in one txn so no ambiguous
+  window). Token is optional (null default = backward compat), so live edge fns
+  keep working with 5-arg calls resolving to the 6-arg-default. No redeploy.
+
+**New bug found + fixed: `20260803170000_budget_drop_ambiguous_5arg.sql`.** The
+budget token-binding (`20260721100000`) added a 6-arg overload to all four
+`keel_cmd_budgets_*` commands WITHOUT dropping the 5-arg original (from
+`20260720170000`), leaving both live — the exact latent ambiguity `20260803130000`
+fixed for reimbursements, but for budgets it was never dropped. CI missed it
+(double-reset convergence only diffs schema dumps; no suite invokes a budget
+command by arg-list, so 42725 never fired). It would fire at runtime the moment
+the app calls a budget command — and the user actively uses budgets (12 targets).
+Added the mirror drop migration; applied `100000`+`170000` to live in one txn,
+verified all four budget commands are now 6-arg-only, owner keel_api, anon
+excluded. Anon grant floor preserved throughout. See memory keel-live-migration-drift.
+
 ---
 
 ## 2026-08-03 — fix(sync): preserve user-authored splits across a settle-revise
