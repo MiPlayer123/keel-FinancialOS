@@ -290,8 +290,13 @@ select is(
   (select count(*)::int from public.transfer_links
     where household_id='00000000-0000-4000-8000-00000000a001' and status='confirmed'),
   0, 'confirm raised NO confirmed transfer (never auto-confirms)');
+-- The decide command audits through keel_finish_command: audit_log.action is
+-- the command ('statements.decide_payment_link') with the confirm/reject in the
+-- `after` payload, while 'statements.payment_confirmed' is the domain_events
+-- event_type. Assert the audit trail actually records the confirmation.
 select ok(
-  exists(select 1 from public.audit_log where action='statements.payment_confirmed'),
+  exists(select 1 from public.audit_log
+    where action='statements.decide_payment_link' and after->>'status'='confirmed'),
   'confirm is audited');
 
 select lives_ok($$select public.keel_cmd_statements_detach_payment_link(
