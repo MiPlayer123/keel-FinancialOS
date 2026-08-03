@@ -76,8 +76,8 @@ const parseDate = (value: unknown): string | null => {
   const iso = value.trim();
   // Reject impossible civil dates (2026-13-40) without importing a date lib.
   const [y, m, d] = iso.split('-').map((p) => Number(p));
-  if (m! < 1 || m! > 12 || d! < 1 || d! > 31) return null;
-  void y;
+  if (y === undefined || m === undefined || d === undefined) return null;
+  if (m < 1 || m > 12 || d < 1 || d > 31) return null;
   return iso;
 };
 

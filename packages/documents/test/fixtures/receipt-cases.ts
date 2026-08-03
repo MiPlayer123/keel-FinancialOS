@@ -92,6 +92,9 @@ const cleanCases: ReceiptCase[] = Array.from({ length: 16 }, (_, i) => {
 const tipCases: ReceiptCase[] = Array.from({ length: 6 }, (_, i) => {
   const id = `20000000-0000-4000-8000-0000000000${String(i).padStart(2, '0')}`;
   const pre = 4000 + i * 100;
+  // Synthetic FIXTURE money for matcher test cases — not ledger arithmetic,
+  // and no posting is ever derived from it.
+  // eslint-disable-next-line no-restricted-syntax -- test fixture only
   const withTip = Math.round(pre * 1.18); // ~18% tip, within band
   return {
     id: `tip-${String(i)}`,

@@ -118,7 +118,7 @@ describe('CloudVisionReceiptExtractor', () => {
       baseUrl: 'https://example.test/v1',
       model: 'claude-haiku',
       apiKey: 'secret-key',
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl: fetchImpl,
     });
     const result = await extractor.extract(image('BASE64BYTES'));
     expect(result.fields.totalMinor).toBe('4217');
@@ -157,7 +157,7 @@ describe('CloudVisionReceiptExtractor', () => {
       baseUrl: 'https://example.test/v1',
       model: 'claude-haiku',
       apiKey: 'k',
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl: fetchImpl,
     });
     const result = await extractor.extract(image());
     expect(result.fields.merchant).toBe(hostile);
@@ -172,7 +172,7 @@ describe('CloudVisionReceiptExtractor', () => {
       baseUrl: 'https://example.test/v1',
       model: 'm',
       apiKey: 'k',
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl: fetchImpl,
     });
     await expect(extractor.extract(image())).rejects.toMatchObject({
       name: 'AiProviderError',
@@ -189,7 +189,7 @@ describe('CloudVisionReceiptExtractor', () => {
         baseUrl: 'https://example.test/v1',
         model: 'm',
         apiKey: 'k',
-        fetchImpl: (async () => resp) as unknown as typeof fetch,
+        fetchImpl: async () => resp,
       });
     await expect(make(new Response('nope', { status: 500 })).extract(image())).rejects.toThrow(
       AiProviderError,

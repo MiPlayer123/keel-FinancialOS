@@ -100,14 +100,14 @@ beforeAll(async () => {
       .eq('household_id', HOUSEHOLD);
     const laById = new Map((las ?? []).map((l: Record<string, unknown>) => [l['id'], l]));
     const candidate = (rows ?? []).find((a: Record<string, unknown>) => {
-      const la = laById.get(a['ledger_account_id']) as Record<string, unknown> | undefined;
+      const la = laById.get(a['ledger_account_id']);
       return (
         a['archived_at'] === null && a['id'] !== SEED.accounts.alphaChecking &&
         la && la['kind'] === 'asset' && la['is_category'] === false &&
         la['entity_id'] === ENTITY && la['currency'] === 'USD' && la['archived_at'] === null
       );
     });
-    retirementAccountId = (candidate?.['id'] as string) ?? SEED.accounts.alphaChecking;
+    retirementAccountId = (candidate?.['id'] as string | undefined) ?? SEED.accounts.alphaChecking;
   } else {
     retirementAccountId = (acct as { effects: { accountId: string } }).effects.accountId;
   }
@@ -118,7 +118,7 @@ beforeAll(async () => {
     .select('id')
     .eq('household_id', HOUSEHOLD)
     .limit(1);
-  seriesId = (series?.[0]?.['id'] as string) ?? '';
+  seriesId = (series?.[0]?.['id'] as string | undefined) ?? '';
   if (!seriesId) {
     // Seed a minimal recurring series if none exists on the stack.
     const { data: ins } = await service
@@ -126,7 +126,7 @@ beforeAll(async () => {
       .insert({ household_id: HOUSEHOLD, account_id: SEED.accounts.alphaChecking, status: 'confirmed', direction: 'inflow', counterparty_key: `payroll ${suffix}` })
       .select('id')
       .single();
-    seriesId = (ins?.['id'] as string) ?? '';
+    seriesId = (ins?.['id'] as string | undefined) ?? '';
   }
 
   const { data: emp } = await service

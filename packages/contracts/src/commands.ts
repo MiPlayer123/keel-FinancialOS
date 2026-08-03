@@ -179,7 +179,7 @@ export const RecurringReclassifyCadencePayloadSchema = z.object({
     (value.cadence === 'semimonthly' && kind === 'day_pair');
   if (!ok) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: 'custom',
       message: `cadence ${value.cadence} does not match anchor kind ${kind}`,
       path: ['cadenceAnchor', 'kind'],
     });
@@ -188,19 +188,19 @@ export const RecurringReclassifyCadencePayloadSchema = z.object({
   if (value.cadenceAnchor.kind === 'epoch_grid') {
     const want = value.cadence === 'weekly' ? 7 : 14;
     if (value.cadenceAnchor.intervalDays !== want) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'epoch interval does not match cadence', path: ['cadenceAnchor', 'intervalDays'] });
+      ctx.addIssue({ code: 'custom', message: 'epoch interval does not match cadence', path: ['cadenceAnchor', 'intervalDays'] });
     }
   }
   if (value.cadenceAnchor.kind === 'day_of_month') {
     const want = value.cadence === 'monthly' ? 1 : value.cadence === 'quarterly' ? 3 : 12;
     if (value.cadenceAnchor.intervalMonths !== want) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'intervalMonths does not match cadence', path: ['cadenceAnchor', 'intervalMonths'] });
+      ctx.addIssue({ code: 'custom', message: 'intervalMonths does not match cadence', path: ['cadenceAnchor', 'intervalMonths'] });
     }
   }
   if (value.cadenceAnchor.kind === 'day_pair') {
     const [a, b] = value.cadenceAnchor.days;
     if (a === b) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'semimonthly requires two distinct days', path: ['cadenceAnchor', 'days'] });
+      ctx.addIssue({ code: 'custom', message: 'semimonthly requires two distinct days', path: ['cadenceAnchor', 'days'] });
     }
   }
 });
@@ -210,10 +210,10 @@ export const RecurringReclassifyCadencePayloadSchema = z.object({
 // (scheduled_transactions has no branded id schema — it uses a bespoke route).
 export const RecurringLinkSchedulePayloadSchema = z.object({
   seriesId: RecurringSeriesIdSchema,
-  scheduleId: z.string().uuid(),
+  scheduleId: z.uuid(),
 }).strict();
 export const RecurringUnlinkSchedulePayloadSchema = z.object({
-  linkId: z.string().uuid(),
+  linkId: z.uuid(),
   reason: z.string().max(500).optional(),
 }).strict();
 
@@ -670,13 +670,13 @@ export const DeleteDocumentPayloadSchema = z.object({
  * Approval binds the exact matchId (Law 11).
  */
 export const DecideReceiptMatchPayloadSchema = z.object({
-  matchId: z.string().uuid(),
+  matchId: z.uuid(),
   confirm: z.boolean(),
 }).strict();
 
 /** Undo a confirmed receipt match — detach (Law 2), never delete. */
 export const DetachReceiptMatchPayloadSchema = z.object({
-  matchId: z.string().uuid(),
+  matchId: z.uuid(),
 }).strict();
 
 // ---------------------------------------------------------------------------

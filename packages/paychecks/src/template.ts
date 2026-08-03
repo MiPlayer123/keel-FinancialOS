@@ -334,7 +334,7 @@ const selectGross = (net: bigint, p: PartitionedTemplate): bigint => {
   if (selected === undefined) {
     throw new TemplateApplyError({
       code: 'does_not_reconcile',
-      detail: `no integer gross near seed ${seed} yields net ${net}`,
+      detail: `no integer gross near seed ${String(seed)} yields net ${String(net)}`,
     });
   }
   /* c8 ignore stop */
@@ -361,7 +361,7 @@ export const applyPaycheckTemplate = (input: PaycheckTemplateApplyInput): Templa
   if (remainderAmount < 0n) {
     throw new TemplateApplyError({
       code: 'does_not_reconcile',
-      detail: `remainder ${remainderAmount} is negative`,
+      detail: `remainder ${String(remainderAmount)} is negative`,
     });
   }
   /* c8 ignore stop */
