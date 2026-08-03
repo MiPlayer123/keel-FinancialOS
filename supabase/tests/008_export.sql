@@ -13,10 +13,10 @@ insert into expected_export_tables(table_name, allowed_columns, omitted_columns)
   ('entities', array['id','household_id','name','kind','created_at','archived_at'], '{}'),
   ('household_memberships', array['household_id','user_id','role','created_at'], '{}'),
   ('entity_memberships', array['entity_id','user_id','created_at'], '{}'),
-  ('accounts', array['id','household_id','entity_id','connection_id','ledger_account_id','name','subtype','currency','external_ref','mask','created_at','archived_at'], '{}'),
+  ('accounts', array['id','household_id','entity_id','connection_id','ledger_account_id','name','subtype','currency','external_ref','mask','created_at','archived_at','holdings_cash_equivalent_count','holdings_provider_count','holdings_synced_at'], '{}'),
   ('account_owners', array['account_id','user_id','created_at'], '{}'),
   ('ledger_accounts', array['id','household_id','entity_id','name','kind','currency','is_category','created_at','archived_at','pfc_key','is_system','parent_ledger_account_id','tax_line'], '{}'),
-  ('connections', array['id','household_id','provider','external_ref','status','created_at','institution_id','consent_expires_at','last_successful_sync_at','sync_lease_owner','sync_leased_until','sync_desired_generation','sync_committed_generation','next_sync_eligible_at','display_name','sync_continuation_pending','sync_continuation_marked_at','holdings_last_error_code','holdings_last_error_message','holdings_last_error_at','holdings_last_success_at'], '{}'),
+  ('connections', array['id','household_id','provider','external_ref','status','created_at','institution_id','consent_expires_at','last_successful_sync_at','sync_lease_owner','sync_leased_until','sync_desired_generation','sync_committed_generation','next_sync_eligible_at','display_name','sync_continuation_pending','sync_continuation_marked_at','holdings_last_error_code','holdings_last_error_message','holdings_last_error_at','holdings_last_success_at','archived_at'], '{}'),
   ('resource_permissions', array['id','household_id','user_id','resource_kind','resource_id','permission','created_at'], '{}'),
   ('approval_policies', array['id','household_id','risk_class','autonomy','created_at'], '{}'),
   ('canonical_transactions', array['id','household_id','entity_id','account_id','status','source','description','effective_date','economic_event_key','created_at','voided_at'], '{}'),
@@ -48,8 +48,8 @@ insert into expected_export_tables(table_name, allowed_columns, omitted_columns)
 insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
   ('tags', array['id','household_id','name','created_at'], '{}'),
   ('transaction_tags', array['canonical_transaction_id','tag_id','household_id','created_at'], '{}'),
-  ('scheduled_transactions', array['id','household_id','account_id','description','amount_minor','currency','category_ledger_account_id','frequency','next_due_date','auto_enter_days','status','created_at','anchor_day'], '{}'),
-  ('savings_goals', array['id','household_id','name','target_minor','target_date','account_id','currency','status','created_at','kind','start_balance_minor'], '{}'),
+  ('scheduled_transactions', array['id','household_id','account_id','description','amount_minor','currency','category_ledger_account_id','frequency','next_due_date','auto_enter_days','status','created_at','anchor_day','anchor_day_2'], '{}'),
+  ('savings_goals', array['id','household_id','name','target_minor','target_date','account_id','currency','status','created_at','kind','start_balance_minor','tracking'], '{}'),
   ('goal_contributions', array['id','goal_id','household_id','amount_minor','contributed_on','created_at'], '{}');
 insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
   ('transaction_categories', array['canonical_transaction_id','household_id','category_ledger_account_id','source','rule_id','created_at','updated_at'], '{}'),
@@ -63,7 +63,7 @@ insert into expected_export_tables(table_name, allowed_columns, omitted_columns)
 insert into expected_export_tables(table_name, allowed_columns, omitted_columns) values
   ('employers',array['id','household_id','name','created_at'],'{}'),
   ('payroll_provider_imports',array['id','household_id','provider','source_ref','content_hash','imported_at'],'{}'),
-  ('paychecks',array['id','household_id','employer_id','pay_date','gross_minor','net_minor','currency','status','formula_version','created_by','created_at','updated_at','superseded_by_paycheck_id'],'{}'),
+  ('paychecks',array['id','household_id','employer_id','pay_date','gross_minor','net_minor','currency','status','formula_version','created_by','created_at','updated_at','superseded_by_paycheck_id','applied_from_suggestion_id','template_id','template_version'],'{}'),
   ('paycheck_components',array['household_id','id','paycheck_id','component_key','kind','amount_minor','created_at'],'{}'),
   ('paycheck_templates',array['household_id','id','employer_id','template_version','component_blueprint','formula_version','created_at'],'{}'),
   ('paycheck_sources',array['household_id','id','paycheck_id','source_kind','source_ref','content_hash','payroll_provider_import_id','created_at'],'{}'),
@@ -80,7 +80,7 @@ insert into expected_export_tables(table_name,allowed_columns,omitted_columns) v
  ('settlement_status_events',array['household_id','id','settlement_id','transition','reason','actor','command_id','created_at'],'{}'),
  ('reimbursement_claim_status_events',array['household_id','id','claim_id','transition','reason','actor','command_id','created_at'],'{}');
 insert into expected_export_tables(table_name,allowed_columns,omitted_columns)values
-('statements',array['id','household_id','account_id','period_start','period_end','opening_minor','ending_minor','currency','source_hash','created_by','created_at'],'{}'),
+('statements',array['id','household_id','account_id','period_start','period_end','opening_minor','ending_minor','currency','source_hash','created_by','created_at','anchor_gap_explanation','anchor_reason','balance_check'],'{}'),
 ('statement_lines',array['household_id','id','statement_id','line_key','line_date','amount_minor','description','created_at'],'{}'),
 ('reconciliation_sessions',array['household_id','id','statement_id','account_id','ledger_ending_minor','difference_minor','status','formula_version','period_lock_id','closed_by','closed_at','reopened_at','created_at'],'{}'),
 ('reconciliation_items',array['household_id','id','session_id','statement_line_id','resolution','transaction_id','explanation','created_at'],'{}'),
@@ -145,8 +145,32 @@ insert into excluded_export_tables(table_name) values ('recurring_detection_clai
 -- (statement_outbox moved to INCLUDE by Slice 6's export layer,
 --   20260720220000_statement_ingest_begin.sql — confirm-upload writer + INCLUDE
 --   entry + keel_export grant/RLS + keel_export_household rewrap together.)
+-- WS-tokens / budgeting-v2 / expected-reimbursements / statement-extraction /
+-- paycheck-template-apply: these tables shipped with keel_export grants + export
+-- emit but their expected-registry rows were never added (CI wasn't running).
+-- All are first-class user data (Law 6). Columns mirror the live schema.
+insert into expected_export_tables(table_name,allowed_columns,omitted_columns) values
+ ('approval_tokens',array['token_id','household_id','actor_user_id','command','payload_sha256','normalized_payload','scope','account_id','proposal_kind','proposal_ref','proposal_version','policy_version','status','issued_at','expires_at','redeemed_at','redeemed_command_id','created_at'],'{}'),
+ ('budget_expected_income',array['id','household_id','effective_month','end_month','amount_minor','currency','created_at'],'{}'),
+ ('budget_targets',array['id','household_id','category_ledger_account_id','effective_month','end_month','target_kind','total_basis','amount_minor','percent_bp','rollover','currency','created_at'],'{}'),
+ ('detected_paycheck_dismissals',array['household_id','id','series_id','employer_key','occurrence_date','dismissed_by','command_id','created_at'],'{}'),
+ ('document_hashes',array['household_id','content_sha256','first_document_id','first_version_id','byte_size','created_at'],'{}'),
+ ('expected_reimbursements',array['household_id','id','counterparty_id','source_transaction_id','expected_minor','currency','expected_date','description','status','created_by','created_at','updated_at'],'{}'),
+ ('expected_reimbursement_receipts',array['household_id','id','expected_id','transaction_id','allocated_minor','status','note','created_by','created_at','updated_at'],'{}'),
+ ('expected_reimbursement_status_events',array['household_id','id','expected_id','transition','reason','actor','command_id','created_at'],'{}'),
+ ('paycheck_template_applications',array['household_id','id','series_id','deposit_txn_id','template_id','template_version','paycheck_id','approval_token_id','applied_from_suggestion_id','prior_offset_ledger_account_id','prior_amount_minor','applied_by','revoked_at','revoked_by','created_at'],'{}'),
+ ('statement_drafts',array['id','household_id','document_version_id','account_id','source_hash','status','extraction_id','statement_id','decided_by','decided_at','created_at'],'{}'),
+ ('statement_extractions',array['id','household_id','document_version_id','account_id','kind_hint','period_start','period_end','opening_minor','ending_minor','currency','extractor','extractor_version','model_version','prompt_version','confidence','raw_evidence','status','error_code','created_at'],'{}'),
+ ('statement_extraction_lines',array['id','household_id','extraction_id','line_no','line_date','amount_minor','description_raw','currency','src_page','src_bbox','src_row','src_col','src_byte_offset','ofx_path','field_confidence','null_reason','created_at'],'{}'),
+ ('statement_extraction_holdings',array['id','household_id','extraction_id','symbol','cusip','isin','name','qty','price_minor','value_minor','cost_basis_minor','currency','src_page','src_bbox','ofx_path','field_confidence','null_reason','created_at'],'{}');
+
 insert into excluded_export_tables(table_name) values
   ('household_notes'), ('household_tasks');
+-- household_ai_profile holds AI personalization prefs (not exported today; no
+-- keel_export grant). regular_core_sweep_allowlist / _suppressions are internal
+-- detector control tables (granted to keel_api/keel_worker only, not keel_export).
+insert into excluded_export_tables(table_name) values
+  ('household_ai_profile'), ('regular_core_sweep_allowlist'), ('regular_core_sweep_suppressions');
 
 select has_role('keel_export', 'dedicated export role exists');
 select ok(
@@ -157,8 +181,8 @@ select ok(
 select is(
   (select count(*)::int from expected_export_tables
     where has_table_privilege('keel_export', format('public.%I', table_name), 'SELECT')),
-  84,
-  'keel_export can SELECT all 84 included tables'
+  97,
+  'keel_export can SELECT all 97 included tables'
 );
 select is(
   (select count(*)::int
@@ -289,8 +313,8 @@ reset role;
 select is(
   (select count(*)::int from jsonb_object_keys(
     public.keel_export_household('00000000-0000-4000-8000-00000000a001')->'tables')),
-  84,
-  'snapshot contains all 84 included table arrays'
+  97,
+  'snapshot contains all 97 included table arrays'
 );
 select is(
   (select count(*)::int from excluded_export_tables e

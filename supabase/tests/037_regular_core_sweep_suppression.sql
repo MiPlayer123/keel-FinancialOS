@@ -98,34 +98,34 @@ values
    'TRANSFERRED TO VS Z37-626027-1', '2026-06-01', gen_random_uuid());
 
 insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency)
-select b.id, 'e7000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-00000000a101', 50000, 'USD'
+select b.id, 'e7000000-0000-4000-8000-000000000011'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, 50000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000a1'
 union all
-select b.id, '00000000-0000-4000-8000-00000000a318', '00000000-0000-4000-8000-00000000a101', -50000, 'USD'
+select b.id, '00000000-0000-4000-8000-00000000a318'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, -50000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000a1'
 union all
-select b.id, '00000000-0000-4000-8000-00000000a317', '00000000-0000-4000-8000-00000000a101', 50000, 'USD'
+select b.id, '00000000-0000-4000-8000-00000000a317'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, 50000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000a2'
 union all
-select b.id, 'e7000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-00000000a101', -50000, 'USD'
+select b.id, 'e7000000-0000-4000-8000-000000000011'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, -50000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000a2';
 
 insert into public.normalized_source_records
   (raw_event_id, household_id, account_id, provider_transaction_id, amount_minor, currency,
    effective_date, description, pending, pfc_primary)
-select r.id, '00000000-0000-4000-8000-00000000a001', 'e7000000-0000-4000-8000-000000000021',
-       'sweep-a', 50000, 'USD', '2026-06-01', 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
+select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
+       'sweep-a', 50000, 'USD', '2026-06-01'::date, 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'sweep-a:raw'
 union all
-select r.id, '00000000-0000-4000-8000-00000000a001', 'e7000000-0000-4000-8000-000000000021',
-       'transfer-a', -50000, 'USD', '2026-06-01', 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
+select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
+       'transfer-a', -50000, 'USD', '2026-06-01'::date, 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'transfer-a:raw';
 
 insert into public.transaction_source_links (canonical_transaction_id, normalized_source_record_id)
-select 'e7000000-0000-4000-8000-0000000000a1', n.id
+select 'e7000000-0000-4000-8000-0000000000a1'::uuid, n.id
   from public.normalized_source_records n where n.provider_transaction_id = 'sweep-a'
 union all
-select 'e7000000-0000-4000-8000-0000000000a2', n.id
+select 'e7000000-0000-4000-8000-0000000000a2'::uuid, n.id
   from public.normalized_source_records n where n.provider_transaction_id = 'transfer-a';
 
 -- ---- (b) unmatched sweep-pattern row: no counterpart at all. ---------------
@@ -149,21 +149,21 @@ values
    'PURCHASE INTO CORE ACCOUNT (SPAXX)', '2026-06-02', gen_random_uuid());
 
 insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency)
-select b.id, 'e7000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-00000000a101', -77700, 'USD'
+select b.id, 'e7000000-0000-4000-8000-000000000011'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, -77700, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000b1'
 union all
-select b.id, '00000000-0000-4000-8000-00000000a318', '00000000-0000-4000-8000-00000000a101', 77700, 'USD'
+select b.id, '00000000-0000-4000-8000-00000000a318'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, 77700, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000b1';
 
 insert into public.normalized_source_records
   (raw_event_id, household_id, account_id, provider_transaction_id, amount_minor, currency,
    effective_date, description, pending, pfc_primary)
-select r.id, '00000000-0000-4000-8000-00000000a001', 'e7000000-0000-4000-8000-000000000021',
-       'sweep-b', -77700, 'USD', '2026-06-02', 'PURCHASE INTO CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
+select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
+       'sweep-b', -77700, 'USD', '2026-06-02'::date, 'PURCHASE INTO CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'sweep-b:raw';
 
 insert into public.transaction_source_links (canonical_transaction_id, normalized_source_record_id)
-select 'e7000000-0000-4000-8000-0000000000b1', n.id
+select 'e7000000-0000-4000-8000-0000000000b1'::uuid, n.id
   from public.normalized_source_records n where n.provider_transaction_id = 'sweep-b';
 
 -- ---- (c) ambiguous: two candidates chasing one counterpart. ----------------
@@ -203,47 +203,47 @@ values
    'TRANSFERRED TO VS Z37-626027-1', '2026-06-03', gen_random_uuid());
 
 insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency)
-select b.id, 'e7000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-00000000a101', 30000, 'USD'
+select b.id, 'e7000000-0000-4000-8000-000000000011'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, 30000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000c1'
 union all
-select b.id, '00000000-0000-4000-8000-00000000a318', '00000000-0000-4000-8000-00000000a101', -30000, 'USD'
+select b.id, '00000000-0000-4000-8000-00000000a318'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, -30000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000c1'
 union all
-select b.id, 'e7000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-00000000a101', 30000, 'USD'
+select b.id, 'e7000000-0000-4000-8000-000000000011'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, 30000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000c2'
 union all
-select b.id, '00000000-0000-4000-8000-00000000a318', '00000000-0000-4000-8000-00000000a101', -30000, 'USD'
+select b.id, '00000000-0000-4000-8000-00000000a318'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, -30000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000c2'
 union all
-select b.id, '00000000-0000-4000-8000-00000000a317', '00000000-0000-4000-8000-00000000a101', 30000, 'USD'
+select b.id, '00000000-0000-4000-8000-00000000a317'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, 30000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000c3'
 union all
-select b.id, 'e7000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-00000000a101', -30000, 'USD'
+select b.id, 'e7000000-0000-4000-8000-000000000011'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, -30000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000c3';
 
 insert into public.normalized_source_records
   (raw_event_id, household_id, account_id, provider_transaction_id, amount_minor, currency,
    effective_date, description, pending, pfc_primary)
-select r.id, '00000000-0000-4000-8000-00000000a001', 'e7000000-0000-4000-8000-000000000021',
-       'sweep-c1', 30000, 'USD', '2026-06-03', 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
+select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
+       'sweep-c1', 30000, 'USD', '2026-06-03'::date, 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'sweep-c1:raw'
 union all
-select r.id, '00000000-0000-4000-8000-00000000a001', 'e7000000-0000-4000-8000-000000000021',
-       'sweep-c2', 30000, 'USD', '2026-06-03', 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
+select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
+       'sweep-c2', 30000, 'USD', '2026-06-03'::date, 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'sweep-c2:raw'
 union all
-select r.id, '00000000-0000-4000-8000-00000000a001', 'e7000000-0000-4000-8000-000000000021',
-       'transfer-c', -30000, 'USD', '2026-06-03', 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
+select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
+       'transfer-c', -30000, 'USD', '2026-06-03'::date, 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'transfer-c:raw';
 
 insert into public.transaction_source_links (canonical_transaction_id, normalized_source_record_id)
-select 'e7000000-0000-4000-8000-0000000000c1', n.id
+select 'e7000000-0000-4000-8000-0000000000c1'::uuid, n.id
   from public.normalized_source_records n where n.provider_transaction_id = 'sweep-c1'
 union all
-select 'e7000000-0000-4000-8000-0000000000c2', n.id
+select 'e7000000-0000-4000-8000-0000000000c2'::uuid, n.id
   from public.normalized_source_records n where n.provider_transaction_id = 'sweep-c2'
 union all
-select 'e7000000-0000-4000-8000-0000000000c3', n.id
+select 'e7000000-0000-4000-8000-0000000000c3'::uuid, n.id
   from public.normalized_source_records n where n.provider_transaction_id = 'transfer-c';
 
 -- ---- (d) confirmed transfer_links exclusion. -------------------------------
@@ -275,34 +275,34 @@ values
    'TRANSFERRED TO VS Z37-626027-1', '2026-06-04', gen_random_uuid());
 
 insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency)
-select b.id, 'e7000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-00000000a101', 40000, 'USD'
+select b.id, 'e7000000-0000-4000-8000-000000000011'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, 40000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000d1'
 union all
-select b.id, '00000000-0000-4000-8000-00000000a318', '00000000-0000-4000-8000-00000000a101', -40000, 'USD'
+select b.id, '00000000-0000-4000-8000-00000000a318'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, -40000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000d1'
 union all
-select b.id, '00000000-0000-4000-8000-00000000a317', '00000000-0000-4000-8000-00000000a101', 40000, 'USD'
+select b.id, '00000000-0000-4000-8000-00000000a317'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, 40000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000d2'
 union all
-select b.id, 'e7000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-00000000a101', -40000, 'USD'
+select b.id, 'e7000000-0000-4000-8000-000000000011'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, -40000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000d2';
 
 insert into public.normalized_source_records
   (raw_event_id, household_id, account_id, provider_transaction_id, amount_minor, currency,
    effective_date, description, pending, pfc_primary)
-select r.id, '00000000-0000-4000-8000-00000000a001', 'e7000000-0000-4000-8000-000000000021',
-       'sweep-d', 40000, 'USD', '2026-06-04', 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
+select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
+       'sweep-d', 40000, 'USD', '2026-06-04'::date, 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'sweep-d:raw'
 union all
-select r.id, '00000000-0000-4000-8000-00000000a001', 'e7000000-0000-4000-8000-000000000021',
-       'transfer-d', -40000, 'USD', '2026-06-04', 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
+select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
+       'transfer-d', -40000, 'USD', '2026-06-04'::date, 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'transfer-d:raw';
 
 insert into public.transaction_source_links (canonical_transaction_id, normalized_source_record_id)
-select 'e7000000-0000-4000-8000-0000000000d1', n.id
+select 'e7000000-0000-4000-8000-0000000000d1'::uuid, n.id
   from public.normalized_source_records n where n.provider_transaction_id = 'sweep-d'
 union all
-select 'e7000000-0000-4000-8000-0000000000d2', n.id
+select 'e7000000-0000-4000-8000-0000000000d2'::uuid, n.id
   from public.normalized_source_records n where n.provider_transaction_id = 'transfer-d';
 
 -- The candidate already participates in a CONFIRMED link. Its OTHER leg is a
@@ -354,34 +354,34 @@ values
    'TRANSFERRED TO VS Z37-626027-1', '2026-06-05', gen_random_uuid());
 
 insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency)
-select b.id, 'e7000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-00000000a101', 60000, 'USD'
+select b.id, 'e7000000-0000-4000-8000-000000000011'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, 60000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000e1'
 union all
-select b.id, '00000000-0000-4000-8000-00000000a318', '00000000-0000-4000-8000-00000000a101', -60000, 'USD'
+select b.id, '00000000-0000-4000-8000-00000000a318'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, -60000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000e1'
 union all
-select b.id, '00000000-0000-4000-8000-00000000a317', '00000000-0000-4000-8000-00000000a101', 60000, 'USD'
+select b.id, '00000000-0000-4000-8000-00000000a317'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, 60000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000e2'
 union all
-select b.id, 'e7000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-00000000a101', -60000, 'USD'
+select b.id, 'e7000000-0000-4000-8000-000000000011'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, -60000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000e2';
 
 insert into public.normalized_source_records
   (raw_event_id, household_id, account_id, provider_transaction_id, amount_minor, currency,
    effective_date, description, pending, pfc_primary)
-select r.id, '00000000-0000-4000-8000-00000000a001', 'e7000000-0000-4000-8000-000000000021',
-       'sweep-e', 60000, 'USD', '2026-06-05', 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
+select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
+       'sweep-e', 60000, 'USD', '2026-06-05'::date, 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'sweep-e:raw'
 union all
-select r.id, '00000000-0000-4000-8000-00000000a001', 'e7000000-0000-4000-8000-000000000021',
-       'transfer-e', -60000, 'USD', '2026-06-05', 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
+select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
+       'transfer-e', -60000, 'USD', '2026-06-05'::date, 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'transfer-e:raw';
 
 insert into public.transaction_source_links (canonical_transaction_id, normalized_source_record_id)
-select 'e7000000-0000-4000-8000-0000000000e1', n.id
+select 'e7000000-0000-4000-8000-0000000000e1'::uuid, n.id
   from public.normalized_source_records n where n.provider_transaction_id = 'sweep-e'
 union all
-select 'e7000000-0000-4000-8000-0000000000e2', n.id
+select 'e7000000-0000-4000-8000-0000000000e2'::uuid, n.id
   from public.normalized_source_records n where n.provider_transaction_id = 'transfer-e';
 
 -- Lock AFTER posting (the period-lock trigger fires on new postings, not
@@ -596,34 +596,34 @@ values
    'TRANSFERRED TO VS Z37-626027-1', '2026-06-01', gen_random_uuid());
 
 insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency)
-select b.id, 'e8000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-00000000b101', 50000, 'USD'
+select b.id, 'e8000000-0000-4000-8000-000000000011'::uuid, '00000000-0000-4000-8000-00000000b101'::uuid, 50000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e8000000-0000-4000-8000-0000000000a1'
 union all
-select b.id, '00000000-0000-4000-8000-00000000b318', '00000000-0000-4000-8000-00000000b101', -50000, 'USD'
+select b.id, '00000000-0000-4000-8000-00000000b318'::uuid, '00000000-0000-4000-8000-00000000b101'::uuid, -50000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e8000000-0000-4000-8000-0000000000a1'
 union all
-select b.id, '00000000-0000-4000-8000-00000000b317', '00000000-0000-4000-8000-00000000b101', 50000, 'USD'
+select b.id, '00000000-0000-4000-8000-00000000b317'::uuid, '00000000-0000-4000-8000-00000000b101'::uuid, 50000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e8000000-0000-4000-8000-0000000000a2'
 union all
-select b.id, 'e8000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-00000000b101', -50000, 'USD'
+select b.id, 'e8000000-0000-4000-8000-000000000011'::uuid, '00000000-0000-4000-8000-00000000b101'::uuid, -50000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e8000000-0000-4000-8000-0000000000a2';
 
 insert into public.normalized_source_records
   (raw_event_id, household_id, account_id, provider_transaction_id, amount_minor, currency,
    effective_date, description, pending, pfc_primary)
-select r.id, '00000000-0000-4000-8000-00000000b001', 'e8000000-0000-4000-8000-000000000021',
-       'beta-sweep-a', 50000, 'USD', '2026-06-01', 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
+select r.id, '00000000-0000-4000-8000-00000000b001'::uuid, 'e8000000-0000-4000-8000-000000000021'::uuid,
+       'beta-sweep-a', 50000, 'USD', '2026-06-01'::date, 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'beta-sweep-a:raw'
 union all
-select r.id, '00000000-0000-4000-8000-00000000b001', 'e8000000-0000-4000-8000-000000000021',
-       'beta-transfer-a', -50000, 'USD', '2026-06-01', 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
+select r.id, '00000000-0000-4000-8000-00000000b001'::uuid, 'e8000000-0000-4000-8000-000000000021'::uuid,
+       'beta-transfer-a', -50000, 'USD', '2026-06-01'::date, 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'beta-transfer-a:raw';
 
 insert into public.transaction_source_links (canonical_transaction_id, normalized_source_record_id)
-select 'e8000000-0000-4000-8000-0000000000a1', n.id
+select 'e8000000-0000-4000-8000-0000000000a1'::uuid, n.id
   from public.normalized_source_records n where n.provider_transaction_id = 'beta-sweep-a'
 union all
-select 'e8000000-0000-4000-8000-0000000000a2', n.id
+select 'e8000000-0000-4000-8000-0000000000a2'::uuid, n.id
   from public.normalized_source_records n where n.provider_transaction_id = 'beta-transfer-a';
 
 -- Reconcile ALPHA's connection again -- Beta's identical-shaped pair must be
@@ -713,21 +713,21 @@ values
    'TRANSFERRED TO VS Z37-626027-1', '2026-06-01', gen_random_uuid());
 
 insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency)
-select b.id, 'e7000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-00000000a101', -50000, 'USD'
+select b.id, 'e7000000-0000-4000-8000-000000000011'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, -50000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000f1'
 union all
-select b.id, '00000000-0000-4000-8000-00000000a317', '00000000-0000-4000-8000-00000000a101', 50000, 'USD'
+select b.id, '00000000-0000-4000-8000-00000000a317'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, 50000, 'USD'
   from public.journal_batches b where b.canonical_transaction_id = 'e7000000-0000-4000-8000-0000000000f1';
 
 insert into public.normalized_source_records
   (raw_event_id, household_id, account_id, provider_transaction_id, amount_minor, currency,
    effective_date, description, pending, pfc_primary)
-select r.id, '00000000-0000-4000-8000-00000000a001', 'e7000000-0000-4000-8000-000000000021',
-       'transfer-f', -50000, 'USD', '2026-06-01', 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
+select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
+       'transfer-f', -50000, 'USD', '2026-06-01'::date, 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'transfer-f:raw';
 
 insert into public.transaction_source_links (canonical_transaction_id, normalized_source_record_id)
-select 'e7000000-0000-4000-8000-0000000000f1', n.id
+select 'e7000000-0000-4000-8000-0000000000f1'::uuid, n.id
   from public.normalized_source_records n where n.provider_transaction_id = 'transfer-f';
 
 -- The reconcile call must SUCCEED (no uncaught KEEL_IDEMPOTENCY_CONFLICT) --

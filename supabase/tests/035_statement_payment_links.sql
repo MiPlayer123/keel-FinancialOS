@@ -70,17 +70,17 @@ values
   -- Exact amount but OUTSIDE the window (period_end + 36d) — must NOT match.
   ('d1000000-0000-4000-8000-000000000104', '00000000-0000-4000-8000-00000000a001',
    '00000000-0000-4000-8000-00000000a101', '00000000-0000-4000-8000-00000000a402',
-   'posted', 'sync', 'LATE PAYMENT', '2026-07-06', 'pgtap:pay:late');
+   'posted', 'sync', 'LATE PAYMENT', '2026-08-01', 'pgtap:pay:late');
 insert into public.journal_batches (id, household_id, canonical_transaction_id, description, effective_date, command_id)
 values
   ('d1000000-0000-4000-8000-000000000201', '00000000-0000-4000-8000-00000000a001',
-   'd1000000-0000-4000-8000-000000000101', 'exact pay', '2026-06-10', 'd1000000-0000-4000-8000-000000000c1'),
+   'd1000000-0000-4000-8000-000000000101', 'exact pay', '2026-06-10', 'd1000000-0000-4000-8000-0000000000c1'),
   ('d1000000-0000-4000-8000-000000000202', '00000000-0000-4000-8000-00000000a001',
-   'd1000000-0000-4000-8000-000000000102', 'partial', '2026-06-11', 'd1000000-0000-4000-8000-000000000c2'),
+   'd1000000-0000-4000-8000-000000000102', 'partial', '2026-06-11', 'd1000000-0000-4000-8000-0000000000c2'),
   ('d1000000-0000-4000-8000-000000000203', '00000000-0000-4000-8000-00000000a001',
-   'd1000000-0000-4000-8000-000000000103', 'purchase', '2026-06-12', 'd1000000-0000-4000-8000-000000000c3'),
+   'd1000000-0000-4000-8000-000000000103', 'purchase', '2026-06-12', 'd1000000-0000-4000-8000-0000000000c3'),
   ('d1000000-0000-4000-8000-000000000204', '00000000-0000-4000-8000-00000000a001',
-   'd1000000-0000-4000-8000-000000000104', 'late pay', '2026-07-06', 'd1000000-0000-4000-8000-000000000c4');
+   'd1000000-0000-4000-8000-000000000104', 'late pay', '2026-08-01', 'd1000000-0000-4000-8000-0000000000c4');
 -- Card-side posting on a302 (liability). +50000 = payment (inflow); -50000 = purchase.
 insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency) values
   ('d1000000-0000-4000-8000-000000000201', '00000000-0000-4000-8000-00000000a302',
@@ -150,6 +150,13 @@ select is(
 --    another whose period_end+35d == the payment date must both match (both
 --    ends inclusive). period_end just past the payment must not.
 -- ---------------------------------------------------------------------------
+-- The remaining fixtures are privileged direct inserts (statements + txns);
+-- authenticated has no table DML, so drop back to the migration role for them.
+-- The suggester is SECURITY DEFINER and runs identically on the service path
+-- (null JWT claim just skips the redundant membership check), so the
+-- assertions between these inserts are unaffected. keel_cmd_* / read-model
+-- calls that need a real caller re-establish the authenticated role at §4.
+reset role;
 -- Statement B: period_end = 2026-06-10 (== payment date) → inclusive start.
 insert into public.statements
   (id, household_id, account_id, period_start, period_end, opening_minor, ending_minor, currency, source_hash, created_by)
@@ -210,9 +217,9 @@ values
 insert into public.journal_batches (id, household_id, canonical_transaction_id, description, effective_date, command_id)
 values
   ('d1000000-0000-4000-8000-000000000401', '00000000-0000-4000-8000-00000000a001',
-   'd1000000-0000-4000-8000-000000000301', 'ambig a', '2026-02-05', 'd1000000-0000-4000-8000-000000000e1'),
+   'd1000000-0000-4000-8000-000000000301', 'ambig a', '2026-02-05', 'd1000000-0000-4000-8000-0000000000e1'),
   ('d1000000-0000-4000-8000-000000000402', '00000000-0000-4000-8000-00000000a001',
-   'd1000000-0000-4000-8000-000000000302', 'ambig b', '2026-02-06', 'd1000000-0000-4000-8000-000000000e2');
+   'd1000000-0000-4000-8000-000000000302', 'ambig b', '2026-02-06', 'd1000000-0000-4000-8000-0000000000e2');
 insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency) values
   ('d1000000-0000-4000-8000-000000000401', '00000000-0000-4000-8000-00000000a302',
    '00000000-0000-4000-8000-00000000a101',  25000, 'USD'),
@@ -240,6 +247,10 @@ select ok(
 -- 4. DECIDE — reject then rejected-NOT-resurrected. Reject the statement-A link,
 --    then re-run the suggester: it must NOT re-create a suggestion for that pair.
 -- ---------------------------------------------------------------------------
+-- Back to the real owner: the command procs + read model resolve the actor from
+-- the JWT claim and enforce membership.
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
 select lives_ok($$select public.keel_cmd_statements_decide_payment_link(
   'd1000000-0000-4000-8000-000000000f01','pgtap:decide:reject','{}',
   '00000000-0000-4000-8000-00000000a001',
@@ -279,8 +290,13 @@ select is(
   (select count(*)::int from public.transfer_links
     where household_id='00000000-0000-4000-8000-00000000a001' and status='confirmed'),
   0, 'confirm raised NO confirmed transfer (never auto-confirms)');
+-- The decide command audits through keel_finish_command: audit_log.action is
+-- the command ('statements.decide_payment_link') with the confirm/reject in the
+-- `after` payload, while 'statements.payment_confirmed' is the domain_events
+-- event_type. Assert the audit trail actually records the confirmation.
 select ok(
-  exists(select 1 from public.audit_log where action='statements.payment_confirmed'),
+  exists(select 1 from public.audit_log
+    where action='statements.decide_payment_link' and after->>'status'='confirmed'),
   'confirm is audited');
 
 select lives_ok($$select public.keel_cmd_statements_detach_payment_link(

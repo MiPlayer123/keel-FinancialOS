@@ -12,16 +12,16 @@ select ok('withdrawn' = any(enum_range(null::public.recurring_series_status)::te
 select ok('withdrawn' = any(enum_range(null::public.recurring_transition)::text[]),
   'recurring_transition gained withdrawn');
 select has_function('public', 'keel_recurring_reap_stale_suggestions',
-  array['uuid','uuid','uuid[]'], 'reap proc exists');
+  array['uuid','uuid','uuid[]','boolean'], 'reap proc exists');
 select is(
   (select r.rolname from pg_proc p join pg_roles r on r.oid = p.proowner
-    where p.oid = 'public.keel_recurring_reap_stale_suggestions(uuid,uuid,uuid[])'::regprocedure),
+    where p.oid = 'public.keel_recurring_reap_stale_suggestions(uuid,uuid,uuid[],boolean)'::regprocedure),
   'keel_api', 'reap proc is keel_api-owned definer (can flip series status)');
 select ok(has_function_privilege('service_role',
-  'public.keel_recurring_reap_stale_suggestions(uuid,uuid,uuid[])', 'EXECUTE'),
+  'public.keel_recurring_reap_stale_suggestions(uuid,uuid,uuid[],boolean)', 'EXECUTE'),
   'service role (worker admin client) can call the reap');
 select ok(not has_function_privilege('authenticated',
-  'public.keel_recurring_reap_stale_suggestions(uuid,uuid,uuid[])', 'EXECUTE'),
+  'public.keel_recurring_reap_stale_suggestions(uuid,uuid,uuid[],boolean)', 'EXECUTE'),
   'authenticated cannot call the reap directly');
 
 -- ---------------------------------------------------------------------------
@@ -171,7 +171,7 @@ from (values
 insert into public.journal_postings (id, batch_id, ledger_account_id, entity_id, amount_minor, currency)
 select ('d3000000-0000-4000-8000-0000007' || lpad(s::text,5,'0'))::uuid,
        ('d3000000-0000-4000-8000-0000005' || lpad(s::text,5,'0'))::uuid,
-       '00000000-0000-4000-8000-00000000a301','00000000-0000-4000-8000-00000000a101',-90000,'USD'
+       '00000000-0000-4000-8000-00000000a301'::uuid,'00000000-0000-4000-8000-00000000a101'::uuid,-90000,'USD'
 from generate_series(0,8) s
 union all
 select ('d3000000-0000-4000-8000-0000008' || lpad(s::text,5,'0'))::uuid,
@@ -220,7 +220,7 @@ set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
 select lives_ok($$
   select public.keel_recurring_confirm(
-    'd3000000-0000-4000-8000-0000009000f','pgtap:reap:confirm0','{}',
+    'd3000000-0000-4000-8000-00000009000f','pgtap:reap:confirm0','{}',
     '00000000-0000-4000-8000-00000000a001',
     jsonb_build_object('series_id',(select id from public.recurring_series where series_key='reap-series-0'),
       'effective_date','2026-07-19','horizon_days',60))
@@ -228,22 +228,26 @@ $$, 'confirm reap-series-0 so the reap must leave it alone');
 -- Reject series #1 (so it is protected too) — via authorized owner command.
 select lives_ok($$
   select public.keel_recurring_reject(
-    'd3000000-0000-4000-8000-0000009001f','pgtap:reap:reject1','{}',
+    'd3000000-0000-4000-8000-00000009001f','pgtap:reap:reject1','{}',
     '00000000-0000-4000-8000-00000000a001',
     jsonb_build_object('series_id',(select id from public.recurring_series where series_key='reap-series-1'),
       'effective_date','2026-07-19'))
 $$, 'reject reap-series-1 so the reap must leave it alone');
 reset role;
 
--- Now series-2 is the only one still 'suggested'. Run the reap for a run that
--- emitted NOTHING (empty emitted set) → series-2 must be withdrawn; the
--- confirmed (#0) and rejected (#1) must survive.
+-- Now series-2 is the only one still 'suggested'. Run the reap for a genuine
+-- detection that re-emitted series #0 and #1 but NOT #2 → series-2 must be
+-- withdrawn; the confirmed (#0) and rejected (#1) must survive. (The reap
+-- guard, 20260719082000, refuses to reap on an EMPTY emitted set — an empty
+-- detection is not proof every prior suggestion is stale — so the emitted set
+-- must be the non-empty survivor list, exactly as a real detection produces.)
 set local role service_role;
 select is(
   public.keel_recurring_reap_stale_suggestions(
     '00000000-0000-4000-8000-00000000a001',
     (select id from public.recurring_detector_runs where run_key='pgtap:reap:runA'),
-    array[]::uuid[]),
+    array[(select id from public.recurring_series where series_key='reap-series-0'),
+          (select id from public.recurring_series where series_key='reap-series-1')]::uuid[], true),
   1, 'reap withdraws exactly the one still-suggested, not-emitted series');
 reset role;
 
@@ -268,7 +272,8 @@ select is(
   public.keel_recurring_reap_stale_suggestions(
     '00000000-0000-4000-8000-00000000a001',
     (select id from public.recurring_detector_runs where run_key='pgtap:reap:runA'),
-    array[]::uuid[]),
+    array[(select id from public.recurring_series where series_key='reap-series-0'),
+          (select id from public.recurring_series where series_key='reap-series-1')]::uuid[], true),
   0, 'reap is idempotent — a second pass withdraws nothing');
 reset role;
 select is((select count(*)::int from public.recurring_status_events se

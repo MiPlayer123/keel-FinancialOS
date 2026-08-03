@@ -157,7 +157,7 @@ select is(
   '0', 'a Transfers-In inflow is EXCLUDED from cash-flow income with no paired link');
 select is(
   public.keel_cash_flow('00000000-0000-4000-8000-00000000a001','2026-06-01','2026-06-30')->>'formulaVersion',
-  'cash-flow-v4-transfer-category-excluded', 'cash_flow formula version reflects the transfer-category exclusion');
+  'cash-flow-v7-sign-classified', 'cash_flow formula version reflects the transfer-category exclusion');
 select is(
   coalesce((select (r->>'inflowMinor') from jsonb_array_elements(
      public.keel_cash_flow_monthly('00000000-0000-4000-8000-00000000a001','2026-06-01','2026-06-30')->'rows') r
