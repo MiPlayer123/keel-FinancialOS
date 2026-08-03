@@ -150,6 +150,13 @@ select is(
 --    another whose period_end+35d == the payment date must both match (both
 --    ends inclusive). period_end just past the payment must not.
 -- ---------------------------------------------------------------------------
+-- The remaining fixtures are privileged direct inserts (statements + txns);
+-- authenticated has no table DML, so drop back to the migration role for them.
+-- The suggester is SECURITY DEFINER and runs identically on the service path
+-- (null JWT claim just skips the redundant membership check), so the
+-- assertions between these inserts are unaffected. keel_cmd_* / read-model
+-- calls that need a real caller re-establish the authenticated role at §4.
+reset role;
 -- Statement B: period_end = 2026-06-10 (== payment date) → inclusive start.
 insert into public.statements
   (id, household_id, account_id, period_start, period_end, opening_minor, ending_minor, currency, source_hash, created_by)
@@ -240,6 +247,10 @@ select ok(
 -- 4. DECIDE — reject then rejected-NOT-resurrected. Reject the statement-A link,
 --    then re-run the suggester: it must NOT re-create a suggestion for that pair.
 -- ---------------------------------------------------------------------------
+-- Back to the real owner: the command procs + read model resolve the actor from
+-- the JWT claim and enforce membership.
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
 select lives_ok($$select public.keel_cmd_statements_decide_payment_link(
   'd1000000-0000-4000-8000-000000000f01','pgtap:decide:reject','{}',
   '00000000-0000-4000-8000-00000000a001',

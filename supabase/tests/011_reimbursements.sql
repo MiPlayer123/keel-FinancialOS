@@ -12,7 +12,7 @@ select has_table('public','reimbursement_claim_status_events','claim reversal hi
 select has_function('public','keel_reimbursement_create_claim',array['uuid','text','jsonb','uuid','jsonb','uuid'],'claim command exists');
 select has_function('public','keel_reimbursement_settle',array['uuid','text','jsonb','uuid','jsonb','uuid'],'settle command exists');
 select has_function('public','keel_reimbursement_reverse_settlement',array['uuid','text','jsonb','uuid','jsonb','uuid'],'settlement reversal exists');
-select has_function('public','keel_reimbursement_reverse_claim',array['uuid','text','jsonb','uuid','jsonb'],'claim reversal exists');
+select has_function('public','keel_reimbursement_reverse_claim',array['uuid','text','jsonb','uuid','jsonb','uuid'],'claim reversal exists');
 select has_function('public','keel_list_reimbursements',array['uuid'],'claim read exists');
 select has_function('public','keel_is_non_income_settlement',array['uuid','uuid'],'income exclusion classifier exists');
 select is((select r.rolname from pg_proc p join pg_roles r on r.oid=p.proowner where p.oid='public.keel_reimbursement_settle(uuid,text,jsonb,uuid,jsonb,uuid)'::regprocedure),'keel_api','command owner is keel_api');

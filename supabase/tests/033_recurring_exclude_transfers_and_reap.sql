@@ -235,15 +235,19 @@ select lives_ok($$
 $$, 'reject reap-series-1 so the reap must leave it alone');
 reset role;
 
--- Now series-2 is the only one still 'suggested'. Run the reap for a run that
--- emitted NOTHING (empty emitted set) → series-2 must be withdrawn; the
--- confirmed (#0) and rejected (#1) must survive.
+-- Now series-2 is the only one still 'suggested'. Run the reap for a genuine
+-- detection that re-emitted series #0 and #1 but NOT #2 → series-2 must be
+-- withdrawn; the confirmed (#0) and rejected (#1) must survive. (The reap
+-- guard, 20260719082000, refuses to reap on an EMPTY emitted set — an empty
+-- detection is not proof every prior suggestion is stale — so the emitted set
+-- must be the non-empty survivor list, exactly as a real detection produces.)
 set local role service_role;
 select is(
   public.keel_recurring_reap_stale_suggestions(
     '00000000-0000-4000-8000-00000000a001',
     (select id from public.recurring_detector_runs where run_key='pgtap:reap:runA'),
-    array[]::uuid[], true),
+    array[(select id from public.recurring_series where series_key='reap-series-0'),
+          (select id from public.recurring_series where series_key='reap-series-1')]::uuid[], true),
   1, 'reap withdraws exactly the one still-suggested, not-emitted series');
 reset role;
 
@@ -268,7 +272,8 @@ select is(
   public.keel_recurring_reap_stale_suggestions(
     '00000000-0000-4000-8000-00000000a001',
     (select id from public.recurring_detector_runs where run_key='pgtap:reap:runA'),
-    array[]::uuid[], true),
+    array[(select id from public.recurring_series where series_key='reap-series-0'),
+          (select id from public.recurring_series where series_key='reap-series-1')]::uuid[], true),
   0, 'reap is idempotent — a second pass withdraws nothing');
 reset role;
 select is((select count(*)::int from public.recurring_status_events se

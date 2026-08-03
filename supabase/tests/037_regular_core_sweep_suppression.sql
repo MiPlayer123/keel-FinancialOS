@@ -114,11 +114,11 @@ insert into public.normalized_source_records
   (raw_event_id, household_id, account_id, provider_transaction_id, amount_minor, currency,
    effective_date, description, pending, pfc_primary)
 select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
-       'sweep-a', 50000, 'USD', '2026-06-01', 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
+       'sweep-a', 50000, 'USD', '2026-06-01'::date, 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'sweep-a:raw'
 union all
 select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
-       'transfer-a', -50000, 'USD', '2026-06-01', 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
+       'transfer-a', -50000, 'USD', '2026-06-01'::date, 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'transfer-a:raw';
 
 insert into public.transaction_source_links (canonical_transaction_id, normalized_source_record_id)
@@ -159,7 +159,7 @@ insert into public.normalized_source_records
   (raw_event_id, household_id, account_id, provider_transaction_id, amount_minor, currency,
    effective_date, description, pending, pfc_primary)
 select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
-       'sweep-b', -77700, 'USD', '2026-06-02', 'PURCHASE INTO CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
+       'sweep-b', -77700, 'USD', '2026-06-02'::date, 'PURCHASE INTO CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'sweep-b:raw';
 
 insert into public.transaction_source_links (canonical_transaction_id, normalized_source_record_id)
@@ -225,15 +225,15 @@ insert into public.normalized_source_records
   (raw_event_id, household_id, account_id, provider_transaction_id, amount_minor, currency,
    effective_date, description, pending, pfc_primary)
 select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
-       'sweep-c1', 30000, 'USD', '2026-06-03', 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
+       'sweep-c1', 30000, 'USD', '2026-06-03'::date, 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'sweep-c1:raw'
 union all
 select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
-       'sweep-c2', 30000, 'USD', '2026-06-03', 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
+       'sweep-c2', 30000, 'USD', '2026-06-03'::date, 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'sweep-c2:raw'
 union all
 select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
-       'transfer-c', -30000, 'USD', '2026-06-03', 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
+       'transfer-c', -30000, 'USD', '2026-06-03'::date, 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'transfer-c:raw';
 
 insert into public.transaction_source_links (canonical_transaction_id, normalized_source_record_id)
@@ -291,11 +291,11 @@ insert into public.normalized_source_records
   (raw_event_id, household_id, account_id, provider_transaction_id, amount_minor, currency,
    effective_date, description, pending, pfc_primary)
 select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
-       'sweep-d', 40000, 'USD', '2026-06-04', 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
+       'sweep-d', 40000, 'USD', '2026-06-04'::date, 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'sweep-d:raw'
 union all
 select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
-       'transfer-d', -40000, 'USD', '2026-06-04', 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
+       'transfer-d', -40000, 'USD', '2026-06-04'::date, 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'transfer-d:raw';
 
 insert into public.transaction_source_links (canonical_transaction_id, normalized_source_record_id)
@@ -370,11 +370,11 @@ insert into public.normalized_source_records
   (raw_event_id, household_id, account_id, provider_transaction_id, amount_minor, currency,
    effective_date, description, pending, pfc_primary)
 select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
-       'sweep-e', 60000, 'USD', '2026-06-05', 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
+       'sweep-e', 60000, 'USD', '2026-06-05'::date, 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'sweep-e:raw'
 union all
 select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
-       'transfer-e', -60000, 'USD', '2026-06-05', 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
+       'transfer-e', -60000, 'USD', '2026-06-05'::date, 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'transfer-e:raw';
 
 insert into public.transaction_source_links (canonical_transaction_id, normalized_source_record_id)
@@ -612,11 +612,11 @@ insert into public.normalized_source_records
   (raw_event_id, household_id, account_id, provider_transaction_id, amount_minor, currency,
    effective_date, description, pending, pfc_primary)
 select r.id, '00000000-0000-4000-8000-00000000b001'::uuid, 'e8000000-0000-4000-8000-000000000021'::uuid,
-       'beta-sweep-a', 50000, 'USD', '2026-06-01', 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
+       'beta-sweep-a', 50000, 'USD', '2026-06-01'::date, 'REDEMPTION FROM CORE ACCOUNT (SPAXX)', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'beta-sweep-a:raw'
 union all
 select r.id, '00000000-0000-4000-8000-00000000b001'::uuid, 'e8000000-0000-4000-8000-000000000021'::uuid,
-       'beta-transfer-a', -50000, 'USD', '2026-06-01', 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
+       'beta-transfer-a', -50000, 'USD', '2026-06-01'::date, 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'beta-transfer-a:raw';
 
 insert into public.transaction_source_links (canonical_transaction_id, normalized_source_record_id)
@@ -723,7 +723,7 @@ insert into public.normalized_source_records
   (raw_event_id, household_id, account_id, provider_transaction_id, amount_minor, currency,
    effective_date, description, pending, pfc_primary)
 select r.id, '00000000-0000-4000-8000-00000000a001'::uuid, 'e7000000-0000-4000-8000-000000000021'::uuid,
-       'transfer-f', -50000, 'USD', '2026-06-01', 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
+       'transfer-f', -50000, 'USD', '2026-06-01'::date, 'TRANSFERRED TO VS Z37-626027-1', false, 'TRANSFER_OUT'
   from public.raw_provider_events r where r.provider_event_id = 'transfer-f:raw';
 
 insert into public.transaction_source_links (canonical_transaction_id, normalized_source_record_id)
