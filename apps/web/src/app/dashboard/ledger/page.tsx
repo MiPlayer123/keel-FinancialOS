@@ -176,6 +176,10 @@ function LedgerTable() {
   const [customRange, setCustomRange] = useState<{ from: string; to: string } | null>(null);
   const [accountFilter, setAccountFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
+  // True only via a Reports drill on a rolled-up parent (?subs=1): the
+  // register then matches the parent AND its subcategories, reproducing the
+  // clicked number (Law 9). Manual picks stay exact-match.
+  const [categorySubs, setCategorySubs] = useState(false);
   const [tagFilter, setTagFilter] = useState('all');
   // D-047 status facet: All / Reconciled / Unreconciled, same select-pattern
   // as account/category/tag above — no new filter paradigm.
@@ -192,7 +196,10 @@ function LedgerTable() {
   // refresh/back doesn't reopen the dialog and a repeat ⌘K action re-fires.
   useEffect(() => {
     const category = searchParams.get('category');
-    if (category) setCategoryFilter(category);
+    if (category) {
+      setCategoryFilter(category);
+      setCategorySubs(searchParams.get('subs') === '1');
+    }
     const account = searchParams.get('account');
     if (account) setAccountFilter(account);
     const date = searchParams.get('date');
@@ -272,6 +279,17 @@ function LedgerTable() {
     [entityLens, accounts],
   );
 
+  const categoryChildIds = useMemo(() => {
+    if (!categorySubs || categoryFilter === 'all' || categoryFilter === 'uncategorized' || categoryFilter === 'transfers') {
+      return null;
+    }
+    return new Set(
+      categories
+        .filter((c) => c.parentLedgerAccountId === categoryFilter)
+        .map((c) => c.ledgerAccountId),
+    );
+  }, [categorySubs, categoryFilter, categories]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     const [from, to] = customRange
@@ -286,12 +304,15 @@ function LedgerTable() {
         if (!isUncategorized(t)) return false;
       } else if (categoryFilter === 'transfers') {
         if (t.transferStatus !== 'confirmed') return false;
-      } else if (
-        categoryFilter !== 'all' &&
-        t.categoryLedgerAccountId !== categoryFilter &&
-        !(t.splits ?? []).some((s) => s.categoryLedgerAccountId === categoryFilter)
-      ) {
-        return false;
+      } else if (categoryFilter !== 'all') {
+        const matches = (id: string | null) =>
+          id !== null && (id === categoryFilter || (categoryChildIds?.has(id) ?? false));
+        if (
+          !matches(t.categoryLedgerAccountId) &&
+          !(t.splits ?? []).some((s) => matches(s.categoryLedgerAccountId))
+        ) {
+          return false;
+        }
       }
       if (tagFilter !== 'all' && !(t.tags ?? []).some((x) => x.tagId === tagFilter)) {
         return false;
@@ -338,6 +359,7 @@ function LedgerTable() {
     customRange,
     accountFilter,
     categoryFilter,
+    categoryChildIds,
     tagFilter,
     reconciledFilter,
     sort,
@@ -628,7 +650,10 @@ function LedgerTable() {
             ),
           }}
           onValueChange={(v) => {
-            if (v) setCategoryFilter(v);
+            if (v) {
+              setCategoryFilter(v);
+              setCategorySubs(false);
+            }
           }}
         >
           <SelectTrigger className="h-9 w-44">

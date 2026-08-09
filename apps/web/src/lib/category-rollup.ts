@@ -95,8 +95,21 @@ export function taxCategoryIdSet(categories: CategoryRow[]): Set<string> {
   for (const c of categories) {
     if (c.pfcKey === TAX_PFC_KEY) ids.add(c.ledgerAccountId);
   }
-  for (const c of categories) {
-    if (c.parentLedgerAccountId && ids.has(c.parentLedgerAccountId)) ids.add(c.ledgerAccountId);
+  // Fixpoint, not a single pass: descent must not depend on list order (the
+  // schema says one-level nesting, but nothing here should bank on it).
+  let grew = ids.size > 0;
+  while (grew) {
+    grew = false;
+    for (const c of categories) {
+      if (
+        c.parentLedgerAccountId &&
+        ids.has(c.parentLedgerAccountId) &&
+        !ids.has(c.ledgerAccountId)
+      ) {
+        ids.add(c.ledgerAccountId);
+        grew = true;
+      }
+    }
   }
   return ids;
 }

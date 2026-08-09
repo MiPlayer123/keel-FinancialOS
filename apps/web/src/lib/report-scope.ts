@@ -237,12 +237,16 @@ export function clampMonthToRange(
  */
 export function ledgerDrillHref(input: {
   categoryId?: string | null;
+  /** True when the drilled number rolled subcategories into `categoryId`, so
+   *  the register must match the whole subtree to reproduce it (Law 9). */
+  includeSubcategories?: boolean;
   from: string;
   to: string;
   accountSet: Set<string> | null;
 }): string {
   const p = new URLSearchParams();
   if (input.categoryId !== undefined) p.set('category', input.categoryId ?? 'uncategorized');
+  if (input.includeSubcategories === true && input.categoryId != null) p.set('subs', '1');
   p.set('from', input.from);
   p.set('to', input.to);
   if (input.accountSet !== null && input.accountSet.size === 1) {

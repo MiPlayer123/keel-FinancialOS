@@ -123,7 +123,7 @@ describe('excludeTaxSpend', () => {
       ],
     };
     const out = excludeTaxSpend([row], taxIds);
-    expect(out[0]?.splits?.map((s) => s.categoryLedgerAccountId)).toEqual(['groceries', null]);
+    expect(out[0]?.splits.map((s) => s.categoryLedgerAccountId)).toEqual(['groceries', null]);
   });
 
   it('drops a split row whose every share was tax', () => {
