@@ -135,9 +135,20 @@ describe('excludeTaxSpend', () => {
     expect(excludeTaxSpend([row], taxIds)).toEqual([]);
   });
 
-  it('is a no-op passthrough when no tax categories exist', () => {
+  it('keeps rows untouched when no tax categories exist', () => {
     const rows = [{ categoryLedgerAccountId: 'taxes' }];
-    expect(excludeTaxSpend(rows, new Set())).toBe(rows);
+    const out = excludeTaxSpend(rows, new Set());
+    expect(out).toHaveLength(1);
+    expect(out[0]).toBe(rows[0]);
+  });
+
+  it('drops a row by its own pfc key even when the category is archived out of the id set', () => {
+    const rows = [
+      { categoryLedgerAccountId: 'archived-taxes', categoryPfcKey: TAX_PFC_KEY },
+      { categoryLedgerAccountId: 'groceries', categoryPfcKey: null },
+    ];
+    const out = excludeTaxSpend(rows, new Set());
+    expect(out.map((r) => r.categoryLedgerAccountId)).toEqual(['groceries']);
   });
 });
 
@@ -148,6 +159,12 @@ describe('isWhollyTaxRow', () => {
     expect(isWhollyTaxRow({ categoryLedgerAccountId: 'taxes' }, taxIds)).toBe(true);
     expect(isWhollyTaxRow({ categoryLedgerAccountId: 'groceries' }, taxIds)).toBe(false);
     expect(isWhollyTaxRow({ categoryLedgerAccountId: null }, taxIds)).toBe(false);
+    expect(
+      isWhollyTaxRow(
+        { categoryLedgerAccountId: 'archived-taxes', categoryPfcKey: TAX_PFC_KEY },
+        new Set(),
+      ),
+    ).toBe(true);
   });
 
   it('matches a split row only when EVERY category share is tax', () => {

@@ -1209,9 +1209,16 @@ function ReportsBody() {
   // scope, offers only in-range months, and states its month in the footnote;
   // the "vs previous month" baseline deliberately reads the full prior month
   // (a range-clamped baseline would fake huge deltas — Law 9 over-honesty).
+  // Currency voted over the SAME tax-filtered population the review sums
+  // (codex r2264 on PR #162): borrowing the tag report's vote (unfiltered by
+  // design) could pick a currency the taxes-off view has no activity in.
+  const reviewCurrency = useMemo(
+    () => dominantCurrency(spendScopedRows.filter((t) => !isDebtOrTransferLike(t))),
+    [spendScopedRows],
+  );
   const monthReview = useMemo(
-    () => (reviewMonth ? buildMonthReview(spendScopedRows, reviewMonth, tagReport.currency) : null),
-    [spendScopedRows, reviewMonth, tagReport.currency],
+    () => (reviewMonth ? buildMonthReview(spendScopedRows, reviewMonth, reviewCurrency) : null),
+    [spendScopedRows, reviewMonth, reviewCurrency],
   );
   // Includes archived categories: their history stays on the tax schedule.
   const [taxLines, setTaxLines] = useState<Map<string, string>>(new Map());

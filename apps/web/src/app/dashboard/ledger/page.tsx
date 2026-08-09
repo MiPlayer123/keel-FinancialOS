@@ -206,7 +206,10 @@ function LedgerTable() {
       setCategoryFilter(category);
       setCategorySubs(searchParams.get('subs') === '1');
     }
-    if (searchParams.get('notax') === '1') setExcludeTax(true);
+    // Mirror the URL exactly (set AND clear) — a stale tax exclusion must not
+    // keep constraining a register the user reached without it, same rule as
+    // the custom range below (review r3603410823).
+    setExcludeTax(searchParams.get('notax') === '1');
     const account = searchParams.get('account');
     if (account) setAccountFilter(account);
     const date = searchParams.get('date');
@@ -701,6 +704,14 @@ function LedgerTable() {
             title="This register arrived from a taxes-off report drill: tax-categorized transactions are hidden. Click to show them."
             onClick={() => {
               setExcludeTax(false);
+              // Drop notax from the URL too, or a refresh/share resurrects
+              // the exclusion the user just cleared.
+              const p = new URLSearchParams(searchParams.toString());
+              p.delete('notax');
+              const qs = p.toString();
+              router.replace(qs ? `/dashboard/ledger?${qs}` : '/dashboard/ledger', {
+                scroll: false,
+              });
             }}
           >
             Taxes excluded ✕

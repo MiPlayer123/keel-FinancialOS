@@ -116,8 +116,16 @@ export function taxCategoryIdSet(categories: CategoryRow[]): Set<string> {
 
 type TaxFilterableRow = {
   categoryLedgerAccountId: string | null;
+  /** Rename-proof key carried on the row itself — catches rows whose tax
+   *  category was archived out of categories.list (codex r2264, PR #162). */
+  categoryPfcKey?: string | null;
   splits?: { categoryLedgerAccountId: string | null }[] | null;
 };
+
+function isTaxRef(row: TaxFilterableRow, taxIds: Set<string>): boolean {
+  if (row.categoryPfcKey === TAX_PFC_KEY) return true;
+  return row.categoryLedgerAccountId !== null && taxIds.has(row.categoryLedgerAccountId);
+}
 
 /**
  * Drop tax-categorized activity from `rows`: a row categorized to a tax
@@ -132,22 +140,25 @@ type TaxFilterableRow = {
  * mixed split with any non-tax share stays visible in full.
  */
 export function isWhollyTaxRow(row: TaxFilterableRow, taxIds: Set<string>): boolean {
-  if (taxIds.size === 0) return false;
   if (row.splits && row.splits.length > 0) {
+    if (taxIds.size === 0) return false;
     const catLegs = row.splits.filter((s) => s.categoryLedgerAccountId !== null);
     return (
       catLegs.length > 0 &&
       catLegs.every((s) => s.categoryLedgerAccountId !== null && taxIds.has(s.categoryLedgerAccountId))
     );
   }
-  return row.categoryLedgerAccountId !== null && taxIds.has(row.categoryLedgerAccountId);
+  return isTaxRef(row, taxIds);
 }
 
 export function excludeTaxSpend<T extends TaxFilterableRow>(rows: T[], taxIds: Set<string>): T[] {
-  if (taxIds.size === 0) return rows;
   const out: T[] = [];
   for (const row of rows) {
     if (row.splits && row.splits.length > 0) {
+      if (taxIds.size === 0) {
+        out.push(row);
+        continue;
+      }
       const kept = row.splits.filter(
         (s) => s.categoryLedgerAccountId === null || !taxIds.has(s.categoryLedgerAccountId),
       );
@@ -155,7 +166,7 @@ export function excludeTaxSpend<T extends TaxFilterableRow>(rows: T[], taxIds: S
       else if (kept.length > 0) out.push({ ...row, splits: kept });
       continue;
     }
-    if (row.categoryLedgerAccountId !== null && taxIds.has(row.categoryLedgerAccountId)) continue;
+    if (isTaxRef(row, taxIds)) continue;
     out.push(row);
   }
   return out;
