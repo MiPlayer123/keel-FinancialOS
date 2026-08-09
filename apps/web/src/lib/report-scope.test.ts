@@ -46,6 +46,7 @@ describe('parseReportScope', () => {
       to: '2026-07-17',
       accountIds: [],
       entityId: null,
+      includeTaxes: true,
     });
   });
 
@@ -80,6 +81,12 @@ describe('parseReportScope', () => {
     expect(s.accountIds).toEqual(['a', 'b']);
     expect(s.entityId).toBeNull();
   });
+
+  it('taxes=off parses to includeTaxes false; anything else stays on', () => {
+    expect(parseReportScope(params({ taxes: 'off' }), NOW).includeTaxes).toBe(false);
+    expect(parseReportScope(params({ taxes: 'on' }), NOW).includeTaxes).toBe(true);
+    expect(parseReportScope(params({}), NOW).includeTaxes).toBe(true);
+  });
 });
 
 describe('reportScopeToSearch', () => {
@@ -93,6 +100,8 @@ describe('reportScopeToSearch', () => {
       { from: '2026-05-10', to: '2026-06-20' },
       { range: 'ytd', entity: 'ent-1', accounts: 'a,b' },
       { accounts: 'a' },
+      { taxes: 'off' },
+      { range: 'last_3', taxes: 'off' },
     ];
     for (const c of cases) {
       const scope = parseReportScope(params(c), NOW);
@@ -108,6 +117,7 @@ describe('reportScopeToSearch', () => {
       to: '2026-06-30',
       accountIds: [],
       entityId: null,
+      includeTaxes: true,
     };
     expect(reportScopeToSearch(scope)).toBe('range=last_month');
   });

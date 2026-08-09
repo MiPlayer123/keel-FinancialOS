@@ -385,7 +385,12 @@ export type CategoryDonutSlice = {
   /** Category ledger-account id for drill-through (null = uncategorized).
    *  Omit when the caller doesn't wire clicks. */
   id?: string | null;
+  /** Subcategory lines shown in the hover tooltip (largest first). */
+  breakdown?: { name: string; amountMinor: string }[];
 };
+
+/** Tooltip shows at most this many breakdown lines before "+N more". */
+const DONUT_BREAKDOWN_CAP = 4;
 
 const DONUT_HUES = [
   'var(--chart-1)',
@@ -466,6 +471,7 @@ export function CategoryDonut({
       pct,
       isOther: s.isOther,
       categoryId: s.id ?? null,
+      breakdown: s.breakdown ?? [],
       fill: style.fill,
       fillOpacity: style.fillOpacity,
     };
@@ -498,12 +504,24 @@ export function CategoryDonut({
               content={({ active, payload }) => {
                 const p = payload[0]?.payload as (typeof data)[number] | undefined;
                 if (!active || !p) return null;
+                const extra = p.breakdown.length - DONUT_BREAKDOWN_CAP;
                 return (
                   <TooltipShell>
                     <p className="font-medium">{p.name}</p>
                     <p className="font-mono tabular-nums">
                       {formatMoney(p.amountMinor, { currency })} · {String(p.pct)}%
                     </p>
+                    {p.breakdown.slice(0, DONUT_BREAKDOWN_CAP).map((b) => (
+                      <p key={b.name} className="flex justify-between gap-3 text-muted-foreground">
+                        <span className="truncate">{b.name}</span>
+                        <span className="font-mono tabular-nums">
+                          {formatMoney(b.amountMinor, { currency })}
+                        </span>
+                      </p>
+                    ))}
+                    {extra > 0 ? (
+                      <p className="text-muted-foreground">+{String(extra)} more</p>
+                    ) : null}
                   </TooltipShell>
                 );
               }}
@@ -602,8 +620,8 @@ type SankeyNodeShapeProps = {
   payload: SankeyFlowNode & { value: number };
 };
 
-function FlowNode(props: SankeyNodeShapeProps) {
-  const { x, y, width, height, payload } = props;
+function FlowNode(props: SankeyNodeShapeProps & { currency: string }) {
+  const { x, y, width, height, payload, currency } = props;
   const fill =
     payload.side === 'out' ? 'var(--keel-chart-outflow)' : 'var(--keel-chart-inflow)';
   const rect = (
@@ -624,7 +642,7 @@ function FlowNode(props: SankeyNodeShapeProps) {
         className="fill-[var(--foreground)]"
         fontSize={12}
       >
-        {`${payload.name} · ${formatMoney(payload.totalMinor)}`}
+        {`${payload.name} · ${formatMoney(payload.totalMinor, { currency })}`}
       </text>
     </g>
   );
@@ -639,10 +657,12 @@ export function CashFlowSankey({
   nodes,
   links,
   height,
+  currency = 'USD',
 }: {
   nodes: SankeyFlowNode[];
   links: SankeyFlowLink[];
   height?: number;
+  currency?: string;
 }) {
   if (nodes.length < 3 || links.length === 0) return null;
   const data = {
@@ -669,7 +689,7 @@ export function CashFlowSankey({
         nodeWidth={NODE_W}
         nodePadding={14}
         margin={{ top: 8, right: 175, bottom: 8, left: 175 }}
-        node={(p: unknown) => <FlowNode {...(p as SankeyNodeShapeProps)} />}
+        node={(p: unknown) => <FlowNode {...(p as SankeyNodeShapeProps)} currency={currency} />}
         link={{ stroke: 'var(--muted-foreground)', strokeOpacity: 0.18 }}
       >
         <Tooltip
@@ -682,7 +702,7 @@ export function CashFlowSankey({
             return (
               <TooltipShell>
                 <p className="font-medium">{inner.name}</p>
-                <p className="text-muted-foreground">{formatMoney(inner.totalMinor)}</p>
+                <p className="text-muted-foreground">{formatMoney(inner.totalMinor, { currency })}</p>
               </TooltipShell>
             );
           }}

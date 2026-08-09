@@ -6,10 +6,12 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import {
   BarChart3,
   ArrowDownRight,
+  ArrowLeft,
   ArrowUpRight,
   ChevronDown,
   ChevronRight,
   Download,
+  ListFilter,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -40,6 +42,13 @@ import {
   type SankeyFlowNode,
 } from '@/components/keel/charts';
 import { isDebtOrTransferLike, suggestedTransferCount } from '@/lib/spending';
+import {
+  excludeTaxSpend,
+  rollupCategoryTotals,
+  taxCategoryIdSet,
+  type CategoryGroupEntry,
+  type CategoryRangeEntry,
+} from '@/lib/category-rollup';
 import { allocationMix } from '@/lib/holdings-allocation';
 import {
   clampMonthToRange,
@@ -326,13 +335,13 @@ function downloadCsvFile(filename: string, csv: string) {
 }
 
 /**
- * Net-signed expense totals per category over an arbitrary inclusive
+ * Net-signed expense totals per LEAF category over an arbitrary inclusive
  * [from, to] calendar-day range — split-aware and transfer/debt-payment-
  * excluding, same convention as buildMatrix. Restricted to the dominant
  * currency within the range (like tagTotals/taxSchedule) so the donut and
- * its total format with one currency. Categories whose net is negative
- * (refunds outweigh spend in-range) are returned separately so the pie only
- * ever shows honest positive spend.
+ * its total format with one currency. Callers roll leaves up to parents
+ * (rollupCategoryTotals) and partition by sign at that grain, so the pie
+ * only ever shows honest positive net spend.
  */
 function categoryRangeTotals(
   rows: RichTransactionRow[],
@@ -340,8 +349,7 @@ function categoryRangeTotals(
   to: string,
 ): {
   currency: string;
-  positive: { categoryId: string | null; name: string; amountMinor: bigint }[];
-  negative: { categoryId: string | null; name: string; amountMinor: bigint }[];
+  entries: CategoryRangeEntry[];
 } {
   const inRange = (dateIso: string) => {
     const day = dateIso.slice(0, 10);
@@ -381,12 +389,7 @@ function categoryRangeTotals(
     );
   }
 
-  const all = [...byCategory.values()];
-  return {
-    currency,
-    positive: all.filter((e) => e.amountMinor > 0n),
-    negative: all.filter((e) => e.amountMinor < 0n),
-  };
+  return { currency, entries: [...byCategory.values()].filter((e) => e.amountMinor !== 0n) };
 }
 
 type FlowGraph = {
@@ -395,16 +398,20 @@ type FlowGraph = {
   totalInMinor: string;
   totalOutMinor: string;
   savedMinor: string;
+  currency: string;
 } | null;
 
 /**
  * Money movement as a flow: income categories → Income → spending categories,
  * with "Saved" / "From savings" balancing the sides so every ribbon is
  * positive. Net convention matches the matrix; subcategories roll up into
- * their parents; transfers & debt payments excluded. BigInt sums. Callers
- * pass rows already reduced to the report scope (accounts + date range).
+ * their parents; transfers & debt payments excluded; dominant currency only
+ * (voted like monthlyFlow — mixed-currency sums would be meaningless).
+ * BigInt sums. Callers pass rows already reduced to the report scope
+ * (accounts + date range).
  */
 function buildFlow(rows: RichTransactionRow[], categories: CategoryRow[]): FlowGraph {
+  const currency = dominantCurrency(rows.filter((t) => !isDebtOrTransferLike(t)));
   const byId = new Map(categories.map((c) => [c.ledgerAccountId, c]));
   const rollup = (id: string | null, fallback: string): { key: string; name: string } => {
     const cat = id ? byId.get(id) : undefined;
@@ -428,6 +435,7 @@ function buildFlow(rows: RichTransactionRow[], categories: CategoryRow[]): FlowG
 
   for (const t of rows) {
     if (isDebtOrTransferLike(t)) continue;
+    if (t.currency !== currency) continue;
     if (t.splits && t.splits.length > 0) {
       for (const s of t.splits) {
         const share = BigInt(s.amountMinor || '0');
@@ -492,6 +500,7 @@ function buildFlow(rows: RichTransactionRow[], categories: CategoryRow[]): FlowG
     totalInMinor: totalIn.toString(),
     totalOutMinor: totalOut.toString(),
     savedMinor: saved.toString(),
+    currency,
   };
 }
 
@@ -783,6 +792,109 @@ function DeltaLine({ deltaMinor, vsLabel }: { deltaMinor: bigint; vsLabel: strin
   );
 }
 
+/** Refund-heavy rows a donut can't plot, listed under it (Law 9: disclosed,
+ *  never silently dropped). Renders nothing when there are none. */
+function NetRefundsStrip({
+  entries,
+  currency,
+}: {
+  entries: { key: string; name: string; amountMinor: bigint }[];
+  currency: string;
+}) {
+  if (entries.length === 0) return null;
+  return (
+    <div className="border-t border-border pt-3">
+      <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        Net refunds (excluded from the chart)
+      </p>
+      <div className="space-y-1">
+        {entries.map((e) => (
+          <div key={e.key} className="flex items-center gap-3 text-sm">
+            <span className="min-w-0 flex-1 truncate text-muted-foreground">{e.name}</span>
+            <Money
+              amountMinor={e.amountMinor.toString()}
+              currency={currency}
+              signed
+              className="text-xs"
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Focused view of one parent slice: its subcategories as their own donut,
+ * with "Filter transactions" opening the register on the whole subtree (the
+ * exact population behind the parent's number) and a leaf click opening just
+ * that subcategory.
+ */
+function DonutBreakdown({
+  group,
+  currency,
+  scopeText,
+  onBack,
+  onFilterTransactions,
+  onLeafClick,
+}: {
+  group: CategoryGroupEntry;
+  currency: string;
+  scopeText: string;
+  onBack: () => void;
+  onFilterTransactions: () => void;
+  onLeafClick: (categoryId: string | null) => void;
+}) {
+  const positive = group.children.filter((c) => c.amountMinor > 0n);
+  const negative = group.children.filter((c) => c.amountMinor < 0n);
+  return (
+    <>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={onBack}>
+          <ArrowLeft className="size-3.5" />
+          All categories
+        </Button>
+        <span className="flex items-center gap-2">
+          <span className="text-sm font-medium">{group.name}</span>
+          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onFilterTransactions}>
+            <ListFilter className="size-3.5" />
+            Filter transactions
+          </Button>
+        </span>
+      </div>
+      {positive.length > 0 ? (
+        <CategoryDonut
+          items={positive.map((c) => ({
+            id: c.categoryId,
+            name: c.name,
+            amountMinor: c.amountMinor.toString(),
+          }))}
+          currency={currency}
+          onSliceClick={(slice) => {
+            onLeafClick(slice.id);
+          }}
+        />
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          Refunds outweigh spending in every {group.name} subcategory for this range.
+        </p>
+      )}
+      <NetRefundsStrip
+        entries={negative.map((c) => ({
+          key: c.categoryId ?? c.name,
+          name: c.name,
+          amountMinor: c.amountMinor,
+        }))}
+        currency={currency}
+      />
+      <p className="text-xs text-muted-foreground">
+        {group.name} subcategories · {scopeText}, dominant currency only, transfers & debt
+        payments excluded, net of refunds. Click a slice to open it in the ledger.
+      </p>
+    </>
+  );
+}
+
 /**
  * THE scope bar (teardown C14): one date range + account subset + entity
  * drives every widget below it. State lives in the URL (shareable views);
@@ -927,6 +1039,18 @@ function ScopeBar({
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
+      <Button
+        variant={scope.includeTaxes ? 'ghost' : 'secondary'}
+        size="sm"
+        className={`h-7 text-xs${scope.includeTaxes ? ' text-muted-foreground' : ''}`}
+        aria-pressed={!scope.includeTaxes}
+        title="Exclude tax payments (the Taxes category) from the spending widgets. The tax schedule and CSV export always stay complete."
+        onClick={() => {
+          onScopeChange({ ...scope, includeTaxes: !scope.includeTaxes });
+        }}
+      >
+        {scope.includeTaxes ? 'Taxes: on' : 'Taxes: off'}
+      </Button>
     </div>
   );
 }
@@ -988,28 +1112,80 @@ function ReportsBody() {
     () => (accountSet === null ? txns.rows : txns.rows.filter((r) => accountSet.has(r.accountId))),
     [txns.rows, accountSet],
   );
-  /** Rows inside the full scope: accounts AND the [from, to] day range. */
-  const rangedRows = useMemo(() => scopeRows(scopedRows, scope, null), [scopedRows, scope]);
+  const taxIds = useMemo(() => taxCategoryIdSet(categories), [categories]);
+  /** Scoped rows with tax payments removed when the scope bar says taxes off. */
+  const spendScopedRows = useMemo(
+    () => (scope.includeTaxes ? scopedRows : excludeTaxSpend(scopedRows, taxIds)),
+    [scope.includeTaxes, scopedRows, taxIds],
+  );
+  /** Rows inside the full scope: accounts AND the [from, to] day range —
+   *  UNfiltered by the tax toggle (tax schedule + CSV export stay complete). */
+  const rangedRowsFull = useMemo(() => scopeRows(scopedRows, scope, null), [scopedRows, scope]);
+  /** What every spending widget consumes: ranged rows honoring the tax toggle. */
+  const rangedRows = useMemo(
+    () => (scope.includeTaxes ? rangedRowsFull : excludeTaxSpend(rangedRowsFull, taxIds)),
+    [scope.includeTaxes, rangedRowsFull, taxIds],
+  );
   const entityName = scope.entityId
     ? (entities.find((e) => e.entityId === scope.entityId)?.name ?? null)
     : null;
-  /** "3 of 5 accounts · 2026-05-01 – 2026-07-17" — every footnote leads with this (Law 9). */
-  const scopeText = scopeLabel({
+  const baseScopeText = scopeLabel({
     scope,
     accountSet,
     totalAccounts: accounts.length,
     entityName,
   });
+  /** "3 of 5 accounts · 2026-05-01 – 2026-07-17[ · taxes excluded]" — every
+   *  spending-widget footnote leads with this (Law 9); the tax-schedule card
+   *  and CSV export use baseScopeText because they never drop tax rows. */
+  const scopeText = scope.includeTaxes ? baseScopeText : `${baseScopeText} · taxes excluded`;
 
   const [view, setView] = useState<'expense' | 'income'>('expense');
   const flow = useMemo(() => buildFlow(rangedRows, categories), [rangedRows, categories]);
 
   const donutReport = useMemo(
-    () => categoryRangeTotals(scopedRows, scope.from, scope.to),
-    [scopedRows, scope.from, scope.to],
+    () => categoryRangeTotals(spendScopedRows, scope.from, scope.to),
+    [spendScopedRows, scope.from, scope.to],
+  );
+  // Parent grain (F-016b): the donut agrees with the matrix and the Sankey —
+  // a slice is a parent's rolled-up net; its leaves live one click (or one
+  // hover) below.
+  const donutGroups = useMemo(
+    () => rollupCategoryTotals(donutReport.entries, categories),
+    [donutReport, categories],
+  );
+  const donutPositive = useMemo(
+    () => donutGroups.filter((g) => g.amountMinor > 0n),
+    [donutGroups],
+  );
+  const donutNegative = useMemo(
+    () => donutGroups.filter((g) => g.amountMinor < 0n),
+    [donutGroups],
+  );
+  // Drill-down focus: a parent group key ('uncategorized' for null). Derived
+  // against the live groups so a scope change that empties the parent simply
+  // falls back to the top-level view — no stale state to clean up.
+  const [donutFocusKey, setDonutFocusKey] = useState<string | null>(null);
+  // A scope change discards the focus outright — deriving alone would let a
+  // stale key silently resurrect the drill-down when the parent reappears.
+  useEffect(() => {
+    setDonutFocusKey(null);
+  }, [scope.from, scope.to, scope.entityId, scope.accountIds, scope.includeTaxes]);
+  const donutFocus = useMemo(
+    () =>
+      donutFocusKey === null
+        ? null
+        : (donutPositive.find(
+            (g) => (g.categoryId ?? 'uncategorized') === donutFocusKey && g.children.length > 0,
+          ) ?? null),
+    [donutFocusKey, donutPositive],
   );
   const months = useMemo(() => scopeMonths(scope.from, scope.to), [scope.from, scope.to]);
-  const tagReport = useMemo(() => tagTotals(rangedRows), [rangedRows]);
+  // Deliberately UNfiltered by the tax toggle: tags exist to sum things like
+  // "tax-deductible", and payees rank gross cash out — hiding tax rows from
+  // either would break their stated formulas. Both footnotes lead with
+  // baseScopeText (no "taxes excluded" claim).
+  const tagReport = useMemo(() => tagTotals(rangedRowsFull), [rangedRowsFull]);
   const tags = tagReport.totals;
   // Household-wide (unscoped by date/account) — allocation describes what
   // you currently hold, not a range of activity like the rest of this page.
@@ -1033,9 +1209,16 @@ function ReportsBody() {
   // scope, offers only in-range months, and states its month in the footnote;
   // the "vs previous month" baseline deliberately reads the full prior month
   // (a range-clamped baseline would fake huge deltas — Law 9 over-honesty).
+  // Currency voted over the SAME tax-filtered population the review sums
+  // (codex r2264 on PR #162): borrowing the tag report's vote (unfiltered by
+  // design) could pick a currency the taxes-off view has no activity in.
+  const reviewCurrency = useMemo(
+    () => dominantCurrency(spendScopedRows.filter((t) => !isDebtOrTransferLike(t))),
+    [spendScopedRows],
+  );
   const monthReview = useMemo(
-    () => (reviewMonth ? buildMonthReview(scopedRows, reviewMonth, tagReport.currency) : null),
-    [scopedRows, reviewMonth, tagReport.currency],
+    () => (reviewMonth ? buildMonthReview(spendScopedRows, reviewMonth, reviewCurrency) : null),
+    [spendScopedRows, reviewMonth, reviewCurrency],
   );
   // Includes archived categories: their history stays on the tax schedule.
   const [taxLines, setTaxLines] = useState<Map<string, string>>(new Map());
@@ -1047,7 +1230,7 @@ function ReportsBody() {
         setTaxLines(new Map());
       });
   }, [householdId]);
-  const taxReport = useMemo(() => taxSchedule(rangedRows, taxLines), [rangedRows, taxLines]);
+  const taxReport = useMemo(() => taxSchedule(rangedRowsFull, taxLines), [rangedRowsFull, taxLines]);
   // Data-quality nudge, not a report number: counts the whole household's
   // suggested transfers regardless of scope, so a narrow scope can't hide
   // pending review work.
@@ -1077,8 +1260,8 @@ function ReportsBody() {
       return next;
     });
   }, []);
-  // F-039: top payees from the very same scoped rows every widget uses.
-  const payeeReport = useMemo(() => payeeTotals(rangedRows), [rangedRows]);
+  // F-039: top payees — full ranged rows (see tagReport note above).
+  const payeeReport = useMemo(() => payeeTotals(rangedRowsFull), [rangedRowsFull]);
 
   // Income vs spending per scope month, derived client-side from the scoped
   // rows (same net convention as the matrix — transfers & debt payments
@@ -1126,7 +1309,14 @@ function ReportsBody() {
       .map((row) => {
         const a = row.byMonth.get(prev)?.total ?? 0n;
         const b = row.byMonth.get(curr)?.total ?? 0n;
-        return { name: row.name, categoryId: row.categoryId, prev: a, curr: b, delta: b - a };
+        return {
+          name: row.name,
+          categoryId: row.categoryId,
+          hasSubs: row.children.length > 0,
+          prev: a,
+          curr: b,
+          delta: b - a,
+        };
       })
       .filter((r) => r.prev !== 0n || r.curr !== 0n)
       .sort((x, y) => {
@@ -1146,17 +1336,17 @@ function ReportsBody() {
   const handleExportCsv = useCallback(() => {
     const generatedAt = new Date();
     const csv = buildScopedTransactionsCsv({
-      rows: rangedRows,
+      rows: rangedRowsFull,
       scope: { from: scope.from, to: scope.to },
-      scopeText,
+      scopeText: baseScopeText,
       asOf: txns.asOf,
       generatedAt,
     });
     downloadCsvFile(scopedExportFilename({ from: scope.from, to: scope.to }, generatedAt), csv);
     toast.success(
-      `Exported ${String(rangedRows.length)} transaction${rangedRows.length === 1 ? '' : 's'}.`,
+      `Exported ${String(rangedRowsFull.length)} transaction${rangedRowsFull.length === 1 ? '' : 's'}.`,
     );
-  }, [rangedRows, scope.from, scope.to, scopeText, txns.asOf]);
+  }, [rangedRowsFull, scope.from, scope.to, baseScopeText, txns.asOf]);
 
   const scopeRestricted = scope.entityId !== null || scope.accountIds.length > 0;
   if (
@@ -1213,11 +1403,11 @@ function ReportsBody() {
         </Button>
       </div>
 
-      {rangedRows.length === 0 ? (
+      {rangedRowsFull.length === 0 ? (
         <EmptyState
           icon={<BarChart3 className="size-6" />}
           title="Nothing in this scope"
-          description={`No transactions for ${scopeText}. Widen the date range or accounts above.`}
+          description={`No transactions for ${baseScopeText}. Widen the date range or accounts above.`}
         />
       ) : (
         <>
@@ -1353,6 +1543,7 @@ function ReportsBody() {
                   : `${String(accountSet.size)} of ${String(accounts.length)} accounts`}{' '}
                 · full month {monthLabel(reviewMonth)}, dominant currency only, transfers &
                 debt payments excluded.
+                {scope.includeTaxes ? '' : ' Taxes excluded.'}
               </p>
             </>
           ) : (
@@ -1368,18 +1559,31 @@ function ReportsBody() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {donutReport.positive.length > 0 ? (
-            <CategoryDonut
-              items={donutReport.positive.map((c) => ({
-                id: c.categoryId,
-                name: c.name,
-                amountMinor: c.amountMinor.toString(),
-              }))}
+          {donutFocus ? (
+            <DonutBreakdown
+              group={donutFocus}
               currency={donutReport.currency}
-              onSliceClick={(slice) => {
+              scopeText={scopeText}
+              onBack={() => {
+                setDonutFocusKey(null);
+              }}
+              onFilterTransactions={() => {
                 router.push(
                   ledgerDrillHref({
-                    categoryId: slice.id,
+                    categoryId: donutFocus.categoryId,
+                    includeSubcategories: true,
+                    excludeTaxes: !scope.includeTaxes,
+                    from: scope.from,
+                    to: scope.to,
+                    accountSet,
+                  }),
+                );
+              }}
+              onLeafClick={(categoryId) => {
+                router.push(
+                  ledgerDrillHref({
+                    categoryId,
+                    excludeTaxes: !scope.includeTaxes,
                     from: scope.from,
                     to: scope.to,
                     accountSet,
@@ -1388,34 +1592,59 @@ function ReportsBody() {
               }}
             />
           ) : (
-            <p className="text-sm text-muted-foreground">
-              No spending in {rangeLabel(scope.from, scope.to)}.
-            </p>
-          )}
-          {donutReport.negative.length > 0 ? (
-            <div className="border-t border-border pt-3">
-              <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Net refunds (excluded from the chart)
+            <>
+              {donutPositive.length > 0 ? (
+                <CategoryDonut
+                  items={donutPositive.map((g) => ({
+                    id: g.categoryId,
+                    name: g.name,
+                    amountMinor: g.amountMinor.toString(),
+                    breakdown: g.children.map((c) => ({
+                      name: c.name,
+                      amountMinor: c.amountMinor.toString(),
+                    })),
+                  }))}
+                  currency={donutReport.currency}
+                  onSliceClick={(slice) => {
+                    const key = slice.id ?? 'uncategorized';
+                    const group = donutPositive.find(
+                      (g) => (g.categoryId ?? 'uncategorized') === key,
+                    );
+                    if (group && group.children.length > 0) {
+                      setDonutFocusKey(key);
+                      return;
+                    }
+                    router.push(
+                      ledgerDrillHref({
+                        categoryId: slice.id,
+                        excludeTaxes: !scope.includeTaxes,
+                        from: scope.from,
+                        to: scope.to,
+                        accountSet,
+                      }),
+                    );
+                  }}
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  No spending in {rangeLabel(scope.from, scope.to)}.
+                </p>
+              )}
+              <NetRefundsStrip
+                entries={donutNegative.map((g) => ({
+                  key: g.categoryId ?? g.name,
+                  name: g.name,
+                  amountMinor: g.amountMinor,
+                }))}
+                currency={donutReport.currency}
+              />
+              <p className="text-xs text-muted-foreground">
+                {scopeText}, dominant currency only, transfers & debt payments excluded, net
+                of refunds. Subcategories roll up into their parents — click a slice to break
+                it down (a category without subcategories opens straight in the ledger).
               </p>
-              <div className="space-y-1">
-                {donutReport.negative.map((c) => (
-                  <div key={c.categoryId ?? c.name} className="flex items-center gap-3 text-sm">
-                    <span className="min-w-0 flex-1 truncate text-muted-foreground">{c.name}</span>
-                    <Money
-                      amountMinor={c.amountMinor.toString()}
-                      currency={donutReport.currency}
-                      signed
-                      className="text-xs"
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
-          <p className="text-xs text-muted-foreground">
-            {scopeText}, dominant currency only, transfers & debt payments excluded, net of
-            refunds. Click a slice to open it in the ledger.
-          </p>
+            </>
+          )}
         </CardContent>
       </Card>
 
@@ -1427,13 +1656,23 @@ function ReportsBody() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <CashFlowSankey nodes={flow.nodes} links={flow.links} />
+            <CashFlowSankey nodes={flow.nodes} links={flow.links} currency={flow.currency} />
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
               <span className="text-muted-foreground">
-                Income <Money amountMinor={flow.totalInMinor} className="text-foreground" />
+                Income{' '}
+                <Money
+                  amountMinor={flow.totalInMinor}
+                  currency={flow.currency}
+                  className="text-foreground"
+                />
               </span>
               <span className="text-muted-foreground">
-                Spent <Money amountMinor={flow.totalOutMinor} className="text-foreground" />
+                Spent{' '}
+                <Money
+                  amountMinor={flow.totalOutMinor}
+                  currency={flow.currency}
+                  className="text-foreground"
+                />
               </span>
               <span className="text-muted-foreground">
                 {flow.savedMinor.startsWith('-') ? 'From savings ' : 'Saved '}
@@ -1441,13 +1680,14 @@ function ReportsBody() {
                   amountMinor={
                     flow.savedMinor.startsWith('-') ? flow.savedMinor.slice(1) : flow.savedMinor
                   }
+                  currency={flow.currency}
                   className="text-foreground"
                 />
               </span>
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
               {scopeText}. Income on the left, spending on the right; subcategories roll up
-              into their parents. Transfers & debt payments excluded.
+              into their parents. Dominant currency only, transfers & debt payments excluded.
             </p>
           </CardContent>
         </Card>
@@ -1466,7 +1706,12 @@ function ReportsBody() {
               onMonthClick={(m) => {
                 const clamped = clampMonthToRange(m, scope.from, scope.to);
                 router.push(
-                  ledgerDrillHref({ from: clamped.from, to: clamped.to, accountSet }),
+                  ledgerDrillHref({
+                    excludeTaxes: !scope.includeTaxes,
+                    from: clamped.from,
+                    to: clamped.to,
+                    accountSet,
+                  }),
                 );
               }}
             />
@@ -1582,6 +1827,8 @@ function ReportsBody() {
                             <Link
                               href={ledgerDrillHref({
                                 categoryId: row.categoryId,
+                                includeSubcategories: expandable,
+                                excludeTaxes: !scope.includeTaxes,
                                 from: scope.from,
                                 to: scope.to,
                                 accountSet,
@@ -1624,6 +1871,7 @@ function ReportsBody() {
                             <Link
                               href={ledgerDrillHref({
                                 categoryId: child.drillId,
+                                excludeTaxes: !scope.includeTaxes,
                                 from: scope.from,
                                 to: scope.to,
                                 accountSet,
@@ -1711,7 +1959,7 @@ function ReportsBody() {
               </div>
             ))}
             <p className="pt-1 text-xs text-muted-foreground">
-              {scopeText}. Top {String(payeeReport.payees.length)} payees by money out
+              {baseScopeText}. Top {String(payeeReport.payees.length)} payees by money out
               (payee = transaction description), dominant currency only, transfers &
               debt payments excluded. Refunds don&apos;t offset a payee — this ranks
               where money goes.
@@ -1760,7 +2008,7 @@ function ReportsBody() {
               </div>
             ))}
             <p className="pt-1 text-xs text-muted-foreground">
-              {scopeText}. Net cash for tagged transactions — tag things like tax-deductible
+              {baseScopeText}. Net cash for tagged transactions — tag things like tax-deductible
               or a trip, then read the total here. Confirmed transfers excluded; debt
               payments count (net cash, not spending).
             </p>
@@ -1797,7 +2045,7 @@ function ReportsBody() {
               </div>
             ))}
             <p className="pt-1 text-xs text-muted-foreground">
-              {scopeText}. Actual cash per IRS line, from the tax lines you set on categories
+              {baseScopeText}. Actual cash per IRS line, from the tax lines you set on categories
               (Home → Categories → Manage). Confirmed transfers excluded. Bookkeeping, not
               tax advice.
             </p>
@@ -1818,6 +2066,8 @@ function ReportsBody() {
                 <Link
                   href={ledgerDrillHref({
                     categoryId: r.categoryId,
+                    includeSubcategories: r.hasSubs,
+                    excludeTaxes: !scope.includeTaxes,
                     from: scope.from,
                     to: scope.to,
                     accountSet,

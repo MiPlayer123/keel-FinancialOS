@@ -36,6 +36,7 @@ import {
   type TagRow,
 } from '@/lib/keel-api';
 import { merchantDisplayName } from '@/lib/merchant-name';
+import { isWhollyTaxRow, taxCategoryIdSet } from '@/lib/category-rollup';
 import { entityLabel, hasMultipleEntities } from '@/lib/category-picker';
 import { resolveEditingAfterSave } from '@/lib/txn-edit-guard';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
@@ -176,6 +177,15 @@ function LedgerTable() {
   const [customRange, setCustomRange] = useState<{ from: string; to: string } | null>(null);
   const [accountFilter, setAccountFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
+  // True only via a Reports drill on a rolled-up parent (?subs=1): the
+  // register then matches the parent AND its subcategories, reproducing the
+  // clicked number (Law 9). Manual picks stay exact-match; the Select label
+  // discloses the widened match.
+  const [categorySubs, setCategorySubs] = useState(false);
+  // True only via a taxes-off Reports drill (?notax=1): whole-tax rows drop
+  // so the register reproduces the drilled number. Disclosed as a clearable
+  // chip — never a silent filter.
+  const [excludeTax, setExcludeTax] = useState(false);
   const [tagFilter, setTagFilter] = useState('all');
   // D-047 status facet: All / Reconciled / Unreconciled, same select-pattern
   // as account/category/tag above — no new filter paradigm.
@@ -192,7 +202,14 @@ function LedgerTable() {
   // refresh/back doesn't reopen the dialog and a repeat ⌘K action re-fires.
   useEffect(() => {
     const category = searchParams.get('category');
-    if (category) setCategoryFilter(category);
+    if (category) {
+      setCategoryFilter(category);
+      setCategorySubs(searchParams.get('subs') === '1');
+    }
+    // Mirror the URL exactly (set AND clear) — a stale tax exclusion must not
+    // keep constraining a register the user reached without it, same rule as
+    // the custom range below (review r3603410823).
+    setExcludeTax(searchParams.get('notax') === '1');
     const account = searchParams.get('account');
     if (account) setAccountFilter(account);
     const date = searchParams.get('date');
@@ -272,6 +289,19 @@ function LedgerTable() {
     [entityLens, accounts],
   );
 
+  const taxIds = useMemo(() => taxCategoryIdSet(categories), [categories]);
+
+  const categoryChildIds = useMemo(() => {
+    if (!categorySubs || categoryFilter === 'all' || categoryFilter === 'uncategorized' || categoryFilter === 'transfers') {
+      return null;
+    }
+    return new Set(
+      categories
+        .filter((c) => c.parentLedgerAccountId === categoryFilter)
+        .map((c) => c.ledgerAccountId),
+    );
+  }, [categorySubs, categoryFilter, categories]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     const [from, to] = customRange
@@ -279,6 +309,7 @@ function LedgerTable() {
       : presetRange(datePreset);
     const out = rows.filter((t) => {
       if (lensAccountIds !== null && !lensAccountIds.has(t.accountId)) return false;
+      if (excludeTax && isWhollyTaxRow(t, taxIds)) return false;
       if (from && t.effectiveDate < from) return false;
       if (to && t.effectiveDate > to) return false;
       if (accountFilter !== 'all' && t.accountId !== accountFilter) return false;
@@ -286,12 +317,15 @@ function LedgerTable() {
         if (!isUncategorized(t)) return false;
       } else if (categoryFilter === 'transfers') {
         if (t.transferStatus !== 'confirmed') return false;
-      } else if (
-        categoryFilter !== 'all' &&
-        t.categoryLedgerAccountId !== categoryFilter &&
-        !(t.splits ?? []).some((s) => s.categoryLedgerAccountId === categoryFilter)
-      ) {
-        return false;
+      } else if (categoryFilter !== 'all') {
+        const matches = (id: string | null) =>
+          id !== null && (id === categoryFilter || (categoryChildIds?.has(id) ?? false));
+        if (
+          !matches(t.categoryLedgerAccountId) &&
+          !(t.splits ?? []).some((s) => matches(s.categoryLedgerAccountId))
+        ) {
+          return false;
+        }
       }
       if (tagFilter !== 'all' && !(t.tags ?? []).some((x) => x.tagId === tagFilter)) {
         return false;
@@ -338,6 +372,9 @@ function LedgerTable() {
     customRange,
     accountFilter,
     categoryFilter,
+    categoryChildIds,
+    excludeTax,
+    taxIds,
     tagFilter,
     reconciledFilter,
     sort,
@@ -621,14 +658,23 @@ function LedgerTable() {
             uncategorized: 'Uncategorized',
             transfers: 'Transfers',
             ...Object.fromEntries(
-              categories.map((c) => [
-                c.ledgerAccountId,
-                c.kind === 'income' ? `${c.name} (income)` : c.name,
-              ]),
+              categories.map((c) => {
+                const base = c.kind === 'income' ? `${c.name} (income)` : c.name;
+                // Disclose a subtree drill: this trigger must never read like
+                // an exact-match filter while matching subcategories too.
+                const label =
+                  categorySubs && c.ledgerAccountId === categoryFilter
+                    ? `${base} + subcategories`
+                    : base;
+                return [c.ledgerAccountId, label];
+              }),
             ),
           }}
           onValueChange={(v) => {
-            if (v) setCategoryFilter(v);
+            if (v) {
+              setCategoryFilter(v);
+              setCategorySubs(false);
+            }
           }}
         >
           <SelectTrigger className="h-9 w-44">
@@ -650,6 +696,27 @@ function LedgerTable() {
             ))}
           </SelectContent>
         </Select>
+        {excludeTax ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-9 text-xs"
+            title="This register arrived from a taxes-off report drill: tax-categorized transactions are hidden. Click to show them."
+            onClick={() => {
+              setExcludeTax(false);
+              // Drop notax from the URL too, or a refresh/share resurrects
+              // the exclusion the user just cleared.
+              const p = new URLSearchParams(searchParams.toString());
+              p.delete('notax');
+              const qs = p.toString();
+              router.replace(qs ? `/dashboard/ledger?${qs}` : '/dashboard/ledger', {
+                scroll: false,
+              });
+            }}
+          >
+            Taxes excluded ✕
+          </Button>
+        ) : null}
         {tags.length > 0 ? (
           <Select
             value={tagFilter}
