@@ -240,6 +240,9 @@ export function ledgerDrillHref(input: {
   /** True when the drilled number rolled subcategories into `categoryId`, so
    *  the register must match the whole subtree to reproduce it (Law 9). */
   includeSubcategories?: boolean;
+  /** True when the drilled number was computed with taxes off, so the
+   *  register must drop tax rows too (?notax=1) to reproduce it (Law 9). */
+  excludeTaxes?: boolean;
   from: string;
   to: string;
   accountSet: Set<string> | null;
@@ -247,6 +250,7 @@ export function ledgerDrillHref(input: {
   const p = new URLSearchParams();
   if (input.categoryId !== undefined) p.set('category', input.categoryId ?? 'uncategorized');
   if (input.includeSubcategories === true && input.categoryId != null) p.set('subs', '1');
+  if (input.excludeTaxes === true) p.set('notax', '1');
   p.set('from', input.from);
   p.set('to', input.to);
   if (input.accountSet !== null && input.accountSet.size === 1) {

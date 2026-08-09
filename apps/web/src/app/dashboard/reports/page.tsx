@@ -1166,6 +1166,11 @@ function ReportsBody() {
   // against the live groups so a scope change that empties the parent simply
   // falls back to the top-level view — no stale state to clean up.
   const [donutFocusKey, setDonutFocusKey] = useState<string | null>(null);
+  // A scope change discards the focus outright — deriving alone would let a
+  // stale key silently resurrect the drill-down when the parent reappears.
+  useEffect(() => {
+    setDonutFocusKey(null);
+  }, [scope.from, scope.to, scope.entityId, scope.accountIds, scope.includeTaxes]);
   const donutFocus = useMemo(
     () =>
       donutFocusKey === null
@@ -1176,7 +1181,11 @@ function ReportsBody() {
     [donutFocusKey, donutPositive],
   );
   const months = useMemo(() => scopeMonths(scope.from, scope.to), [scope.from, scope.to]);
-  const tagReport = useMemo(() => tagTotals(rangedRows), [rangedRows]);
+  // Deliberately UNfiltered by the tax toggle: tags exist to sum things like
+  // "tax-deductible", and payees rank gross cash out — hiding tax rows from
+  // either would break their stated formulas. Both footnotes lead with
+  // baseScopeText (no "taxes excluded" claim).
+  const tagReport = useMemo(() => tagTotals(rangedRowsFull), [rangedRowsFull]);
   const tags = tagReport.totals;
   // Household-wide (unscoped by date/account) — allocation describes what
   // you currently hold, not a range of activity like the rest of this page.
@@ -1244,8 +1253,8 @@ function ReportsBody() {
       return next;
     });
   }, []);
-  // F-039: top payees from the very same scoped rows every widget uses.
-  const payeeReport = useMemo(() => payeeTotals(rangedRows), [rangedRows]);
+  // F-039: top payees — full ranged rows (see tagReport note above).
+  const payeeReport = useMemo(() => payeeTotals(rangedRowsFull), [rangedRowsFull]);
 
   // Income vs spending per scope month, derived client-side from the scoped
   // rows (same net convention as the matrix — transfers & debt payments
@@ -1387,11 +1396,11 @@ function ReportsBody() {
         </Button>
       </div>
 
-      {rangedRows.length === 0 ? (
+      {rangedRowsFull.length === 0 ? (
         <EmptyState
           icon={<BarChart3 className="size-6" />}
           title="Nothing in this scope"
-          description={`No transactions for ${scopeText}. Widen the date range or accounts above.`}
+          description={`No transactions for ${baseScopeText}. Widen the date range or accounts above.`}
         />
       ) : (
         <>
@@ -1556,6 +1565,7 @@ function ReportsBody() {
                   ledgerDrillHref({
                     categoryId: donutFocus.categoryId,
                     includeSubcategories: true,
+                    excludeTaxes: !scope.includeTaxes,
                     from: scope.from,
                     to: scope.to,
                     accountSet,
@@ -1566,6 +1576,7 @@ function ReportsBody() {
                 router.push(
                   ledgerDrillHref({
                     categoryId,
+                    excludeTaxes: !scope.includeTaxes,
                     from: scope.from,
                     to: scope.to,
                     accountSet,
@@ -1599,6 +1610,7 @@ function ReportsBody() {
                     router.push(
                       ledgerDrillHref({
                         categoryId: slice.id,
+                        excludeTaxes: !scope.includeTaxes,
                         from: scope.from,
                         to: scope.to,
                         accountSet,
@@ -1637,7 +1649,7 @@ function ReportsBody() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <CashFlowSankey nodes={flow.nodes} links={flow.links} />
+            <CashFlowSankey nodes={flow.nodes} links={flow.links} currency={flow.currency} />
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
               <span className="text-muted-foreground">
                 Income{' '}
@@ -1687,7 +1699,12 @@ function ReportsBody() {
               onMonthClick={(m) => {
                 const clamped = clampMonthToRange(m, scope.from, scope.to);
                 router.push(
-                  ledgerDrillHref({ from: clamped.from, to: clamped.to, accountSet }),
+                  ledgerDrillHref({
+                    excludeTaxes: !scope.includeTaxes,
+                    from: clamped.from,
+                    to: clamped.to,
+                    accountSet,
+                  }),
                 );
               }}
             />
@@ -1804,6 +1821,7 @@ function ReportsBody() {
                               href={ledgerDrillHref({
                                 categoryId: row.categoryId,
                                 includeSubcategories: expandable,
+                                excludeTaxes: !scope.includeTaxes,
                                 from: scope.from,
                                 to: scope.to,
                                 accountSet,
@@ -1846,6 +1864,7 @@ function ReportsBody() {
                             <Link
                               href={ledgerDrillHref({
                                 categoryId: child.drillId,
+                                excludeTaxes: !scope.includeTaxes,
                                 from: scope.from,
                                 to: scope.to,
                                 accountSet,
@@ -1933,7 +1952,7 @@ function ReportsBody() {
               </div>
             ))}
             <p className="pt-1 text-xs text-muted-foreground">
-              {scopeText}. Top {String(payeeReport.payees.length)} payees by money out
+              {baseScopeText}. Top {String(payeeReport.payees.length)} payees by money out
               (payee = transaction description), dominant currency only, transfers &
               debt payments excluded. Refunds don&apos;t offset a payee — this ranks
               where money goes.
@@ -1982,7 +2001,7 @@ function ReportsBody() {
               </div>
             ))}
             <p className="pt-1 text-xs text-muted-foreground">
-              {scopeText}. Net cash for tagged transactions — tag things like tax-deductible
+              {baseScopeText}. Net cash for tagged transactions — tag things like tax-deductible
               or a trip, then read the total here. Confirmed transfers excluded; debt
               payments count (net cash, not spending).
             </p>
@@ -2019,7 +2038,7 @@ function ReportsBody() {
               </div>
             ))}
             <p className="pt-1 text-xs text-muted-foreground">
-              {scopeText}. Actual cash per IRS line, from the tax lines you set on categories
+              {baseScopeText}. Actual cash per IRS line, from the tax lines you set on categories
               (Home → Categories → Manage). Confirmed transfers excluded. Bookkeeping, not
               tax advice.
             </p>
@@ -2041,6 +2060,7 @@ function ReportsBody() {
                   href={ledgerDrillHref({
                     categoryId: r.categoryId,
                     includeSubcategories: r.hasSubs,
+                    excludeTaxes: !scope.includeTaxes,
                     from: scope.from,
                     to: scope.to,
                     accountSet,

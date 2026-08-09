@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   excludeTaxSpend,
+  isWhollyTaxRow,
   rollupCategoryTotals,
   taxCategoryIdSet,
   TAX_PFC_KEY,
@@ -137,5 +138,29 @@ describe('excludeTaxSpend', () => {
   it('is a no-op passthrough when no tax categories exist', () => {
     const rows = [{ categoryLedgerAccountId: 'taxes' }];
     expect(excludeTaxSpend(rows, new Set())).toBe(rows);
+  });
+});
+
+describe('isWhollyTaxRow', () => {
+  const taxIds = new Set(['taxes']);
+
+  it('matches a row categorized to a tax category, not others', () => {
+    expect(isWhollyTaxRow({ categoryLedgerAccountId: 'taxes' }, taxIds)).toBe(true);
+    expect(isWhollyTaxRow({ categoryLedgerAccountId: 'groceries' }, taxIds)).toBe(false);
+    expect(isWhollyTaxRow({ categoryLedgerAccountId: null }, taxIds)).toBe(false);
+  });
+
+  it('matches a split row only when EVERY category share is tax', () => {
+    const allTax = {
+      categoryLedgerAccountId: null,
+      splits: [{ categoryLedgerAccountId: 'taxes' }, { categoryLedgerAccountId: null }],
+    };
+    const mixed = {
+      categoryLedgerAccountId: null,
+      splits: [{ categoryLedgerAccountId: 'taxes' }, { categoryLedgerAccountId: 'groceries' }],
+    };
+    expect(isWhollyTaxRow(allTax, taxIds)).toBe(true);
+    expect(isWhollyTaxRow(mixed, taxIds)).toBe(false);
+    expect(isWhollyTaxRow(allTax, new Set())).toBe(false);
   });
 });

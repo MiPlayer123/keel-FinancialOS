@@ -125,6 +125,24 @@ type TaxFilterableRow = {
  * when nothing else remains). Rows without tax activity pass through by
  * reference, so memoized derivations downstream stay stable.
  */
+/**
+ * Row-grain tax test for the ledger register's taxes-off drill (?notax=1):
+ * true when the whole row is tax — categorized to a tax category, or split
+ * with every category share tax. The register shows whole transactions, so a
+ * mixed split with any non-tax share stays visible in full.
+ */
+export function isWhollyTaxRow(row: TaxFilterableRow, taxIds: Set<string>): boolean {
+  if (taxIds.size === 0) return false;
+  if (row.splits && row.splits.length > 0) {
+    const catLegs = row.splits.filter((s) => s.categoryLedgerAccountId !== null);
+    return (
+      catLegs.length > 0 &&
+      catLegs.every((s) => s.categoryLedgerAccountId !== null && taxIds.has(s.categoryLedgerAccountId))
+    );
+  }
+  return row.categoryLedgerAccountId !== null && taxIds.has(row.categoryLedgerAccountId);
+}
+
 export function excludeTaxSpend<T extends TaxFilterableRow>(rows: T[], taxIds: Set<string>): T[] {
   if (taxIds.size === 0) return rows;
   const out: T[] = [];
