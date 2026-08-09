@@ -66,6 +66,9 @@ export type ReportScope = {
   to: string;
   accountIds: string[];
   entityId: string | null;
+  /** False = tax payments (the seeded Taxes subcategory) are excluded from
+   *  the spending widgets; the tax-schedule card and CSV export stay full. */
+  includeTaxes: boolean;
 };
 
 /** The subset of URLSearchParams we read — keeps the helper testable. */
@@ -110,8 +113,9 @@ export function parseReportScope(params: ScopeParamsLike, now: Date = new Date()
       : [];
   const entityParam = params.get('entity');
   const entityId = entityParam !== null && entityParam !== '' ? entityParam : null;
+  const includeTaxes = params.get('taxes') !== 'off';
 
-  return { preset, from, to, accountIds, entityId };
+  return { preset, from, to, accountIds, entityId, includeTaxes };
 }
 
 /**
@@ -129,6 +133,7 @@ export function reportScopeToSearch(scope: ReportScope): string {
   }
   if (scope.entityId !== null) p.set('entity', scope.entityId);
   if (scope.accountIds.length > 0) p.set('accounts', scope.accountIds.join(','));
+  if (!scope.includeTaxes) p.set('taxes', 'off');
   return p.toString();
 }
 
