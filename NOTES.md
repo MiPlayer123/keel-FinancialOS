@@ -3,6 +3,51 @@
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
 
+## 2026-08-09 — feat(reports): donut parent rollup + drill-down, taxes toggle, Sankey currency fix
+
+User-reported discrepancy confirmed by code trace, not overreaction: the
+spending donut aggregated at LEAF grain while the Sankey and the category
+matrix roll subcategories into parents — the same label could show two
+different totals (e.g. a parent's direct-only spend vs parent+subs). Industry
+convention (Quicken "Food & Dining|Groceries", Copilot, Monarch, Plaid PFC)
+rolls groceries-style leaves up into the parent, which is also how our seeded
+taxonomy is shaped. Netting was already correct everywhere (refunds reduce the
+category; verified against buildMatrix/categoryRangeTotals/buildFlow docs).
+
+Changes (user directive 2026-08-09, this session):
+- `categoryRangeTotals` now returns leaf entries; new pure
+  `lib/category-rollup.ts` (`rollupCategoryTotals`) mirrors `rollupMatrix` at
+  range grain. Donut renders parent groups; hover shows the subcategory
+  breakdown; clicking a parent opens a focused subcategory donut with a
+  "Filter transactions" action; a leaf/standalone slice drills straight to the
+  ledger as before. Negative-net groups keep the "Net refunds" strip at both
+  levels.
+- Law 9 drill fidelity: new `?subs=1` ledger param — a drill from a rolled-up
+  parent number filters the register on parent ∪ children (exact-match stays
+  the default; the ledger's own category Select resets subs). Matrix +
+  comparison parent links carry it too (they previously opened direct-only
+  registers that could NOT reproduce the rolled number — pre-existing gap).
+- Taxes on/off: `taxes=off` scope param + subtle scope-bar toggle. Filter is
+  pfc-key-deterministic (`government_nonprofit_taxes` + nested children, Law
+  5 — never name/memo matched). Applies to spending widgets via
+  `excludeTaxSpend` (drops tax rows, strips tax split-shares); the tax
+  schedule card and CSV export deliberately consume the UNfiltered rows —
+  excluding taxes from a tax report/export would be dishonest. Footnotes
+  disclose via the scopeText suffix "· taxes excluded".
+- `buildFlow` now votes a dominant currency (same rule as monthlyFlow) — it
+  previously summed all currencies' minor units together.
+
+Tests: category-rollup unit suite + report-scope round-trips (440 lib tests
+green); `pnpm build` clean. UI not exercised live: fresh clone has no env
+files and faking credentials is forbidden — static build + prerender is the
+verification here. Review agents ran per commit; findings addressed
+(order-independent tax-descent fixpoint). Known accepted quirk: payeeTotals
+sums row-level cash, so a tax SPLIT share stripped by the toggle still counts
+toward its payee row (whole-row tax payments — the common case — drop
+correctly); payees rank gross money-out by design.
+
+---
+
 ## 2026-08-03 — fix(budgets): drop ambiguous 5-arg budget overloads + live migration reconcile
 
 While reconciling PR #160's pgTAP fixes onto the live DB, found the live cloud
