@@ -638,6 +638,37 @@ export async function createLinkToken(householdId: string): Promise<string> {
   return res.linkToken;
 }
 
+/**
+ * Create a Plaid Link token in UPDATE MODE for an existing connection — Plaid
+ * re-authorizes the SAME item in place (no new item, no duplicate accounts).
+ * Fixes a reissued card whose account dropped out of an otherwise-active item.
+ */
+export async function createUpdateLinkToken(
+  householdId: string,
+  connectionId: string,
+): Promise<string> {
+  const res = await invoke<{ linkToken: string }>('api/connections/update-link-token', {
+    householdId,
+    connectionId,
+  });
+  return res.linkToken;
+}
+
+/**
+ * After the user re-authorizes an item in update mode, discover the item's
+ * current accounts and insert any the connection is missing (the reissued
+ * card). Returns the ids of the accounts that were newly created.
+ */
+export async function finishConnectionUpdate(input: {
+  householdId: string;
+  connectionId: string;
+}): Promise<{ addedAccountIds: string[] }> {
+  return invoke('api/connections/reconcile-accounts', {
+    householdId: input.householdId,
+    connectionId: input.connectionId,
+  });
+}
+
 /** Exchange a real Plaid-Link public_token → a connection (production/real flow). */
 export async function exchangePublicToken(input: {
   householdId: string;

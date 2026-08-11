@@ -18,6 +18,7 @@ import {
   type ReconnectMatchRow,
 } from '@/lib/keel-api';
 import { PlaidLinkButton } from '@/components/keel/plaid-link-button';
+import { PlaidUpdateButton } from '@/components/keel/plaid-update-button';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -339,6 +340,15 @@ function ConnectionsBody() {
                         )}
                         {c.isSyncing ? 'Syncing…' : syncingId === c.id ? 'Starting…' : 'Sync now'}
                       </Button>
+                      {householdId ? (
+                        <PlaidUpdateButton
+                          householdId={householdId}
+                          connectionId={c.id}
+                          onUpdated={() => {
+                            void load();
+                          }}
+                        />
+                      ) : null}
                       <DisconnectDialog
                         label={c.displayName ?? c.institutionId ?? c.provider}
                         onConfirm={() => disconnect(c.id)}
