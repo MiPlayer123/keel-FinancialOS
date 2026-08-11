@@ -58,6 +58,7 @@ import {
 import { decideStatementPromotion } from '../_shared/statement-sniff.ts';
 import { decryptToken, encryptToken, type EncryptedRecord } from '../_shared/credential-crypto.ts';
 import { currentKekVersion, getKek } from '../_shared/credential-kek.ts';
+import { buildUpdateModeLinkTokenBody } from '../_shared/plaid-update.ts';
 import {
   createPlaidClient,
   PlaidClientError,
@@ -290,6 +291,54 @@ const credentialFailure = (): Response =>
     message: 'credential subsystem unavailable',
     details: {},
   });
+
+/**
+ * Fetch + decrypt a connection's stored Plaid access_token (the same envelope
+ * path the disconnect flow uses). Returns the plaintext token, or a ready-made
+ * error Response on any failure (no credential / decrypt failure / subsystem
+ * down). Shared by the update-mode link-token and account-reconcile endpoints.
+ */
+const decryptConnectionAccessToken = async (
+  supabaseAdmin: UserClient,
+  householdId: string,
+  connectionId: string,
+): Promise<{ token: string } | { response: Response }> => {
+  const { data: envelopeData, error: envelopeError } = await supabaseAdmin.rpc(
+    'keel_get_connection_credential_envelope',
+    { p_connection_id: connectionId },
+  );
+  if (envelopeError || !envelopeData) {
+    return {
+      response: json(409, {
+        code: 'no_credentials',
+        message: 'Connection has no stored credential to re-authorize.',
+        details: {},
+      }),
+    };
+  }
+  const envelope = envelopeData as CredentialEnvelope;
+  try {
+    const token = await decryptToken(
+      envelope,
+      envelope.credentialId,
+      householdId,
+      'plaid',
+      getKek(envelope.kekVersion),
+    );
+    return { token };
+  } catch (error) {
+    if (error instanceof Error && error.message === 'credential subsystem unavailable') {
+      return { response: credentialFailure() };
+    }
+    return {
+      response: json(409, {
+        code: 'credential_decrypt_failed',
+        message: 'Could not read the stored credential.',
+        details: {},
+      }),
+    };
+  }
+};
 
 const loadAuthzContext = async (supabase: UserClient, userId: string): Promise<AuthzContext> => {
   const [memberships, entityMemberships, accountOwnerships, accountPermissions] = await Promise.all(
@@ -2432,6 +2481,167 @@ export default {
       });
       if (completeError) return mapDbError(completeError);
       return json(200, { status: removed ? 'disconnected' : 'disconnecting' });
+    }
+
+    // Plaid UPDATE MODE — re-authorize an existing item in place. Returns a link
+    // token minted with the connection's stored access_token so Plaid Link
+    // re-auths the SAME item (no new item, no duplicate accounts). Recovers a
+    // reissued card whose account dropped out of an otherwise-active item; the
+    // item-active state means the reauth prompt never fires on its own.
+    if (path === '/connections/update-link-token') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const connectionId = ConnectionIdSchema.safeParse(input['connectionId']);
+      if (!householdId.success || !connectionId.success) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Connection update request failed validation.',
+          details: {},
+        });
+      }
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'connections.link', {
+        kind: 'household',
+        householdId: householdId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+      // Connection must be in the household and live (RLS-scoped read).
+      const { data: connRow, error: connErr } = await ctx.supabase
+        .from('connections')
+        .select('id, archived_at')
+        .eq('household_id', householdId.data)
+        .eq('id', connectionId.data)
+        .maybeSingle();
+      if (connErr) return mapDbError(connErr);
+      if (!connRow || connRow.archived_at) {
+        return json(404, { code: 'not_found', message: 'Not found.', details: {} });
+      }
+      const decrypted = await decryptConnectionAccessToken(ctx.supabaseAdmin, householdId.data, connectionId.data);
+      if ('response' in decrypted) return decrypted.response;
+      const plaid = createPlaidClient(ctx.supabaseAdmin, {
+        env: Deno.env.get('PLAID_ENV') ?? 'sandbox',
+        clientId: Deno.env.get('PLAID_CLIENT_ID'),
+        secret: Deno.env.get('PLAID_SECRET'),
+        householdId: householdId.data,
+      });
+      try {
+        const splitEnv = (name: string, fallback: string) =>
+          (Deno.env.get(name) ?? fallback)
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
+        const daysRequested = Number.parseInt(
+          Deno.env.get('PLAID_TRANSACTIONS_DAYS_REQUESTED') ?? '730',
+          10,
+        );
+        const requestBody = buildUpdateModeLinkTokenBody({
+          userId,
+          accessToken: decrypted.token,
+          countryCodes: splitEnv('PLAID_COUNTRY_CODES', 'US'),
+          ...(Number.isSafeInteger(daysRequested) && daysRequested > 0 ? { daysRequested } : {}),
+        });
+        const result = await plaid.linkTokenCreate(
+          `linktoken:update:${connectionId.data}`,
+          requestBody,
+        );
+        const linkToken = result['link_token'];
+        if (typeof linkToken !== 'string') return internalFailure();
+        return json(200, { linkToken });
+      } catch (error) {
+        return error instanceof ProviderBudgetExhaustedError
+          ? providerBudgetFailure()
+          : error instanceof PlaidClientError
+            ? providerFailure(error)
+            : internalFailure();
+      }
+    }
+
+    // Update-mode companion: after the user re-authorizes the item, discover the
+    // item's CURRENT accounts and insert any the connection is missing (the
+    // reissued card). The ongoing sync path never creates accounts, so without
+    // this the re-surfaced card's transactions would hit `unknown account`.
+    if (path === '/connections/reconcile-accounts') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const connectionId = ConnectionIdSchema.safeParse(input['connectionId']);
+      if (!householdId.success || !connectionId.success) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Connection reconcile request failed validation.',
+          details: {},
+        });
+      }
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'connections.link', {
+        kind: 'household',
+        householdId: householdId.data,
+      });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+      const { data: connRow, error: connErr } = await ctx.supabase
+        .from('connections')
+        .select('id, archived_at')
+        .eq('household_id', householdId.data)
+        .eq('id', connectionId.data)
+        .maybeSingle();
+      if (connErr) return mapDbError(connErr);
+      if (!connRow || connRow.archived_at) {
+        return json(404, { code: 'not_found', message: 'Not found.', details: {} });
+      }
+      const decrypted = await decryptConnectionAccessToken(ctx.supabaseAdmin, householdId.data, connectionId.data);
+      if ('response' in decrypted) return decrypted.response;
+      const plaid = createPlaidClient(ctx.supabaseAdmin, {
+        env: Deno.env.get('PLAID_ENV') ?? 'sandbox',
+        clientId: Deno.env.get('PLAID_CLIENT_ID'),
+        secret: Deno.env.get('PLAID_SECRET'),
+        householdId: householdId.data,
+      });
+      let mapped: ReturnType<typeof mapAccountsGetToKeel>;
+      try {
+        const accountsBody = await plaid.accountsGet(`reconcile:${connectionId.data}`, {
+          access_token: decrypted.token,
+        });
+        mapped = mapAccountsGetToKeel(accountsBody);
+      } catch (error) {
+        return error instanceof ProviderBudgetExhaustedError
+          ? providerBudgetFailure()
+          : error instanceof PlaidClientError
+            ? providerFailure(error)
+            : internalFailure();
+      }
+      const dbAccounts = mapped.accounts.map((account) => ({
+        external_ref: account.externalRef,
+        name: account.name,
+        subtype: account.subtype,
+        currency: account.currency,
+        kind: account.kind,
+        mask: account.mask,
+      }));
+      const { data: reconciled, error: reconcileError } = await ctx.supabase.rpc(
+        'keel_reconcile_connection_accounts',
+        {
+          p_household_id: householdId.data,
+          p_connection_id: connectionId.data,
+          p_accounts: dbAccounts,
+        },
+      );
+      if (reconcileError) return mapDbError(reconcileError);
+      // Kick a sync so the newly-created account backfills promptly; the cron is
+      // the fallback. Best-effort — a drain failure must not fail the reconcile.
+      await ctx.supabaseAdmin.rpc('keel_cron_drain_sync', {});
+      const added = (reconciled as { added?: Array<{ accountId?: string }> } | null)?.added ?? [];
+      return json(200, {
+        addedAccountIds: added
+          .map((a) => a.accountId)
+          .filter((id): id is string => typeof id === 'string'),
+      });
     }
 
     if (path === '/documents/upload-url') {
