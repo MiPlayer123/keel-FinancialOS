@@ -103,13 +103,24 @@ begin
     raise exception 'KEEL_INVALID_COMMAND: household has no personal entity' using errcode = 'P0009';
   end if;
 
-  select count(*), min(id)
-    into v_business_entity_count, v_business_entity_id
+  -- The LONE non-personal entity enables the business-name heuristic; 0 or 2+
+  -- disables it. (Counted then selected separately rather than via min(id) —
+  -- Postgres has no built-in min(uuid) aggregate, so aggregating the uuid pk
+  -- would raise `function min(uuid) does not exist`.)
+  select count(*) into v_business_entity_count
     from public.entities
    where household_id = p_household_id
      and kind <> 'personal'
      and archived_at is null;
-  if v_business_entity_count <> 1 then
+  if v_business_entity_count = 1 then
+    select id into v_business_entity_id
+      from public.entities
+     where household_id = p_household_id
+       and kind <> 'personal'
+       and archived_at is null
+     order by created_at, id
+     limit 1;
+  else
     v_business_entity_id := null;
   end if;
 
