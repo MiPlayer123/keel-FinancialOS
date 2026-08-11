@@ -209,14 +209,12 @@ $$;
 -- the api edge function over the user's JWT (ctx.supabase.rpc) so
 -- request.jwt.claim.sub is populated for keel_actor_from_jwt. keel_api must own
 -- it because it calls keel_resolve_finalize_entity (execute-granted to keel_api)
--- under its own definer boundary.
-do $grants$
-begin
-  execute 'alter function public.keel_reconcile_connection_accounts(uuid, uuid, jsonb) owner to keel_api';
-exception when insufficient_privilege then
-  raise notice 'keel_reconcile_connection_accounts owner change skipped (insufficient_privilege); create-or-replace preserved prior owner';
-end;
-$grants$;
+-- under its own definer boundary. The owner ALTER is unguarded — the same house
+-- pattern every command migration uses (set_splits, paycheck templates) — so the
+-- proc is reliably keel_api-owned. (A bare-`postgres` manual apply cannot
+-- reassign because keel_api lacks CREATE on `public`; the live apply of this
+-- migration must run with a role that can, exactly as the sibling commands were.)
+alter function public.keel_reconcile_connection_accounts(uuid, uuid, jsonb) owner to keel_api;
 revoke all on function public.keel_reconcile_connection_accounts(uuid, uuid, jsonb)
   from public, anon;
 grant execute on function public.keel_reconcile_connection_accounts(uuid, uuid, jsonb)
