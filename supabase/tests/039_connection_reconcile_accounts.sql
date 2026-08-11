@@ -139,4 +139,5 @@ select throws_ok($$
     '[]'::jsonb)
 $$, 'P0006', null, 'unknown/foreign connection raises scope violation');
 
+select * from finish();
 rollback;
