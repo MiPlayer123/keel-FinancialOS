@@ -20,13 +20,18 @@ Deno.test('update-mode body carries the access_token (in-place re-auth)', () => 
   );
 });
 
-Deno.test('update-mode body NEVER sends products (Plaid rejects products+access_token)', () => {
+Deno.test('update-mode body sends NO products nor product-specific params', () => {
   const body = buildUpdateModeLinkTokenBody({
     userId: 'user-1',
     accessToken: 'access-prod-abc',
     countryCodes: ['US'],
   });
-  assert(!('products' in body), 'products must be absent in update mode');
+  // Plaid forbids products AND product-specific request params (transactions,
+  // statements, …) in update mode — sending transactions.days_requested made
+  // Chase's Link flow throw "Internal error occurred".
+  for (const forbidden of ['products', 'transactions', 'statements', 'income_verification', 'auth']) {
+    assert(!(forbidden in body), `${forbidden} must be absent in update mode`);
+  }
 });
 
 Deno.test('update-mode enables account selection so a reissued card can be added', () => {
@@ -37,27 +42,6 @@ Deno.test('update-mode enables account selection so a reissued card can be added
   });
   const update = body['update'] as { account_selection_enabled: boolean };
   assert(update.account_selection_enabled === true, 'account_selection_enabled defaults true');
-});
-
-Deno.test('update-mode honors days_requested when a positive integer', () => {
-  const withDays = buildUpdateModeLinkTokenBody({
-    userId: 'user-1',
-    accessToken: 'access-prod-abc',
-    countryCodes: ['US'],
-    daysRequested: 730,
-  });
-  assert(
-    (withDays['transactions'] as { days_requested: number }).days_requested === 730,
-    'days_requested passes through',
-  );
-
-  const noDays = buildUpdateModeLinkTokenBody({
-    userId: 'user-1',
-    accessToken: 'access-prod-abc',
-    countryCodes: ['US'],
-    daysRequested: 0,
-  });
-  assert(!('transactions' in noDays), 'non-positive days_requested is omitted');
 });
 
 Deno.test('update-mode requires an access_token', () => {
