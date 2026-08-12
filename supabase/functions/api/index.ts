@@ -2534,15 +2534,13 @@ export default {
             .split(',')
             .map((s) => s.trim())
             .filter(Boolean);
-        const daysRequested = Number.parseInt(
-          Deno.env.get('PLAID_TRANSACTIONS_DAYS_REQUESTED') ?? '730',
-          10,
-        );
+        // Update mode forbids product-specific params (e.g. transactions.
+        // days_requested) — unlike the initial /connections/link-token above.
+        // Plaid's Link flow errors ("Internal error occurred") if they're sent.
         const requestBody = buildUpdateModeLinkTokenBody({
           userId,
           accessToken: decrypted.token,
           countryCodes: splitEnv('PLAID_COUNTRY_CODES', 'US'),
-          ...(Number.isSafeInteger(daysRequested) && daysRequested > 0 ? { daysRequested } : {}),
         });
         const result = await plaid.linkTokenCreate(
           `linktoken:update:${connectionId.data}`,
