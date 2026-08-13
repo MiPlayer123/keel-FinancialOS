@@ -23,7 +23,7 @@ import {
 } from '@/lib/keel-api';
 import { relativeSyncLabel } from '@/lib/relative-date';
 import { utilizationPercent } from '@/lib/credit-utilization';
-import { looksLikeRetirementAccount } from '@/lib/investment-subtype';
+import { looksLikeRetirementAccount, looksLikeInvestmentAccount } from '@/lib/investment-subtype';
 import { Skeleton } from '@/components/ui/skeleton';
 import { AddAccountDialog } from '@/components/keel/add-account-dialog';
 import { NetWorthHero } from '@/components/keel/net-worth-hero';
@@ -150,10 +150,19 @@ function AccountsBody() {
     const kind = kinds.get(a.ledgerAccountId) ?? 'asset';
     const conn = a.connectionId ? connectionById.get(a.connectionId) : undefined;
     const snapshot = providerByAccount.get(a.id);
+    // Investment accounts display their MARKET value (Plaid snapshot total incl.
+    // securities), matching the headline net worth and the sidebar rail. The
+    // anchored cash ledger is stale + already contains securities, so it is not
+    // the right display figure. A manual investment account has no provider
+    // snapshot → falls back to its ledger balance (same as the backend).
+    const marketMinor =
+      looksLikeInvestmentAccount(a.subtype) && snapshot?.currentMinor
+        ? snapshot.currentMinor
+        : null;
     return {
       ...a,
       kind,
-      balanceMinor: balanceByLedger.get(a.ledgerAccountId) ?? '0',
+      balanceMinor: marketMinor ?? balanceByLedger.get(a.ledgerAccountId) ?? '0',
       syncLabel: conn?.lastSuccessfulSyncAt
         ? relativeSyncLabel(conn.lastSuccessfulSyncAt, nowIso)
         : null,
