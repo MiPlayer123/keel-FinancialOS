@@ -1788,7 +1788,12 @@ export type RecurringStatusEvent = {
 
 export type RecurringSeriesRow = {
   seriesId: string;
-  status: 'suggested' | 'confirmed' | 'paused' | 'cancelled' | 'rejected';
+  // 'withdrawn' = the nightly reaper (keel_recurring_reap_stale_suggestions)
+  // auto-retired a series whose detector score fell. The read model returns it,
+  // and the state machine allows confirm-from-withdrawn (a Restore), but the UI
+  // historically never rendered this status — so reaped series (incl. a payroll
+  // series that briefly dipped) vanished with no way to bring them back.
+  status: 'suggested' | 'confirmed' | 'paused' | 'cancelled' | 'rejected' | 'withdrawn';
   candidateVersionHash: string;
   counterpartyKey: string;
   sign: 'inflow' | 'outflow';

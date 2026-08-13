@@ -39,6 +39,11 @@ export const RECURRING_ACTIONS: Record<
   ],
   cancelled: [],
   rejected: [],
+  // Reaped by KEEL. The state machine only allows confirm-from-withdrawn
+  // (cancel requires confirmed/paused; reject requires suggested), so the sole
+  // action is Restore — bring it back to active tracking. Once restored the
+  // normal confirmed-status actions (Pause / Stop tracking) apply.
+  withdrawn: [{ command: 'recurring.confirm', label: 'Restore' }],
 };
 
 export type RecurringCommand =
@@ -184,12 +189,17 @@ export function nextOccurrence(series: RecurringSeriesRow, todayIso: string) {
 }
 
 /**
- * The state machine requires each transition's effective date to be STRICTLY
- * later than the previous one — a second change on the same day is rejected
- * by the server (P0009). Detect it so the UI can explain instead of erroring.
+ * The state machine rejects a transition whose effective date is STRICTLY
+ * EARLIER than a prior one (`v_effective_date < v_last_effective_date`,
+ * keel_recurring_transition_core) — a same-day transition IS allowed. So we
+ * only need to block when a transition is dated in the FUTURE (which the UI
+ * never issues), not when the last change was today. The prior `>=` guard was
+ * stricter than the server and hid every action button for a full day after
+ * any change (e.g. right after confirming a series you couldn't then pause or
+ * stop it). Match the server: `>` only.
  */
 export function changedToday(series: RecurringSeriesRow, todayIso: string): boolean {
-  return series.statusEvents.some((e) => e.effectiveDate >= todayIso);
+  return series.statusEvents.some((e) => e.effectiveDate > todayIso);
 }
 
 /**

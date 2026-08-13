@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Banknote, Plus, Loader2, ChevronRight, Pencil, Trash2, Undo2, Sparkles, X, CalendarClock } from 'lucide-react';
+import { Banknote, Plus, Loader2, ChevronRight, Pencil, Trash2, Undo2, Sparkles, X, CalendarClock, Ban } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
@@ -16,6 +16,7 @@ import {
   dismissDetectedPaycheck,
   unapplyPaycheck,
   applyPaycheckTemplate,
+  setPaycheckSeriesSettings,
   keelCommand,
   newId,
   type RecurringClassificationRow,
@@ -23,6 +24,7 @@ import {
   type RecurringSeriesRow,
   type RichTransactionRow,
   type PaycheckTemplatesResult,
+  type PaycheckSeriesSettings,
 } from '@/lib/keel-api';
 import {
   PaycheckTemplateEditor,
@@ -32,6 +34,7 @@ import {
   previewPaycheckTemplate,
   type PreviewLine,
 } from '@/lib/paycheck-template-math';
+import { recurringTransition } from '@/lib/recurring';
 import type { PaycheckTemplate } from '@/lib/keel-api';
 import { EditCadenceDialog } from '@/components/edit-cadence-dialog';
 import { TxnPicker } from '@/components/keel/txn-picker';
@@ -521,6 +524,24 @@ function PaychecksBody() {
                         reloadDismissals();
                       }}
                     />
+                    {/* Stop tracking the whole recurring paycheck. Only valid
+                        from a confirmed series (the state machine allows cancel
+                        from confirmed/paused only); a still-suggested detection
+                        is turned off with Decline above. Reversible — restore it
+                        from the Recurring page. */}
+                    {series.status === 'confirmed' && householdId && userId ? (
+                      <StopPaycheckButton
+                        householdId={householdId}
+                        userId={userId}
+                        seriesId={series.seriesId}
+                        employerId={resolvedEmployerId}
+                        settings={settings}
+                        onStopped={() => {
+                          reloadTemplates();
+                          void refetch();
+                        }}
+                      />
+                    ) : null}
                   </div>
                   </div>
 
@@ -751,6 +772,93 @@ function DeclineDetectedButton({
     >
       {busy ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
       Decline
+    </Button>
+  );
+}
+
+// Stop tracking a confirmed recurring paycheck. Issues recurring.cancel (the
+// series leaves the detected list and stops being forecast) and, when the
+// series carries paycheck settings, also flips bookingEnabled off so the
+// paycheck "booking machine" doesn't stay armed after cancel — the gap the
+// runbook flagged (a cancel alone left booking_enabled=true). Both are
+// reversible: restore the series from the Recurring page. Booking-disable is
+// best-effort: its failure is reported but never masks a successful cancel.
+function StopPaycheckButton({
+  householdId,
+  userId,
+  seriesId,
+  employerId,
+  settings,
+  onStopped,
+}: {
+  householdId: string;
+  userId: string;
+  seriesId: string;
+  employerId: string | null;
+  settings: PaycheckSeriesSettings | null;
+  onStopped: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function stop() {
+    setBusy(true);
+    try {
+      await recurringTransition({
+        command: 'recurring.cancel',
+        seriesId,
+        householdId,
+        userId,
+      });
+      // Disarm the booking machine too (only possible with a resolved employer
+      // + existing settings; the command requires a non-null employerId).
+      if (employerId && settings && settings.bookingEnabled) {
+        try {
+          await setPaycheckSeriesSettings({
+            householdId,
+            userId,
+            seriesId,
+            employerId,
+            activeTemplateId: settings.activeTemplateId,
+            bookingEnabled: false,
+            incomeCategoryLedgerAccountId: settings.incomeCategoryLedgerAccountId,
+            autonomy: settings.autonomy,
+          });
+        } catch {
+          // paychecks.set_series_settings is OWNER-only while recurring.cancel
+          // is partner-level, so a partner's stop lands here. Harmless: booking
+          // is UI-driven (no background auto-book worker) and the cancelled
+          // series leaves the detected list, so nothing books — the owner can
+          // flip the setting off later. Inform, don't alarm.
+          toast.success(
+            'Stopped tracking. (The split template stays saved; the owner can disable auto-booking in the template editor.)',
+          );
+          onStopped();
+          return;
+        }
+      }
+      toast.success(
+        'Stopped tracking this paycheck. Restore it anytime from the Recurring page’s Stopped section.',
+      );
+      onStopped();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not stop tracking.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="gap-1.5 text-muted-foreground"
+      disabled={busy}
+      onClick={() => {
+        void stop();
+      }}
+    >
+      {busy ? <Loader2 className="size-4 animate-spin" /> : <Ban className="size-4" />}
+      Stop tracking
     </Button>
   );
 }

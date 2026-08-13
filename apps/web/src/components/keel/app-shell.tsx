@@ -45,12 +45,14 @@ import {
   fetchAccounts,
   fetchConnections,
   fetchLedgerKinds,
+  fetchInvestmentsOverview,
   keelQuery,
   type AccountRow,
   type ConnectionRow,
   type EntityRow,
   type TrialBalanceRow,
 } from '@/lib/keel-api';
+import { looksLikeInvestmentAccount } from '@/lib/investment-subtype';
 import { relativeSyncLabel } from '@/lib/relative-date';
 import { Money } from '@/components/keel/money';
 import { ReauthLink } from '@/components/keel/reauth-link';
@@ -239,8 +241,11 @@ function currencySubtotal(
  * Accounts inline in the nav, grouped assets / liabilities — the Quicken
  * left rail. Each row carries a right-aligned balance, each group header its
  * subtotal, and net worth is pinned at the foot — the same figures the
- * Accounts page shows (both read `ledger.trial_balance`, so the rows sum to
- * the net worth exactly). Every account is listed in its group (no cap) and
+ * Accounts page shows. Both read `ledger.trial_balance` and then overlay
+ * MARKET value (Plaid snapshot total) onto investment accounts, so the rows
+ * sum to the headline net worth exactly (keel_net_worth_* value investment
+ * accounts at market, not the anchored cash ledger). Every account is listed
+ * in its group (no cap) and
  * the rail scrolls with its container (the desktop <aside> is h-dvh
  * overflow-y-auto; the mobile drawer is min-h-0 overflow-y-auto — see
  * AppShell); balances hide when the sidebar is collapsed because the whole
@@ -279,15 +284,27 @@ function SidebarAccounts({
     queryKey: ['keel-query', 'sidebar-accounts', householdId],
     queryFn: async () => {
       if (!householdId) throw new Error('sidebar-accounts: disabled (no household)');
-      const [a, k, b, c] = await Promise.all([
+      const [a, k, b, c, inv] = await Promise.all([
         fetchAccounts(householdId),
         fetchLedgerKinds(householdId),
         keelQuery<TrialBalanceRow>('ledger.trial_balance', householdId),
         // Per-account freshness + reauth at the row (C8); same member-read
         // the Connections page uses. Best-effort — the rail renders without.
         fetchConnections(householdId).catch((): ConnectionRow[] => []),
+        // Per-account MARKET value (Plaid snapshot total incl. securities) for
+        // investment accounts, so the rail's balances/subtotals/net-worth foot
+        // match the headline net worth (keel_net_worth_* now value investment
+        // accounts at market, not the anchored cash ledger). Best-effort.
+        fetchInvestmentsOverview(householdId).catch(() => ({
+          accounts: [] as {
+            accountId: string;
+            currentMinor: string;
+            isManual: boolean;
+            balanceAsOf: string | null;
+          }[],
+        })),
       ]);
-      return { accounts: a, kinds: k, balances: b.rows, connections: c };
+      return { accounts: a, kinds: k, balances: b.rows, connections: c, investments: inv.accounts };
     },
     enabled: householdId !== null,
   });
@@ -295,6 +312,31 @@ function SidebarAccounts({
   const kinds = data?.kinds ?? new Map<string, string>();
   const byLedger = new Map((data?.balances ?? []).map((r) => [r.ledgerAccountId, r]));
   const connById = new Map((data?.connections ?? []).map((c) => [c.id, c]));
+
+  // Overlay market value onto investment accounts' ledger balances so the rail
+  // (per-row, per-group subtotal, and net-worth foot — all read byLedger)
+  // reconciles with the headline net worth. Only connected (non-manual)
+  // investment accounts get a snapshot; a manual investment account (e.g. a
+  // hand-entered Roth 401k) has no snapshot and keeps its ledger balance, which
+  // matches the backend's ledger fallback for accounts with no Plaid snapshot.
+  // balanceAsOf null = the overview coalesced a MISSING snapshot to "0" — never
+  // overlay that $0 over a real ledger balance (review finding).
+  const marketByAccount = new Map(
+    (data?.investments ?? [])
+      .filter((r) => !r.isManual && r.balanceAsOf !== null && r.currentMinor !== '')
+      .map((r) => [r.accountId, r.currentMinor]),
+  );
+  for (const a of accounts) {
+    if (!looksLikeInvestmentAccount(a.subtype)) continue;
+    const market = marketByAccount.get(a.id);
+    if (market == null) continue;
+    const existing = byLedger.get(a.ledgerAccountId);
+    byLedger.set(a.ledgerAccountId, {
+      ledgerAccountId: a.ledgerAccountId,
+      currency: existing?.currency ?? a.currency,
+      balanceMinor: market,
+    });
+  }
 
   if (accounts.length === 0) return null;
 

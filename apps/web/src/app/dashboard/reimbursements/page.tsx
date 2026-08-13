@@ -62,6 +62,29 @@ type ClaimRow = {
 
 const CLAIM_KINDS = ['friend', 'employer', 'client', 'insurance', 'household'] as const;
 
+/**
+ * The reimbursement commands reject a transaction the ledger can't find a single
+ * live real posting for (pending, voided, transfer/distribution, or a stale id)
+ * with KEEL_SCOPE_VIOLATION, which the API returns as a terse "Not found." The
+ * picker already hides ineligible rows, so this only fires on a race (a row that
+ * changed state between load and submit) — translate it to something actionable
+ * instead of the cryptic default.
+ *
+ * The API maps EVERY scope violation to the same "Not found." string, so the
+ * copy is scoped per flow: in the create flows the picked EXPENSE is the only
+ * object that can 404; in settle/receipt the failure can also be the claim or
+ * expectation (e.g. reversed concurrently), so that copy names both.
+ */
+function tagErrorMessage(err: unknown, fallback: string, flow: 'expense' | 'deposit'): string {
+  const raw = err instanceof Error ? err.message : '';
+  if (/not[\s_]?found/i.test(raw)) {
+    return flow === 'expense'
+      ? 'That transaction can’t be used — it must be a posted expense (not pending or a transfer). Try refreshing.'
+      : 'Not found — the deposit must be posted (not pending or a transfer), and the claim or expectation must still be open. Try refreshing.';
+  }
+  return raw || fallback;
+}
+
 /** Expected (future-dated) reimbursement — an accounts-receivable line: money
  * owed to you, tracked BEFORE it arrives. Never an economic event. */
 type ExpectedRow = {
@@ -574,7 +597,7 @@ function CreateClaimDialog({
       setDescription('');
       onCreated();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not create the claim.');
+      toast.error(tagErrorMessage(err, 'Could not create the claim.', 'expense'));
     } finally {
       setBusy(false);
     }
@@ -603,7 +626,11 @@ function CreateClaimDialog({
               value={txnId}
               onChange={setTxnId}
               placeholder="Pick the expense transaction"
+              eligibleOnly
             />
+            <p className="text-xs text-muted-foreground">
+              Pending charges appear here once they post.
+            </p>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
@@ -756,7 +783,7 @@ function SettleDialog({
       setNote('');
       onSettled();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not record the settlement.');
+      toast.error(tagErrorMessage(err, 'Could not record the settlement.', 'deposit'));
     } finally {
       setBusy(false);
     }
@@ -791,7 +818,11 @@ function SettleDialog({
                 value={txnId}
                 onChange={setTxnId}
                 placeholder="Pick the incoming transaction"
+                eligibleOnly
               />
+              <p className="text-xs text-muted-foreground">
+                Pending deposits appear here once they post.
+              </p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="settle-amount">Amount applied to this claim</Label>
@@ -1257,7 +1288,7 @@ function CreateExpectedDialog({
       setDescription('');
       onCreated();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not create it.');
+      toast.error(tagErrorMessage(err, 'Could not create it.', 'expense'));
     } finally {
       setBusy(false);
     }
@@ -1311,7 +1342,11 @@ function CreateExpectedDialog({
                 value={txnId}
                 onChange={setTxnId}
                 placeholder="Pick the expense you fronted"
+                eligibleOnly
               />
+              <p className="text-xs text-muted-foreground">
+                Pending charges appear here once they post.
+              </p>
             </div>
           ) : null}
           <div className="grid grid-cols-2 gap-3">
@@ -1477,7 +1512,7 @@ function RecordReceiptDialog({
       toast.success('Receipt recorded — no fake income.');
       onRecorded();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not record it.');
+      toast.error(tagErrorMessage(err, 'Could not record it.', 'deposit'));
     } finally {
       setBusy(false);
     }
@@ -1512,7 +1547,11 @@ function RecordReceiptDialog({
                 value={txnId}
                 onChange={setTxnId}
                 placeholder="Pick the incoming transaction"
+                eligibleOnly
               />
+              <p className="text-xs text-muted-foreground">
+                Pending deposits appear here once they post.
+              </p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="rcpt-amount">Amount applied</Label>

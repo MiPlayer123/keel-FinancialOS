@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import Link from 'next/link';
-import { Repeat, Loader2, Plus, Pause, Play, CheckCircle2, SkipForward, XCircle, Banknote, ArrowRight } from 'lucide-react';
+import { Repeat, Loader2, Plus, Pause, Play, CheckCircle2, SkipForward, XCircle, Banknote, ArrowRight, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { PageHeader, EmptyState } from '@/components/keel/page-header';
@@ -286,6 +286,11 @@ function RecurringBody() {
   const active = rows.filter((r) => r.status === 'confirmed');
   const suggested = rows.filter((r) => r.status === 'suggested');
   const paused = rows.filter((r) => r.status === 'paused');
+  // Stopped series: reaped by the nightly detector-score reaper ('withdrawn')
+  // or stopped by a user ('cancelled'). Neither used to render anywhere, so a
+  // stopped series vanished with no way back — surface both with a Restore
+  // (the state machine allows confirm from either status).
+  const stopped = rows.filter((r) => r.status === 'withdrawn' || r.status === 'cancelled');
 
   if (!householdId) {
     return (
@@ -412,7 +417,110 @@ function RecurringBody() {
         onDone={() => void refetch()}
         onLinksChanged={reloadLinks}
       />
+
+      <StoppedSection
+        rows={stopped}
+        accountName={accountName}
+        householdId={householdId}
+        userId={userId}
+        onDone={() => void refetch()}
+      />
     </div>
+  );
+}
+
+// Stopped-series lane: 'withdrawn' (the nightly reaper retired a series whose
+// detector score fell) and 'cancelled' (a user stopped tracking it — e.g. the
+// Paychecks page's Stop button). The read model returns both and the state
+// machine allows confirm from either, but nothing rendered them — so a stopped
+// series disappeared with no recovery path. This compact section lists them
+// with a single Restore action. Kept deliberately separate from SeriesCard,
+// whose schedule-linking / projection UI assumes a live series.
+function StoppedSection({
+  rows,
+  accountName,
+  householdId,
+  userId,
+  onDone,
+}: {
+  rows: RecurringSeriesRow[];
+  accountName: (id: string) => string;
+  householdId: string;
+  userId: string | null;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  if (rows.length === 0) return null;
+
+  async function restore(seriesId: string) {
+    if (!householdId || !userId) return;
+    setBusy(seriesId);
+    try {
+      await recurringTransition({
+        command: 'recurring.confirm',
+        seriesId,
+        householdId,
+        userId,
+      });
+      toast.success('Restored — KEEL is tracking this series again.');
+      onDone();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not restore the series.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="space-y-2">
+      <div>
+        <h2 className="text-base font-semibold text-muted-foreground">Stopped</h2>
+        <p className="text-xs text-muted-foreground">
+          Series KEEL stopped because their pattern weakened, or that you stopped tracking.
+          Restore any you still want forecast.
+        </p>
+      </div>
+      <div className="overflow-hidden rounded-lg border border-border">
+        {rows.map((series, i) => {
+          const cadence = detectedCadenceLabel(series);
+          const acct = accountName(series.accountId);
+          const subtitle = [cadence, acct].filter(Boolean).join(' · ');
+          return (
+            <div
+              key={series.seriesId}
+              className={`flex items-center justify-between gap-3 px-4 py-3 ${
+                i === 0 ? '' : 'border-t border-border'
+              }`}
+            >
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium" title={series.counterpartyKey}>
+                  {merchantDisplayName(series.counterpartyKey)}
+                </p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {series.status === 'withdrawn' ? 'Stopped by KEEL' : 'Stopped by you'}
+                  {subtitle ? ` · ${subtitle}` : ''}
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy !== null || !userId}
+                onClick={() => {
+                  void restore(series.seriesId);
+                }}
+              >
+                {busy === series.seriesId ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <RotateCcw className="size-4" />
+                )}
+                Restore
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
