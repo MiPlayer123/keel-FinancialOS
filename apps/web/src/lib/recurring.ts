@@ -171,6 +171,36 @@ export async function reclassifyCadence(input: {
   });
 }
 
+/**
+ * Correct a recurring series' expected per-occurrence amount (the amount
+ * sibling of reclassifyCadence). `amountMinor` is SIGNED and must match the
+ * series direction — the caller signs the user's positive magnitude by
+ * series.sign; the SQL command re-validates. Mints a manual candidate version
+ * (Law 2 audited/reversible, Law 9 explicit ownership) and re-projects.
+ */
+export async function setRecurringAmount(input: {
+  seriesId: string;
+  amountMinor: string;
+  householdId: string;
+  userId: string;
+  horizonDays?: number;
+}): Promise<unknown> {
+  const effectiveDate = new Date().toISOString().slice(0, 10);
+  return keelCommand({
+    commandId: newId(),
+    command: 'recurring.set_amount',
+    economicEventKey: `recurring.set_amount:${input.seriesId}:${effectiveDate}:${input.amountMinor}`,
+    actor: { kind: 'user', userId: input.userId },
+    householdId: input.householdId,
+    payload: {
+      seriesId: input.seriesId,
+      amountMinor: input.amountMinor,
+      effectiveDate,
+      horizonDays: input.horizonDays ?? 120,
+    },
+  });
+}
+
 /** Human-facing cadence names for the edit picker. */
 export const EDITABLE_CADENCE_LABELS: Record<EditableCadence, string> = {
   weekly: 'Weekly',

@@ -128,6 +128,7 @@ const COMMAND_TO_PROC: Record<string, string> = {
   'recurring.cancel': 'keel_recurring_cancel',
   'recurring.reject': 'keel_recurring_reject',
   'recurring.reclassify_cadence': 'keel_recurring_reclassify_cadence',
+  'recurring.set_amount': 'keel_recurring_set_amount',
   'recurring.link_schedule': 'keel_recurring_link_schedule',
   'recurring.unlink_schedule': 'keel_recurring_unlink_schedule',
   'paychecks.create': 'keel_paycheck_create',
