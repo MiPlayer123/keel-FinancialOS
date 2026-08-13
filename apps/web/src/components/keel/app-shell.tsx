@@ -295,7 +295,14 @@ function SidebarAccounts({
         // investment accounts, so the rail's balances/subtotals/net-worth foot
         // match the headline net worth (keel_net_worth_* now value investment
         // accounts at market, not the anchored cash ledger). Best-effort.
-        fetchInvestmentsOverview(householdId).catch(() => ({ accounts: [] as { accountId: string; currentMinor: string; isManual: boolean }[] })),
+        fetchInvestmentsOverview(householdId).catch(() => ({
+          accounts: [] as {
+            accountId: string;
+            currentMinor: string;
+            isManual: boolean;
+            balanceAsOf: string | null;
+          }[],
+        })),
       ]);
       return { accounts: a, kinds: k, balances: b.rows, connections: c, investments: inv.accounts };
     },
@@ -312,9 +319,11 @@ function SidebarAccounts({
   // investment accounts get a snapshot; a manual investment account (e.g. a
   // hand-entered Roth 401k) has no snapshot and keeps its ledger balance, which
   // matches the backend's ledger fallback for accounts with no Plaid snapshot.
+  // balanceAsOf null = the overview coalesced a MISSING snapshot to "0" — never
+  // overlay that $0 over a real ledger balance (review finding).
   const marketByAccount = new Map(
     (data?.investments ?? [])
-      .filter((r) => !r.isManual && r.currentMinor !== '')
+      .filter((r) => !r.isManual && r.balanceAsOf !== null && r.currentMinor !== '')
       .map((r) => [r.accountId, r.currentMinor]),
   );
   for (const a of accounts) {

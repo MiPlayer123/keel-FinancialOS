@@ -69,11 +69,18 @@ const CLAIM_KINDS = ['friend', 'employer', 'client', 'insurance', 'household'] a
  * picker already hides ineligible rows, so this only fires on a race (a row that
  * changed state between load and submit) — translate it to something actionable
  * instead of the cryptic default.
+ *
+ * The API maps EVERY scope violation to the same "Not found." string, so the
+ * copy is scoped per flow: in the create flows the picked EXPENSE is the only
+ * object that can 404; in settle/receipt the failure can also be the claim or
+ * expectation (e.g. reversed concurrently), so that copy names both.
  */
-function tagErrorMessage(err: unknown, fallback: string): string {
+function tagErrorMessage(err: unknown, fallback: string, flow: 'expense' | 'deposit'): string {
   const raw = err instanceof Error ? err.message : '';
   if (/not[\s_]?found/i.test(raw)) {
-    return 'That transaction can’t be reimbursed — it must be a posted expense or deposit (not pending or a transfer). Try refreshing.';
+    return flow === 'expense'
+      ? 'That transaction can’t be used — it must be a posted expense (not pending or a transfer). Try refreshing.'
+      : 'Not found — the deposit must be posted (not pending or a transfer), and the claim or expectation must still be open. Try refreshing.';
   }
   return raw || fallback;
 }
@@ -590,7 +597,7 @@ function CreateClaimDialog({
       setDescription('');
       onCreated();
     } catch (err) {
-      toast.error(tagErrorMessage(err, 'Could not create the claim.'));
+      toast.error(tagErrorMessage(err, 'Could not create the claim.', 'expense'));
     } finally {
       setBusy(false);
     }
@@ -776,7 +783,7 @@ function SettleDialog({
       setNote('');
       onSettled();
     } catch (err) {
-      toast.error(tagErrorMessage(err, 'Could not record the settlement.'));
+      toast.error(tagErrorMessage(err, 'Could not record the settlement.', 'deposit'));
     } finally {
       setBusy(false);
     }
@@ -1281,7 +1288,7 @@ function CreateExpectedDialog({
       setDescription('');
       onCreated();
     } catch (err) {
-      toast.error(tagErrorMessage(err, 'Could not create it.'));
+      toast.error(tagErrorMessage(err, 'Could not create it.', 'expense'));
     } finally {
       setBusy(false);
     }
@@ -1505,7 +1512,7 @@ function RecordReceiptDialog({
       toast.success('Receipt recorded — no fake income.');
       onRecorded();
     } catch (err) {
-      toast.error(tagErrorMessage(err, 'Could not record it.'));
+      toast.error(tagErrorMessage(err, 'Could not record it.', 'deposit'));
     } finally {
       setBusy(false);
     }

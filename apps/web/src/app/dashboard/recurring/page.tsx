@@ -286,9 +286,11 @@ function RecurringBody() {
   const active = rows.filter((r) => r.status === 'confirmed');
   const suggested = rows.filter((r) => r.status === 'suggested');
   const paused = rows.filter((r) => r.status === 'paused');
-  // Reaped by the nightly detector-score reaper. The UI never used to render
-  // these, so they vanished with no way back — surface them with a Restore.
-  const withdrawn = rows.filter((r) => r.status === 'withdrawn');
+  // Stopped series: reaped by the nightly detector-score reaper ('withdrawn')
+  // or stopped by a user ('cancelled'). Neither used to render anywhere, so a
+  // stopped series vanished with no way back — surface both with a Restore
+  // (the state machine allows confirm from either status).
+  const stopped = rows.filter((r) => r.status === 'withdrawn' || r.status === 'cancelled');
 
   if (!householdId) {
     return (
@@ -416,8 +418,8 @@ function RecurringBody() {
         onLinksChanged={reloadLinks}
       />
 
-      <WithdrawnSection
-        rows={withdrawn}
+      <StoppedSection
+        rows={stopped}
         accountName={accountName}
         householdId={householdId}
         userId={userId}
@@ -427,14 +429,14 @@ function RecurringBody() {
   );
 }
 
-// Reaped-series lane. The nightly reaper (keel_recurring_reap_stale_suggestions)
-// auto-withdraws a series whose detector score falls; the read model still
-// returns it and the state machine allows confirm-from-withdrawn, but nothing
-// rendered it — so a series that dipped (a payroll series did) disappeared with
-// no recovery. This compact section lists them with a single Restore action
-// (the only valid transition from 'withdrawn'). Kept deliberately separate from
-// SeriesCard, whose schedule-linking / projection UI assumes a live series.
-function WithdrawnSection({
+// Stopped-series lane: 'withdrawn' (the nightly reaper retired a series whose
+// detector score fell) and 'cancelled' (a user stopped tracking it — e.g. the
+// Paychecks page's Stop button). The read model returns both and the state
+// machine allows confirm from either, but nothing rendered them — so a stopped
+// series disappeared with no recovery path. This compact section lists them
+// with a single Restore action. Kept deliberately separate from SeriesCard,
+// whose schedule-linking / projection UI assumes a live series.
+function StoppedSection({
   rows,
   accountName,
   householdId,
@@ -472,10 +474,10 @@ function WithdrawnSection({
   return (
     <section className="space-y-2">
       <div>
-        <h2 className="text-base font-semibold text-muted-foreground">Stopped by KEEL</h2>
+        <h2 className="text-base font-semibold text-muted-foreground">Stopped</h2>
         <p className="text-xs text-muted-foreground">
-          KEEL stopped tracking these because their pattern weakened. Restore any you still want
-          forecast.
+          Series KEEL stopped because their pattern weakened, or that you stopped tracking.
+          Restore any you still want forecast.
         </p>
       </div>
       <div className="overflow-hidden rounded-lg border border-border">
@@ -494,9 +496,10 @@ function WithdrawnSection({
                 <p className="truncate text-sm font-medium" title={series.counterpartyKey}>
                   {merchantDisplayName(series.counterpartyKey)}
                 </p>
-                {subtitle ? (
-                  <p className="truncate text-xs text-muted-foreground">{subtitle}</p>
-                ) : null}
+                <p className="truncate text-xs text-muted-foreground">
+                  {series.status === 'withdrawn' ? 'Stopped by KEEL' : 'Stopped by you'}
+                  {subtitle ? ` · ${subtitle}` : ''}
+                </p>
               </div>
               <Button
                 variant="outline"

@@ -823,17 +823,22 @@ function StopPaycheckButton({
             incomeCategoryLedgerAccountId: settings.incomeCategoryLedgerAccountId,
             autonomy: settings.autonomy,
           });
-        } catch (err) {
-          toast.error(
-            err instanceof Error
-              ? `Stopped tracking, but couldn't disable booking: ${err.message}`
-              : "Stopped tracking, but couldn't disable booking.",
+        } catch {
+          // paychecks.set_series_settings is OWNER-only while recurring.cancel
+          // is partner-level, so a partner's stop lands here. Harmless: booking
+          // is UI-driven (no background auto-book worker) and the cancelled
+          // series leaves the detected list, so nothing books — the owner can
+          // flip the setting off later. Inform, don't alarm.
+          toast.success(
+            'Stopped tracking. (The split template stays saved; the owner can disable auto-booking in the template editor.)',
           );
           onStopped();
           return;
         }
       }
-      toast.success('Stopped tracking this paycheck. Restore it anytime from Recurring.');
+      toast.success(
+        'Stopped tracking this paycheck. Restore it anytime from the Recurring page’s Stopped section.',
+      );
       onStopped();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not stop tracking.');
