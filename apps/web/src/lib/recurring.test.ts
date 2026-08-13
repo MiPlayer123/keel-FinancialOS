@@ -5,9 +5,24 @@ import {
   RECURRING_ACTIONS,
   annualizedEstimate,
   annualizedMinor,
+  changedToday,
   inferCadence,
   stepScheduleDue,
 } from './recurring';
+import type { RecurringSeriesRow, RecurringStatusEvent } from './keel-api';
+
+function seriesWithEvents(events: Partial<RecurringStatusEvent>[]): RecurringSeriesRow {
+  return {
+    seriesId: 's1',
+    status: 'confirmed',
+    candidateVersionHash: 'h',
+    counterpartyKey: 'x',
+    sign: 'outflow',
+    accountId: 'a1',
+    occurrences: [],
+    statusEvents: events as RecurringStatusEvent[],
+  };
+}
 
 describe('stepScheduleDue', () => {
   it('steps weekly / biweekly by fixed day counts', () => {
@@ -249,5 +264,33 @@ describe('RECURRING_ACTIONS copy (teardown: "cancel" collides with concierge sem
       command: 'recurring.cancel',
       label: 'Stop tracking',
     });
+  });
+
+  it('offers Restore (confirm) for a reaped/withdrawn series — the only valid transition', () => {
+    // The state machine allows confirm-from-withdrawn but NOT cancel/reject, so
+    // Restore must be the sole action (and must not read as "Cancel").
+    expect(RECURRING_ACTIONS.withdrawn).toEqual([
+      { command: 'recurring.confirm', label: 'Restore' },
+    ]);
+  });
+});
+
+describe('changedToday matches the server guard (same-day allowed)', () => {
+  const today = '2026-08-13';
+
+  it('does NOT lock a series whose last transition was TODAY (server allows same-day)', () => {
+    // The server rejects only effective_date < last_effective_date, so a second
+    // change on the same day is fine. The old `>=` guard wrongly hid every
+    // action button for a full day after any change.
+    const series = seriesWithEvents([{ effectiveDate: today }]);
+    expect(changedToday(series, today)).toBe(false);
+  });
+
+  it('locks only when a transition is dated in the FUTURE', () => {
+    expect(changedToday(seriesWithEvents([{ effectiveDate: '2026-08-14' }]), today)).toBe(true);
+  });
+
+  it('does not lock on a past transition', () => {
+    expect(changedToday(seriesWithEvents([{ effectiveDate: '2026-08-12' }]), today)).toBe(false);
   });
 });
