@@ -27,6 +27,7 @@ describe('action vocabulary', () => {
       'recurring.cancel',
       'recurring.reject',
       'recurring.reclassify_cadence',
+      'recurring.set_amount',
       'recurring.link_schedule',
       'recurring.unlink_schedule',
       'paychecks.create',
@@ -168,6 +169,7 @@ describe('action vocabulary', () => {
     expect(ACTION_MINIMUM_ROLES['recurring.cancel']).toBe('partner');
     expect(ACTION_MINIMUM_ROLES['recurring.reject']).toBe('partner');
     expect(ACTION_MINIMUM_ROLES['recurring.reclassify_cadence']).toBe('partner');
+    expect(ACTION_MINIMUM_ROLES['recurring.set_amount']).toBe('partner');
     expect(ACTION_MINIMUM_ROLES['recurring.list']).toBe('viewer');
   });
 
