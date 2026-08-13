@@ -1,0 +1,26 @@
+-- Missing grant behind "Command failed. (transaction_failed)" on the Chase
+-- fresh-link finalize (live repro 2026-08-13, attempt 5f54f316):
+--
+--   ERROR: permission denied for table accounts
+--   CONTEXT: update public.accounts ... keel_finalize_link line 195 (the
+--   keel_archive_superseded_accounts PERFORM)
+--
+-- 20260719220000_dedupe_archived_duplicates.sql taught keel_finalize_link to
+-- auto-archive superseded old accounts on reconnect via
+-- keel_archive_superseded_accounts (SECURITY DEFINER, owner keel_api — its
+-- `update public.accounts set archived_at = now()` therefore runs with
+-- keel_api's table privileges), but granted keel_api no UPDATE on accounts.
+-- keel_api holds only INSERT,SELECT plus the column-scoped update (name) /
+-- update (entity_id) from earlier slices — so the archive step fails the
+-- FIRST time a reconnect actually matches a superseded account, aborting the
+-- whole finalize (connection never created; Plaid item left for the link
+-- reaper to compensate). Every pre-Chase link simply never hit a superseded
+-- match on live.
+--
+-- Fix follows the established column-scoped idiom (20260714100000's
+-- update (name), 20260718010000's update (entity_id)): grant exactly the one
+-- column the archive step writes — on BOTH tables it archives (rolled-back
+-- live repro confirmed the accounts grant alone next fails on
+-- `update public.connections set archived_at = now()`).
+grant update (archived_at) on public.accounts to keel_api;
+grant update (archived_at) on public.connections to keel_api;
