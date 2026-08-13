@@ -92,6 +92,41 @@ export default function InvestmentsPage() {
     [overview],
   );
 
+  // Liquid-cash vs invested split (user ask 2026-08-13: "my liquid cash versus
+  // my investments shown separately, and they add up properly"). Per USD
+  // account: with a holdings sync, cash = balance − Σ holdings market value
+  // (the uninvested sweep/core, e.g. SPAXX); with a snapshot but no holdings
+  // sync (a cash-management account) the whole balance IS cash; with neither
+  // (a manual account like a hand-tracked Roth) the balance is its ledger sum
+  // at cost — no market pricing exists, so it's surfaced as its own line, never
+  // silently folded into cash or holdings (Law 9). The three parts sum to the
+  // Total investment balance exactly.
+  const balanceSplit = useMemo(() => {
+    if (!overview) return null;
+    const heldByAccount = new Map<string, bigint>();
+    for (const h of overview.holdings) {
+      heldByAccount.set(
+        h.accountId,
+        (heldByAccount.get(h.accountId) ?? 0n) + BigInt(h.valueMinor || '0'),
+      );
+    }
+    let cash = 0n;
+    let atCost = 0n;
+    for (const a of overview.accounts) {
+      if (a.currency !== 'USD') continue;
+      const current = BigInt(a.currentMinor || '0');
+      if (a.holdingsSyncedAt !== null) {
+        const held = heldByAccount.get(a.accountId) ?? 0n;
+        if (current > held) cash += current - held;
+      } else if (a.balanceAsOf !== null) {
+        cash += current;
+      } else {
+        atCost += current;
+      }
+    }
+    return { cashMinor: cash.toString(), atCostMinor: atCost.toString() };
+  }, [overview]);
+
   const trendPoints = useMemo(
     () =>
       (valuePoints ?? []).map((p) => ({
@@ -226,9 +261,31 @@ export default function InvestmentsPage() {
                   currency={currency}
                   className="text-2xl font-semibold"
                 />
-                <p className="mt-1 text-xs text-muted-foreground">
-                  A breakdown of what&apos;s inside your balances, not a separate total.
-                </p>
+                {balanceSplit ? (
+                  <div className="mt-2 space-y-0.5">
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span>Uninvested cash</span>
+                      <Money
+                        amountMinor={balanceSplit.cashMinor}
+                        currency={currency}
+                        className="text-xs"
+                      />
+                    </div>
+                    {balanceSplit.atCostMinor !== '0' ? (
+                      <div className="flex items-center justify-between text-xs text-muted-foreground">
+                        <span>Tracked at cost (no market pricing)</span>
+                        <Money
+                          amountMinor={balanceSplit.atCostMinor}
+                          currency={currency}
+                          className="text-xs"
+                        />
+                      </div>
+                    ) : null}
+                    <p className="pt-0.5 text-[11px] text-muted-foreground/70">
+                      Holdings + these = the total investment balance.
+                    </p>
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
             {/* Unrealized gain/loss over the with-basis subset. Law 8: red only on
