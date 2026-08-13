@@ -163,6 +163,20 @@ export const CadenceAnchorSchema = z.discriminatedUnion('kind', [
 export const RecurringCadenceSchema = z.enum([
   'weekly', 'biweekly', 'semimonthly', 'monthly', 'quarterly', 'annual',
 ]);
+
+// recurring.set_amount — user correction of a detected series' expected
+// amount (the amount sibling of reclassify_cadence: Law 2 reversible/audited,
+// Law 9 manual-override provenance, Class B). SIGNED minor units — the SQL
+// command additionally enforces that the sign matches the series direction
+// (outflow negative, inflow positive) and rejects zero.
+export const RecurringSetAmountPayloadSchema = z.object({
+  seriesId: RecurringSeriesIdSchema,
+  amountMinor: MinorUnitsStringSchema.refine((v) => v !== '0' && v !== '-0', {
+    message: 'amount must be non-zero',
+  }),
+  effectiveDate: IsoDateSchema,
+  horizonDays: z.number().int().min(1).max(366),
+}).strict();
 export const RecurringReclassifyCadencePayloadSchema = z.object({
   seriesId: RecurringSeriesIdSchema,
   cadence: RecurringCadenceSchema,
@@ -753,6 +767,7 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
   'recurring.cancel': RecurringCancelPayloadSchema,
   'recurring.reject': RecurringRejectPayloadSchema,
   'recurring.reclassify_cadence': RecurringReclassifyCadencePayloadSchema,
+  'recurring.set_amount': RecurringSetAmountPayloadSchema,
   'recurring.link_schedule': RecurringLinkSchedulePayloadSchema,
   'recurring.unlink_schedule': RecurringUnlinkSchedulePayloadSchema,
   'paychecks.create': CreatePaycheckPayloadSchema,

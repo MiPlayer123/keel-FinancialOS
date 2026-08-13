@@ -49,6 +49,7 @@ import { cadenceLabel } from '@/lib/recurring-evidence';
 import { merchantDisplayName } from '@/lib/merchant-name';
 import { RECURRING_BUCKET_BADGE_LABELS } from '@/lib/recurring-bucket';
 import { EditCadenceDialog } from '@/components/edit-cadence-dialog';
+import { EditAmountDialog } from '@/components/edit-amount-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -769,6 +770,7 @@ function SeriesCard({
   const [busy, setBusy] = useState<RecurringCommand | null>(null);
   const [linkBusy, setLinkBusy] = useState(false);
   const [editingCadence, setEditingCadence] = useState(false);
+  const [editingAmount, setEditingAmount] = useState(false);
   const next = nextOccurrence(series, todayIso());
   // Human cadence label for the subtitle (Bill & Income parity with the manual
   // scheduled rows' FREQUENCY_LABELS). Null when no cadence is inferable.
@@ -958,16 +960,28 @@ function SeriesCard({
           {/* Correct a mis-detected cadence (e.g. semi-monthly payroll read as
               biweekly). Available on any live series; not shown once terminal. */}
           {userId && ['suggested', 'confirmed', 'paused'].includes(series.status) ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={busy !== null}
-              onClick={() => {
-                setEditingCadence(true);
-              }}
-            >
-              Fix schedule
-            </Button>
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy !== null}
+                onClick={() => {
+                  setEditingAmount(true);
+                }}
+              >
+                Edit amount
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy !== null}
+                onClick={() => {
+                  setEditingCadence(true);
+                }}
+              >
+                Fix schedule
+              </Button>
+            </>
           ) : null}
           {lockedToday ? (
             <span className="text-xs text-muted-foreground">
@@ -1003,6 +1017,21 @@ function SeriesCard({
           householdId={householdId}
           userId={userId}
           referenceDate={cadenceReferenceDate}
+        />
+      ) : null}
+      {userId ? (
+        <EditAmountDialog
+          open={editingAmount}
+          onClose={() => {
+            setEditingAmount(false);
+          }}
+          onDone={onDone}
+          seriesId={series.seriesId}
+          seriesLabel={merchantDisplayName(series.counterpartyKey)}
+          sign={series.sign}
+          currentAmountMinor={next?.expectedAmountMinor ?? series.occurrences.at(-1)?.expectedAmountMinor ?? null}
+          householdId={householdId}
+          userId={userId}
         />
       ) : null}
     </Card>
