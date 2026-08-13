@@ -281,14 +281,19 @@ select is((select count(*)::int from public.recurring_status_events se
   where s.series_key='reap-series-2' and se.transition='withdrawn'),
   1, 'idempotent reap does not duplicate the withdrawn status event');
 
--- keel_list_recurring hides the withdrawn series from the client.
+-- 20260813150000: keel_list_recurring RETURNS the withdrawn series (status
+-- 'withdrawn') so the client can offer Restore — the earlier hide-it filter
+-- (20260719031000) made reaped series silently unrecoverable from the UI.
+-- Consumers are status-driven, so a withdrawn row only surfaces in the
+-- dedicated Stopped lane.
 set local role authenticated;
 set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
-select ok(
-  not exists (select 1 from jsonb_array_elements(
+select is(
+  (select r->>'status' from jsonb_array_elements(
      public.keel_list_recurring('00000000-0000-4000-8000-00000000a001')->'rows') r
    where r->>'seriesKey'='reap-series-2'),
-  'withdrawn series is not listed to the client');
+  'withdrawn',
+  'withdrawn series is listed to the client with status withdrawn (restorable)');
 select ok(
   exists (select 1 from jsonb_array_elements(
      public.keel_list_recurring('00000000-0000-4000-8000-00000000a001')->'rows') r
