@@ -116,6 +116,19 @@ function splitSummaryLabel(s: TransactionSplit): string {
   return s.legType === 'account' ? `Transfer to ${s.name}` : s.name;
 }
 
+/**
+ * A buy/sell whose single offset the investment-flow classifier routed to the
+ * non-category Investments asset ledger (seeded pfc_key='investments',
+ * 20260721060000). Economically the cash converted into holdings within the
+ * same account — already excluded from cash flow — so the register renders it
+ * with transfer visual language ("→ Investments") instead of a bare negative
+ * that reads as spending. Rename-proof via the pfc key, mirroring
+ * isTransferCategoryRow above.
+ */
+function isInvestmentFlowRow(t: Pick<RichTransactionRow, 'categoryPfcKey'>): boolean {
+  return t.categoryPfcKey === 'investments';
+}
+
 export type ListCallbacks = {
   onRecategorize: (txnId: string, categoryId: string) => void;
   onEdit: (row: RichTransactionRow) => void;
@@ -325,6 +338,27 @@ export function TxnRow({
                 {t.counterpartyAccountName
                   ? ` ${BigInt(t.amountMinor) < 0n ? '→' : '←'} ${t.counterpartyAccountName}`
                   : ''}
+              </span>
+            </Badge>
+          ) : isInvestmentFlowRow(t) ? (
+            // A buy/sell whose offset the investment-flow classifier routed to
+            // the Investments asset ledger (pfc_key='investments'). The money
+            // moved INTO/OUT OF holdings, not out of the household — a bare
+            // "-$200 · Investments" line read as spending (user bug report).
+            // Render it with the same transfer visual language instead. Still
+            // recategorizable from the detail sheet (nothing here is locked).
+            <Badge
+              variant="secondary"
+              className="hidden max-w-40 shrink-0 gap-1 sm:inline-flex"
+              title={
+                BigInt(t.amountMinor) < 0n
+                  ? 'Invested — moved into your Investments balance'
+                  : 'Sold — moved out of your Investments balance'
+              }
+            >
+              <ArrowLeftRight className="size-3 shrink-0" />
+              <span className="truncate">
+                {BigInt(t.amountMinor) < 0n ? '→ Investments' : '← Investments'}
               </span>
             </Badge>
           ) : t.splits && t.splits.length > 0 ? (
@@ -1494,6 +1528,26 @@ function TxnEditForm({
                 </Button>
               ) : null}
             </div>
+          </div>
+        ) : null}
+        {isInvestmentFlowRow(row) && row.transferStatus !== 'confirmed' && !row.distributionTransfer ? (
+          // Investment buy/sell (offset on the Investments asset ledger). Info
+          // only — the category picker below stays live, so a mis-classified
+          // row can still be re-filed to a real category (which replaces the
+          // Investments offset via the normal recategorize command).
+          <div className="space-y-1.5">
+            <Label>Investment</Label>
+            <div className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
+              <ArrowLeftRight className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 truncate">
+                {BigInt(row.amountMinor) < 0n
+                  ? 'Invested — moved into your Investments balance'
+                  : 'Sold — moved out of your Investments balance'}
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Excluded from income and spending. Holdings are tracked on the Investments page.
+            </p>
           </div>
         ) : null}
         {row.transferStatus !== 'confirmed' && !row.distributionTransfer && splitRows === null && !hasAccountLeg && categoryOptions.length > 0 ? (

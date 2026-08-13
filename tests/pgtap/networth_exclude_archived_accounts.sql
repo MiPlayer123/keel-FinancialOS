@@ -51,6 +51,8 @@ create table public.ledger_accounts (
   id uuid primary key default gen_random_uuid(),
   household_id uuid not null,
   kind public.ledger_account_kind not null,
+  -- 20260813140000 bodies exclude pfc_key='investments' cost-basis ledgers.
+  pfc_key text,
   archived_at timestamptz
 );
 create table public.accounts (
@@ -82,7 +84,9 @@ create table public.balance_snapshots (
   current_minor bigint not null,
   available_minor bigint,
   limit_minor bigint,
-  currency text not null default 'USD'
+  currency text not null default 'USD',
+  -- 20260813140000 bodies value investment accounts from source='plaid' rows.
+  source text not null default 'plaid'
 );
 create table public.holdings_snapshots (
   id uuid primary key default gen_random_uuid(),

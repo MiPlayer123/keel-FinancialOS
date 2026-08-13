@@ -12,7 +12,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# The SHIPPED read-model bodies are layered: 20260719130000 defines all five
+# archived-filtered read models; 20260813140000 (market-value net worth, final
+# perf-fixed bodies — superseding 20260813120000's first cut) redefines
+# keel_net_worth_as_of + keel_net_worth_daily on top. Load both, in order, so
+# the archived-account invariants are proven against what production actually
+# runs — not a superseded formula (review finding on PR #165).
 MIGRATION="$ROOT/supabase/migrations/20260719130000_networth_exclude_archived_accounts.sql"
+MIGRATION2="$ROOT/supabase/migrations/20260813140000_net_worth_daily_perf_fix.sql"
 TESTSQL="$ROOT/tests/pgtap/networth_exclude_archived_accounts.sql"
 
 PGBIN="$(dirname "$(command -v initdb)")"
@@ -36,11 +43,17 @@ if ! grep -q keel_net_worth_as_of "$BODIES"; then
   echo "FATAL: migration missing keel_net_worth_as_of"; exit 1
 fi
 
+if ! grep -q keel_net_worth_daily "$MIGRATION2"; then
+  echo "FATAL: market-value migration missing keel_net_worth_daily"; exit 1
+fi
+
 RENDERED="$TMP/rendered.sql"
-python3 - "$TESTSQL" "$BODIES" "$RENDERED" <<'PY'
+python3 - "$TESTSQL" "$BODIES" "$MIGRATION2" "$RENDERED" <<'PY'
 import sys
-test, bodies, out = sys.argv[1], sys.argv[2], sys.argv[3]
-body = open(bodies).read()
+test, bodies, bodies2, out = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+# Concatenate in migration order: later create-or-replace wins, exactly as the
+# real migration chain applies (20260813140000 is pure function DDL).
+body = open(bodies).read() + '\n' + open(bodies2).read()
 src = open(test).read()
 marker = '-- __READMODEL_BODIES__  (replaced by the runner with the real function DDL)'
 assert marker in src, 'test marker missing'
