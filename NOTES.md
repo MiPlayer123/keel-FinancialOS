@@ -104,6 +104,40 @@ Paycheck with no extra work. Confirming one projects occurrences correctly
 pgTAP `040_plaid_recurring_series.sql` pins the duplicate guard, the suppression
 policy, the unknown-cadence refusal, idempotence, and dismissal durability.
 
+## 2026-08-14 — fix(recurring): Codex review findings on the Plaid slices
+
+Process failure worth recording: PRs #172 and #173 were merged WITHOUT reading
+the Codex reviews sitting on them. Both carried real defects. Read the bot
+review before merging, not after.
+
+All six findings confirmed against live data before fixing, and each is now
+pinned by pgTAP 040:
+1. [P1] The nightly GRID reaper withdrew Plaid series. Confirmed from the live
+   body of keel_recurring_reap_stale_suggestions: it withdraws every
+   'suggested' series absent from the grid detector's emitted-id list, and a
+   provider series is never in that list. The Plaid pass would not restore it
+   either — an unchanged stream fingerprint is a no-op. The 03:00 UTC cron
+   would have silently retired the entire feature within a day. Reap is now
+   scoped by detector provenance, and provider series get their own staleness
+   path (Plaid marking a stream inactive withdraws its untouched suggestion).
+2. [P1] Plaid-first / KEEL-later produced the exact twin the guard exists to
+   prevent: the grid's series key is derived from cadence+anchor+amount and can
+   never equal a provider key, and the upsert conflicts only on series_key. The
+   pass now converges — the provider suggestion is withdrawn and its stream
+   re-links to the KEEL series.
+3. [P1] Two streams from ONE merchant collapsed onto the first stream's series,
+   losing a projection. The guard now ignores series another stream created.
+4. [P2] normalized_source_records is append-only (added/modified/removed), so
+   joining on provider_transaction_id counted one revised transaction several
+   times, skewing the median, the day-of-month mode and the >=3 gate. 12
+   provider transactions in the live household already carry multiple versions.
+   Now distinct-on latest non-removed version.
+5. [P2] A stream that failed shape validation was indistinguishable from one
+   Plaid dropped, so the mirror deactivated a live stream. The ingest proc
+   takes p_seen_stream_ids (what Plaid RETURNED, not what mapped).
+6. [P2] A swallowed error on the accounts lookup would have mapped every stream
+   with a null account and wiped good associations. The connection is skipped.
+
 ## 2026-08-09 — feat(reports): donut parent rollup + drill-down, taxes toggle, Sankey currency fix
 
 User-reported discrepancy confirmed by code trace, not overreaction: the
