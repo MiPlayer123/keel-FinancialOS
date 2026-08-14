@@ -252,5 +252,81 @@ select is(
     where household_id = '00000000-0000-4000-8000-00000000a001' and is_active),
   0, 'streams Plaid genuinely stopped reporting are deactivated');
 
+-- Second review round on the fixes themselves (same follow-up migration).
+--
+-- The reconciliation test above deliberately left every stream deactivated, and
+-- the mapping pass only looks at active streams — so without this the cases
+-- below would assert against an empty loop and pass for the wrong reason.
+update public.plaid_recurring_streams
+   set is_active = true, absent_since = null
+ where household_id = '00000000-0000-4000-8000-00000000a001';
+
+-- A stream an earlier pass collapsed onto ANOTHER stream's provider series must
+-- be re-evaluated, not honoured forever, or its lost projection never returns.
+insert into public.plaid_recurring_streams
+  (household_id, connection_id, account_id, external_account_ref, stream_id, direction,
+   status, frequency, is_active, description, merchant_name, category_primary,
+   first_date, last_date, predicted_next_date, average_amount_minor, last_amount_minor,
+   currency, raw, matched_series_id, link_kind, linked_at)
+select household_id, connection_id, account_id, external_account_ref, 'stream-collapsed',
+       direction, status, 'ANNUALLY', true, description, merchant_name, category_primary,
+       first_date, last_date, predicted_next_date, average_amount_minor, last_amount_minor,
+       currency, raw,
+       (select s.id from public.recurring_series s
+          join public.recurring_candidate_versions cv on cv.id = s.current_candidate_version_id
+         where cv.detector_version = 'plaid-streams-v1' limit 1),
+       'matched', now()
+  from public.plaid_recurring_streams where stream_id = 'stream-new';
+select lives_ok(
+  $$select public.keel_recurring_ingest_plaid_series('00000000-0000-4000-8000-00000000a001')$$,
+  'the pass runs with a wrongly collapsed link');
+select is(
+  (select link_kind from public.plaid_recurring_streams where stream_id = 'stream-collapsed'),
+  'created', 'a collapsed link is re-evaluated into its own series');
+
+-- A provider series the user ACTED ON keeps its stream even when the grid
+-- detector later mints its own series for the same merchant: moving the link
+-- would strand the confirmed series with nothing refreshing it.
+update public.recurring_series set status = 'confirmed', confirmed_at = now()
+ where id = (select matched_series_id from public.plaid_recurring_streams
+              where stream_id = 'stream-new');
+insert into public.recurring_series
+  (household_id, series_key, account_id, ledger_account_id, counterparty_key,
+   currency, sign, status)
+select household_id, 'pgtap-grid-twin', account_id, ledger_account_id, counterparty_key,
+       currency, sign, 'suggested'
+  from public.recurring_series
+ where id = (select matched_series_id from public.plaid_recurring_streams
+              where stream_id = 'stream-new');
+select lives_ok(
+  $$select public.keel_recurring_ingest_plaid_series('00000000-0000-4000-8000-00000000a001')$$,
+  'the pass runs with a grid twin beside a confirmed provider series');
+select is(
+  (select s.status::text from public.recurring_series s
+    where s.id = (select matched_series_id from public.plaid_recurring_streams
+                   where stream_id = 'stream-new')),
+  'confirmed', 'the acted-on provider series keeps its status');
+select isnt(
+  (select matched_series_id from public.plaid_recurring_streams where stream_id = 'stream-new'),
+  (select id from public.recurring_series where series_key = 'pgtap-grid-twin'),
+  'and keeps its stream rather than handing it to the grid twin');
+
+-- A `removed` tombstone must drop the transaction entirely. Filtering tombstones
+-- before picking the latest version would resurrect the superseded row.
+insert into public.normalized_source_records
+  (raw_event_id, household_id, account_id, provider_transaction_id, amount_minor,
+   currency, effective_date, description, pending, kind, created_at)
+values
+  ('d4000000-0000-4000-8000-0000000000e1', '00000000-0000-4000-8000-00000000a001',
+   '00000000-0000-4000-8000-00000000a401', 'ptx-sub-3', -1299, 'USD', '2026-06-12',
+   'QUILLSTACK NOTES', false, 'removed', now() + interval '1 day');
+select lives_ok(
+  $$select public.keel_recurring_ingest_plaid_series('00000000-0000-4000-8000-00000000a001')$$,
+  'the pass runs after a tombstone lands');
+select is(
+  (select skip_reason from public.plaid_recurring_streams where stream_id = 'stream-second-plan'),
+  'insufficient_history',
+  'a tombstoned transaction stops counting toward the three-occurrence gate');
+
 select * from finish();
 rollback;

@@ -380,16 +380,20 @@ begin
            array_agg(latest.amount_minor order by latest.effective_date)
       into v_dates, v_amounts
       from (
+        -- Latest version of EVERY kind first, then drop the transaction when
+        -- that latest version is a `removed` tombstone. Filtering tombstones
+        -- before the distinct-on would resurrect the superseded `added` row and
+        -- let a deleted transaction keep voting on the cadence and the median.
         select distinct on (n.provider_transaction_id)
-               n.provider_transaction_id, n.effective_date, n.amount_minor
+               n.provider_transaction_id, n.effective_date, n.amount_minor, n.kind
           from jsonb_array_elements_text(coalesce(v_stream.raw->'transaction_ids', '[]'::jsonb)) tid
           join public.normalized_source_records n
             on n.provider_transaction_id = tid and n.household_id = p_household_id
-         where n.kind <> 'removed'
-           and n.effective_date is not null
-           and n.amount_minor is not null
          order by n.provider_transaction_id, n.created_at desc, n.id desc
-      ) latest;
+      ) latest
+     where latest.kind <> 'removed'
+       and latest.effective_date is not null
+       and latest.amount_minor is not null;
 
     v_count := coalesce(array_length(v_dates, 1), 0);
     if v_count < 3 then
@@ -466,7 +470,18 @@ begin
     v_existing_id := null;
     if v_stream.matched_series_id is not null
        and exists (select 1 from public.recurring_series
-                    where id = v_stream.matched_series_id and household_id = p_household_id) then
+                    where id = v_stream.matched_series_id and household_id = p_household_id)
+       -- ... unless the link points at a series ANOTHER stream created. An
+       -- earlier pass could collapse two same-merchant streams onto one series;
+       -- those links must be re-evaluated, not honoured forever, or the second
+       -- stream never gets the projection it lost.
+       and not exists (
+         select 1 from public.plaid_recurring_streams other
+          where other.matched_series_id = v_stream.matched_series_id
+            and other.household_id = p_household_id
+            and other.link_kind = 'created'
+            and other.stream_id <> v_stream.stream_id
+       ) then
       if v_stream.link_kind = 'matched' then
         v_matched := v_matched + 1;
         continue;
@@ -534,13 +549,20 @@ begin
          where household_id = p_household_id
            and id = v_stream.matched_series_id
            and status = 'suggested';
-        update public.plaid_recurring_streams
-           set matched_series_id = v_existing_id,
-               link_kind = 'matched',
-               linked_at = now()
-         where id = v_stream.id;
-        v_converged := v_converged + 1;
-        continue;
+        -- Relink ONLY if that withdrawal actually happened. A provider series
+        -- the user already confirmed, paused, rejected or cancelled keeps both
+        -- its status and its stream: moving the link would strand the series
+        -- the user acted on with nothing refreshing it, while the KEEL twin
+        -- lived on beside it.
+        if found then
+          update public.plaid_recurring_streams
+             set matched_series_id = v_existing_id,
+                 link_kind = 'matched',
+                 linked_at = now()
+           where id = v_stream.id;
+          v_converged := v_converged + 1;
+          continue;
+        end if;
       end if;
     end if;
 
