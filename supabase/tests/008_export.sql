@@ -171,6 +171,14 @@ insert into excluded_export_tables(table_name) values
 -- detector control tables (granted to keel_api/keel_worker only, not keel_export).
 insert into excluded_export_tables(table_name) values
   ('household_ai_profile'), ('regular_core_sweep_allowlist'), ('regular_core_sweep_suppressions');
+-- plaid_recurring_allowlist / plaid_recurring_streams (20260814100000) are the
+-- same shape as the core-sweep pair above: a connection-id control table plus a
+-- refetchable mirror of the PROVIDER's own detector output, granted to
+-- keel_worker only. The user data they describe (the transactions themselves,
+-- and from Phase 2 the recurring series) is already exported. Revisit if Phase
+-- 2 makes a stream the user-visible provenance for a series.
+insert into excluded_export_tables(table_name) values
+  ('plaid_recurring_allowlist'), ('plaid_recurring_streams');
 
 select has_role('keel_export', 'dedicated export role exists');
 select ok(
