@@ -1441,30 +1441,47 @@ const processSyncRecurringStreams = async (admin: AdminClient): Promise<Response
         request_id?: unknown;
       };
       const requestId = typeof body.request_id === 'string' ? body.request_id : null;
+      const fetchedStreams = [...(body.inflow_streams ?? []), ...(body.outflow_streams ?? [])];
+      const fetched = fetchedStreams.length;
 
-      const { data: dbAccts } = await admin
+      // A swallowed error here would leave dbAccts null, map every stream with
+      // accountId: null, and the upsert would wipe the account associations
+      // this connection's streams already had — a transient lookup failure
+      // must not erase good mappings, so the connection is skipped instead.
+      const { data: dbAccts, error: acctError } = await admin
         .from('accounts')
         .select('id, external_ref')
         .eq('connection_id', connectionId)
         .is('archived_at', null);
+      if (acctError) {
+        results.push({ connectionId, fetched, error: `accounts:${acctError.message}` });
+        continue;
+      }
       const accountByRef = new Map(
         ((dbAccts ?? []) as Array<{ id: string; external_ref: string | null }>)
           .filter((a): a is { id: string; external_ref: string } => a.external_ref !== null)
           .map((a) => [a.external_ref, a.id]),
       );
 
-      const fetched = (body.inflow_streams ?? []).length + (body.outflow_streams ?? []).length;
       const streams: PlaidStreamRow[] = [
         ...(body.inflow_streams ?? []).map((s) => mapRecurringStream(s, 'inflow', accountByRef)),
         ...(body.outflow_streams ?? []).map((s) => mapRecurringStream(s, 'outflow', accountByRef)),
       ].filter((s): s is PlaidStreamRow => s !== null);
 
+      // Every stream id Plaid RETURNED, including any the mapper rejected. The
+      // proc treats its payload as the full snapshot and deactivates whatever
+      // is missing, so without this a stream that merely failed shape
+      // validation would be marked absent and stop being tracked.
+      const seenStreamIds = fetchedStreams
+        .map((s) => (typeof s.stream_id === 'string' ? s.stream_id : null))
+        .filter((id): id is string => id !== null);
       const { data: ingested, error: ingestError } = await admin.rpc(
         'keel_ingest_plaid_recurring_streams',
         {
           p_household_id: entry.household_id,
           p_connection_id: connectionId,
           p_streams: streams,
+          p_seen_stream_ids: seenStreamIds,
         },
       );
       if (ingestError) {

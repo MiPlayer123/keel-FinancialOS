@@ -181,5 +181,76 @@ select is(
     where cv.detector_version = 'plaid-streams-v1' and s.status = 'suggested'),
   0, 'a dismissed provider series is not re-suggested');
 
+-- ---------------------------------------------------------------------------
+-- Codex review regressions (#172/#173 follow-up, 20260814150000). Each of
+-- these was a real defect found in review and confirmed against live data.
+-- ---------------------------------------------------------------------------
+
+-- The nightly GRID detection reap must not touch provider series: they are
+-- never in its emitted-id list, so before this scoping every Plaid suggestion
+-- was withdrawn within a day of appearing — and the Plaid pass would not bring
+-- it back, because an unchanged stream fingerprint is a no-op.
+update public.recurring_series set status = 'suggested'
+ where id in (select s.id from public.recurring_series s
+                join public.recurring_candidate_versions cv on cv.id = s.current_candidate_version_id
+               where cv.detector_version = 'plaid-streams-v1');
+select is(
+  public.keel_recurring_reap_stale_suggestions(
+    '00000000-0000-4000-8000-00000000a001',
+    (select detector_run_id from public.recurring_candidate_versions
+      where detector_version = 'plaid-streams-v1' limit 1),
+    array[gen_random_uuid()]::uuid[], true),
+  0, 'the grid reaper withdraws no provider series');
+select is(
+  (select count(*)::int from public.recurring_series s
+     join public.recurring_candidate_versions cv on cv.id = s.current_candidate_version_id
+    where cv.detector_version = 'plaid-streams-v1' and s.status = 'suggested'),
+  1, 'the provider suggestion survives a grid detection run');
+
+-- Two streams from ONE merchant are two series: the grid detector puts cadence,
+-- anchor and amount in its identity precisely because a counterparty can bill
+-- more than one plan, and collapsing them drops a projection.
+insert into public.plaid_recurring_streams
+  (household_id, connection_id, account_id, external_account_ref, stream_id, direction,
+   status, frequency, is_active, description, merchant_name, category_primary,
+   first_date, last_date, predicted_next_date, average_amount_minor, last_amount_minor,
+   currency, raw)
+values
+  ('00000000-0000-4000-8000-00000000a001', 'd4000000-0000-4000-8000-000000000001',
+   '00000000-0000-4000-8000-00000000a401', 'acct-ext', 'stream-second-plan', 'outflow',
+   'MATURE', 'ANNUALLY', true, 'QUILLSTACK NOTES 05/12', null, 'GENERAL_SERVICES',
+   '2026-04-12', '2026-06-12', '2027-04-12', -9900, -9900, 'USD',
+   jsonb_build_object('transaction_ids', jsonb_build_array('ptx-sub-1','ptx-sub-2','ptx-sub-3')));
+select lives_ok(
+  $$select public.keel_recurring_ingest_plaid_series('00000000-0000-4000-8000-00000000a001')$$,
+  'the pass runs with a second stream from the same merchant');
+select is(
+  (select count(*)::int from public.recurring_series s
+     join public.recurring_candidate_versions cv on cv.id = s.current_candidate_version_id
+    where cv.detector_version = 'plaid-streams-v1'),
+  2, 'a second stream from the same merchant gets its own series');
+
+-- A stream the caller FETCHED but could not map must keep its stored state; only
+-- a stream Plaid genuinely stopped reporting is deactivated.
+select lives_ok(
+  $$select public.keel_ingest_plaid_recurring_streams(
+      '00000000-0000-4000-8000-00000000a001', 'd4000000-0000-4000-8000-000000000001',
+      '[]'::jsonb,
+      array['stream-new','stream-known','stream-p2p','stream-unknown','stream-second-plan'])$$,
+  'an empty payload with the fetched ids reconciles nothing');
+select is(
+  (select count(*)::int from public.plaid_recurring_streams
+    where household_id = '00000000-0000-4000-8000-00000000a001' and is_active),
+  5, 'streams that merely failed mapping stay active');
+select lives_ok(
+  $$select public.keel_ingest_plaid_recurring_streams(
+      '00000000-0000-4000-8000-00000000a001', 'd4000000-0000-4000-8000-000000000001',
+      '[]'::jsonb, array[]::text[])$$,
+  'an empty payload with no fetched ids reconciles');
+select is(
+  (select count(*)::int from public.plaid_recurring_streams
+    where household_id = '00000000-0000-4000-8000-00000000a001' and is_active),
+  0, 'streams Plaid genuinely stopped reporting are deactivated');
+
 select * from finish();
 rollback;
