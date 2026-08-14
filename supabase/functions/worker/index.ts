@@ -1499,7 +1499,24 @@ const processSyncRecurringStreams = async (admin: AdminClient): Promise<Response
     }
   }
 
-  return json(200, { streams: results });
+  // Phase 2: map the freshly mirrored streams onto recurring series. Runs once
+  // per household (not per connection) so the duplicate guard sees every
+  // series in the household, and only after ingest so it reads current data.
+  // Best-effort: a mapping failure must not lose the streams we just stored —
+  // the next daily pass retries.
+  const mapped: Array<{ householdId: string; summary?: unknown; error?: string }> = [];
+  for (const householdId of new Set(
+    ((allowed ?? []) as Array<{ household_id: string }>).map((a) => a.household_id),
+  )) {
+    const { data, error } = await admin.rpc('keel_recurring_ingest_plaid_series', {
+      p_household_id: householdId,
+    });
+    mapped.push(
+      error ? { householdId, error: error.message } : { householdId, summary: data },
+    );
+  }
+
+  return json(200, { streams: results, series: mapped });
 };
 
 export default {
