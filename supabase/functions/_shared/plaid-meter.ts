@@ -15,6 +15,7 @@ export type ProviderCallKind =
   | 'transactions_sync'
   | 'investments_holdings_get'
   | 'investments_transactions_get'
+  | 'transactions_recurring_get'
   | 'cron_enqueue_syncs'
   | 'quarantine_capped'
   | 'budget_refused';

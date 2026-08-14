@@ -79,6 +79,9 @@ export interface PlaidClient {
   publicTokenExchange(scopeKey: string, requestBody: { public_token: string }): Promise<{ access_token: string; item_id: string }>;
   accountsGet(scopeKey: string, requestBody: { access_token: string }): Promise<Record<string, unknown>>;
   investmentsHoldingsGet(scopeKey: string, requestBody: { access_token: string }): Promise<Record<string, unknown>>;
+  /** Plaid's own recurring-stream detection (billed add-on; called only for
+   *  allowlisted connections — see plaid_recurring_allowlist). */
+  transactionsRecurringGet(scopeKey: string, requestBody: { access_token: string }): Promise<Record<string, unknown>>;
   investmentsTransactionsGet(
     scopeKey: string,
     requestBody: {
@@ -310,6 +313,15 @@ export const createPlaidClient = (
 
     investmentsHoldingsGet: (scopeKey, requestBody) =>
       request(scopeKey, 'investments_holdings_get', '/investments/holdings/get', requestBody),
+
+    transactionsRecurringGet: (scopeKey, requestBody) =>
+      request(
+        scopeKey,
+        'transactions_recurring_get',
+        '/transactions/recurring/get',
+        requestBody,
+        true, // preserve amount lexemes — stream amounts feed candidate evidence.
+      ),
 
     investmentsTransactionsGet: (scopeKey, requestBody) =>
       request(

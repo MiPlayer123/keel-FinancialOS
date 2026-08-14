@@ -30,6 +30,7 @@ import { json, mapDbError } from '../_shared/http.ts';
 import { decryptToken, type EncryptedRecord } from '../_shared/credential-crypto.ts';
 import { getKek } from '../_shared/credential-kek.ts';
 import { isHoldingsSyncEligibleSubtype } from '../_shared/investment-subtype.ts';
+import { mapRecurringStream, type PlaidStreamRow } from './recurring-streams.ts';
 import {
   createPlaidClient,
   PlaidClientError,
@@ -1378,6 +1379,129 @@ const processRefreshBalances = async (admin: AdminClient): Promise<Response> => 
   });
 };
 
+const processSyncRecurringStreams = async (admin: AdminClient): Promise<Response> => {
+  const { data: allowed, error: allowError } = await admin
+    .from('plaid_recurring_allowlist')
+    .select('household_id, connection_id')
+    .is('removed_at', null);
+  if (allowError) return mapDbError(allowError);
+
+  const results: Array<{
+    connectionId: string;
+    // `fetched` is what Plaid returned, `mapped` is what survived shape
+    // validation — they must match; a gap means the payload shape drifted and
+    // we are silently dropping streams.
+    fetched?: number;
+    mapped?: number;
+    requestId?: string | null;
+    upserted?: number;
+    deactivated?: number;
+    error?: string;
+  }> = [];
+
+  for (const entry of (allowed ?? []) as Array<{ household_id: string; connection_id: string }>) {
+    const connectionId = entry.connection_id;
+    try {
+      const { data: conn } = await admin
+        .from('connections')
+        .select('id, status')
+        .eq('id', connectionId)
+        .maybeSingle();
+      if (!conn || (conn as { status?: string }).status !== 'active') {
+        results.push({ connectionId, error: 'connection_not_active' });
+        continue;
+      }
+
+      const { data: envData } = await admin.rpc('keel_get_connection_credential_envelope', {
+        p_connection_id: connectionId,
+      });
+      if (!envData) {
+        results.push({ connectionId, error: 'no_credential' });
+        continue;
+      }
+      const envelope = envData as BalanceCredential & Record<string, unknown>;
+      const token = await decryptToken(
+        envelope as unknown as EncryptedRecord,
+        envelope.credentialId,
+        entry.household_id,
+        'plaid',
+        getKek(envelope.kekVersion),
+      );
+      const plaid = createPlaidClient(admin, {
+        env: Deno.env.get('PLAID_ENV') ?? 'sandbox',
+        clientId: Deno.env.get('PLAID_CLIENT_ID'),
+        secret: Deno.env.get('PLAID_SECRET'),
+        householdId: entry.household_id,
+      });
+      const body = (await plaid.transactionsRecurringGet(connectionId, {
+        access_token: token,
+      })) as {
+        inflow_streams?: Array<Record<string, unknown>>;
+        outflow_streams?: Array<Record<string, unknown>>;
+        request_id?: unknown;
+      };
+      const requestId = typeof body.request_id === 'string' ? body.request_id : null;
+
+      const { data: dbAccts } = await admin
+        .from('accounts')
+        .select('id, external_ref')
+        .eq('connection_id', connectionId)
+        .is('archived_at', null);
+      const accountByRef = new Map(
+        ((dbAccts ?? []) as Array<{ id: string; external_ref: string | null }>)
+          .filter((a): a is { id: string; external_ref: string } => a.external_ref !== null)
+          .map((a) => [a.external_ref, a.id]),
+      );
+
+      const fetched = (body.inflow_streams ?? []).length + (body.outflow_streams ?? []).length;
+      const streams: PlaidStreamRow[] = [
+        ...(body.inflow_streams ?? []).map((s) => mapRecurringStream(s, 'inflow', accountByRef)),
+        ...(body.outflow_streams ?? []).map((s) => mapRecurringStream(s, 'outflow', accountByRef)),
+      ].filter((s): s is PlaidStreamRow => s !== null);
+
+      const { data: ingested, error: ingestError } = await admin.rpc(
+        'keel_ingest_plaid_recurring_streams',
+        {
+          p_household_id: entry.household_id,
+          p_connection_id: connectionId,
+          p_streams: streams,
+        },
+      );
+      if (ingestError) {
+        results.push({
+          connectionId,
+          fetched,
+          mapped: streams.length,
+          requestId,
+          error: ingestError.message,
+        });
+        continue;
+      }
+      const summary = ingested as { upserted?: number; deactivated?: number } | null;
+      results.push({
+        connectionId,
+        fetched,
+        mapped: streams.length,
+        requestId,
+        upserted: summary?.upserted ?? 0,
+        deactivated: summary?.deactivated ?? 0,
+      });
+    } catch (error) {
+      results.push({
+        connectionId,
+        error:
+          error instanceof PlaidClientError
+            ? `plaid:${error.errorCode ?? 'unknown'}`
+            : error instanceof Error
+              ? error.message
+              : 'recurring_streams_failed',
+      });
+    }
+  }
+
+  return json(200, { streams: results });
+};
+
 export default {
   fetch: withSupabase({ auth: 'secret:automations', env: keelSecretKeys() }, async (req, ctx) => {
     const url = new URL(req.url);
@@ -1391,6 +1515,9 @@ export default {
     }
     if (req.method === 'POST' && path === '/refresh-balances') {
       return processRefreshBalances(ctx.supabaseAdmin);
+    }
+    if (req.method === 'POST' && path === '/sync-recurring-streams') {
+      return processSyncRecurringStreams(ctx.supabaseAdmin);
     }
     if (req.method !== 'POST' || path !== '/drain') {
       return json(404, { code: 'not_found', message: 'Not found.', details: {} });

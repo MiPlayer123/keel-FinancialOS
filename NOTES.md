@@ -3,6 +3,58 @@
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
 
+## 2026-08-14 — feat(recurring): Plaid-primary detection, Phase 1 (streams ingested behind an allowlist)
+
+User ruling (2026-08-13): "The recurring thing should just be detected via
+[Plaid's] system, and then ... secondary will use our recurring." Phase 1 lands
+STORAGE + INGEST only; nothing yet writes `recurring_series` or any read model.
+Phase 2 owns the stream <-> series_key identity mapping and primary/secondary
+arbitration, and must not duplicate already-confirmed series (KEEL's own grid
+stays primary on manual/CSV accounts, which Plaid cannot see).
+
+- `plaid-client.ts`: `transactionsRecurringGet` (/transactions/recurring/get),
+  lexeme-preserving like the investments path.
+- `20260814100000_plaid_recurring_streams.sql`: `plaid_recurring_allowlist`
+  (connection-id flag table, same idiom as `regular_core_sweep_allowlist` —
+  this is a BILLED add-on, so no item is called unless it is listed; removal is
+  soft via `removed_at`, hard DELETE blocked) + `plaid_recurring_streams`
+  mirror + `keel_ingest_plaid_recurring_streams` (upsert present, deactivate
+  absent, idempotent by construction). Plaid's status/frequency vocabularies are
+  stored verbatim rather than mapped onto a KEEL enum — Phase 2 owns the
+  translation, and pinning an enum now would silently drop values Plaid adds.
+- Worker `POST /worker/sync-recurring-streams` + `keel-sync-recurring-streams`
+  cron at 09:20 UTC daily (NOT the reaper's 15 minutes: streams are a slow
+  signal and the call is billed).
+
+Three live findings, all fixed here and re-verified end-to-end against the real
+cloud project (nothing merged untested):
+1. `permission denied for table plaid_recurring_streams` — the definer proc is
+   owned by `keel_worker`, which had neither table grants nor an RLS policy.
+   Fixed by `20260814110000` with the same grant+definer-policy pair the
+   core-sweep suppressions table already carries.
+2. The first live fetch ran COMPLETELY UNMETERED: `usage_events.kind` and
+   `keel_meter_provider_call` both carry pinned kind lists, and `meterCall`
+   swallows telemetry failures by design — so a billed call left no usage row
+   at all. `20260814120000` admits `transactions_recurring_get` to both. A
+   billed add-on with no usage row is exactly the cost blind spot to avoid.
+3. Five of the first six live streams were silently DROPPED: `average_amount`
+   is a mean Plaid computes over the stream's transactions and routinely
+   carries more than two decimals, which the exact-decimal ledger parser
+   rejects outright. Stream amounts are evidence, never postings, so
+   `recurring-streams.ts` now rounds to cents with BigInt string math (half
+   away from zero, no float) and applies the KEEL sign flip itself. Extracted
+   into its own module with unit tests covering exactly that case — the
+   diagnostic that caught it (`fetched` vs `mapped` counts in the endpoint
+   response) is kept permanently, since a silent shape drift is invisible
+   otherwise.
+
+Live state: allowlist seeded directly on the cloud project (not in a
+migration — connection ids are environment state) with two connections, one
+rich item and one control. The control item legitimately returns zero streams:
+it has 7 transactions over 6 months, below anything Plaid would call recurring.
+Re-running the endpoint is a no-op beyond `last_seen_at` (6 rows, 6 distinct
+streams, verified twice).
+
 ## 2026-08-09 — feat(reports): donut parent rollup + drill-down, taxes toggle, Sankey currency fix
 
 User-reported discrepancy confirmed by code trace, not overreaction: the
