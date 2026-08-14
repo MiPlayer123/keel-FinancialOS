@@ -55,6 +55,55 @@ it has 7 transactions over 6 months, below anything Plaid would call recurring.
 Re-running the endpoint is a no-op beyond `last_seen_at` (6 rows, 6 distinct
 streams, verified twice).
 
+## 2026-08-14 — feat(recurring): Plaid-primary detection, Phase 2 (streams become series)
+
+Phase 1 stored what Plaid detects; Phase 2 maps a stream onto the EXISTING
+recurring spine, so the Recurring page, confirm/pause/cancel/restore, occurrence
+projection and schedule links all work on provider-detected series with no
+downstream change. A Plaid series is an ordinary `recurring_series` row whose
+candidate carries `detector_version = 'plaid-streams-v1'`; `keel_list_recurring`
+already returns `detectorVersion`, so provenance reached the UI with no
+read-model change (new "Detected by Plaid" badge on the card).
+
+Design rulings:
+- NOT routed through `keel_recurring_upsert_candidates`. That proc demands every
+  evidence row be a live tenant-owned POSTING. Measured on the real household:
+  all 61 stream transaction ids resolve to `normalized_source_records`, but only
+  4 to live canonical transactions — reconnect dedupe voided the rest, the
+  surviving copies sit on archived accounts. So provider candidates cite
+  {streamId, providerTransactionId} and are labelled as provider inference
+  (Law 9 explicit ownership) rather than dressed up as posting-backed claims.
+- Dates and amounts still come from OUR immutable source records, never from
+  Plaid's summary fields, so cadence anchors reflect what actually happened.
+- Duplicate guard matches on account + sign + normalized counterparty in ANY
+  status, including `rejected`/`cancelled`: a series the user dismissed cannot
+  return wearing a Plaid badge. Verified in a rolled-back live transaction
+  against seeded confirmed AND rejected twins — both linked, neither twinned.
+- `keel_provider_stream_label` is separate from `keel_normalize_counterparty`
+  on purpose: the shared normalizer's output is baked into every existing KEEL
+  series key and must not move. The provider cleaner strips what a stream memo
+  carries and a bank memo does not — the latest occurrence's date, reference
+  runs, ACH batch descriptors, and a trailing "ending in 4550".
+
+Live findings (all fixed and re-verified on the cloud project):
+- The definer role lacked EXECUTE on `keel_recurring_cadence_dates` (it had only
+  ever run inside keel_api-owned procs).
+- A tidy-up DELETE of empty detector runs hit `KEEL_IMMUTABLE`
+  (recurring_detector_runs is append-only) — and only in the STEADY STATE, once
+  every stream was already mapped, which is exactly the state the daily cron
+  lives in. Removed; an empty run is itself the record that the pass ran.
+- Two passes in the same second collided on (household_id, run_key); now the
+  same on-conflict-then-select idiom the KEEL detector's proc uses.
+
+Live result on the real household: 3 provider series created (a semimonthly
+payroll and two card payments) from streams our own detector could not see,
+because the relink segmented that history across archived accounts. The payroll
+one flowed through the existing classifier and landed on the Paychecks page as a
+Paycheck with no extra work. Confirming one projects occurrences correctly
+(semimonthly, 15th and 30th, lower-median amount). Repeat passes write nothing.
+pgTAP `040_plaid_recurring_series.sql` pins the duplicate guard, the suppression
+policy, the unknown-cadence refusal, idempotence, and dismissal durability.
+
 ## 2026-08-09 — feat(reports): donut parent rollup + drill-down, taxes toggle, Sankey currency fix
 
 User-reported discrepancy confirmed by code trace, not overreaction: the

@@ -1798,9 +1798,18 @@ export type RecurringSeriesRow = {
   counterpartyKey: string;
   sign: 'inflow' | 'outflow';
   accountId: string;
+  // Which detector produced the series' current candidate. 'plaid-streams-v1'
+  // is Plaid's own recurring detection (20260814140000); anything else is
+  // KEEL's grid detector or a manual user edit ('manual-*'). Surfaced so a
+  // provider claim is never shown as if we measured it ourselves (Law 9).
+  detectorVersion?: string | null;
   occurrences: RecurringOccurrence[];
   statusEvents: RecurringStatusEvent[];
 };
+
+/** True when this series' current candidate came from Plaid's own detection. */
+export const isPlaidDetectedSeries = (series: Pick<RecurringSeriesRow, 'detectorVersion'>): boolean =>
+  (series.detectorVersion ?? '').startsWith('plaid-streams');
 
 // ---- F-028 recurring classification + manual-schedule linking --------------
 // 'excluded' = a detected series that is NOT a subscription/bill/income and must

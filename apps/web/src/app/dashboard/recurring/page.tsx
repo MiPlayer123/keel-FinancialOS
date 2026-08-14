@@ -20,6 +20,7 @@ import {
   fetchSchedules,
   fetchRecurringClassification,
   fetchRecurringScheduleLinks,
+  isPlaidDetectedSeries,
   linkRecurringSchedule,
   unlinkRecurringSchedule,
   saveSchedule,
@@ -852,6 +853,13 @@ function SeriesCard({
             <p className="truncate text-sm font-medium" title={series.counterpartyKey}>
               {merchantDisplayName(series.counterpartyKey)}
             </p>
+            {/* Provenance, adjacent to the name it qualifies (Law 8): a series
+                Plaid detected is labelled as Plaid's claim, not ours. */}
+            {isPlaidDetectedSeries(series) ? (
+              <Badge variant="outline" className="text-muted-foreground" title="Detected by your bank connection (Plaid), not by KEEL's own pattern detector">
+                Detected by Plaid
+              </Badge>
+            ) : null}
             {bucket === 'paycheck' ? (
               <>
                 {/* PAYROLL/WAGES: clearly marked as a paycheck, and linked to the
