@@ -27,12 +27,24 @@ function PopoverContent({
   >) {
   return (
     <PopoverPrimitive.Portal>
+      {/* positionMethod="fixed": with the default "absolute" strategy the popup
+          spends its first frame at position:absolute top:0 of the DOCUMENT
+          (Base UI's fixed-position fallback for the unpositioned frame is
+          overridden by the floating styles it spreads after it). Anything that
+          focuses or scrollIntoViews popup content on mount — cmdk scrolls its
+          auto-selected first item — then yanks the window to the top of the
+          page. On the virtualized ledger that scroll unmounts the very row
+          that owns the Popover.Root, so the dropdown appeared to never open
+          (scrolled-to-top instead). A fixed-strategy popup is viewport-
+          anchored in every frame, so those mount-time scrolls can never move
+          the document. */}
       <PopoverPrimitive.Positioner
         className="isolate z-50"
         align={align}
         alignOffset={alignOffset}
         side={side}
         sideOffset={sideOffset}
+        positionMethod="fixed"
       >
         <PopoverPrimitive.Popup
           data-slot="popover-content"
