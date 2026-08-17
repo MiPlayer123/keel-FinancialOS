@@ -518,16 +518,19 @@ export function CategoryPicker({
    */
   auto?: boolean;
   /**
-   * Render the popover NON-modal (no focus trap, no forced focus-into-popup on
-   * open). Set for the compact picker inside the virtualized transaction list:
-   * modal='trap-focus' force-focuses the popup on open, which scrolls the
-   * window; useWindowVirtualizer then recomputes its range and can UNMOUNT the
-   * very row that owns this Popover.Root, so the dropdown appears not to open
-   * (it opens and is torn down in the same frame). A non-modal popover keeps
-   * the trigger's click from moving focus/scroll, so the row stays virtualized
-   * and the popup survives. The Sheet-hosted pickers (split rows, detail
-   * category) keep the default trap-focus — they live in a real modal surface
-   * and aren't inside a window virtualizer.
+   * Render the popover NON-modal (no focus trap, no scroll lock). Set for the
+   * compact picker inside the virtualized transaction list — a transient list
+   * popover shouldn't lock the page the way a real modal surface does. The
+   * Sheet-hosted pickers (split rows, detail category) keep the default
+   * trap-focus — they live in a real modal surface and aren't inside a window
+   * virtualizer.
+   *
+   * NOTE this alone never fixed the "dropdown scrolls the page to the top and
+   * tears itself down" bug on the virtualized ledger: the actual scroller was
+   * cmdk's mount-time scrollIntoView of its auto-selected first item, fired
+   * during the frame the popup is still parked at the top of the DOCUMENT.
+   * That's cured at the source by positionMethod="fixed" in ui/popover.tsx
+   * (see the comment there); this flag remains for the modality semantics.
    */
   nonModal?: boolean;
 }) {
@@ -720,10 +723,9 @@ export function CategoryPicker({
     <Popover
       open={open}
       onOpenChange={handleOpenChange}
-      // Virtualized-list picker (nonModal): no focus trap, so opening never
-      // force-focuses the popup, never scrolls the window, and never lets the
-      // window virtualizer unmount this row mid-open. Elsewhere keep the
-      // a11y focus trap.
+      // Virtualized-list picker (nonModal): no focus trap / scroll lock for a
+      // transient list popover. Elsewhere keep the a11y focus trap. (The
+      // scroll-to-top-on-open bug is fixed in ui/popover.tsx, not here.)
       modal={nonModal ? false : 'trap-focus'}
     >
       <PopoverTrigger
