@@ -17,13 +17,13 @@ pixels — everything expressed in KEEL's design language (Law 8).
 
 ### P0-A — Transfer/CC-payment pollution corrupts every analytic number
 `DASHBOARD-1` + `REPORTSCASHFLOW-1` + `BUDGETS-4`. On KEEL's own screens:
-"Top merchant this month" AND "Biggest purchase" are both the user's Discover
-card payment ($895.33); "Biggest single purchase" in Reports is a **$4,518.33
-Citibank CC bill**; Loan Payments is the #1 "spending" category everywhere
-($5,999.55 dashboard / $15,156.15 six-month); the 6-month table shows
-**$30,645.49 of Transfers inside a table footnoted "confirmed transfers
-excluded"**; savings rate renders **−124%**; Budgets lists "Transfers —
-$36.23 spent" directly under a subtitle promising "transfers excluded."
+"Top merchant this month" AND "Biggest purchase" are both the same credit-card
+bill payment; "Biggest single purchase" in Reports is likewise a **CC bill**;
+Loan Payments is the #1 "spending" category everywhere (dashboard and
+six-month); the 6-month table shows **a five-figure Transfers line inside a
+table footnoted "confirmed transfers excluded"**; savings rate renders
+**−124%**; Budgets lists a "Transfers" spent row directly under a subtitle
+promising "transfers excluded." (Amounts redacted 2026-08-18, Law 12.)
 Every competitor strips transfers/CC-payments from all spend surfaces
 (Copilot transfer rows carry no category pill at all).
 **Fix:** wire the existing transfer-exclusion into ALL aggregation paths
@@ -47,11 +47,12 @@ suggestions; auto-apply above threshold with a visible reversible "auto"
 badge; ship the W1.5 badge; add a reviewed/unreviewed transaction state;
 reconcile the empty-state copy.
 
-**Also load-bearing (P1 but data-trust):** "Personal Profile · Checking
-−$1,711.04" sits under Assets unflagged; `ONBOARDINGIMPORT-7` — local-dev
+**Also load-bearing (P1 but data-trust):** a negative-balance checking
+account sits under Assets unflagged; `ONBOARDINGIMPORT-7` — local-dev
 credentials render on the production-dated sign-in screen (Law 12 hygiene);
-`REPORTSCASHFLOW-4` — red on favorable deltas (spending *dropped* $38k shown
-red) while a genuine −124% savings rate is plain black: Law 8 inverted twice.
+`REPORTSCASHFLOW-4` — red on favorable deltas (a large *drop* in spending
+shown red) while a genuine −124% savings rate is plain black: Law 8 inverted
+twice.
 
 ---
 
@@ -62,11 +63,11 @@ Full findings live in `docs/harness/plans/fragments-2026-07-16/<dim>.md`.
 | Dimension | Findings | Top items |
 |---|---|---|
 | **nav-layout** | 12 | Sidebar accounts: no balances/subtotals/net-worth in rail (the founder's own example — Copilot/YNAB/Quicken/Simplifi/Monarch all do it); no global ⌘K search (Ramp/Brex/Copilot/Quicken); no desktop top bar (utilities crammed in footer, avatar **overlaps "Sign out"** on every screen); mobile = drawer-only, no bottom tabs; 13-item flat nav unchunked; zero nav badges |
-| **dashboard** | 13 | P0-A tiles; "Free to spend $8,803 / $586/day" reserves nothing for upcoming bills (Simplifi/Copilot/Rocket all compute left-after-bills); net position = bare number, no delta/%/range, trend divorced 7 cards down; 100% passive (no to-review, no upcoming bills); spending bars unreadable when one category dominates 100×; projected-cash chart renders "15.2K"×4 axis (looks broken); cards are dead-ends (no drill-in); no per-account freshness; no as-of stamp (Law 9) |
+| **dashboard** | 13 | P0-A tiles; the "Free to spend / per-day" hero reserves nothing for upcoming bills (Simplifi/Copilot/Rocket all compute left-after-bills); net position = bare number, no delta/%/range, trend divorced 7 cards down; 100% passive (no to-review, no upcoming bills); spending bars unreadable when one category dominates 100×; projected-cash chart renders one repeated axis value ×4 (looks broken); cards are dead-ends (no drill-in); no per-account freshness; no as-of stamp (Law 9) |
 | **accounts** | 9 | Only Assets/Liabilities bands — no Cash/Credit/Investments/Loans groups+subtotals; net worth bare (no trend/delta/as-of); no per-account "Updated Nh ago"/reauth state; no account detail (register+running balance+history chart = W1.9 unshipped); no balance/limit/utilization; no rename/hide/close; no institution logo/last-4; ALL-CAPS raw provider names |
 | **ledger-transactions** | 18 | No splits (W2.4 blocked by a read-model bug, not design); raw ACH memos as primary label; **mobile cannot edit/categorize at all** (Law 8 gap); filters lack status/uncategorized/amount facets + saved views; bulk = category-only; no reviewed state; only "PENDING" (no cleared/reconciled on row despite Statements being a strength); no attachments/receipts; no exclude-from-reports flag; no tags; no column headers; no keyboard (j/k/c/e); no date-group headers; "Show 47 more" instead of virtualization |
 | **categorization-rules** | 14 | P0-B silent auto-cat; bare `<select>` picker (no typeahead/recents/inline-create — Copilot pattern); rules = 1 condition × 2 actions, no dry-run count (Monarch previews affected rows); flat 19-category taxonomy, no groups/subcats (W2.3); no create-rule-from-transaction; no merge/archive UI; audit leaks `ingest.apply_action` raw strings ×15 |
-| **budgets** | 13 | Rows show *only* "spent" — no target/remaining/bar (a spend list mislabeled Budgets); no hero ("Left this month") or totals; no over/under state at all (needs a non-red near-limit signal — every competitor's amber is off-limits under Law 8); Transfers-row contradiction (P0-A); flat list; no drill-to-transactions; no rollover model reserved; no pacing ("is $679 fine on day 16?"); no income line so "left to budget" can't exist; "Set budget" button instead of inline cell |
+| **budgets** | 13 | Rows show *only* "spent" — no target/remaining/bar (a spend list mislabeled Budgets); no hero ("Left this month") or totals; no over/under state at all (needs a non-red near-limit signal — every competitor's amber is off-limits under Law 8); Transfers-row contradiction (P0-A); flat list; no drill-to-transactions; no rollover model reserved; no pacing ("is this pace fine on day 16?"); no income line so "left to budget" can't exist; "Set budget" button instead of inline cell |
 | **recurring** | 12 | Page captured 100% empty vs live backend; no calendar view (Monarch's primary view); no series detail (cadence/next/price history/matched txns); no paid/due/overdue/missed occurrence states; no Suggested-vs-Active split (Law 2 seam!); no $X/mo·$Y/yr total; no price-change detection surfaced despite tolerance data existing; "cancel" verb collides with Rocket's concierge meaning — rename "Stop tracking" |
 | **reports-cashflow** | 15 | P0-A; charts are dead-ends (donut/Sankey/bars unclickable — only the 6-month table drills); four unsynchronized date paradigms on one page (top card says June, cards below say July); **no account/entity filter — directly undercuts the multi-entity thesis**; Law 8 delta-color inversion; no per-report export (Law 6 exists but unreachable from where users look); no Net Worth report; donut truncates tail silently; Sankey static. *Strength: per-widget as-of/scope footnotes beat every competitor — keep.* |
 | **goals-forecast** | 9 | Goals = empty undesigned page (competitors ship target/progress/date/funding objects); free-to-spend ignores bills+goal earmarks; projection chart non-functional; no debt-payoff simulator (while "Loan Payments" is the #1 category!); no what-if levers; goals don't earmark real money |
@@ -121,7 +122,7 @@ captions; Brex's day-grouped notifications with per-row "View" deep-links.
    proper empty state. 3. Law 8 delta-color rule (neutral direction glyphs;
    red = negative money only) + purple→token palette on cash-flow bars.
 4. Sidebar footer collision + floating "N"; pull dev creds off login.
-5. Investigate the −$1,711.04 "asset" checking account (data lineage).
+5. Investigate the negative-balance "asset" checking account (data lineage).
 6. Add CSV to Export-all (Law 6); confirm-dialog + danger styling on
    Disconnect.
 
