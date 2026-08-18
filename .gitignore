@@ -40,6 +40,12 @@ backups/
 supabase/functions/_shared/vendor/
 .env.local-automations
 
+# Real-data UI captures stay local (privacy pass 2026-08-18)
+design/current/20*/
+
+# Local debug scratch
+.debug/
+
 # local Claude Code state (settings, session artifacts) — but the
 # versioned pipeline skills under .claude/skills/ are project files
 .claude/*

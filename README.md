@@ -17,7 +17,7 @@ The full law set and agent operating rules live in [`CLAUDE.md`](CLAUDE.md). Bac
 ## Stack
 
 - **Web**: Next.js 15 (App Router), Tailwind v4, shadcn/ui, recharts. Deployed on Vercel.
-- **Backend**: Supabase (Postgres, Auth, Storage, Edge Functions, `pgmq`, `pg_cron`). Cloud project ref `yrbteeownwjhcushwaga`.
+- **Backend**: Supabase (Postgres, Auth, Storage, Edge Functions, `pgmq`, `pg_cron`).
 - **Bank data**: Plaid.
 - **Monorepo**: pnpm workspaces.
 
@@ -33,31 +33,51 @@ packages/detectors        Recurring/transfer/categorization detection
 packages/documents        Receipts and documents
 packages/reports          Report calculators
 packages/ai               AI provider-agnostic core
-supabase/migrations       SQL migrations (applied to the live project; see below)
+supabase/migrations       SQL migrations
 supabase/functions        Edge Functions: api, worker, webhook-provider, scheduled
 scripts                   Build and harness tooling
 tests/integration         Cross-package integration tests
 docs                      Specs (BC-v2.1, build plan, tech spec, status)
 docs/harness              Evidence census > plan > slice build pipeline
 docs/archive              Historical phase plans (superseded; kept for citations)
-design                    Competitor teardown evidence, tokens, current-app captures
+design                    Design tokens and teardown notes (evidence not redistributable)
 NOTES.md                  Running build journal (decisions, deviations, findings)
 ```
 
-## Getting started
+## Getting started (local)
+
+Prereqs: Node 22+, pnpm 10, Deno 2, Docker, and the Supabase CLI.
 
 ```sh
 pnpm install
-cd apps/web && pnpm dev        # web app against configured Supabase project
+pnpm build:functions           # bundle shared domain code for the edge functions
+supabase start                 # local Postgres, Auth, Storage, edge functions
+supabase db reset              # apply migrations + seed
+cp apps/web/.env.example apps/web/.env.local
+cd apps/web && pnpm dev
 ```
 
-Environment setup, secret placement, and Plaid configuration are documented in `docs/17-KEEL-PROJECT-SETUP.md`. Secrets live only in gitignored local files or provider secret managers; `.env.example` lists the shape.
+Environment details, secret placement, and Plaid configuration are documented in `docs/17-KEEL-PROJECT-SETUP.md`. Secrets live only in gitignored local files or provider secret managers; the `.env.example` files list the shape.
 
 ## Development workflow
 
-- Work on a branch; open a PR to `main`. Vercel deploys `main` automatically.
-- Before pushing web changes, run the real build (it includes ESLint, which Vercel enforces): `cd apps/web && pnpm build`. A clean typecheck is not sufficient.
-- Migrations are applied directly to the live Supabase project with `psql --single-transaction` (see `supabase/.env.remote`, gitignored). There is no local Docker step and no migration-history table for manual applies; verify by object diff.
-- Edge functions deploy: `node scripts/build-functions.mjs && supabase functions deploy api worker --project-ref yrbteeownwjhcushwaga`.
-- Tests: `pnpm test` at the root (vitest workspaces); ledger package must stay at 100% line coverage.
-- Demo and fixture data must be fictional. Never commit real merchant, employer, or payroll strings, and never commit screenshots of real data (`.screenshots/` is gitignored).
+- Work on a branch; open a PR to `main`. CI runs typecheck, lint, the test suites, and the database gates.
+- Before pushing web changes, run the real build (it includes ESLint, which the deploy enforces): `cd apps/web && pnpm build`. A clean typecheck is not sufficient.
+- Tests: `pnpm test` at the root (after `pnpm build:functions`). `packages/ledger` must stay at 100% line coverage.
+- Demo and fixture data must be fictional. Never commit real merchant, employer, or payroll strings, and never commit screenshots of real data.
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contributor guide and [`SECURITY.md`](SECURITY.md) for how to report vulnerabilities.
+
+## Running your own instance
+
+KEEL needs one Supabase project plus a Next.js host:
+
+1. Apply `supabase/migrations` to your project.
+2. Build and deploy the functions: `node scripts/build-functions.mjs && supabase functions deploy api worker webhook-provider scheduled --project-ref <your-project-ref>`.
+3. Point `apps/web` at your project with the publishable env vars and deploy it to Vercel or any Next.js host.
+
+`docs/17-KEEL-PROJECT-SETUP.md` walks through the details, including Plaid Sandbox setup.
+
+## License
+
+AGPL-3.0. See [`LICENSE`](LICENSE).
