@@ -1,8 +1,8 @@
 # KEEL
 
-KEEL is an AI-first personal and entity finance system of record. One deterministic double-entry ledger holds everything you and your businesses own, owe, earn and spend; AI works only the fuzzy edges (categorizing, matching, narrating) and every material suggestion waits for explicit approval.
+KEEL is a personal finance app built like an accounting system. Your accounts, your spending, and your businesses all live in one exact double-entry ledger, so every number adds up and can show its work. AI handles the busywork: categorizing transactions, matching receipts, spotting recurring bills. But it only suggests. You approve every change, and anything can be undone.
 
-Live at [keel.mikulsaravanan.com](https://keel.mikulsaravanan.com) (Vercel, deployed from `main`).
+Live at [keel.mikulsaravanan.com](https://keel.mikulsaravanan.com).
 
 ## Non-negotiables
 
@@ -16,7 +16,7 @@ The full law set and agent operating rules live in [`CLAUDE.md`](CLAUDE.md). Bac
 
 ## Stack
 
-- **Web**: Next.js 15 (App Router), Tailwind v4, shadcn/ui, recharts. Deployed on Vercel.
+- **Web**: Next.js 15 (App Router), Tailwind v4, shadcn/ui, recharts.
 - **Backend**: Supabase (Postgres, Auth, Storage, Edge Functions, `pgmq`, `pg_cron`).
 - **Bank data**: Plaid.
 - **Monorepo**: pnpm workspaces.
