@@ -46,6 +46,14 @@ export function LandingNav() {
           >
             Features
           </a>
+          <a
+            href="https://github.com/MiPlayer123/keel-FinancialOS"
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-full px-3 py-1.5 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            GitHub
+          </a>
         </nav>
         <ThemeToggle />
         <Link
