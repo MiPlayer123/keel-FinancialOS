@@ -70,6 +70,8 @@ const JSON_LD = {
   url: 'https://keel.mikulsaravanan.com',
   applicationCategory: 'FinanceApplication',
   operatingSystem: 'Web',
+  isAccessibleForFree: true,
+  offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
   description:
     'KEEL is an AI-first personal and entity finance system of record: a deterministic double-entry ledger with exact integer money, append-only audited history, undoable changes, full data export (CSV, JSON, QIF, Beancount), and AI that only suggests; every material change waits for user approval.',
   featureList: [
@@ -128,7 +130,8 @@ export default function LandingPage() {
               </div>
               <p className="motion-safe:animate-in motion-safe:fade-in motion-safe:fill-mode-backwards mt-5 flex items-center justify-center gap-1.5 text-xs text-muted-foreground delay-300 duration-700">
                 <ShieldCheck aria-hidden className="size-3.5" />
-                Banks connect securely through Plaid. Export your data anytime.
+                Free and open source. Banks connect securely through Plaid. Export your
+                data anytime.
               </p>
             </div>
 
@@ -280,6 +283,14 @@ export default function LandingPage() {
               className="rounded-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             >
               Features
+            </a>
+            <a
+              href="https://github.com/MiPlayer123/keel-FinancialOS"
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
+              GitHub
             </a>
             <Link
               href="/login"
