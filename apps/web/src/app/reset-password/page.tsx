@@ -66,11 +66,14 @@ export default function ResetPasswordPage() {
             finishValidation(false);
           });
       } else if (code) {
-        void client.auth.exchangeCodeForSession(code).then(({ data, error }) => {
-          finishValidation(error === null && data.session !== null);
-        }).catch(() => {
-          finishValidation(false);
-        });
+        void client.auth
+          .exchangeCodeForSession(code)
+          .then(({ error }) => {
+            finishValidation(error === null);
+          })
+          .catch(() => {
+            finishValidation(false);
+          });
       } else {
         finishValidation(false);
       }
