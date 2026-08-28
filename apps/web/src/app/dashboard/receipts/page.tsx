@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { PageHeader, EmptyState } from '@/components/keel/page-header';
+import { PageHeader, EmptyState, QueryErrorState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
 import {
@@ -113,21 +113,27 @@ function ReceiptsBody() {
   const [uploading, setUploading] = useState(false);
   const [busyMatch, setBusyMatch] = useState<string | null>(null);
   const [accountFilter, setAccountFilter] = useState<string>('all');
+  const [loadError, setLoadError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const requestKeyRef = useRef(0);
 
   const load = useCallback(() => {
     if (!householdId) {
-      setRows(null);
+      setRows([]);
+      setLoadError(null);
       return;
     }
+    setLoadError(null);
     const requestKey = ++requestKeyRef.current;
     void fetchReceiptsInbox(householdId)
       .then((fetched) => {
         if (requestKeyRef.current === requestKey) setRows(fetched);
       })
-      .catch(() => {
-        if (requestKeyRef.current === requestKey) setRows([]);
+      .catch((error: unknown) => {
+        if (requestKeyRef.current === requestKey) {
+          setRows([]);
+          setLoadError(error instanceof Error ? error.message : 'Could not load receipts.');
+        }
       });
     void fetchStorageSummary(householdId)
       .then((s) => {
@@ -268,6 +274,17 @@ function ReceiptsBody() {
           <Skeleton key={i} className="h-20 w-full" />
         ))}
       </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <QueryErrorState
+        description={loadError}
+        onRetry={() => {
+          load();
+        }}
+      />
     );
   }
 

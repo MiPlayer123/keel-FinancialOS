@@ -5,6 +5,7 @@ import { ArrowDownRight, ArrowUpRight } from 'lucide-react';
 
 import { keelQuery, type CashFlowRow } from '@/lib/keel-api';
 import { Money } from '@/components/keel/money';
+import { EmptyState, QueryErrorState } from '@/components/keel/page-header';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 
@@ -17,18 +18,23 @@ function isoDaysAgo(days: number): string {
 /** Cash flow over the last 30 days (primary-currency row). Wired to dashboard.cash_flow. */
 export function CashFlowCard({ householdId }: { householdId: string }) {
   const [row, setRow] = useState<CashFlowRow | null | undefined>(undefined);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
     const to = new Date().toISOString().slice(0, 10);
     const from = isoDaysAgo(30);
+    setError(null);
     void keelQuery<CashFlowRow>('dashboard.cash_flow', householdId, { from, to })
       .then((res) => {
         if (!active) return;
         setRow(res.rows[0] ?? null);
       })
-      .catch(() => {
-        if (active) setRow(null);
+      .catch((cause: unknown) => {
+        if (active) {
+          setRow(null);
+          setError(cause instanceof Error ? cause.message : 'Could not load cash flow.');
+        }
       });
     return () => {
       active = false;
@@ -39,10 +45,23 @@ export function CashFlowCard({ householdId }: { householdId: string }) {
     return <Skeleton className="h-40 w-full max-w-sm" />;
   }
 
-  const inflow = row?.inflowMinor ?? '0';
-  const outflow = row?.outflowMinor ?? '0';
-  const net = row?.netMinor ?? '0';
-  const currency = row?.currency ?? 'USD';
+  if (error) {
+    return <QueryErrorState description={error} />;
+  }
+
+  if (row === null) {
+    return (
+      <EmptyState
+        title="No cash flow in the last 30 days"
+        description="Income and spending will appear here when transactions fall inside this period."
+      />
+    );
+  }
+
+  const inflow = row.inflowMinor;
+  const outflow = row.outflowMinor;
+  const net = row.netMinor;
+  const currency = row.currency;
 
   return (
     <Card className="max-w-sm">

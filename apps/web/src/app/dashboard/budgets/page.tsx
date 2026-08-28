@@ -2,9 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { PiggyBank, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
-import { toast } from 'sonner';
 
-import { PageHeader, EmptyState } from '@/components/keel/page-header';
+import { PageHeader, EmptyState, QueryErrorState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { RebalanceBudgetsDialog } from '@/components/keel/rebalance-budgets-dialog';
 import { AddBudgetCategoryPicker } from '@/components/keel/add-budget-category-picker';
@@ -66,10 +65,12 @@ function BudgetsBody() {
   const [plan, setPlan] = useState<BudgetMonth | null>(null);
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [available, setAvailable] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const monthIso = monthStartIso(offset);
 
   const load = useCallback(async () => {
     if (!householdId) return;
+    setLoadError(null);
     try {
       const [p, cats] = await Promise.all([
         fetchBudgetMonth(householdId, monthIso),
@@ -83,7 +84,7 @@ function BudgetsBody() {
         setAvailable(false);
       } else {
         setPlan(null);
-        toast.error(msg || 'Could not load budgets.');
+        setLoadError(msg || 'Could not load budgets.');
       }
     }
   }, [householdId, monthIso]);
@@ -93,13 +94,24 @@ function BudgetsBody() {
     void load();
   }, [load]);
 
-  if (!ready || (plan === null && available)) {
+  if (!ready || (plan === null && available && loadError === null)) {
     return (
       <div className="space-y-2">
         {Array.from({ length: 6 }).map((_, i) => (
           <Skeleton key={i} className="h-12 w-full" />
         ))}
       </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <QueryErrorState
+        description={loadError}
+        onRetry={() => {
+          void load();
+        }}
+      />
     );
   }
 

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Wallet, ChevronRight } from 'lucide-react';
 
-import { PageHeader, EmptyState } from '@/components/keel/page-header';
+import { PageHeader, EmptyState, QueryErrorState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
 import { useEntityLens } from '@/components/keel/entity-lens-context';
@@ -24,6 +24,11 @@ import {
 import { relativeSyncLabel } from '@/lib/relative-date';
 import { utilizationPercent } from '@/lib/credit-utilization';
 import { looksLikeRetirementAccount, looksLikeInvestmentAccount } from '@/lib/investment-subtype';
+import {
+  currencyTotals,
+  primaryCurrencyTotal,
+  type CurrencyTotal,
+} from '@/lib/currency-totals';
 import { Skeleton } from '@/components/ui/skeleton';
 import { AddAccountDialog } from '@/components/keel/add-account-dialog';
 import { NetWorthHero } from '@/components/keel/net-worth-hero';
@@ -63,8 +68,25 @@ export default function AccountsPage() {
   );
 }
 
-function sumMinor(rows: Enriched[]): string {
-  return rows.reduce((acc, r) => acc + BigInt(r.balanceMinor || '0'), 0n).toString();
+function totalsFor(rows: Enriched[]): CurrencyTotal[] {
+  return currencyTotals(
+    rows.map((row) => ({ amountMinor: row.balanceMinor, currency: row.currency })),
+  );
+}
+
+function CurrencyTotalValues({ rows }: { rows: Enriched[] }) {
+  return (
+    <span className="flex flex-wrap justify-end gap-x-3 gap-y-1">
+      {totalsFor(rows).map((total) => (
+        <Money
+          key={total.currency}
+          amountMinor={total.amountMinor}
+          currency={total.currency}
+          className="text-sm text-muted-foreground"
+        />
+      ))}
+    </span>
+  );
 }
 
 function AccountsBody() {
@@ -81,13 +103,16 @@ function AccountsBody() {
   const [provider, setProvider] = useState<LatestBalanceRow[]>([]);
   const [entities, setEntities] = useState<EntityRow[]>([]);
   const [reload, setReload] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!householdId) {
       setAccounts([]);
       setKinds(new Map());
+      setLoadError(null);
       return;
     }
+    setLoadError(null);
     let active = true;
     void Promise.all([fetchAccounts(householdId), fetchLedgerKinds(householdId)])
       .then(([a, k]) => {
@@ -95,10 +120,11 @@ function AccountsBody() {
         setAccounts(a);
         setKinds(k);
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (!active) return;
         setAccounts([]);
         setKinds(new Map());
+        setLoadError(error instanceof Error ? error.message : 'Could not load accounts.');
       });
     // Row enrichment (C8/C9) is best-effort: freshness/reauth ride the same
     // member-read the Connections page uses, utilization the same
@@ -139,6 +165,19 @@ function AccountsBody() {
         <Skeleton className="h-24 w-full max-w-sm" />
         <Skeleton className="h-48 w-full" />
       </div>
+    );
+  }
+
+  const coreError = balances.error ?? loadError;
+  if (coreError) {
+    return (
+      <QueryErrorState
+        description={coreError}
+        onRetry={() => {
+          setReload((value) => value + 1);
+          void balances.refetch();
+        }}
+      />
     );
   }
 
@@ -206,7 +245,10 @@ function AccountsBody() {
   const assets = lensRows.filter((a) => a.kind === 'asset');
   const liabilities = lensRows.filter((a) => a.kind === 'liability');
   const other = lensRows.filter((a) => a.kind !== 'asset' && a.kind !== 'liability');
-  const netMinor = lensRows.reduce((acc, r) => acc + BigInt(r.balanceMinor || '0'), 0n).toString();
+  const netTotals = totalsFor(lensRows);
+  const primaryNet = primaryCurrencyTotal(
+    lensRows.map((row) => ({ amountMinor: row.balanceMinor, currency: row.currency })),
+  ) ?? { amountMinor: '0', currency: 'USD', rowCount: 0 };
 
   // F-023: entity grouping renders ONLY for a blended, multi-entity household —
   // a single-entity household (entities.length <= 1) and a lensed view (one
@@ -223,7 +265,9 @@ function AccountsBody() {
           matches what's on screen (Law 9). */}
       <NetWorthHero
         householdId={householdId}
-        fallbackNetMinor={netMinor}
+        fallbackNetMinor={primaryNet.amountMinor}
+        fallbackCurrency={primaryNet.currency}
+        fallbackMultiCurrency={netTotals.length > 1}
         fallbackAsOf={balances.asOf}
         entityScoped={lensActive}
         {...(lensActive && lensEntity ? { scopeLabel: `${lensEntity.name} only` } : {})}
@@ -263,9 +307,8 @@ type EntitySection = {
   entityId: string;
   name: string;
   rows: Enriched[];
-  assetsMinor: bigint;
-  liabilitiesMinor: bigint;
-  netMinor: bigint;
+  assets: Enriched[];
+  liabilities: Enriched[];
 };
 
 /**
@@ -292,15 +335,12 @@ function EntityGroupedAccounts({ entities, rows }: { entities: EntityRow[]; rows
   ]
     .map(({ entityId, name }) => {
       const entityRows = byEntity.get(entityId) ?? [];
-      const sum = (pred: (r: Enriched) => boolean) =>
-        entityRows.filter(pred).reduce((acc, r) => acc + BigInt(r.balanceMinor || '0'), 0n);
       return {
         entityId,
         name,
         rows: entityRows,
-        assetsMinor: sum((r) => r.kind === 'asset'),
-        liabilitiesMinor: sum((r) => r.kind === 'liability'),
-        netMinor: sum(() => true),
+        assets: entityRows.filter((r) => r.kind === 'asset'),
+        liabilities: entityRows.filter((r) => r.kind === 'liability'),
       };
     })
     .filter((s) => s.rows.length > 0);
@@ -315,7 +355,7 @@ function EntityGroupedAccounts({ entities, rows }: { entities: EntityRow[]; rows
             className="flex items-baseline gap-2 rounded-lg border border-border bg-card px-3 py-2"
           >
             <span className="text-xs font-medium text-muted-foreground">{s.name}</span>
-            <Money amountMinor={s.netMinor.toString()} className="text-sm font-semibold" />
+            <CurrencyTotalValues rows={s.rows} />
           </div>
         ))}
       </div>
@@ -335,19 +375,13 @@ function EntityGroupedAccounts({ entities, rows }: { entities: EntityRow[]; rows
               <h2 className="text-base font-semibold">{s.name}</h2>
               <p className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs text-muted-foreground">
                 <span>
-                  Assets{' '}
-                  <Money amountMinor={s.assetsMinor.toString()} className="text-xs" />
+                  Assets <CurrencyTotalValues rows={s.assets} />
                 </span>
                 <span>
-                  Liabilities{' '}
-                  <Money amountMinor={s.liabilitiesMinor.toString()} className="text-xs" />
+                  Liabilities <CurrencyTotalValues rows={s.liabilities} />
                 </span>
                 <span>
-                  Net{' '}
-                  <Money
-                    amountMinor={s.netMinor.toString()}
-                    className="text-xs font-medium text-foreground"
-                  />
+                  Net <CurrencyTotalValues rows={s.rows} />
                 </span>
               </p>
             </div>
@@ -368,7 +402,7 @@ function AccountGroup({ title, rows }: { title: string; rows: Enriched[] }) {
     <section className="space-y-2">
       <div className="flex items-baseline justify-between">
         <h2 className="text-sm font-medium text-muted-foreground">{title}</h2>
-        <Money amountMinor={sumMinor(rows)} className="text-sm text-muted-foreground" />
+        <CurrencyTotalValues rows={rows} />
       </div>
       <div className="overflow-hidden rounded-lg border border-border">
         {rows.map((a, i) => (

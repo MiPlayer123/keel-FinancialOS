@@ -2,7 +2,7 @@
 
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { BadgeCheck, Search } from 'lucide-react';
+import { AlertCircle, BadgeCheck, Search } from 'lucide-react';
 
 import { ReviewBadge } from '@/components/keel/review-badge';
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -119,5 +119,28 @@ export function EmptyState({
       </div>
       {action}
     </div>
+  );
+}
+
+export function QueryErrorState({
+  description,
+  onRetry,
+}: {
+  description: string;
+  onRetry?: () => void;
+}) {
+  return (
+    <EmptyState
+      icon={<AlertCircle className="size-6" />}
+      title="We couldn't load this data"
+      description={description}
+      action={
+        onRetry ? (
+          <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+            Try again
+          </Button>
+        ) : undefined
+      }
+    />
   );
 }

@@ -4,7 +4,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Wallet } from 'lucide-react';
 
-import { PageHeader, EmptyState } from '@/components/keel/page-header';
+import { PageHeader, EmptyState, QueryErrorState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
 import { useEntityLens, lensAccountIdSet } from '@/components/keel/entity-lens-context';
@@ -39,6 +39,7 @@ import { NetWorthHero } from '@/components/keel/net-worth-hero';
 import { NotesTasksCard } from '@/components/keel/notes-tasks-card';
 import { NeedsAttention } from '@/components/keel/needs-attention';
 import { formatMoney } from '@/lib/money';
+import { currencyTotals, primaryCurrencyTotal } from '@/lib/currency-totals';
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -632,6 +633,7 @@ function HomeBody() {
   const richTxns = useKeelQuerySilent<RichTransactionRow>('transactions.rich', householdId);
   const recurringSeries = useKeelQuerySilent<RecurringSeriesRow>('recurring.list', householdId);
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
+  const [accountsError, setAccountsError] = useState<string | null>(null);
   const [connections, setConnections] = useState<ConnectionRow[] | null>(null);
   const [schedules, setSchedules] = useState<ScheduleRow[]>([]);
   const [budgets, setBudgets] = useState<BudgetRow[] | null>(null);
@@ -676,12 +678,16 @@ function HomeBody() {
   useEffect(() => {
     if (!householdId) return;
     let active = true;
+    setAccountsError(null);
     void fetchAccounts(householdId)
       .then((a) => {
         if (active) setAccounts(a);
       })
-      .catch(() => {
-        if (active) setAccounts([]);
+      .catch((error: unknown) => {
+        if (active) {
+          setAccounts([]);
+          setAccountsError(error instanceof Error ? error.message : 'Could not load accounts.');
+        }
       });
     return () => {
       active = false;
@@ -788,6 +794,11 @@ function HomeBody() {
     );
   }
 
+  const coreError = balances.error ?? accountsError;
+  if (coreError) {
+    return <QueryErrorState description={coreError} />;
+  }
+
   // Under an active lens the accounts summary + net worth count only the
   // lensed entity's accounts (a VIEW filter — the others aren't gone, just out
   // of scope). Blended keeps every account, unchanged.
@@ -798,10 +809,16 @@ function HomeBody() {
       : (accounts ?? []).filter((a) => lensAccountIds.has(a.id));
 
   const balanceByLedger = new Map(balances.rows.map((r) => [r.ledgerAccountId, r.balanceMinor]));
-  const netMinor = accountList.reduce((acc, a) => {
-    const b = balanceByLedger.get(a.ledgerAccountId) ?? '0';
-    return acc + BigInt(b);
-  }, 0n);
+  const accountBalances = accountList.map((account) => ({
+    amountMinor: balanceByLedger.get(account.ledgerAccountId) ?? '0',
+    currency: account.currency,
+  }));
+  const netTotals = currencyTotals(accountBalances);
+  const primaryNet = primaryCurrencyTotal(accountBalances) ?? {
+    amountMinor: '0',
+    currency: 'USD',
+    rowCount: 0,
+  };
 
   const showMonthlyFlow =
     monthlyFlow !== null &&
@@ -825,7 +842,9 @@ function HomeBody() {
       <div className="flex flex-col gap-2">
         <NetWorthHero
           householdId={householdId}
-          fallbackNetMinor={netMinor.toString()}
+          fallbackNetMinor={primaryNet.amountMinor}
+          fallbackCurrency={primaryNet.currency}
+          fallbackMultiCurrency={netTotals.length > 1}
           fallbackAsOf={balances.asOf}
           entityScoped={lensActive}
           {...(lensActive && lensEntity ? { scopeLabel: `${lensEntity.name} only` } : {})}
