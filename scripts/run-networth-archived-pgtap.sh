@@ -2,8 +2,7 @@
 # Throwaway-Postgres validation for the "active accounts only" read-model filter
 # (20260719130000_networth_exclude_archived_accounts.sql). The Supabase local
 # Docker stack is unavailable this session (same as run-finalize-entity-pgtap.sh),
-# so we initdb a temporary cluster, load ONLY the real read-model function DDL
-# (the whole body of the migration, which is just CREATE OR REPLACE + grants),
+# so we initdb a temporary cluster and load only the real read-model function DDL,
 # and run tests/pgtap/networth_exclude_archived_accounts.sql against it.
 #
 # pgTAP is not bundled with a vanilla PG install; if the extension is missing we
@@ -15,11 +14,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # The SHIPPED read-model bodies are layered: 20260719130000 defines all five
 # archived-filtered read models; 20260813140000 (market-value net worth, final
 # perf-fixed bodies — superseding 20260813120000's first cut) redefines
-# keel_net_worth_as_of + keel_net_worth_daily on top. Load both, in order, so
+# keel_net_worth_as_of + keel_net_worth_daily on top; 20260828012000 preserves
+# selected snapshot currencies. Load all three in order, so
 # the archived-account invariants are proven against what production actually
 # runs — not a superseded formula (review finding on PR #165).
 MIGRATION="$ROOT/supabase/migrations/20260719130000_networth_exclude_archived_accounts.sql"
 MIGRATION2="$ROOT/supabase/migrations/20260813140000_net_worth_daily_perf_fix.sql"
+MIGRATION3="$ROOT/supabase/migrations/20260828012000_net_worth_snapshot_currency.sql"
 TESTSQL="$ROOT/tests/pgtap/networth_exclude_archived_accounts.sql"
 
 PGBIN="$(dirname "$(command -v initdb)")"
@@ -35,8 +36,8 @@ echo "initdb throwaway cluster in $DATADIR"
 "$PGBIN/pg_ctl" -D "$DATADIR" -o "-k $SOCK -c listen_addresses=''" -w start >/dev/null
 PSQL=("$PGBIN/psql" -X -v ON_ERROR_STOP=1 -h "$SOCK" -U postgres -d postgres)
 
-# The migration body is entirely CREATE OR REPLACE FUNCTION + owner/grant DDL
-# for the 5 read models. Load it verbatim at the test's __READMODEL_BODIES__
+# The migration bodies are function + owner/grant DDL. Load them verbatim at
+# the test's __READMODEL_BODIES__
 # marker so the tests run the SHIPPED SQL, not a paraphrase.
 BODIES="$MIGRATION"
 if ! grep -q keel_net_worth_as_of "$BODIES"; then
@@ -46,14 +47,17 @@ fi
 if ! grep -q keel_net_worth_daily "$MIGRATION2"; then
   echo "FATAL: market-value migration missing keel_net_worth_daily"; exit 1
 fi
+if ! grep -q net-worth-daily-market-v2 "$MIGRATION3"; then
+  echo "FATAL: currency migration missing net-worth-daily-market-v2"; exit 1
+fi
 
 RENDERED="$TMP/rendered.sql"
-python3 - "$TESTSQL" "$BODIES" "$MIGRATION2" "$RENDERED" <<'PY'
+python3 - "$TESTSQL" "$BODIES" "$MIGRATION2" "$MIGRATION3" "$RENDERED" <<'PY'
 import sys
-test, bodies, bodies2, out = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+test, bodies, bodies2, bodies3, out = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 # Concatenate in migration order: later create-or-replace wins, exactly as the
-# real migration chain applies (20260813140000 is pure function DDL).
-body = open(bodies).read() + '\n' + open(bodies2).read()
+# real migration chain applies.
+body = open(bodies).read() + '\n' + open(bodies2).read() + '\n' + open(bodies3).read()
 src = open(test).read()
 marker = '-- __READMODEL_BODIES__  (replaced by the runner with the real function DDL)'
 assert marker in src, 'test marker missing'
