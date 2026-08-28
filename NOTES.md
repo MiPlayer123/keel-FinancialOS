@@ -75,7 +75,8 @@ Record every decision, deviation, failed approach, command run, test result, mig
   and local setup warns that database reset is destructive rather than a startup step.
 - Codex review follow-up: dashboard account/balance load failures and the 30-day cash-flow
   card now expose real retry actions that restart their requests without requiring a reload
-  or route change.
+  or route change. The dashboard retry invalidates only the trial-balance query rather than
+  refreshing unrelated mounted reads.
 
 ## 2026-08-18 chore(repo): privacy + open-source prep pass (Law 12; user directive 2026-08-18)
 

@@ -8,7 +8,7 @@ import { PageHeader, EmptyState, QueryErrorState } from '@/components/keel/page-
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
 import { useEntityLens, lensAccountIdSet } from '@/components/keel/entity-lens-context';
-import { useKeelQuery } from '@/lib/use-keel-query';
+import { useKeelInvalidate, useKeelQuery } from '@/lib/use-keel-query';
 import {
   fetchAccounts,
   fetchBudgets,
@@ -614,6 +614,7 @@ function ProjectedCashCard({
 
 function HomeBody() {
   const { householdId, ready, error: householdError, retry: retryHousehold } = useHousehold();
+  const invalidate = useKeelInvalidate(householdId);
   // Global entity lens (persona theme #2). null = "All entities" (blended,
   // pre-lens dashboard). A concrete id scopes every widget that can be
   // decomposed client-side by account→entity (net worth, spending mix,
@@ -821,7 +822,7 @@ function HomeBody() {
         onRetry={() => {
           setAccounts(null);
           setAccountsAttempt((attempt) => attempt + 1);
-          void balances.refetch();
+          void invalidate(['ledger.trial_balance']);
         }}
       />
     );
