@@ -2,6 +2,29 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+## 2026-08-28 P0/P1 trust and public-readiness pass
+
+- Financial correctness: cross-currency account totals are now grouped by currency;
+  the dashboard and account hero select one explicit primary currency instead of
+  summing incompatible minor units. Core query failures render as errors rather than
+  valid zero or empty states.
+- Entity scope: the entity switcher now appears only on the four routes that actually
+  honor it (Home, Accounts, Budgets, Ledger). Expanding the shared authorization
+  compiler to every read model remains separate backend contract work.
+- AI governance: the hosted Assistant is read-only until every Class B action carries
+  a payload-bound approval token. The previous direct command path violated
+  BC-v2.1 §3/Law 11 and was removed rather than presented as safe.
+- Onboarding: added an idempotent, audited, service-only bootstrap for a first
+  household, personal entity, and explicit A/B/C/D policies. Added password recovery.
+- Public surface: rewrote unsupported claims, added Privacy/Security/Terms pages,
+  configurable public URL metadata, noindex auth routes, and GitHub community files.
+- Removed third-party screenshots and capture manifests from the current tree.
+  Human checkpoint remains: public git history still contains previously committed
+  sensitive and nonredistributable artifacts. Cleaning it requires coordinated
+  history replacement and force-push; this agent did not rewrite history.
+- Human checkpoint remains: the Terms and Privacy copy needs qualified legal review
+  before a production launch. Plaid remains Sandbox-only.
+
 ## 2026-08-18 chore(repo): privacy + open-source prep pass (Law 12; user directive 2026-08-18)
 
 User ruling: prepare the repo for eventual open sourcing (not announced yet), delete the
