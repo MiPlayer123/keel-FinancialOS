@@ -59,4 +59,11 @@ describe('buildAgentSystemPrompt', () => {
   it('rejects an invalid data boundary', () => {
     expect(() => buildAgentSystemPrompt({ dataBoundary: 'bad boundary!' })).toThrow();
   });
+
+  it('can compile a strictly read-only session', () => {
+    const prompt = buildAgentSystemPrompt({ dataBoundary: 'kd-read', readOnly: true });
+    expect(prompt).toContain('This session is read-only');
+    expect(prompt).toContain('Never claim you changed or staged anything');
+    expect(prompt).not.toContain('You STAGE a proposal');
+  });
 });

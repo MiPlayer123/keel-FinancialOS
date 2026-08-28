@@ -24,6 +24,12 @@ describe('buildAgentResponseRecord', () => {
     expect(rec.promptVersion).toBe(AGENT_PROMPT_VERSION);
     expect(rec.toolsUsed).toEqual(['get_account_balances']);
     expect(rec.displayOnly).toBe(true);
+    expect(rec.verdict).toBe('uncertain');
+    expect(rec.confidence).toBe(0);
+    expect(rec.reasonCodes).toEqual(['TOOL_EVIDENCE']);
+    expect(rec.evidenceRefs).toEqual(['get_account_balances']);
+    expect(rec.requiresApproval).toBe(false);
+    expect(rec.policyVersion).toBe('keel-ai-policy@v1');
   });
 
   it('is not display-only once it carries proposals', () => {
@@ -41,6 +47,7 @@ describe('buildAgentResponseRecord', () => {
     });
     expect(rec.displayOnly).toBe(false);
     expect(rec.proposedActions).toHaveLength(1);
+    expect(rec.requiresApproval).toBe(true);
   });
 
   it('derives a bounded tldr from the first paragraph', () => {
