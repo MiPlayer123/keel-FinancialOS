@@ -2741,7 +2741,7 @@ export type AiChatRecord = {
   verdict: 'yes' | 'no' | 'uncertain';
   tldr: string;
   body: string;
-  confidence: number;
+  confidence: number | null;
   asOf: string;
   scope: { householdId: string; entityIds: string[] };
   reasonCodes: string[];

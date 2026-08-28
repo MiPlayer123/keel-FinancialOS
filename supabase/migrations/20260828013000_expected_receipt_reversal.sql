@@ -16,7 +16,7 @@ begin
      or new.note is distinct from old.note
      or new.created_by is distinct from old.created_by
      or new.created_at is distinct from old.created_at
-     or new.updated_at <= old.updated_at then
+     or new.updated_at < old.updated_at then
     raise exception 'KEEL_IMMUTABLE: expected reimbursement receipts allow only controlled reversal'
       using errcode = 'P0001';
   end if;

@@ -60,6 +60,13 @@ Record every decision, deviation, failed approach, command run, test result, mig
   added recovery-link validity and replacement-link states, prevented dashboard indexing,
   supplied route-specific social metadata, corrected local setup environment-file guidance,
   and narrowed export-format claims to what each serializer contains.
+- Independent backend review: moved onboarding bootstrap to the least-privilege API owner
+  without granting access to the Auth schema; the membership foreign key remains the
+  authoritative user-existence check. Agent confidence is now explicitly unavailable
+  (`null` plus a reason code) instead of a fabricated calibrated zero. Daily net worth
+  ignores snapshots beyond the requested window, controlled receipt reversal permits equal
+  transaction timestamps, the goal caller-id repair is safe to reapply, and notes/tasks now
+  follow the export chain's current full-history semantics when `asOf` is only provenance.
 
 ## 2026-08-18 chore(repo): privacy + open-source prep pass (Law 12; user directive 2026-08-18)
 

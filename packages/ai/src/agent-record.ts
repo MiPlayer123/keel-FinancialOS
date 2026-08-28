@@ -73,7 +73,7 @@ export interface AgentResponseRecord {
   readonly verdict: 'yes' | 'no' | 'uncertain';
   readonly tldr: string;
   readonly body: string;
-  readonly confidence: number;
+  readonly confidence: number | null;
   readonly asOf: string;
   readonly scope: SnapshotScope;
   readonly reasonCodes: readonly string[];
@@ -132,10 +132,13 @@ export const buildAgentResponseRecord = (input: BuildAgentRecordInput): AgentRes
     verdict: 'uncertain',
     tldr: deriveTldr(body, AGENT_TLDR_MAX_LENGTH),
     body,
-    confidence: 0,
+    confidence: null,
     asOf: input.asOf,
     scope: input.scope,
-    reasonCodes: input.toolsUsed.length > 0 ? ['TOOL_EVIDENCE'] : ['NO_TOOL_EVIDENCE'],
+    reasonCodes: [
+      input.toolsUsed.length > 0 ? 'TOOL_EVIDENCE' : 'NO_TOOL_EVIDENCE',
+      'CONFIDENCE_UNAVAILABLE',
+    ],
     evidenceRefs: [...new Set(input.toolsUsed)],
     requiresApproval: proposedActions.length > 0,
     displayOnly: proposedActions.length === 0 && appliedActions.length === 0,

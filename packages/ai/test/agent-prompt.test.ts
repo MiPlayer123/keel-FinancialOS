@@ -64,6 +64,7 @@ describe('buildAgentSystemPrompt', () => {
     const prompt = buildAgentSystemPrompt({ dataBoundary: 'kd-read', readOnly: true });
     expect(prompt).toContain('This session is read-only');
     expect(prompt).toContain('Never claim you changed or staged anything');
+    expect(prompt).toContain('No read tool joins account identity to balances');
     expect(prompt).not.toContain('You STAGE a proposal');
   });
 });

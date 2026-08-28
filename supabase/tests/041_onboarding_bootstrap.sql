@@ -1,5 +1,5 @@
 begin;
-select plan(10);
+select plan(11);
 
 insert into auth.users (id, email)
 values ('00000000-0000-4000-8000-00000000b001', 'onboarding-fixture@example.test');
@@ -81,6 +81,17 @@ select is(
 );
 
 reset role;
+
+select is(
+  (
+    select role.rolname
+      from pg_proc p
+      join pg_roles role on role.oid = p.proowner
+     where p.oid = 'public.keel_bootstrap_household(uuid,text)'::regprocedure
+  ),
+  'keel_api',
+  'bootstrap runs with the least-privilege API owner'
+);
 
 select ok(
   not has_function_privilege(

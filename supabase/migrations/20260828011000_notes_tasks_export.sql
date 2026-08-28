@@ -48,7 +48,6 @@ begin
       ) order by n.id)
       from public.household_notes n
       where n.household_id = p_household_id
-        and (p_as_of is null or n.created_at <= p_as_of)
     ), '[]'::jsonb),
     'household_tasks', coalesce((
       select jsonb_agg(jsonb_build_object(
@@ -73,7 +72,6 @@ begin
       ) order by t.id)
       from public.household_tasks t
       where t.household_id = p_household_id
-        and (p_as_of is null or t.created_at <= p_as_of)
     ), '[]'::jsonb)
   ) into v_tables;
 

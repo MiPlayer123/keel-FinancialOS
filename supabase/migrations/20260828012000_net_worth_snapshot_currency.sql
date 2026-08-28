@@ -153,6 +153,7 @@ begin
          where b.household_id = p_household_id
            and b.account_id = a.id
            and b.source = 'plaid'
+           and b.as_of < ((p_to + 1)::timestamp at time zone 'utc')
          order by b.as_of desc, b.id desc
          limit 1
       ) latest

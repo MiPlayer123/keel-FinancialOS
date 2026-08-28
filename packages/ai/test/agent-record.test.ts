@@ -25,8 +25,8 @@ describe('buildAgentResponseRecord', () => {
     expect(rec.toolsUsed).toEqual(['get_net_worth']);
     expect(rec.displayOnly).toBe(true);
     expect(rec.verdict).toBe('uncertain');
-    expect(rec.confidence).toBe(0);
-    expect(rec.reasonCodes).toEqual(['TOOL_EVIDENCE']);
+    expect(rec.confidence).toBeNull();
+    expect(rec.reasonCodes).toEqual(['TOOL_EVIDENCE', 'CONFIDENCE_UNAVAILABLE']);
     expect(rec.evidenceRefs).toEqual(['get_net_worth']);
     expect(rec.requiresApproval).toBe(false);
     expect(rec.policyVersion).toBe('keel-ai-policy@v1');

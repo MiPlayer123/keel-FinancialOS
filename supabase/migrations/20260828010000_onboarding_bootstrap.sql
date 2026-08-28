@@ -4,16 +4,14 @@ create or replace function public.keel_bootstrap_household(
 ) returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = pg_catalog, public
 as $$
 declare
   v_household_id uuid;
   v_entity_id uuid;
   v_name text;
 begin
-  if p_user_id is null or not exists (
-    select 1 from auth.users where id = p_user_id
-  ) then
+  if p_user_id is null then
     raise exception 'KEEL_NOT_AUTHENTICATED' using errcode = 'P0004';
   end if;
 
@@ -84,6 +82,10 @@ begin
   );
 end;
 $$;
+
+grant create on schema public to keel_api;
+alter function public.keel_bootstrap_household(uuid, text) owner to keel_api;
+revoke create on schema public from keel_api;
 
 revoke all on function public.keel_bootstrap_household(uuid, text)
   from public, anon, authenticated;

@@ -15,11 +15,11 @@ begin
   ]
   loop
     v_definition := pg_catalog.pg_get_functiondef(v_proc);
-    if pg_catalog.strpos(v_definition, v_old) = 0 then
-      raise exception 'KEEL_MIGRATION: expected auth.uid() in %', v_proc;
+    if pg_catalog.strpos(v_definition, v_old) > 0 then
+      execute pg_catalog.replace(v_definition, v_old, v_new);
+    elsif pg_catalog.strpos(v_definition, v_new) = 0 then
+      raise exception 'KEEL_MIGRATION: unrecognized caller-id declaration in %', v_proc;
     end if;
-
-    execute pg_catalog.replace(v_definition, v_old, v_new);
   end loop;
 end;
 $migration$;

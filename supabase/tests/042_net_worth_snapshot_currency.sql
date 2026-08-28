@@ -220,10 +220,9 @@ select is(
         )->'rows'
       ) row
      where row->>'currency' = 'GBP'
-       and row->>'balanceMinor' = '0'
   ),
-  2,
-  'future-only investment snapshots preserve the existing zero-padded series'
+  0,
+  'future-only investment snapshots do not create a phantom currency series'
 );
 
 select is(
