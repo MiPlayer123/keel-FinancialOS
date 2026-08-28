@@ -3,8 +3,8 @@ import { EXCLUDE, INCLUDE } from '../src/index.js';
 
 describe('export manifest', () => {
   it('classifies each manifest public-table decision exactly once', () => {
-    expect(INCLUDE).toHaveLength(91);
-    expect(EXCLUDE.filter((entry) => entry.schema === 'public')).toHaveLength(16);
+    expect(INCLUDE).toHaveLength(93);
+    expect(EXCLUDE.filter((entry) => entry.schema === 'public')).toHaveLength(14);
     const decisions = [
       ...INCLUDE.map((entry) => entry.table),
       ...EXCLUDE.filter((entry) => entry.schema === 'public').map((entry) => entry.table),
@@ -14,6 +14,9 @@ describe('export manifest', () => {
 
   it('documents auth.users separately and includes command_executions', () => {
     expect(INCLUDE.map((entry) => entry.table)).toContain('command_executions');
+    expect(INCLUDE.map((entry) => entry.table)).toEqual(
+      expect.arrayContaining(['household_notes', 'household_tasks']),
+    );
     expect(EXCLUDE).toContainEqual(
       expect.objectContaining({ schema: 'auth', table: 'users' }),
     );
