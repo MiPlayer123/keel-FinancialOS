@@ -256,7 +256,7 @@ function GoalCard({
     const months = monthsUntil(goal.targetDate);
     // Ceiling division keeps the plan honest (Law 4 — integer math).
     return ((remaining + BigInt(months) - 1n) / BigInt(months)).toString();
-  }, [goal.targetDate, remaining]);
+  }, [goal.targetDate, isDerived, remaining]);
   // Teardown C19: near target dates read "in N days" instead of a bare ISO
   // date; goal targets are usually months out so this is almost always null
   // (the absolute date renders unchanged) — it only fires once a target is
