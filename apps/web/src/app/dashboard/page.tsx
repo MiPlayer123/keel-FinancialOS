@@ -634,6 +634,7 @@ function HomeBody() {
   const recurringSeries = useKeelQuery<RecurringSeriesRow>('recurring.list', householdId);
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
   const [accountsError, setAccountsError] = useState<string | null>(null);
+  const [accountsAttempt, setAccountsAttempt] = useState(0);
   const [connections, setConnections] = useState<ConnectionRow[] | null>(null);
   const [schedules, setSchedules] = useState<ScheduleRow[]>([]);
   const [budgets, setBudgets] = useState<BudgetRow[] | null>(null);
@@ -703,7 +704,7 @@ function HomeBody() {
     return () => {
       active = false;
     };
-  }, [householdId]);
+  }, [householdId, accountsAttempt]);
 
   // One connections fetch for the whole page: the Needs-attention reauth row
   // and the Accounts section's SyncStatus both read from it.
@@ -815,7 +816,15 @@ function HomeBody() {
 
   const coreError = balances.error ?? accountsError;
   if (coreError) {
-    return <QueryErrorState />;
+    return (
+      <QueryErrorState
+        onRetry={() => {
+          setAccounts(null);
+          setAccountsAttempt((attempt) => attempt + 1);
+          void balances.refetch();
+        }}
+      />
+    );
   }
 
   // Under an active lens the accounts summary + net worth count only the

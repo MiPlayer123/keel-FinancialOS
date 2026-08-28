@@ -19,6 +19,7 @@ function isoDaysAgo(days: number): string {
 export function CashFlowCard({ householdId }: { householdId: string }) {
   const [rows, setRows] = useState<CashFlowRow[] | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -39,14 +40,21 @@ export function CashFlowCard({ householdId }: { householdId: string }) {
     return () => {
       active = false;
     };
-  }, [householdId]);
+  }, [householdId, attempt]);
 
   if (rows === undefined) {
     return <Skeleton className="h-40 w-full max-w-sm" />;
   }
 
   if (error) {
-    return <QueryErrorState />;
+    return (
+      <QueryErrorState
+        onRetry={() => {
+          setRows(undefined);
+          setAttempt((value) => value + 1);
+        }}
+      />
+    );
   }
 
   if (rows === null) {
