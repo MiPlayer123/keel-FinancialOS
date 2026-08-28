@@ -15,10 +15,12 @@ import { cn } from '@/lib/utils';
 
 /** Deterministic integer triangle wave (demo wobble) — no float math on money. */
 function triangle(i: number, period: number, amplitudeMinor: number): number {
-  const phase = i % period;
-  const half = period / 2;
-  const t = phase < half ? phase / half : (period - phase) / half;
-  return (2 * t - 1) * amplitudeMinor;
+  const cycle = BigInt(period);
+  const half = cycle / 2n;
+  const phase = BigInt(i % period);
+  const distance = phase < half ? phase : cycle - phase;
+  const amplitude = BigInt(amplitudeMinor);
+  return Number(-amplitude + (2n * amplitude * distance + half / 2n) / half);
 }
 
 const DEMO_NET_WORTH: BalancePoint[] = Array.from({ length: 48 }, (_, i) => {
@@ -37,10 +39,10 @@ const DEMO_ROWS: Array<{
   badge?: 'transfer' | 'split';
 }> = [
   { date: 'Jul 16', name: 'Acme Labs Payroll', meta: 'Checking · Income', amountMinor: '425000' },
-  { date: 'Jul 15', name: 'Trader Joe’s', meta: 'Credit card · Groceries', amountMinor: '-8412' },
+  { date: 'Jul 15', name: 'Green Basket Market', meta: 'Credit card · Groceries', amountMinor: '-8412' },
   { date: 'Jul 15', name: 'Transfer to Savings', meta: 'Checking → Savings', amountMinor: '100000', badge: 'transfer' },
-  { date: 'Jul 14', name: 'Costco', meta: 'Credit card · 2 categories', amountMinor: '-21376', badge: 'split' },
-  { date: 'Jul 13', name: 'Lyft', meta: 'Credit card · Transport', amountMinor: '-1890' },
+  { date: 'Jul 14', name: 'Warehouse Market', meta: 'Credit card · 2 categories', amountMinor: '-21376', badge: 'split' },
+  { date: 'Jul 13', name: 'City Ride', meta: 'Credit card · Transport', amountMinor: '-1890' },
 ];
 
 function DemoBadge({ kind }: { kind: 'transfer' | 'split' }) {
@@ -125,7 +127,7 @@ export function HeroMockup({ className }: { className?: string }) {
                 Suggestion · confidence 0.94
               </p>
               <p className="mt-1.5 text-xs leading-relaxed">
-                Categorize <span className="font-mono text-[11px]">BLUE BOTTLE 0421</span> as{' '}
+                Categorize <span className="font-mono text-[11px]">HARBOR COFFEE 0421</span> as{' '}
                 <span className="font-medium">Coffee shops</span>. Matched 12 prior transactions.
               </p>
               <div className="mt-2.5 flex items-center gap-2">

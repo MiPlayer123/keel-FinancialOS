@@ -118,9 +118,15 @@ export function BalanceTrendChart({ points, height = 200 }: { points: BalancePoi
   const gid = useId();
   const fillId = `keel-balance-fill-${gid}`;
   const strokeId = `keel-balance-stroke-${gid}`;
+  const firstPoint = points[0];
+  const lastPoint = points[points.length - 1];
+  const chartLabel =
+    firstPoint && lastPoint
+      ? `Balance trend from ${firstPoint.date}, ${formatMoney(firstPoint.balanceMinor, { currency: firstPoint.currency })}, to ${lastPoint.date}, ${formatMoney(lastPoint.balanceMinor, { currency: lastPoint.currency })}.`
+      : 'Balance trend with no data.';
 
   return (
-    <div style={{ height }} className="w-full">
+    <div style={{ height }} className="w-full" role="img" aria-label={chartLabel}>
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 8 }}>
           <defs>
@@ -246,10 +252,22 @@ export function CashFlowMonthlyChart({
           const label = (state as { activeLabel?: unknown } | null)?.activeLabel;
           if (typeof label === 'string' && label !== '') onMonthClick(label);
         };
+  const firstRow = rows.at(0);
+  const lastRow = rows.at(-1);
+  const drilldownMonths = [...new Set(rows.map((row) => row.month))];
 
   return (
     <div className="space-y-2">
-      <div style={{ height }} className={`w-full${handleClick ? ' cursor-pointer' : ''}`}>
+      <div
+        style={{ height }}
+        className={`w-full${handleClick ? ' cursor-pointer' : ''}`}
+        role="group"
+        aria-label={
+          firstRow && lastRow
+            ? `Monthly income and spending from ${monthLabel(firstRow.month)} through ${monthLabel(lastRow.month)}.`
+            : 'Monthly income and spending with no data.'
+        }
+      >
         <ResponsiveContainer width="100%" height="100%">
           <BarChart
             data={data}
@@ -313,6 +331,25 @@ export function CashFlowMonthlyChart({
           </BarChart>
         </ResponsiveContainer>
       </div>
+      {onMonthClick ? (
+        <div
+          aria-label="Open transactions for a month"
+          className="flex flex-wrap items-center gap-1 px-2"
+        >
+          {drilldownMonths.map((month) => (
+            <button
+              key={month}
+              type="button"
+              className="rounded px-2 py-1 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() => {
+                onMonthClick(month);
+              }}
+            >
+              {monthLabel(month)}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="flex items-center gap-4 px-2 text-xs text-muted-foreground">
         <span className="flex items-center gap-1.5">
           <span className="size-2.5 rounded-[3px]" style={{ background: 'var(--keel-chart-inflow)' }} />
@@ -496,7 +533,11 @@ export function CategoryDonut({
         };
 
   return (
-    <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+    <div
+      className="flex flex-col gap-4 sm:flex-row sm:items-center"
+      role="group"
+      aria-label={`Category breakdown with ${String(items.length)} categories.`}
+    >
       <div className="relative mx-auto w-full max-w-[240px] shrink-0" style={{ height }}>
         <ResponsiveContainer width="100%" height="100%">
           <PieChart margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
@@ -681,7 +722,19 @@ export function CashFlowSankey({
   return (
     // Flow labels need real width — on narrow screens the diagram scrolls in
     // its own container rather than colliding (never the page).
-    <div className="overflow-x-auto">
+    <div
+      className="overflow-x-auto"
+      role="group"
+      tabIndex={0}
+      aria-label={`Cash flow diagram with ${String(nodes.length)} categories and ${String(links.length)} flows.`}
+    >
+      <ul className="sr-only">
+        {nodes.map((node) => (
+          <li key={`${node.column}-${node.name}`}>
+            {node.name}: {formatMoney(node.totalMinor, { currency })}
+          </li>
+        ))}
+      </ul>
       <div className="min-w-[560px]">
         <ResponsiveContainer width="100%" height={h}>
           <Sankey

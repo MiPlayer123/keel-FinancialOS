@@ -57,16 +57,19 @@ export function EntityLensProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [entities, setEntities] = useState<EntityRow[]>([]);
   const [entityId, setEntityIdState] = useState<string | null>(null);
+  const [entityLoadFailed, setEntityLoadFailed] = useState(false);
 
   useEffect(() => {
     if (!householdId) {
       setEntities([]);
       setEntityIdState(null);
+      setEntityLoadFailed(false);
       setReady(false);
       return;
     }
     let active = true;
     setReady(false);
+    setEntityLoadFailed(false);
     // Optimistically restore this household's saved lens so the first paint of
     // every page can already narrow. Reconciled below against the real list.
     const saved = window.localStorage.getItem(storageKey(householdId));
@@ -75,6 +78,7 @@ export function EntityLensProvider({ children }: { children: ReactNode }) {
     void fetchEntities(householdId)
       .then((list) => {
         if (!active) return;
+        setEntityLoadFailed(false);
         setEntities(list);
         // Drop a saved lens that isn't a real entity of THIS household (foreign
         // id, deleted/archived entity) — fail safe to blended, never filter to
@@ -87,10 +91,8 @@ export function EntityLensProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => {
         if (!active) return;
-        // A failed entities read degrades to blended — the switcher hides and
-        // every view shows exactly the pre-lens behavior.
         setEntities([]);
-        setEntityIdState(null);
+        setEntityLoadFailed(true);
         setReady(true);
       });
     return () => {
@@ -100,9 +102,9 @@ export function EntityLensProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<EntityLensContextValue>(() => {
     const multiEntity = entities.length > 1;
-    // A single-entity household is always blended, even if a stale id lingers
-    // in state before the effect clears it — the filter is never applied.
-    const effectiveId = multiEntity ? entityId : null;
+    // Preserve a saved scope when entity metadata is unavailable; widening to
+    // blended would silently change the financial authorization context.
+    const effectiveId = entityLoadFailed ? entityId : multiEntity ? entityId : null;
     const entity = effectiveId
       ? (entities.find((e) => e.entityId === effectiveId) ?? null)
       : null;
@@ -119,7 +121,7 @@ export function EntityLensProvider({ children }: { children: ReactNode }) {
         else window.localStorage.setItem(storageKey(householdId), id);
       },
     };
-  }, [ready, entities, entityId, householdId]);
+  }, [ready, entities, entityId, entityLoadFailed, householdId]);
 
   return <EntityLensContext.Provider value={value}>{children}</EntityLensContext.Provider>;
 }

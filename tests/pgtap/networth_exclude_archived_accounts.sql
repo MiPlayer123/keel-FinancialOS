@@ -22,7 +22,7 @@
 --                                         drops the account-less equity leg
 
 begin;
-select plan(9);
+select plan(25);
 
 -- Roles referenced by the shipped grant/owner statements ---------------------
 do $$ begin
@@ -312,6 +312,316 @@ select is(
      -> 'rows' -> 0 ->> 'netWorthMinor'),
   '4824',
   'reconnect invariant: disconnect->reconnect (archive old + equal-anchor new) conserves net worth'
+);
+
+do $currency_fixture$
+declare
+  v_hh uuid := '44444444-4444-4444-4444-444444444444';
+  v_user uuid := '22222222-2222-2222-2222-222222222222';
+  v_la_a uuid := 'eeeeeeee-0000-0000-0000-000000000001';
+  v_la_b uuid := 'eeeeeeee-0000-0000-0000-000000000002';
+  v_eq uuid := 'eeeeeeee-0000-0000-0000-000000000003';
+  v_a uuid := 'ffffffff-0000-0000-0000-000000000001';
+  v_b uuid := 'ffffffff-0000-0000-0000-000000000002';
+  v_batch uuid;
+begin
+  insert into public.household_memberships(household_id, user_id)
+  values (v_hh, v_user);
+
+  insert into public.ledger_accounts(id, household_id, kind)
+  values
+    (v_la_a, v_hh, 'asset'),
+    (v_la_b, v_hh, 'asset'),
+    (v_eq, v_hh, 'equity');
+
+  insert into public.accounts(id, household_id, ledger_account_id, subtype, archived_at)
+  values
+    (v_a, v_hh, v_la_a, 'brokerage', null),
+    (v_b, v_hh, v_la_b, 'brokerage', null);
+
+  insert into public.journal_batches(
+    household_id,
+    canonical_transaction_id,
+    reverses_batch_id,
+    effective_date
+  )
+  values (v_hh, null, null, current_date - 10)
+  returning id into v_batch;
+
+  insert into public.journal_postings(
+    batch_id,
+    ledger_account_id,
+    amount_minor,
+    currency
+  )
+  values
+    (v_batch, v_la_a, 7000, 'USD'),
+    (v_batch, v_la_b, 8000, 'USD'),
+    (v_batch, v_eq, -15000, 'USD');
+
+  insert into public.balance_snapshots(
+    id,
+    household_id,
+    account_id,
+    as_of,
+    current_minor,
+    currency,
+    source
+  )
+  values
+    (
+      '90000000-0000-0000-0000-000000000000',
+      v_hh,
+      v_a,
+      (current_date - 2)::timestamp + interval '12 hours',
+      100,
+      'CAD',
+      'plaid'
+    ),
+    (
+      '90000000-0000-0000-0000-000000000002',
+      v_hh,
+      v_a,
+      (current_date - 1)::timestamp + interval '12 hours',
+      200,
+      'EUR',
+      'plaid'
+    ),
+    (
+      '90000000-0000-0000-0000-000000000001',
+      v_hh,
+      v_a,
+      (current_date - 1)::timestamp + interval '12 hours',
+      999,
+      'CAD',
+      'plaid'
+    ),
+    (
+      '90000000-0000-0000-0000-000000000100',
+      v_hh,
+      v_b,
+      (current_date - 2)::timestamp + interval '12 hours',
+      300,
+      'CAD',
+      'plaid'
+    );
+end
+$currency_fixture$;
+
+select is(
+  (
+    public.keel_net_worth_as_of(
+      '44444444-4444-4444-4444-444444444444',
+      current_date
+    )->'rows'
+  )::text,
+  jsonb_build_array(
+    jsonb_build_object('currency', 'CAD', 'netWorthMinor', '300'),
+    jsonb_build_object('currency', 'EUR', 'netWorthMinor', '200')
+  )::text,
+  'as_of groups latest investment snapshots by their stored currencies'
+);
+
+select is(
+  public.keel_net_worth_as_of(
+    '44444444-4444-4444-4444-444444444444',
+    current_date
+  )->>'formulaVersion',
+  'net-worth-market-v2',
+  'as_of formula version records snapshot-currency semantics'
+);
+
+select is(
+  (
+    public.keel_net_worth_daily(
+      '44444444-4444-4444-4444-444444444444',
+      current_date - 2,
+      current_date
+    )->'rows'
+  )::text,
+  jsonb_build_array(
+    jsonb_build_object(
+      'date', to_char(current_date - 2, 'YYYY-MM-DD'),
+      'currency', 'CAD',
+      'balanceMinor', '400'
+    ),
+    jsonb_build_object(
+      'date', to_char(current_date - 2, 'YYYY-MM-DD'),
+      'currency', 'EUR',
+      'balanceMinor', '0'
+    ),
+    jsonb_build_object(
+      'date', to_char(current_date - 1, 'YYYY-MM-DD'),
+      'currency', 'CAD',
+      'balanceMinor', '300'
+    ),
+    jsonb_build_object(
+      'date', to_char(current_date - 1, 'YYYY-MM-DD'),
+      'currency', 'EUR',
+      'balanceMinor', '200'
+    ),
+    jsonb_build_object(
+      'date', to_char(current_date, 'YYYY-MM-DD'),
+      'currency', 'CAD',
+      'balanceMinor', '300'
+    ),
+    jsonb_build_object(
+      'date', to_char(current_date, 'YYYY-MM-DD'),
+      'currency', 'EUR',
+      'balanceMinor', '200'
+    )
+  )::text,
+  'daily keeps each day and account latest snapshot in its stored currency'
+);
+
+select is(
+  public.keel_net_worth_daily(
+    '44444444-4444-4444-4444-444444444444',
+    current_date - 2,
+    current_date
+  )->>'formulaVersion',
+  'net-worth-daily-market-v2',
+  'daily formula version records snapshot-currency semantics'
+);
+
+select is(
+  (
+    position(
+      'order by b.as_of desc, b.id desc'
+      in lower(pg_get_functiondef(
+        'public.keel_net_worth_as_of(uuid,date)'::regprocedure
+      ))
+    ) > 0
+    and position(
+      'b.as_of < v_cutoff'
+      in lower(pg_get_functiondef(
+        'public.keel_net_worth_as_of(uuid,date)'::regprocedure
+      ))
+    ) > 0
+  )::text,
+  'true',
+  'as_of retains deterministic ordering and a sargable cutoff'
+);
+
+select is(
+  (
+    position(
+      'order by b.as_of desc, b.id desc'
+      in lower(pg_get_functiondef(
+        'public.keel_net_worth_daily(uuid,date,date)'::regprocedure
+      ))
+    ) > 0
+    and position(
+      'b.as_of < ((days.d + 1)::timestamp at time zone ''utc'')'
+      in lower(pg_get_functiondef(
+        'public.keel_net_worth_daily(uuid,date,date)'::regprocedure
+      ))
+    ) > 0
+  )::text,
+  'true',
+  'daily retains deterministic ordering and an index-compatible UTC bound'
+);
+
+select is(
+  (
+    select role.rolname
+      from pg_proc p
+      join pg_roles role on role.oid = p.proowner
+     where p.oid = 'public.keel_net_worth_as_of(uuid,date)'::regprocedure
+  ),
+  'keel_api',
+  'as_of owner remains keel_api'
+);
+
+select is(
+  (
+    select role.rolname
+      from pg_proc p
+      join pg_roles role on role.oid = p.proowner
+     where p.oid = 'public.keel_net_worth_daily(uuid,date,date)'::regprocedure
+  ),
+  'postgres',
+  'daily owner remains postgres'
+);
+
+select is(
+  has_function_privilege(
+    'public',
+    'public.keel_net_worth_as_of(uuid,date)',
+    'EXECUTE'
+  )::text,
+  'false',
+  'PUBLIC cannot execute as_of'
+);
+
+select is(
+  has_function_privilege(
+    'anon',
+    'public.keel_net_worth_as_of(uuid,date)',
+    'EXECUTE'
+  )::text,
+  'false',
+  'anon cannot execute as_of'
+);
+
+select is(
+  has_function_privilege(
+    'authenticated',
+    'public.keel_net_worth_as_of(uuid,date)',
+    'EXECUTE'
+  )::text,
+  'true',
+  'authenticated can execute as_of'
+);
+
+select is(
+  has_function_privilege(
+    'service_role',
+    'public.keel_net_worth_as_of(uuid,date)',
+    'EXECUTE'
+  )::text,
+  'true',
+  'service_role can execute as_of'
+);
+
+select is(
+  has_function_privilege(
+    'public',
+    'public.keel_net_worth_daily(uuid,date,date)',
+    'EXECUTE'
+  )::text,
+  'false',
+  'PUBLIC cannot execute daily'
+);
+
+select is(
+  has_function_privilege(
+    'anon',
+    'public.keel_net_worth_daily(uuid,date,date)',
+    'EXECUTE'
+  )::text,
+  'false',
+  'anon cannot execute daily'
+);
+
+select is(
+  has_function_privilege(
+    'authenticated',
+    'public.keel_net_worth_daily(uuid,date,date)',
+    'EXECUTE'
+  )::text,
+  'true',
+  'authenticated can execute daily'
+);
+
+select is(
+  has_function_privilege(
+    'service_role',
+    'public.keel_net_worth_daily(uuid,date,date)',
+    'EXECUTE'
+  )::text,
+  'true',
+  'service_role can execute daily'
 );
 
 select * from finish();

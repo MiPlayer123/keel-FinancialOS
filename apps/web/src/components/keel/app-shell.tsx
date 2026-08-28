@@ -67,15 +67,15 @@ const PRIMARY_NAV: NavItem[] = [
   { label: 'Home', href: '/dashboard', icon: LayoutDashboard },
   { label: 'Accounts', href: '/dashboard/accounts', icon: Wallet },
   { label: 'Transactions', href: '/dashboard/ledger', icon: ReceiptText },
-  { label: 'Investments', href: '/dashboard/investments', icon: TrendingUp },
-  { label: 'Recurring', href: '/dashboard/recurring', icon: Repeat },
-  { label: 'Budgets', href: '/dashboard/budgets', icon: PiggyBank },
-  { label: 'Goals', href: '/dashboard/goals', icon: Target },
-  { label: 'Reports', href: '/dashboard/reports', icon: BarChart3 },
   { label: 'Review', href: '/dashboard/review', icon: BadgeCheck },
+  { label: 'Reports', href: '/dashboard/reports', icon: BarChart3 },
 ];
 
 const SECONDARY_NAV: NavItem[] = [
+  { label: 'Budgets', href: '/dashboard/budgets', icon: PiggyBank },
+  { label: 'Recurring', href: '/dashboard/recurring', icon: Repeat },
+  { label: 'Goals', href: '/dashboard/goals', icon: Target },
+  { label: 'Investments', href: '/dashboard/investments', icon: TrendingUp },
   { label: 'Paychecks', href: '/dashboard/paychecks', icon: Banknote },
   { label: 'Reimbursements', href: '/dashboard/reimbursements', icon: ArrowLeftRight },
   { label: 'Statements', href: '/dashboard/statements', icon: FileCheck2 },
@@ -132,12 +132,19 @@ function NavItemLink({
 
 function NavLinks({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: () => void }) {
   const pathname = usePathname();
+  const secondaryActive = SECONDARY_NAV.some(
+    (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),
+  );
+  const [moreOpen, setMoreOpen] = useState(secondaryActive);
+  useEffect(() => {
+    if (secondaryActive) setMoreOpen(true);
+  }, [pathname, secondaryActive]);
   // Entity list rides the shared lens context (which reads entities.list once
   // per household) — the rail reuses it rather than opening a second entities
   // read, so its Personal/Business split is the SAME set, order, and names the
   // Accounts page groups by. `entities` is [] until that read resolves; the
   // rail falls back to the flat (single-entity) layout until then.
-  const { entities } = useEntityLens();
+  const { entities, entityId } = useEntityLens();
   return (
     <nav aria-label="Main navigation" className="flex flex-col gap-0.5">
       {PRIMARY_NAV.map((item) =>
@@ -149,7 +156,12 @@ function NavLinks({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: 
               collapsed={collapsed}
               onNavigate={onNavigate}
             />
-            <SidebarAccounts pathname={pathname} onNavigate={onNavigate} entities={entities} />
+            <SidebarAccounts
+              pathname={pathname}
+              onNavigate={onNavigate}
+              entities={entities}
+              activeEntityId={entityId}
+            />
           </div>
         ) : (
           <NavItemLink
@@ -163,20 +175,47 @@ function NavLinks({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: 
       )}
 
       <Separator className={cn('my-2', collapsed && 'mx-auto w-6')} />
-      {collapsed ? null : (
-        <p className="px-3 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
-          Manage
-        </p>
+      {collapsed ? (
+        SECONDARY_NAV.map((item) => (
+          <NavItemLink
+            key={item.href}
+            item={item}
+            pathname={pathname}
+            collapsed
+            onNavigate={onNavigate}
+          />
+        ))
+      ) : (
+        <>
+          <button
+            type="button"
+            aria-expanded={moreOpen}
+            className="flex items-center justify-between rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+            onClick={() => {
+              setMoreOpen((open) => !open);
+            }}
+          >
+            More
+            <ChevronDown
+              className={cn(
+                'size-4 transition-transform',
+                moreOpen && 'rotate-180',
+              )}
+            />
+          </button>
+          {moreOpen
+            ? SECONDARY_NAV.map((item) => (
+                <NavItemLink
+                  key={item.href}
+                  item={item}
+                  pathname={pathname}
+                  collapsed={false}
+                  onNavigate={onNavigate}
+                />
+              ))
+            : null}
+        </>
       )}
-      {SECONDARY_NAV.map((item) => (
-        <NavItemLink
-          key={item.href}
-          item={item}
-          pathname={pathname}
-          collapsed={collapsed}
-          onNavigate={onNavigate}
-        />
-      ))}
     </nav>
   );
 }
@@ -263,10 +302,12 @@ function SidebarAccounts({
   pathname,
   onNavigate,
   entities,
+  activeEntityId,
 }: {
   pathname: string;
   onNavigate?: (() => void) | undefined;
   entities: EntityRow[];
+  activeEntityId: string | null;
 }) {
   const { householdId } = useHousehold();
   // Queried under the shared 'keel-query' cache-key prefix (see
@@ -309,6 +350,10 @@ function SidebarAccounts({
     enabled: householdId !== null,
   });
   const accounts = data?.accounts ?? [];
+  const visibleAccounts =
+    activeEntityId === null
+      ? accounts
+      : accounts.filter((account) => account.entityId === activeEntityId);
   const kinds = data?.kinds ?? new Map<string, string>();
   const byLedger = new Map((data?.balances ?? []).map((r) => [r.ledgerAccountId, r]));
   const connById = new Map((data?.connections ?? []).map((c) => [c.id, c]));
@@ -338,7 +383,7 @@ function SidebarAccounts({
     });
   }
 
-  if (accounts.length === 0) return null;
+  if (visibleAccounts.length === 0) return null;
 
   // One account row — the stretched-link row shared by the flat layout and
   // every per-entity section, so both render identically.
@@ -441,7 +486,7 @@ function SidebarAccounts({
   // Accounts-page net worth for single-currency households (the common case);
   // for mixed-currency households the rail deliberately shows the dominant
   // currency only rather than mis-summing across currencies (Law 4).
-  const netWorth = currencySubtotal(accounts, byLedger);
+  const netWorth = currencySubtotal(visibleAccounts, byLedger);
 
   const netWorthFoot = (
     <div className="mt-1.5 flex items-baseline justify-between border-t border-border/60 px-3 pt-1.5">
@@ -467,7 +512,7 @@ function SidebarAccounts({
   if (entities.length <= 1) {
     return (
       <div className="mb-1">
-        {groupsFor(accounts)}
+        {groupsFor(visibleAccounts)}
         {netWorthFoot}
       </div>
     );
@@ -480,7 +525,7 @@ function SidebarAccounts({
   // (an archived entity still owning live accounts) rather than dropping them
   // from the household total.
   const byEntity = new Map<string, AccountRow[]>();
-  for (const a of accounts) {
+  for (const a of visibleAccounts) {
     const list = byEntity.get(a.entityId) ?? [];
     list.push(a);
     byEntity.set(a.entityId, list);

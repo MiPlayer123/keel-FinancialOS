@@ -4,9 +4,10 @@ KEEL handles financial data, so security reports get priority over everything el
 
 ## Reporting a vulnerability
 
-Use GitHub's private vulnerability reporting on this repository (Security tab,
-then "Report a vulnerability"). Do not open a public issue for a security
-problem.
+Private vulnerability reporting is not enabled yet. Do not post exploit details,
+credentials, financial data, or identifying information in a public issue.
+This repository is not ready to accept confidential reports until a maintainer
+enables a private channel and updates this policy.
 
 Include what you found, steps to reproduce, and the impact you believe it has.
 You will get a response within a few days.

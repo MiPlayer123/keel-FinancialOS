@@ -1,6 +1,7 @@
 'use client';
 
 import { Building2 } from 'lucide-react';
+import { usePathname } from 'next/navigation';
 
 import { useEntityLens } from '@/components/keel/entity-lens-context';
 import {
@@ -26,9 +27,13 @@ const ALL_ENTITIES = '__all_entities__';
  */
 export function EntityLensSwitcher({ className }: { className?: string }) {
   const { multiEntity, entities, entityId, setEntityId } = useEntityLens();
+  const pathname = usePathname();
+  const supportedPath =
+    pathname === '/dashboard' ||
+    pathname === '/dashboard/accounts' ||
+    pathname === '/dashboard/ledger';
 
-  // Single-entity (or not-yet-loaded) household: no lens to switch, no control.
-  if (!multiEntity) return null;
+  if (!multiEntity || !supportedPath) return null;
 
   const items = {
     [ALL_ENTITIES]: 'All entities',
@@ -45,7 +50,8 @@ export function EntityLensSwitcher({ className }: { className?: string }) {
       }}
     >
       <SelectTrigger
-        aria-label="Entity lens — filter every view to one entity's books"
+        aria-label="Filter this view to one entity's books"
+        title="Filter this view by entity"
         className={className}
       >
         <Building2 className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />

@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { markPasswordRecoveryEvent } from '@/lib/password-recovery';
 import { getSupabaseBrowserClient } from '@/lib/supabase';
 
 /**
@@ -12,12 +13,22 @@ import { getSupabaseBrowserClient } from '@/lib/supabase';
 export function RedirectIfAuthed() {
   const router = useRouter();
   useEffect(() => {
+    const hashType = new URLSearchParams(window.location.hash.slice(1)).get('type');
+    if (hashType === 'recovery') {
+      window.location.replace(`/reset-password${window.location.hash}`);
+      return;
+    }
     const client = getSupabaseBrowserClient();
     void client.auth.getSession().then(({ data }) => {
       if (data.session) router.replace('/dashboard');
     });
-    const { data: sub } = client.auth.onAuthStateChange((_event, session) => {
-      if (session) router.replace('/dashboard');
+    const { data: sub } = client.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        markPasswordRecoveryEvent();
+        router.replace('/reset-password');
+      } else if (session) {
+        router.replace('/dashboard');
+      }
     });
     return () => {
       sub.subscription.unsubscribe();

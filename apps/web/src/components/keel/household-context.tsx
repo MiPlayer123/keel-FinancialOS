@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { getSupabaseBrowserClient } from '@/lib/supabase';
-import { fetchHouseholds, type HouseholdMembership } from '@/lib/keel-api';
+import { bootstrapHousehold, fetchHouseholds, type HouseholdMembership } from '@/lib/keel-api';
 
 type HouseholdContextValue = {
   ready: boolean;
@@ -10,6 +10,8 @@ type HouseholdContextValue = {
   households: HouseholdMembership[];
   householdId: string | null;
   setHouseholdId: (id: string) => void;
+  error: string | null;
+  retry: () => void;
 };
 
 const HouseholdContext = createContext<HouseholdContextValue | null>(null);
@@ -21,6 +23,8 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(null);
   const [households, setHouseholds] = useState<HouseholdMembership[]>([]);
   const [householdId, setHouseholdIdState] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -39,21 +43,28 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
       if (active) setReady(true);
     }, 8000);
     void (async () => {
-      const [{ data }, list] = await Promise.all([
-        getSupabaseBrowserClient().auth.getSession(),
-        fetchHouseholds().catch((): HouseholdMembership[] => []),
-      ]);
-      const uid = data.session?.user.id ?? null;
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- flag flips in cleanup
-      if (!active) return;
-      setUserId(uid);
-      setHouseholds(list);
-      const chosen = list.find((h) => h.householdId === saved) ?? list[0];
-      setHouseholdIdState(chosen?.householdId ?? null);
-      // Persist the auto-selection too — consumers outside the provider
-      // (nav badge) read the saved id directly.
-      if (chosen && chosen.householdId !== saved) {
-        window.localStorage.setItem(KEY, chosen.householdId);
+      try {
+        setError(null);
+        const { data } = await getSupabaseBrowserClient().auth.getSession();
+        const uid = data.session?.user.id ?? null;
+        let list = await fetchHouseholds();
+        if (uid && list.length === 0) {
+          await bootstrapHousehold();
+          list = await fetchHouseholds();
+        }
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- flag flips in cleanup
+        if (!active) return;
+        setUserId(uid);
+        setHouseholds(list);
+        const chosen = list.find((h) => h.householdId === saved) ?? list[0];
+        setHouseholdIdState(chosen?.householdId ?? null);
+        if (chosen && chosen.householdId !== saved) {
+          window.localStorage.setItem(KEY, chosen.householdId);
+        }
+      } catch (cause) {
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- flag flips in cleanup
+        if (!active) return;
+        setError(cause instanceof Error ? cause.message : 'Could not set up your household.');
       }
       setReady(true);
     })();
@@ -61,15 +72,22 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
       active = false;
       clearTimeout(guard);
     };
-  }, []);
+  }, [reload]);
 
   function setHouseholdId(id: string) {
     window.localStorage.setItem(KEY, id);
     setHouseholdIdState(id);
   }
 
+  function retry() {
+    setReady(false);
+    setReload((value) => value + 1);
+  }
+
   return (
-    <HouseholdContext.Provider value={{ ready, userId, households, householdId, setHouseholdId }}>
+    <HouseholdContext.Provider
+      value={{ ready, userId, households, householdId, setHouseholdId, error, retry }}
+    >
       {children}
     </HouseholdContext.Provider>
   );

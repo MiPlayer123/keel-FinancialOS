@@ -60,6 +60,7 @@ export {
   type AgentPromptOptions,
 } from './agent-prompt.js';
 export {
+  AGENT_POLICY_VERSION,
   AGENT_TLDR_MAX_LENGTH,
   buildAgentResponseRecord,
   EmptyAgentResponseError,

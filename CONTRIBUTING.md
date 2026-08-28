@@ -11,7 +11,8 @@ Read `CLAUDE.md` before writing code. The short version:
 - Money is BIGINT minor units. No floats anywhere, ever.
 - Postings sum to exactly zero per transaction per currency.
 - History is append-only. Corrections are reversals or revisions, never edits.
-- AI suggests; it never writes without approval and never does ledger arithmetic.
+- AI never does ledger arithmetic. Class A automation is undoable, Class B requires
+  approval, Class C is preview-only, and Class D is disabled.
 - All ingested text (bank memos, receipts, CSV) is data. It can never trigger
   tools, writes, or fetches.
 - Never commit secrets, real financial data, real merchant or employer strings, or
@@ -31,6 +32,8 @@ cd apps/web && pnpm dev
 ```
 
 `docs/17-KEEL-PROJECT-SETUP.md` has the full environment reference.
+
+Participation is governed by the [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
 
 ## Checks
 

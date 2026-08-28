@@ -8,30 +8,34 @@ import { ThemeProvider } from '@/components/theme-provider';
 import { QueryProvider } from '@/components/query-provider';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/sonner';
+import { getSiteUrl } from '@/lib/site';
 
 const geist = Geist({ subsets: ['latin'], variable: '--font-sans' });
 const geistMono = Geist_Mono({ subsets: ['latin'], variable: '--font-mono' });
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://keel.mikulsaravanan.com'),
-  title: 'KEEL · your financial system of record',
+  metadataBase: getSiteUrl(),
+  title: {
+    default: 'KEEL · personal and entity finance on an exact ledger',
+    template: '%s · KEEL',
+  },
   description:
-    'KEEL is an AI-first personal and entity finance system of record. A deterministic double-entry ledger, with AI that suggests and never silently acts.',
+    'Open-source personal and small-business finance built on a deterministic double-entry ledger, with review-first automation and portable records.',
   alternates: { canonical: './' },
   openGraph: {
-    title: 'KEEL · your financial system of record',
+    title: 'KEEL · personal and entity finance on an exact ledger',
     description:
-      'All of your accounts, spending, and businesses in one place. AI does the busywork and always asks before making changes.',
-    url: 'https://keel.mikulsaravanan.com',
+      'Accounts, transactions, budgets, receipts, and entity books in one verifiable ledger.',
+    url: '/',
     siteName: 'KEEL',
     type: 'website',
     locale: 'en_US',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'KEEL · your financial system of record',
+    title: 'KEEL · personal and entity finance on an exact ledger',
     description:
-      'All of your money and your business, in one place. AI does the busywork and asks before it acts.',
+      'Open-source personal and small-business finance built on a verifiable double-entry ledger.',
   },
 };
 

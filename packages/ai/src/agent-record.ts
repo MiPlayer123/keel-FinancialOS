@@ -12,6 +12,7 @@ import type { SnapshotScope } from './snapshot.js';
 import { AGENT_PROMPT_VERSION } from './agent-prompt.js';
 
 export const AGENT_TLDR_MAX_LENGTH = 280;
+export const AGENT_POLICY_VERSION = 'keel-ai-policy@v1';
 
 /** How the UI reverses an auto-applied action (Law 2: every AI write is undoable). */
 export interface AppliedActionUndo {
@@ -69,14 +70,20 @@ export interface ProposedAction {
 }
 
 export interface AgentResponseRecord {
+  readonly verdict: 'yes' | 'no' | 'uncertain';
   readonly tldr: string;
   readonly body: string;
+  readonly confidence: number | null;
   readonly asOf: string;
   readonly scope: SnapshotScope;
+  readonly reasonCodes: readonly string[];
+  readonly evidenceRefs: readonly string[];
+  readonly requiresApproval: boolean;
   /** True while the agent only read data / applied auto actions. */
   readonly displayOnly: boolean;
   readonly modelVersion: string;
   readonly promptVersion: string;
+  readonly policyVersion: string;
   /** Read tools the agent invoked, in order — the evidence for its answer. */
   readonly toolsUsed: readonly string[];
   readonly steps: number;
@@ -122,13 +129,22 @@ export const buildAgentResponseRecord = (input: BuildAgentRecordInput): AgentRes
   const proposedActions = input.proposedActions ?? [];
   const appliedActions = input.appliedActions ?? [];
   return {
+    verdict: 'uncertain',
     tldr: deriveTldr(body, AGENT_TLDR_MAX_LENGTH),
     body,
+    confidence: null,
     asOf: input.asOf,
     scope: input.scope,
+    reasonCodes: [
+      input.toolsUsed.length > 0 ? 'TOOL_EVIDENCE' : 'NO_TOOL_EVIDENCE',
+      'CONFIDENCE_UNAVAILABLE',
+    ],
+    evidenceRefs: [...new Set(input.toolsUsed)],
+    requiresApproval: proposedActions.length > 0,
     displayOnly: proposedActions.length === 0 && appliedActions.length === 0,
     modelVersion: input.modelVersion,
     promptVersion: AGENT_PROMPT_VERSION,
+    policyVersion: AGENT_POLICY_VERSION,
     toolsUsed: input.toolsUsed,
     steps: input.steps,
     stoppedReason: input.stoppedReason,

@@ -23,7 +23,7 @@ export const AiProposedActionSchema = z.object({
 export const AiResponseRecordSchema = z.object({
   verdict: AiVerdictSchema,
   tldr: z.string().min(1).max(500),
-  confidence: z.number().min(0).max(1),
+  confidence: z.number().min(0).max(1).nullable(),
   asOf: z.iso.datetime(),
   scope: AiScopeSchema,
   reasonCodes: z.array(z.string()),

@@ -84,6 +84,25 @@ export default function LoginPage() {
     }
   }
 
+  async function handlePasswordReset() {
+    if (!email) {
+      toast.error('Enter your email first.');
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const { error } = await getSupabaseBrowserClient().auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+      if (error) toast.error(error.message);
+      else toast.success('Password reset link sent. Check your email.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to send a reset link.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   return (
     <div className="flex min-h-dvh flex-col">
       <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-5">
@@ -157,6 +176,19 @@ export default function LoginPage() {
             >
               Email me a magic link
             </Button>
+            {!isSignup ? (
+              <Button
+                type="button"
+                variant="ghost"
+                className="w-full"
+                disabled={isSubmitting}
+                onClick={() => {
+                  void handlePasswordReset();
+                }}
+              >
+                Forgot password?
+              </Button>
+            ) : null}
           </form>
 
           <p className="mt-6 text-center text-sm text-muted-foreground">

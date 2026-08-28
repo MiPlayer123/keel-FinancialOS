@@ -1,15 +1,16 @@
 import type { MetadataRoute } from 'next';
+import { getSiteUrl } from '@/lib/site';
 
-/** Allow all crawlers (search + LLM) on public pages; the app itself is auth-gated noise. */
+/** Let crawlers fetch routes so page-level noindex directives remain observable. */
 export default function robots(): MetadataRoute.Robots {
+  const site = getSiteUrl();
   return {
     rules: [
       {
         userAgent: '*',
         allow: '/',
-        disallow: ['/dashboard'],
       },
     ],
-    sitemap: 'https://keel.mikulsaravanan.com/sitemap.xml',
+    sitemap: new URL('/sitemap.xml', site).toString(),
   };
 }

@@ -1,16 +1,11 @@
 import type { MetadataRoute } from 'next';
+import { getSiteUrl } from '@/lib/site';
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  return [
-    {
-      url: 'https://keel.mikulsaravanan.com/',
-      changeFrequency: 'weekly',
-      priority: 1,
-    },
-    {
-      url: 'https://keel.mikulsaravanan.com/login',
-      changeFrequency: 'monthly',
-      priority: 0.3,
-    },
-  ];
+  const site = getSiteUrl();
+  return ['/', '/privacy', '/security', '/terms'].map((path) => ({
+    url: new URL(path, site).toString(),
+    changeFrequency: path === '/' ? 'weekly' : 'monthly',
+    priority: path === '/' ? 1 : 0.4,
+  }));
 }

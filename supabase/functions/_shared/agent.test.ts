@@ -54,8 +54,11 @@ Deno.test('read tool catalog exposes the broad read surface', () => {
   const defs = readToolDefinitions();
   assert(defs.length >= 15, 'expected a broad read surface');
   // A few anchors the agent relies on.
-  for (const name of ['get_account_balances', 'list_transactions', 'list_budgets', 'list_reimbursements']) {
+  for (const name of ['get_net_worth', 'list_transactions', 'list_budgets', 'list_reimbursements']) {
     assert(READ_TOOL_NAMES.includes(name), `missing tool ${name}`);
+  }
+  for (const name of ['get_account_balances', 'get_latest_balances']) {
+    assert(!READ_TOOL_NAMES.includes(name), `unsafe unjoined balance tool ${name} must stay disabled`);
   }
   // The reachability-gap batch (previously-authorized actions with no tool).
   for (const name of [
@@ -74,7 +77,6 @@ Deno.test('read tool catalog exposes the broad read surface', () => {
     'list_documents_for_target',
     'get_document_storage_summary',
     'get_receipts_inbox',
-    'get_latest_balances',
   ]) {
     assert(READ_TOOL_NAMES.includes(name), `missing tool ${name}`);
   }
@@ -110,7 +112,7 @@ Deno.test('authz denial returns not_authorized and never calls the proc', async 
     queryToProc: TEST_QUERY_TO_PROC,
     todayIso: '2026-07-19',
   });
-  const out = JSON.parse(await exec(call('get_account_balances')));
+  const out = JSON.parse(await exec(call('get_net_worth')));
   assert(out.error === 'not_authorized');
   assert(called === false, 'proc must not run when authz denies');
 });
@@ -129,7 +131,7 @@ Deno.test('injects the fixed householdId; the model cannot pass another', async 
     todayIso: '2026-07-19',
   });
   // Attempt to smuggle a different household via args — it must be ignored.
-  await exec(call('get_account_balances', { p_household_id: 'h-evil', householdId: 'h-evil' }));
+  await exec(call('get_net_worth', { p_household_id: 'h-evil', householdId: 'h-evil' }));
   assert(seenArgs['p_household_id'] === 'h-real', 'household must be server-injected');
 });
 
@@ -161,7 +163,7 @@ Deno.test('proc errors surface a constant code, never DB internals (Law 12)', as
     queryToProc: TEST_QUERY_TO_PROC,
     todayIso: '2026-07-19',
   });
-  const raw = await exec(call('get_account_balances'));
+  const raw = await exec(call('get_net_worth'));
   assert(!raw.includes('secret_table'), 'must not leak DB internals');
   assert(JSON.parse(raw).error === 'query_failed');
 });
@@ -182,7 +184,7 @@ Deno.test('a read tool whose action has no proc mapping fails closed, never gues
     queryToProc: {},
     todayIso: '2026-07-19',
   });
-  const out = JSON.parse(await exec(call('get_account_balances')));
+  const out = JSON.parse(await exec(call('get_net_worth')));
   assert(out.error === 'unmapped_tool');
   assert(called === false, 'must never call rpc with a guessed/undefined proc name');
 });
@@ -318,7 +320,7 @@ Deno.test('agent tool catalog includes the note write tools', () => {
     assert(names.includes(w), `catalog missing ${w}`);
   }
   // Reads are still present in the combined catalog.
-  assert(names.includes('get_account_balances'));
+  assert(names.includes('get_net_worth'));
 });
 
 Deno.test('create_note applies immediately and records an archive-undo', async () => {

@@ -18,15 +18,36 @@ import {
   callFunction,
   envelope,
   serviceClient,
+  signIn,
   userToken,
   authedHeaders,
   SEED,
 } from './helpers.js';
 
 let alexHeaders: Record<string, string>;
+let goalAccountId: string;
+let goalLedgerAccountId: string;
 
 beforeAll(async () => {
   alexHeaders = authedHeaders(await userToken(SEED.users.alex.email));
+  const alex = await signIn(SEED.users.alex.email);
+  const { data, error } = await alex.rpc('keel_cmd_create_account', {
+    p_command_id: crypto.randomUUID(),
+    p_economic_event_key: `itest:goal-account:${crypto.randomUUID()}`,
+    p_actor: { kind: 'user', userId: SEED.users.alex.id },
+    p_household_id: SEED.households.alpha,
+    p_payload: {
+      entity_id: SEED.entities.alphaPersonal,
+      name: 'Fictional goal savings',
+      kind: 'asset',
+      subtype: 'savings',
+      currency: 'USD',
+    },
+  });
+  if (error || !data) throw new Error(`create goal account: ${error?.message}`);
+  const effects = (data as { effects: { accountId: string; ledgerAccountId: string } }).effects;
+  goalAccountId = effects.accountId;
+  goalLedgerAccountId = effects.ledgerAccountId;
 });
 
 type GoalRow = {
@@ -59,7 +80,7 @@ const depositToChecking = async (amountMinor: string, key: string): Promise<void
       description: 'goal-tracking fixture deposit',
       effectiveDate: '2026-07-05',
       postings: [
-        { ledgerAccountId: SEED.ledgerAccounts.alphaChecking, amountMinor, currency: 'USD' },
+        { ledgerAccountId: goalLedgerAccountId, amountMinor, currency: 'USD' },
         {
           ledgerAccountId: SEED.ledgerAccounts.alphaGroceries,
           amountMinor: (-BigInt(amountMinor)).toString(),
@@ -75,7 +96,7 @@ const depositToChecking = async (amountMinor: string, key: string): Promise<void
 
 describe('goal tracking = account_balance', () => {
   it('derives progress from the asset balance and refuses contributions', async () => {
-    // Establish a positive checking balance.
+    // Establish a positive balance in the isolated goal account.
     await depositToChecking('50000', 'goal-track-deposit-1'); // +$500.00
 
     // Create a tracked savings goal on the checking account, target $400.
@@ -86,7 +107,7 @@ describe('goal tracking = account_balance', () => {
         name: 'Track — checking cushion',
         targetMinor: '40000',
         targetDate: null,
-        accountId: SEED.accounts.alphaChecking,
+        accountId: goalAccountId,
         kind: 'savings',
         tracking: 'account_balance',
       },
@@ -129,7 +150,7 @@ describe('goal tracking = account_balance', () => {
     });
   });
 
-  it('refuses a tracked goal without an account and against a liability', async () => {
+  it('refuses a tracked goal without an account', async () => {
     const noAccount = await callFunction('/api/goals/save', {
       headers: alexHeaders,
       body: {
@@ -142,7 +163,8 @@ describe('goal tracking = account_balance', () => {
         tracking: 'account_balance',
       },
     });
-    expect(noAccount.status).toBeGreaterThanOrEqual(400);
+    expect(noAccount.status).toBe(400);
+    expect(noAccount.body).toMatchObject({ code: 'invalid_command' });
   });
 
   it('manual savings goals still accumulate from contributions', async () => {
@@ -190,7 +212,7 @@ describe('goal tracking = account_balance', () => {
         name: 'Track — audited',
         targetMinor: '10000',
         targetDate: null,
-        accountId: SEED.accounts.alphaChecking,
+        accountId: goalAccountId,
         kind: 'savings',
         tracking: 'account_balance',
       },

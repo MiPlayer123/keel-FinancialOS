@@ -4,11 +4,11 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Wallet } from 'lucide-react';
 
-import { PageHeader, EmptyState } from '@/components/keel/page-header';
+import { PageHeader, EmptyState, QueryErrorState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
 import { useEntityLens, lensAccountIdSet } from '@/components/keel/entity-lens-context';
-import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
+import { useKeelInvalidate, useKeelQuery } from '@/lib/use-keel-query';
 import {
   fetchAccounts,
   fetchBudgets,
@@ -39,6 +39,7 @@ import { NetWorthHero } from '@/components/keel/net-worth-hero';
 import { NotesTasksCard } from '@/components/keel/notes-tasks-card';
 import { NeedsAttention } from '@/components/keel/needs-attention';
 import { formatMoney } from '@/lib/money';
+import { currencyTotals, primaryCurrencyTotal } from '@/lib/currency-totals';
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -612,7 +613,8 @@ function ProjectedCashCard({
 }
 
 function HomeBody() {
-  const { householdId, ready } = useHousehold();
+  const { householdId, ready, error: householdError, retry: retryHousehold } = useHousehold();
+  const invalidate = useKeelInvalidate(householdId);
   // Global entity lens (persona theme #2). null = "All entities" (blended,
   // pre-lens dashboard). A concrete id scopes every widget that can be
   // decomposed client-side by account→entity (net worth, spending mix,
@@ -625,13 +627,15 @@ function HomeBody() {
   const balances = useKeelQuery<TrialBalanceRow>('ledger.trial_balance', householdId);
   // Net-worth trend now lives inside NetWorthHero (C11 fusion) — it fetches
   // the longest supported series once and subsets per range pill (C10).
-  const monthlyFlow = useKeelQuerySilent<MonthlyCashFlowRow>(
+  const monthlyFlow = useKeelQuery<MonthlyCashFlowRow>(
     'dashboard.cash_flow_monthly',
     householdId,
   );
-  const richTxns = useKeelQuerySilent<RichTransactionRow>('transactions.rich', householdId);
-  const recurringSeries = useKeelQuerySilent<RecurringSeriesRow>('recurring.list', householdId);
+  const richTxns = useKeelQuery<RichTransactionRow>('transactions.rich', householdId);
+  const recurringSeries = useKeelQuery<RecurringSeriesRow>('recurring.list', householdId);
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
+  const [accountsError, setAccountsError] = useState<string | null>(null);
+  const [accountsAttempt, setAccountsAttempt] = useState(0);
   const [connections, setConnections] = useState<ConnectionRow[] | null>(null);
   const [schedules, setSchedules] = useState<ScheduleRow[]>([]);
   const [budgets, setBudgets] = useState<BudgetRow[] | null>(null);
@@ -639,17 +643,28 @@ function HomeBody() {
     rows: DailyBalanceRow[];
     bills: ForecastBill[];
   } | null>(null);
+  const [forecastError, setForecastError] = useState<string | null>(null);
+  const [forecastAttempt, setForecastAttempt] = useState(0);
 
   useEffect(() => {
     if (!householdId) return;
     let active = true;
-    void fetchCashFlowForecast(householdId, 30).then((f) => {
-      if (active) setForecast(f);
-    });
+    setForecast(null);
+    setForecastError(null);
+    void fetchCashFlowForecast(householdId, 30)
+      .then((f) => {
+        if (active) setForecast(f);
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setForecast(null);
+          setForecastError(error instanceof Error ? error.message : 'Could not load forecast.');
+        }
+      });
     return () => {
       active = false;
     };
-  }, [householdId]);
+  }, [householdId, forecastAttempt]);
 
   // Match the Budgets page's current-month read. budgets.list includes every
   // category, so a real budget exists only when at least one row has a
@@ -676,17 +691,21 @@ function HomeBody() {
   useEffect(() => {
     if (!householdId) return;
     let active = true;
+    setAccountsError(null);
     void fetchAccounts(householdId)
       .then((a) => {
         if (active) setAccounts(a);
       })
-      .catch(() => {
-        if (active) setAccounts([]);
+      .catch((error: unknown) => {
+        if (active) {
+          setAccounts([]);
+          setAccountsError(error instanceof Error ? error.message : 'Could not load accounts.');
+        }
       });
     return () => {
       active = false;
     };
-  }, [householdId]);
+  }, [householdId, accountsAttempt]);
 
   // One connections fetch for the whole page: the Needs-attention reauth row
   // and the Accounts section's SyncStatus both read from it.
@@ -721,7 +740,12 @@ function HomeBody() {
   }, [householdId]);
 
   const waitingForAccounts = householdId !== null && accounts === null;
-  const loading = !ready || balances.loading || waitingForAccounts;
+  const loading =
+    !ready ||
+    balances.loading ||
+    richTxns.loading ||
+    recurringSeries.loading ||
+    waitingForAccounts;
 
   // The account ids inside the current lens (null = blended, no restriction) —
   // the one mapping every decomposable widget below narrows through.
@@ -734,9 +758,9 @@ function HomeBody() {
   const lensTxns = useMemo(
     () =>
       lensAccountIds === null
-        ? (richTxns ?? [])
-        : (richTxns ?? []).filter((t) => lensAccountIds.has(t.accountId)),
-    [richTxns, lensAccountIds],
+        ? richTxns.rows
+        : richTxns.rows.filter((t) => lensAccountIds.has(t.accountId)),
+    [richTxns.rows, lensAccountIds],
   );
 
   // Hooks must run on EVERY render — these sit ABOVE the early returns below
@@ -754,7 +778,7 @@ function HomeBody() {
   const todayIso = new Date().toISOString().slice(0, 10);
   const upcomingRecurring = useMemo(
     () =>
-      (recurringSeries ?? [])
+      recurringSeries.rows
         .filter((series) => series.status === 'confirmed')
         .flatMap((series) =>
           series.occurrences
@@ -766,7 +790,7 @@ function HomeBody() {
         )
         .sort((a, b) => a.occurrence.expectedDate.localeCompare(b.occurrence.expectedDate))
         .slice(0, 6),
-    [recurringSeries, todayIso],
+    [recurringSeries.rows, todayIso],
   );
 
   if (loading) {
@@ -779,11 +803,27 @@ function HomeBody() {
   }
 
   if (!householdId) {
+    if (householdError) {
+      return <QueryErrorState onRetry={retryHousehold} />;
+    }
     return (
       <EmptyState
         icon={<Wallet className="size-6" />}
         title="No household yet"
         description="Once your account is set up with a household, balances and accounts appear here."
+      />
+    );
+  }
+
+  const coreError = balances.error ?? accountsError;
+  if (coreError) {
+    return (
+      <QueryErrorState
+        onRetry={() => {
+          setAccounts(null);
+          setAccountsAttempt((attempt) => attempt + 1);
+          void invalidate(['ledger.trial_balance']);
+        }}
       />
     );
   }
@@ -798,14 +838,25 @@ function HomeBody() {
       : (accounts ?? []).filter((a) => lensAccountIds.has(a.id));
 
   const balanceByLedger = new Map(balances.rows.map((r) => [r.ledgerAccountId, r.balanceMinor]));
-  const netMinor = accountList.reduce((acc, a) => {
-    const b = balanceByLedger.get(a.ledgerAccountId) ?? '0';
-    return acc + BigInt(b);
-  }, 0n);
+  const accountBalances = accountList.map((account) => ({
+    amountMinor: balanceByLedger.get(account.ledgerAccountId) ?? '0',
+    currency: account.currency,
+  }));
+  const netTotals = currencyTotals(accountBalances);
+  const primaryNet = primaryCurrencyTotal(accountBalances) ?? {
+    amountMinor: '0',
+    currency: 'USD',
+    rowCount: 0,
+  };
 
-  const showMonthlyFlow =
-    monthlyFlow !== null &&
-    monthlyFlow.some((m) => m.inflowMinor !== '0' || m.outflowMinor !== '0');
+  const monthlyFlowGroups = [...new Set(monthlyFlow.rows.map((row) => row.currency))]
+    .map((currency) => ({
+      currency,
+      rows: monthlyFlow.rows.filter((row) => row.currency === currency),
+    }))
+    .filter((group) =>
+      group.rows.some((row) => row.inflowMinor !== '0' || row.outflowMinor !== '0'),
+    );
   // With no confirmed recurring occurrences in the window the forecast collapses
   // to a flat band (every balance equal) that reads as a broken chart
   // (DASHBOARD-7 / GOALSFORECAST-3). Only draw the chart once the series really
@@ -825,7 +876,9 @@ function HomeBody() {
       <div className="flex flex-col gap-2">
         <NetWorthHero
           householdId={householdId}
-          fallbackNetMinor={netMinor.toString()}
+          fallbackNetMinor={primaryNet.amountMinor}
+          fallbackCurrency={primaryNet.currency}
+          fallbackMultiCurrency={netTotals.length > 1}
           fallbackAsOf={balances.asOf}
           entityScoped={lensActive}
           {...(lensActive && lensEntity ? { scopeLabel: `${lensEntity.name} only` } : {})}
@@ -839,13 +892,19 @@ function HomeBody() {
           state that can't be split per entity client-side, so it's shown only
           in the blended view — an entity lens would otherwise imply its counts
           are scoped when they aren't. */}
-      {lensActive ? null : (
+      {richTxns.error || recurringSeries.error ? (
+        <QueryErrorState
+          onRetry={() => {
+            void richTxns.refetch();
+          }}
+        />
+      ) : lensActive ? null : (
         <NeedsAttention
           householdId={householdId}
-          recurring={recurringSeries}
+          recurring={recurringSeries.rows}
           bills={forecast?.bills ?? null}
           connections={connections}
-          transactions={richTxns}
+          transactions={richTxns.rows}
         />
       )}
 
@@ -855,24 +914,38 @@ function HomeBody() {
         {lensActive ? null : (
           <div className="flex min-w-0 flex-col gap-4 [&>*]:max-w-none">
             <CashFlowCard householdId={householdId} />
-            {showMonthlyFlow ? (
-              <Card size="sm">
+            {monthlyFlow.error ? (
+              <QueryErrorState
+                onRetry={() => {
+                  void monthlyFlow.refetch();
+                }}
+              />
+            ) : null}
+            {monthlyFlowGroups.map((group) => (
+              <Card key={group.currency} size="sm">
                 <CardHeader>
-                  <CardTitle>Cash flow by month</CardTitle>
+                  <CardTitle>
+                    Cash flow by month
+                    {monthlyFlowGroups.length > 1 ? ` · ${group.currency}` : ''}
+                  </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <CashFlowMonthlyChart rows={monthlyFlow} height={180} />
+                  <CashFlowMonthlyChart rows={group.rows} height={180} />
                 </CardContent>
               </Card>
-            ) : null}
+            ))}
           </div>
         )}
 
         {/* Transaction-derived cards ARE entity-decomposable — they run on the
             lens-scoped transactions/accounts computed above. */}
-        <SpendingCard spending={spending} insights={insights} />
-        <RecentTransactionsCard rows={recentTransactions} />
-        {lensActive ? null : (
+        {richTxns.error ? null : (
+          <>
+            <SpendingCard spending={spending} insights={insights} />
+            <RecentTransactionsCard rows={recentTransactions} />
+          </>
+        )}
+        {lensActive || recurringSeries.error ? null : (
           <UpcomingRecurringCard rows={upcomingRecurring} todayIso={todayIso} />
         )}
         {/* The flat account list card was removed here (founder ask
@@ -881,13 +954,19 @@ function HomeBody() {
             balances" better than a truncated top-5 card on the dashboard did.
             The net-worth hero above already carries the headline figure. */}
         <NotesTasksCard householdId={householdId} compact />
-        {!lensActive && forecast !== null ? (
+        {!lensActive && forecastError ? (
+          <QueryErrorState
+            onRetry={() => {
+              setForecastAttempt((attempt) => attempt + 1);
+            }}
+          />
+        ) : !lensActive && forecast !== null ? (
           <ProjectedCashCard forecast={forecast} varies={forecastVaries} todayIso={todayIso} />
         ) : null}
-        {!lensActive && hasBudget ? (
+        {!lensActive && hasBudget && !richTxns.error && !recurringSeries.error ? (
           <FreeToSpendCard
-            richTxns={richTxns ?? []}
-            series={recurringSeries ?? []}
+            richTxns={richTxns.rows}
+            series={recurringSeries.rows}
             schedules={schedules}
           />
         ) : null}

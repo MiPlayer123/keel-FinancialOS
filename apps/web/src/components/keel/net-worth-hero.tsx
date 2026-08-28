@@ -46,15 +46,18 @@ function isoDaysAgo(days: number): string {
 export function NetWorthHero({
   householdId,
   fallbackNetMinor,
+  fallbackCurrency,
+  fallbackMultiCurrency = false,
   fallbackAsOf,
   actions,
   entityScoped = false,
   scopeLabel,
 }: {
   householdId: string | null;
-  /** Trial-balance net worth (all currencies summed) — shown while the trend
-   *  loads and when the trend read model returns no usable series. */
+  /** Trial-balance net worth in the selected primary currency. */
   fallbackNetMinor: string;
+  fallbackCurrency: string;
+  fallbackMultiCurrency?: boolean;
   /** asOf of the trial-balance envelope, stamped when the trend is absent. */
   fallbackAsOf?: string | null;
   /** Optional page actions rendered in the hero's top-right corner. */
@@ -81,19 +84,16 @@ export function NetWorthHero({
   );
   const [selectedKey, setSelectedKey] = useState('90d');
 
-  // The daily series is per-currency; the hero plots the dominant one (same
-  // convention as the insight/free-to-spend cards — BigInt sums are only
-  // meaningful within one currency).
+  // The daily series is per-currency; the hero plots the same explicit
+  // presentation currency as its fallback headline.
   const { points, multiCurrency } = useMemo(() => {
     const rows = trend?.rows ?? [];
-    const counts = new Map<string, number>();
-    for (const r of rows) counts.set(r.currency, (counts.get(r.currency) ?? 0) + 1);
-    const dominant = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+    const currencies = new Set(rows.map((row) => row.currency));
     return {
-      points: dominant === undefined ? [] : rows.filter((r) => r.currency === dominant),
-      multiCurrency: counts.size > 1,
+      points: rows.filter((row) => row.currency === fallbackCurrency),
+      multiCurrency: currencies.size > 1,
     };
-  }, [trend]);
+  }, [fallbackCurrency, trend]);
 
   const historyDays = availableHistoryDays(points);
   // Shortest range is always offered (there is nothing shorter to fall back
@@ -111,7 +111,7 @@ export function NetWorthHero({
   const hasTrend = trend !== null && delta !== null;
 
   const currentMinor = delta?.lastMinor ?? fallbackNetMinor;
-  const currency = windowPoints[windowPoints.length - 1]?.currency;
+  const currency = windowPoints[windowPoints.length - 1]?.currency ?? fallbackCurrency;
   const asOf = hasTrend ? trend.asOf : (fallbackAsOf ?? null);
   const deltaNegative = delta !== null && isNegativeMinor(delta.deltaMinor);
 
@@ -125,7 +125,7 @@ export function NetWorthHero({
             <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:gap-3">
               <Money
                 amountMinor={currentMinor}
-                {...(currency !== undefined ? { currency } : {})}
+                currency={currency}
                 className="text-3xl font-semibold"
                 muteZero={false}
               />
@@ -133,7 +133,7 @@ export function NetWorthHero({
                 <span className="flex flex-wrap items-baseline gap-x-1.5 text-sm">
                   <Money
                     amountMinor={delta.deltaMinor}
-                    {...(currency !== undefined ? { currency } : {})}
+                    currency={currency}
                     signed
                     muteZero={false}
                   />
@@ -151,7 +151,7 @@ export function NetWorthHero({
             {asOf !== null ? (
               <p className="text-xs text-muted-foreground">
                 As of {asOfLabel(asOf)}
-                {multiCurrency ? ' · dominant currency only' : ''}
+                {multiCurrency || fallbackMultiCurrency ? ' · shown in primary currency only' : ''}
                 {entityScoped && scopeLabel != null && scopeLabel !== ''
                   ? ` · ${scopeLabel}`
                   : ''}

@@ -83,34 +83,15 @@ beforeAll(async () => {
     p_actor: ACTOR,
     p_household_id: HOUSEHOLD,
     p_payload: {
-      entityId: ENTITY, name: `Retirement 401k ${suffix}`, kind: 'asset',
-      subtype: 'retirement', currency: 'USD', openingBalanceMinor: '0',
+      entity_id: ENTITY,
+      name: `Retirement 401k ${suffix}`,
+      kind: 'asset',
+      subtype: 'retirement',
+      currency: 'USD',
     },
-  }).catch(() => ({ data: null, error: { message: 'create_account rpc shape differs' } }));
-  // Fall back: some stacks expose account creation via a different proc. If the
-  // rpc name/shape differs, resolve a pre-seeded manual asset account instead.
-  if (acctErr || !acct) {
-    const { data: rows } = await service
-      .from('accounts')
-      .select('id, ledger_account_id, entity_id, archived_at, connection_id')
-      .eq('household_id', HOUSEHOLD);
-    const { data: las } = await service
-      .from('ledger_accounts')
-      .select('id, kind, is_category, entity_id, currency, archived_at')
-      .eq('household_id', HOUSEHOLD);
-    const laById = new Map((las ?? []).map((l: Record<string, unknown>) => [l['id'], l]));
-    const candidate = (rows ?? []).find((a: Record<string, unknown>) => {
-      const la = laById.get(a['ledger_account_id']);
-      return (
-        a['archived_at'] === null && a['id'] !== SEED.accounts.alphaChecking &&
-        la && la['kind'] === 'asset' && la['is_category'] === false &&
-        la['entity_id'] === ENTITY && la['currency'] === 'USD' && la['archived_at'] === null
-      );
-    });
-    retirementAccountId = (candidate?.['id'] as string | undefined) ?? SEED.accounts.alphaChecking;
-  } else {
-    retirementAccountId = (acct as { effects: { accountId: string } }).effects.accountId;
-  }
+  });
+  if (acctErr || !acct) throw new Error(`create retirement account: ${acctErr?.message}`);
+  retirementAccountId = (acct as { effects: { accountId: string } }).effects.accountId;
 
   // A confirmed recurring series + employer to author the template against.
   const { data: series } = await service
@@ -170,7 +151,11 @@ beforeAll(async () => {
 });
 
 /** Issue a token then apply, mirroring applyPaycheckTemplate (keel-api.ts). */
-async function issueAndApply(depositTxnId: string, tokenTemplateVersion = 1): Promise<{ paycheckId: string; newBatchId: string }> {
+async function issueAndApply(depositTxnId: string, tokenTemplateVersion = 1): Promise<{
+  paycheckId: string;
+  newBatchId: string;
+  tokenId: string;
+}> {
   const { data: issued, error: issErr } = await alex.rpc('keel_cmd_paycheck_issue_apply_token', {
     p_household_id: HOUSEHOLD, p_series_id: seriesId, p_deposit_txn_id: depositTxnId,
     p_template_id: templateId, p_template_version: tokenTemplateVersion,
@@ -186,7 +171,7 @@ async function issueAndApply(depositTxnId: string, tokenTemplateVersion = 1): Pr
   });
   if (appErr) throw new Error(`apply: ${appErr.message}`);
   const eff = (applied as { effects: { paycheckId: string; newBatchId: string } }).effects;
-  return { paycheckId: eff.paycheckId, newBatchId: eff.newBatchId };
+  return { paycheckId: eff.paycheckId, newBatchId: eff.newBatchId, tokenId };
 }
 
 describe('paycheck template apply — delegates to set_splits, balanced decomposition', () => {
@@ -219,16 +204,22 @@ describe('paycheck template apply — delegates to set_splits, balanced decompos
   it('idempotent replay: re-applying the same deposit returns the same result, no double-book', async () => {
     const { txnId } = await mkDeposit('1200000', `PAYCHECK replay ${suffix}`);
     const first = await issueAndApply(txnId);
-    // A second apply with the SAME economic_event_key replays (idempotency check).
-    const { data: issued2 } = await alex.rpc('keel_cmd_paycheck_issue_apply_token', {
-      p_household_id: HOUSEHOLD, p_series_id: seriesId, p_deposit_txn_id: txnId, p_template_id: templateId, p_template_version: 1,
-    });
-    const { data: applied2 } = await alex.rpc('keel_cmd_paycheck_apply_template', {
+    const { data: applied2, error: replayError } = await alex.rpc(
+      'keel_cmd_paycheck_apply_template',
+      {
       p_command_id: uuid(),
       p_economic_event_key: `paycheck-tpl:${seriesId}:${txnId}`,
       p_actor: ACTOR, p_household_id: HOUSEHOLD,
-      p_payload: { series_id: seriesId, deposit_txn_id: txnId, template_id: templateId, template_version: 1, approval_token_id: (issued2 as { tokenId: string }).tokenId },
-    });
+        p_payload: {
+          series_id: seriesId,
+          deposit_txn_id: txnId,
+          template_id: templateId,
+          template_version: 1,
+          approval_token_id: first.tokenId,
+        },
+      },
+    );
+    expect(replayError).toBeNull();
     expect((applied2 as { effects: { paycheckId: string } }).effects.paycheckId).toBe(first.paycheckId);
   });
 });
@@ -310,9 +301,8 @@ describe('AGENT-SAFETY + tenant isolation', () => {
 
   it('a different household member (beta) cannot apply into alpha (tenant isolation)', async () => {
     const { txnId } = await mkDeposit('1200000', `PAYCHECK tenant ${suffix}`);
-    const blake = await signIn(SEED.users.blake.email).catch(() => null);
-    if (!blake) return; // blake may not be seeded on every stack
-    const { error } = await blake.rpc('keel_cmd_paycheck_issue_apply_token', {
+    const casey = await signIn(SEED.users.casey.email);
+    const { error } = await casey.rpc('keel_cmd_paycheck_issue_apply_token', {
       p_household_id: HOUSEHOLD, p_series_id: seriesId, p_deposit_txn_id: txnId, p_template_id: templateId, p_template_version: 1,
     });
     expect(error).not.toBeNull();

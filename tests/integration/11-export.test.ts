@@ -193,7 +193,16 @@ describe('POST /api/admin/export', () => {
     expect(sortedTrial(reconstructTrialBalance(restored))).toEqual(
       sortedTrial(restored.trialBalance ?? []),
     );
-    expect(sortedTrial(restored.trialBalance ?? [])).toEqual(sortedTrial(liveTrial.rows));
+    const archivedLedgerAccountIds = new Set(
+      restored.tables.accounts
+        .filter((row) => row['archived_at'] !== null)
+        .map((row) => row['ledger_account_id'] as string),
+    );
+    expect(
+      sortedTrial(restored.trialBalance ?? []).filter(
+        (row) => !archivedLedgerAccountIds.has(row.ledgerAccountId),
+      ),
+    ).toEqual(sortedTrial(liveTrial.rows));
 
     const publicDecisions = [
       ...body.manifest.include.map((entry) => entry.table),
@@ -290,7 +299,8 @@ describe('POST /api/admin/export', () => {
     expect(response.status).toBe(413);
     expect(response.body).toEqual({
       code: 'export_too_large',
-      message: 'Use the async export job.',
+      message:
+        'This household is too large for the current download endpoint. An async export is not available yet.',
       details: {},
     });
   });

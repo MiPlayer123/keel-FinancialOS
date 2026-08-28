@@ -50,10 +50,8 @@ import {
 } from '../_shared/vendor/keel-domain.mjs';
 import { json, mapDbError, toSnakeKeys } from '../_shared/http.ts';
 import {
-  agentToolDefinitions,
-  makeExecuteAgentTool,
-  type AppliedAction,
-  type ProposedAction,
+  makeExecuteReadTool,
+  readToolDefinitions,
 } from '../_shared/agent.ts';
 import { decideStatementPromotion } from '../_shared/statement-sniff.ts';
 import { decryptToken, encryptToken, type EncryptedRecord } from '../_shared/credential-crypto.ts';
@@ -407,6 +405,30 @@ export default {
       return json(400, { code: 'invalid_command', message: 'Invalid JSON.', details: {} });
     }
 
+    if (path === '/onboarding/bootstrap') {
+      const input = body as Record<string, unknown>;
+      const requestedName = input['householdName'];
+      if (
+        requestedName !== undefined &&
+        (typeof requestedName !== 'string' || requestedName.trim().length > 200)
+      ) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Household name failed validation.',
+          details: {},
+        });
+      }
+      const { data, error } = await ctx.supabaseAdmin.rpc('keel_bootstrap_household', {
+        p_user_id: userId,
+        p_household_name:
+          typeof requestedName === 'string' && requestedName.trim().length > 0
+            ? requestedName.trim()
+            : 'My household',
+      });
+      if (error) return mapDbError(error);
+      return json(200, data);
+    }
+
     if (path === '/admin/export') {
       const input = body as Record<string, unknown>;
       const householdId = HouseholdIdSchema.safeParse(input['householdId']);
@@ -448,7 +470,8 @@ export default {
         if (!isWithinInlineExportLimit(serialized)) {
           return json(413, {
             code: 'export_too_large',
-            message: 'Use the async export job.',
+            message:
+              'This household is too large for the current download endpoint. An async export is not available yet.',
             details: {},
           });
         }
@@ -651,6 +674,7 @@ export default {
         asOf: nowIso,
         personalProfile,
         derivedContext,
+        readOnly: true,
       });
 
       const provider =
@@ -667,92 +691,13 @@ export default {
               apiKey: openaiKey,
             });
 
-      // Class-A auto writes (notes) report here; collected into the record so
-      // the UI can show what changed + offer undo (Law 2). Budgets/reimbursements
-      // are Class B (proposals) and land in later slices.
-      const appliedActions: AppliedAction[] = [];
-      const proposedActions: ProposedAction[] = [];
-
-      // Scoped receipt-attach capability — ONLY when a receipt-compatible image
-      // is attached this turn. Uses the SERVICE-ROLE client (storage + the
-      // service-role-only confirm proc); the agent tool reaches it solely
-      // through this narrow closure, never `supabaseAdmin` directly. Household
-      // is fixed; the transaction is re-verified in-household here AND by the
-      // confirm proc (KEEL_SCOPE_VIOLATION).
-      const receiptMime =
-        agentImage && RECEIPT_MIME_ALLOWLIST.has(agentImage.mediaType) ? agentImage.mediaType : null;
-      const attachReceipt =
-        agentImage && receiptMime
-          ? async ({ transactionId }: { transactionId: string }) => {
-              const { data: txn } = await ctx.supabase
-                .from('canonical_transactions')
-                .select('entity_id')
-                .eq('id', transactionId)
-                .eq('household_id', householdId.data)
-                .is('voided_at', null)
-                .maybeSingle();
-              const entityId = (txn as { entity_id?: string } | null)?.entity_id;
-              if (!entityId) return { ok: false as const, error: 'transaction_not_found' };
-              let bytes: Uint8Array;
-              try {
-                const bin = atob(agentImage.dataBase64);
-                bytes = new Uint8Array(bin.length);
-                for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
-              } catch {
-                return { ok: false as const, error: 'bad_image' };
-              }
-              if (bytes.byteLength === 0 || bytes.byteLength > DOCUMENT_MAX_BYTES) {
-                return { ok: false as const, error: 'bad_image' };
-              }
-              const documentId = crypto.randomUUID();
-              const storagePath = `${householdId.data}/${documentId}/${crypto.randomUUID()}`;
-              const up = await ctx.supabaseAdmin.storage
-                .from('receipts')
-                .upload(storagePath, bytes, { contentType: receiptMime, upsert: false });
-              if (up.error) return { ok: false as const, error: 'upload_failed' };
-              const contentSha256 = await sha256Hex(bytes);
-              const ext =
-                receiptMime === 'image/png'
-                  ? 'png'
-                  : receiptMime === 'image/webp'
-                    ? 'webp'
-                    : receiptMime === 'application/pdf'
-                      ? 'pdf'
-                      : 'jpg';
-              const { data: conf, error: confErr } = await ctx.supabaseAdmin.rpc(
-                'keel_documents_confirm_upload',
-                {
-                  p_household_id: householdId.data,
-                  p_entity_id: entityId,
-                  p_document_id: documentId,
-                  p_kind: 'receipt',
-                  p_storage_bucket: 'receipts',
-                  p_storage_path: storagePath,
-                  p_content_sha256: contentSha256,
-                  p_mime_type: receiptMime,
-                  p_byte_size: bytes.byteLength,
-                  p_original_filename: `assistant-receipt-${documentId.slice(0, 8)}.${ext}`,
-                  p_created_by: userId,
-                  p_target_type: 'transaction',
-                  p_target_id: transactionId,
-                },
-              );
-              if (confErr) return { ok: false as const, error: 'attach_failed' };
-              const effects = (conf as { effects?: { attachmentId?: string } } | null)?.effects;
-              return { ok: true as const, attachmentId: effects?.attachmentId ?? '', documentId };
-            }
-          : undefined;
-
-      const executeTool = makeExecuteAgentTool({
+      const executeTool = makeExecuteReadTool({
         authorize,
         authzCtx,
         householdId: householdId.data,
         rpc: (proc, args) => ctx.supabase.rpc(proc, args),
-        queryToProc: { ...QUERY_TO_PROC, ...AGENT_WRITE_TO_PROC },
+        queryToProc: QUERY_TO_PROC,
         todayIso,
-        onApplied: (action) => appliedActions.push(action),
-        onProposed: (action) => proposedActions.push(action),
-        ...(attachReceipt ? { attachReceipt } : {}),
       });
 
       const startedAt = Date.now();
@@ -760,7 +705,7 @@ export default {
         const run = await runAgent({
           provider,
           system,
-          tools: agentToolDefinitions(),
+          tools: readToolDefinitions(),
           userMessage: question.trim(),
           ...(agentImage ? { image: agentImage } : {}),
           ...(history.length > 0 ? { history } : {}),
@@ -778,8 +723,8 @@ export default {
             steps: run.steps,
             stoppedReason: run.stoppedReason,
             tools: run.toolCalls.map((t) => t.call.name),
-            appliedCount: appliedActions.length,
-            proposedCount: proposedActions.length,
+            appliedCount: 0,
+            proposedCount: 0,
             hasImage: agentImage !== undefined,
             historyTurns: history.length,
             latencyMs: Date.now() - startedAt,
@@ -795,8 +740,6 @@ export default {
           toolsUsed: run.toolCalls.map((t) => t.call.name),
           steps: run.steps,
           stoppedReason: run.stoppedReason,
-          appliedActions,
-          proposedActions,
         });
         return json(200, record);
       } catch (error) {

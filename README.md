@@ -1,16 +1,19 @@
 # KEEL
 
-KEEL is a personal finance app built like an accounting system. Your accounts, your spending, and your businesses all live in one exact double-entry ledger, so every number adds up and can show its work. AI handles the busywork: categorizing transactions, matching receipts, spotting recurring bills. But it only suggests. You approve every change, and anything can be undone.
+KEEL is an open-source personal finance app built like an accounting system. Accounts, spending, and small-business books live in one exact double-entry ledger, so every number can show its work. Detectors and review workflows suggest categories, receipt matches, transfers, and recurring activity.
 
 Live at [keel.mikulsaravanan.com](https://keel.mikulsaravanan.com).
+
+KEEL is pre-release. The hosted bank connection is Plaid Sandbox-only and should
+be evaluated with fictional data.
 
 ## Non-negotiables
 
 - Money is BIGINT minor units. No floats, no rounding, ever.
 - Per transaction per currency, postings sum to exactly zero (enforced in the service layer and the database).
 - History is append-only: corrections are reversals or revisions, never edits. Every mutation is audited and undoable.
-- AI never does ledger arithmetic and never writes without approval (risk ladder A/B/C/D; see `CLAUDE.md`).
-- Full export always works: CSV, JSON, QIF, Beancount. The Data Access Guarantee is a feature, not a promise.
+- AI never does ledger arithmetic. Its A/B/C/D risk ladder separates undoable automation, approval-gated suggestions, previews, and disabled actions.
+- Financial records are portable through CSV, JSON, QIF, and Beancount exports.
 
 The full law set and agent operating rules live in [`CLAUDE.md`](CLAUDE.md). Backend contracts live in [`docs/BC-v2.1.md`](docs/BC-v2.1.md). Infrastructure decisions live in [`INFRA.md`](INFRA.md).
 
@@ -40,7 +43,7 @@ tests/integration         Cross-package integration tests
 docs                      Specs (BC-v2.1, build plan, tech spec, status)
 docs/harness              Evidence census > plan > slice build pipeline
 docs/archive              Historical phase plans (superseded; kept for citations)
-design                    Design tokens and teardown notes (evidence not redistributable)
+design                    Original tokens and written teardown notes
 NOTES.md                  Running build journal (decisions, deviations, findings)
 ```
 
@@ -52,10 +55,13 @@ Prereqs: Node 22+, pnpm 10, Deno 2, Docker, and the Supabase CLI.
 pnpm install
 pnpm build:functions           # bundle shared domain code for the edge functions
 supabase start                 # local Postgres, Auth, Storage, edge functions
-supabase db reset              # apply migrations + seed
+supabase db reset              # first setup, or an intentional wipe + fixture reseed
 cp apps/web/.env.example apps/web/.env.local
 cd apps/web && pnpm dev
 ```
+
+`supabase db reset` deletes the local database. Do not run it on every startup if you
+want to keep local development data.
 
 Environment details, secret placement, and Plaid configuration are documented in `docs/17-KEEL-PROJECT-SETUP.md`. Secrets live only in gitignored local files or provider secret managers; the `.env.example` files list the shape.
 

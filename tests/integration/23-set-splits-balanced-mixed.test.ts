@@ -80,8 +80,8 @@ describe('set_splits — balanced mixed-direction splits (regression 20260720230
         transaction_id: txnId,
         amount_minor: '254787',
         splits: [
-          { category_ledger_account_id: incomeCat, amount_minor: '509574' },
-          { category_ledger_account_id: expenseCat, amount_minor: '-254787' },
+          { category_ledger_account_id: incomeCat, amount_minor: '254787' },
+          { category_ledger_account_id: expenseCat, amount_minor: '-509574' },
         ],
       },
     });

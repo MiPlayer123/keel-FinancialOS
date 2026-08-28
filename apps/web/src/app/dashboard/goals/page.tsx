@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { PageHeader, EmptyState } from '@/components/keel/page-header';
+import { PageHeader, EmptyState, QueryErrorState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
 import {
@@ -84,6 +84,7 @@ function GoalsBody() {
   const { householdId, ready } = useHousehold();
   const [goals, setGoals] = useState<GoalRow[] | null>(null);
   const [available, setAvailable] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
   const [ledgerKinds, setLedgerKinds] = useState<Map<string, string>>(new Map());
   const [balances, setBalances] = useState<Map<string, string>>(new Map());
@@ -92,14 +93,18 @@ function GoalsBody() {
 
   const load = useCallback(() => {
     if (!householdId) return;
+    setLoadError(false);
     fetchGoals(householdId)
-      .then(setGoals)
+      .then((rows) => {
+        setGoals(rows);
+        setLoadError(false);
+      })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : '';
         if (/unknown query|does not exist|not_found/i.test(msg)) {
           setAvailable(false);
         } else {
-          setGoals([]);
+          setLoadError(true);
           toast.error(msg || 'Could not load goals.');
         }
       });
@@ -138,7 +143,7 @@ function GoalsBody() {
     [accounts, ledgerKinds],
   );
 
-  if (!ready || (goals === null && available)) {
+  if (!ready || (goals === null && available && !loadError)) {
     return (
       <div className="space-y-3">
         {Array.from({ length: 3 }).map((_, i) => (
@@ -155,6 +160,9 @@ function GoalsBody() {
         description="The backend for goals hasn't been deployed to this environment."
       />
     );
+  }
+  if (loadError) {
+    return <QueryErrorState onRetry={load} />;
   }
 
   const rows = goals ?? [];
@@ -248,7 +256,14 @@ function GoalCard({
   const isDerived = isDebt || isTracked;
   const saved = BigInt((isDebt ? goal.paidMinor : goal.savedMinor) || '0');
   const target = BigInt(goal.targetMinor || '1');
-  const pct = Number((saved * 100n) / target);
+  const rawProgressBps = (saved * 10_000n) / target;
+  const progressBps = Number(
+    rawProgressBps < 0n ? 0n : rawProgressBps > 10_000n ? 10_000n : rawProgressBps,
+  );
+  const progressPercent = progressBps / 100;
+  const progressLabel =
+    saved > 0n && saved * 100n < target ? '<1%' : `${String(Math.floor(progressPercent))}%`;
+  const progressWidth = saved > 0n ? Math.max(progressPercent, 0.5) : progressPercent;
   const remaining = target - saved;
 
   const monthly = useMemo(() => {
@@ -256,7 +271,7 @@ function GoalCard({
     const months = monthsUntil(goal.targetDate);
     // Ceiling division keeps the plan honest (Law 4 — integer math).
     return ((remaining + BigInt(months) - 1n) / BigInt(months)).toString();
-  }, [goal.targetDate, remaining]);
+  }, [goal.targetDate, isDerived, remaining]);
   // Teardown C19: near target dates read "in N days" instead of a bare ISO
   // date; goal targets are usually months out so this is almost always null
   // (the absolute date renders unchanged) — it only fires once a target is
@@ -317,6 +332,7 @@ function GoalCard({
               <Money amountMinor={isDebt ? (goal.paidMinor ?? '0') : goal.savedMinor} currency={goal.currency} className="text-xs" />{' '}
               of <Money amountMinor={goal.targetMinor} currency={goal.currency} className="text-xs" />
               {isDebt ? ' paid off' : ''}
+              {` · ${progressLabel}`}
               {goal.targetDate ? ` · by ${goal.targetDate}${targetRelative ? ` (${targetRelative})` : ''}` : ''}
             </p>
             {isDebt ? (
@@ -354,10 +370,18 @@ function GoalCard({
           </span>
         </div>
 
-        <div className="h-2 overflow-hidden rounded-full bg-secondary">
+        <div
+          role="progressbar"
+          aria-label={`${goal.name} progress`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progressPercent}
+          aria-valuetext={progressLabel}
+          className="h-2 overflow-hidden rounded-full bg-secondary"
+        >
           <div
             className="h-full rounded-full bg-primary transition-[width]"
-            style={{ width: `${String(Math.min(pct, 100))}%` }}
+            style={{ width: `${String(progressWidth)}%` }}
           />
         </div>
 

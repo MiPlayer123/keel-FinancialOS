@@ -5,7 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Link2, RefreshCw, Pencil, Check, X, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { PageHeader, EmptyState } from '@/components/keel/page-header';
+import { PageHeader, EmptyState, QueryErrorState } from '@/components/keel/page-header';
 import { useHousehold } from '@/components/keel/household-context';
 import {
   fetchConnections,
@@ -56,17 +56,21 @@ function ConnectionsBody() {
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!householdId) {
       setRows([]);
       setMatches([]);
+      setLoadError(null);
       return;
     }
+    setLoadError(null);
     try {
       setRows(await fetchConnections(householdId));
-    } catch {
+    } catch (error) {
       setRows([]);
+      setLoadError(error instanceof Error ? error.message : 'Could not load connections.');
     }
     try {
       setMatches(await fetchReconnectMatches(householdId));
@@ -230,6 +234,12 @@ function ConnectionsBody() {
               <Skeleton key={i} className="h-16 w-full" />
             ))}
           </div>
+        ) : loadError ? (
+          <QueryErrorState
+            onRetry={() => {
+              void load();
+            }}
+          />
         ) : rows.length === 0 ? (
           <EmptyState
             icon={<Link2 className="size-6" />}

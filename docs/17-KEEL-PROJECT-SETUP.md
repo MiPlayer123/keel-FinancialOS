@@ -24,7 +24,7 @@ The checked-in `.env.example` contains the current public Supabase URL and publi
 ```bash
 pnpm install
 supabase start
-cp .env.example apps/web/.env.local
+cp apps/web/.env.example apps/web/.env.local
 cp supabase/functions/.env.example supabase/functions/.env
 ```
 
@@ -38,10 +38,14 @@ PLAID_SECRET=...
 Then run:
 
 ```bash
+# First setup, or when you intentionally want to wipe and reseed local data:
 supabase db reset
 supabase functions serve --env-file supabase/functions/.env
 pnpm --filter @keel/web dev
 ```
+
+On later startups, skip `supabase db reset` when you want to preserve local development
+data.
 
 The default local mode remains:
 
@@ -82,7 +86,10 @@ supabase functions deploy scheduled --no-verify-jwt
 - `worker` and `scheduled`: `auth: 'secret:automations'`
 - `webhook-provider`: `auth: 'none'`, followed by Plaid webhook JWT/body-hash verification
 
-Deploy the Next.js app to Vercel Hobby with the two `NEXT_PUBLIC_SUPABASE_*` values from `.env.example`.
+Deploy the Next.js app to Vercel Hobby with the two `NEXT_PUBLIC_SUPABASE_*`
+values from `.env.example` and `NEXT_PUBLIC_SITE_URL` set to the public
+origin, without a trailing path. Add `<origin>/reset-password` to the Supabase
+Auth redirect allow-list before enabling password recovery.
 
 ## 3. Plaid Sandbox integration boundary
 
