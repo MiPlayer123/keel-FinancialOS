@@ -641,17 +641,28 @@ function HomeBody() {
     rows: DailyBalanceRow[];
     bills: ForecastBill[];
   } | null>(null);
+  const [forecastError, setForecastError] = useState<string | null>(null);
+  const [forecastAttempt, setForecastAttempt] = useState(0);
 
   useEffect(() => {
     if (!householdId) return;
     let active = true;
-    void fetchCashFlowForecast(householdId, 30).then((f) => {
-      if (active) setForecast(f);
-    });
+    setForecast(null);
+    setForecastError(null);
+    void fetchCashFlowForecast(householdId, 30)
+      .then((f) => {
+        if (active) setForecast(f);
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setForecast(null);
+          setForecastError(error instanceof Error ? error.message : 'Could not load forecast.');
+        }
+      });
     return () => {
       active = false;
     };
-  }, [householdId]);
+  }, [householdId, forecastAttempt]);
 
   // Match the Budgets page's current-month read. budgets.list includes every
   // category, so a real budget exists only when at least one row has a
@@ -933,7 +944,13 @@ function HomeBody() {
             balances" better than a truncated top-5 card on the dashboard did.
             The net-worth hero above already carries the headline figure. */}
         <NotesTasksCard householdId={householdId} compact />
-        {!lensActive && forecast !== null ? (
+        {!lensActive && forecastError ? (
+          <QueryErrorState
+            onRetry={() => {
+              setForecastAttempt((attempt) => attempt + 1);
+            }}
+          />
+        ) : !lensActive && forecast !== null ? (
           <ProjectedCashCard forecast={forecast} varies={forecastVaries} todayIso={todayIso} />
         ) : null}
         {!lensActive && hasBudget && !richTxns.error && !recurringSeries.error ? (

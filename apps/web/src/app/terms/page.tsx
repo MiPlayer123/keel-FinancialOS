@@ -10,11 +10,13 @@ export const metadata: Metadata = {
     title: 'Terms · KEEL',
     description: 'Terms for evaluating the hosted KEEL pre-release.',
     url: '/terms',
+    images: [{ url: '/opengraph-image', alt: 'KEEL · every number can show its work' }],
   },
   twitter: {
     card: 'summary',
     title: 'Terms · KEEL',
     description: 'Terms for evaluating the hosted KEEL pre-release.',
+    images: ['/opengraph-image'],
   },
 };
 

@@ -55,10 +55,13 @@ Prereqs: Node 22+, pnpm 10, Deno 2, Docker, and the Supabase CLI.
 pnpm install
 pnpm build:functions           # bundle shared domain code for the edge functions
 supabase start                 # local Postgres, Auth, Storage, edge functions
-supabase db reset              # apply migrations + seed
+supabase db reset              # first setup, or an intentional wipe + fixture reseed
 cp apps/web/.env.example apps/web/.env.local
 cd apps/web && pnpm dev
 ```
+
+`supabase db reset` deletes the local database. Do not run it on every startup if you
+want to keep local development data.
 
 Environment details, secret placement, and Plaid configuration are documented in `docs/17-KEEL-PROJECT-SETUP.md`. Secrets live only in gitignored local files or provider secret managers; the `.env.example` files list the shape.
 

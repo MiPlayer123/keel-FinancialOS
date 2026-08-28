@@ -40,7 +40,7 @@ const FEATURES = [
   {
     icon: Building2,
     title: 'Personal and entity views',
-    body: 'Keep personal accounts and small-business books in one household, with entity filters on the dashboard, accounts, ledger, and budgets.',
+    body: 'Keep personal accounts and small-business books in one household, with entity filters on the dashboard, accounts, and ledger.',
   },
   {
     icon: CalendarClock,

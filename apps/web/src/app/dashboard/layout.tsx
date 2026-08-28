@@ -7,7 +7,18 @@ import { EntityLensProvider } from '@/components/keel/entity-lens-context';
 
 export const metadata: Metadata = {
   title: 'Dashboard',
+  description: 'Private KEEL financial workspace.',
   robots: { index: false, follow: false },
+  openGraph: {
+    title: 'Dashboard · KEEL',
+    description: 'Private KEEL financial workspace.',
+    url: '/dashboard',
+  },
+  twitter: {
+    card: 'summary',
+    title: 'Dashboard · KEEL',
+    description: 'Private KEEL financial workspace.',
+  },
 };
 
 /**

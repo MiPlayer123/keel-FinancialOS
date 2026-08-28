@@ -10,11 +10,13 @@ export const metadata: Metadata = {
     title: 'Privacy · KEEL',
     description: 'How the hosted KEEL pre-release handles account and financial data.',
     url: '/privacy',
+    images: [{ url: '/opengraph-image', alt: 'KEEL · every number can show its work' }],
   },
   twitter: {
     card: 'summary',
     title: 'Privacy · KEEL',
     description: 'How the hosted KEEL pre-release handles account and financial data.',
+    images: ['/opengraph-image'],
   },
 };
 

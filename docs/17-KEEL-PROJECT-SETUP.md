@@ -38,10 +38,14 @@ PLAID_SECRET=...
 Then run:
 
 ```bash
+# First setup, or when you intentionally want to wipe and reseed local data:
 supabase db reset
 supabase functions serve --env-file supabase/functions/.env
 pnpm --filter @keel/web dev
 ```
+
+On later startups, skip `supabase db reset` when you want to preserve local development
+data.
 
 The default local mode remains:
 

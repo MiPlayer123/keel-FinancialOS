@@ -11,6 +11,7 @@ import { ThemeToggle } from '@/components/theme-toggle';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { consumePasswordRecoveryEvent } from '@/lib/password-recovery';
 import { getSupabaseBrowserClient } from '@/lib/supabase';
 
 export default function ResetPasswordPage() {
@@ -26,33 +27,30 @@ export default function ResetPasswordPage() {
 
   useEffect(() => {
     const client = getSupabaseBrowserClient();
-    const markerKey = 'keel-password-recovery';
-    const hashType = new URLSearchParams(window.location.hash.slice(1)).get('type');
-    if (hashType === 'recovery') {
-      window.sessionStorage.setItem(markerKey, String(Date.now()));
-    }
-
-    const hasFreshMarker = () => {
-      const markedAt = Number(window.sessionStorage.getItem(markerKey));
-      const fresh = Number.isFinite(markedAt) && Date.now() - markedAt < 60 * 60 * 1000;
-      if (!fresh) window.sessionStorage.removeItem(markerKey);
-      return fresh;
-    };
     let active = true;
+    const invalidTimer = window.setTimeout(() => {
+      if (active) setRecoveryState('invalid');
+    }, 1500);
     const { data: subscription } = client.auth.onAuthStateChange((event, session) => {
       if (!active) return;
       if (event === 'PASSWORD_RECOVERY') {
-        window.sessionStorage.setItem(markerKey, String(Date.now()));
+        window.clearTimeout(invalidTimer);
         setRecoveryState(session ? 'valid' : 'invalid');
       } else if (event === 'SIGNED_OUT') {
+        window.clearTimeout(invalidTimer);
         setRecoveryState('invalid');
       }
     });
-    void client.auth.getSession().then(({ data }) => {
-      if (active) setRecoveryState(data.session && hasFreshMarker() ? 'valid' : 'invalid');
-    });
+    if (consumePasswordRecoveryEvent()) {
+      void client.auth.getSession().then(({ data }) => {
+        if (!active) return;
+        window.clearTimeout(invalidTimer);
+        setRecoveryState(data.session ? 'valid' : 'invalid');
+      });
+    }
     return () => {
       active = false;
+      window.clearTimeout(invalidTimer);
       subscription.subscription.unsubscribe();
     };
   }, []);
@@ -71,7 +69,6 @@ export default function ResetPasswordPage() {
         return;
       }
       toast.success('Password updated.');
-      window.sessionStorage.removeItem('keel-password-recovery');
       router.replace('/dashboard');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not update your password.');

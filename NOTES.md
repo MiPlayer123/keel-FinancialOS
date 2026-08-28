@@ -8,8 +8,8 @@ Record every decision, deviation, failed approach, command run, test result, mig
   the dashboard and account hero select one explicit primary currency instead of
   summing incompatible minor units. Core query failures render as errors rather than
   valid zero or empty states.
-- Entity scope: the entity switcher now appears only on the four routes that actually
-  honor it (Home, Accounts, Ledger, Budgets). Expanding the shared authorization
+- Entity scope: the entity switcher now appears only on the three routes whose complete
+  read models honor it (Home, Accounts, Ledger). Expanding the shared authorization
   compiler to every read model remains separate backend contract work.
 - AI governance: the hosted Assistant's financial tools are read-only until every Class B
   action carries a payload-bound approval token. The previous direct command path violated
@@ -67,6 +67,12 @@ Record every decision, deviation, failed approach, command run, test result, mig
   ignores snapshots beyond the requested window, controlled receipt reversal permits equal
   transaction timestamps, the goal caller-id repair is safe to reapply, and notes/tasks now
   follow the export chain's current full-history semantics when `asOf` is only provenance.
+- Frontend re-review: password changes now require a recovery event from Supabase rather
+  than a user-writable browser marker. Budgets no longer expose or silently consume the
+  entity lens until its complete read model can be scoped. Forecast failures are explicit
+  and retryable. Crawlers can read private-route noindex metadata, dashboard social metadata
+  is no longer inherited from the landing page, policy pages retain the shared social image,
+  and local setup warns that database reset is destructive rather than a startup step.
 
 ## 2026-08-18 chore(repo): privacy + open-source prep pass (Law 12; user directive 2026-08-18)
 

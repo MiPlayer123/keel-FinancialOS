@@ -10,11 +10,13 @@ export const metadata: Metadata = {
     title: 'Security · KEEL',
     description: 'KEEL security architecture, current limitations, and responsible disclosure.',
     url: '/security',
+    images: [{ url: '/opengraph-image', alt: 'KEEL · every number can show its work' }],
   },
   twitter: {
     card: 'summary',
     title: 'Security · KEEL',
     description: 'KEEL security architecture, current limitations, and responsible disclosure.',
+    images: ['/opengraph-image'],
   },
 };
 
