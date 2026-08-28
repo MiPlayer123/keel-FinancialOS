@@ -290,7 +290,8 @@ describe('POST /api/admin/export', () => {
     expect(response.status).toBe(413);
     expect(response.body).toEqual({
       code: 'export_too_large',
-      message: 'Use the async export job.',
+      message:
+        'This household is too large for the current download endpoint. An async export is not available yet.',
       details: {},
     });
   });

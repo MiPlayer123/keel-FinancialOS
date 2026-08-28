@@ -182,7 +182,7 @@ function ExportCard() {
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-sm text-muted-foreground">
-          Your full financial record, any time — the exit door is a feature. Choose a format:
+          Download the structured financial records supported by the current export endpoint:
         </p>
         <div className="flex flex-wrap gap-2">
           {FORMATS.map((f) => (
@@ -205,8 +205,8 @@ function ExportCard() {
           ))}
         </div>
         <p className="text-xs text-muted-foreground">
-          CSV for spreadsheets · JSON for full fidelity · QIF and Beancount for other finance
-          tools.
+          CSV for spreadsheets · JSON for the complete structured bundle · QIF and Beancount
+          for other finance tools. Uploaded source files remain separate stored objects.
         </p>
       </CardContent>
     </Card>

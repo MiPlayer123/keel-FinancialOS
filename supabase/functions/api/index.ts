@@ -470,7 +470,8 @@ export default {
         if (!isWithinInlineExportLimit(serialized)) {
           return json(413, {
             code: 'export_too_large',
-            message: 'Use the async export job.',
+            message:
+              'This household is too large for the current download endpoint. An async export is not available yet.',
             details: {},
           });
         }
