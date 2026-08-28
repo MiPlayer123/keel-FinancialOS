@@ -252,6 +252,8 @@ export function CashFlowMonthlyChart({
           const label = (state as { activeLabel?: unknown } | null)?.activeLabel;
           if (typeof label === 'string' && label !== '') onMonthClick(label);
         };
+  const firstRow = rows.at(0);
+  const lastRow = rows.at(-1);
 
   return (
     <div className="space-y-2">
@@ -260,8 +262,8 @@ export function CashFlowMonthlyChart({
         className={`w-full${handleClick ? ' cursor-pointer' : ''}`}
         role="group"
         aria-label={
-          rows.length > 0
-            ? `Monthly income and spending from ${monthLabel(rows[0]!.month)} through ${monthLabel(rows[rows.length - 1]!.month)}.`
+          firstRow && lastRow
+            ? `Monthly income and spending from ${monthLabel(firstRow.month)} through ${monthLabel(lastRow.month)}.`
             : 'Monthly income and spending with no data.'
         }
       >

@@ -4,8 +4,8 @@ import {
   BookOpenCheck,
   Building2,
   CalendarClock,
+  Code2,
   DownloadCloud,
-  Github,
   HandCoins,
   ReceiptText,
   Scale,
@@ -195,7 +195,7 @@ export default function LandingPage() {
           <div className="mx-auto grid w-full max-w-6xl gap-10 px-6 py-20 sm:py-28 lg:grid-cols-[1fr_auto] lg:items-center">
             <Reveal>
               <div className="flex items-center gap-2 text-primary">
-                <Github className="size-5" aria-hidden />
+                <Code2 className="size-5" aria-hidden />
                 <p className="text-xs font-medium uppercase tracking-widest">Open source</p>
               </div>
               <h2 className="mt-3 text-balance text-2xl font-semibold tracking-tight sm:text-4xl">
