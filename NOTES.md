@@ -26,17 +26,18 @@ Record every decision, deviation, failed approach, command run, test result, mig
   balance tools remain disabled until account identity and balance data share one read
   contract.
 - CI follow-up: the integration job had already been failing on `main`. Corrected a
-  mathematically unbalanced contra-leg fixture, removed a race-prone comparison between
-  an exported snapshot and later live state, fixed a non-Promise PostgREST fallback, and
-  aligned cross-tenant smuggling with the existing 404 concealment contract. Receipt
+  mathematically unbalanced contra-leg fixture, scoped the live trial-balance comparison
+  to exclude archived accounts while keeping the export complete, fixed a non-Promise
+  PostgREST fallback, and aligned cross-tenant smuggling with the existing 404 concealment
+  contract. Receipt
   reversal was a product defect: its generic immutable trigger blocked the command
   function itself. A narrow trigger now permits only `keel_api` to change an active
   receipt to reversed while preserving every original fact and continuing to reject
   direct updates and all deletes.
-- CI follow-up: goal creation rolled back at its direct `audit_log` insert because the
-  hardened `keel_api` function had table privilege but no matching RLS insert policy.
-  Added the insert-only policy; append-only triggers still reject updates and deletes.
-  The invalid tracked-goal regression now requires the intended 400 response instead of
+- CI follow-up: the account-tracking migration regressed three `keel_api`-owned goal
+  functions to `auth.uid()`, but that least-privilege role intentionally has no access to
+  the `auth` schema. Restored JWT-claim GUC extraction without widening privileges. The
+  invalid tracked-goal regression now requires the intended 400 response instead of
   allowing any error status to pass.
 - Removed third-party screenshots and capture manifests from the current tree.
   Human checkpoint remains: public git history still contains previously committed
