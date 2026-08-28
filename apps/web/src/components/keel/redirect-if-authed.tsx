@@ -13,11 +13,14 @@ export function RedirectIfAuthed() {
   const router = useRouter();
   useEffect(() => {
     const client = getSupabaseBrowserClient();
+    const hashType = new URLSearchParams(window.location.hash.slice(1)).get('type');
     void client.auth.getSession().then(({ data }) => {
-      if (data.session) router.replace('/dashboard');
+      if (hashType === 'recovery') router.replace('/reset-password');
+      else if (data.session) router.replace('/dashboard');
     });
-    const { data: sub } = client.auth.onAuthStateChange((_event, session) => {
-      if (session) router.replace('/dashboard');
+    const { data: sub } = client.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') router.replace('/reset-password');
+      else if (session) router.replace('/dashboard');
     });
     return () => {
       sub.subscription.unsubscribe();
