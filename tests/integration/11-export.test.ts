@@ -186,9 +186,23 @@ describe('POST /api/admin/export', () => {
     expect(bypassData).toBeNull();
     expect(bypassError?.code).toBe('42501');
 
+    const { data: liveTrial, error: trialError } = await alex.rpc('keel_trial_balance', {
+      p_household_id: SEED.households.alpha,
+    });
+    expect(trialError).toBeNull();
     expect(sortedTrial(reconstructTrialBalance(restored))).toEqual(
       sortedTrial(restored.trialBalance ?? []),
     );
+    const archivedLedgerAccountIds = new Set(
+      restored.tables.accounts
+        .filter((row) => row['archived_at'] !== null)
+        .map((row) => row['ledger_account_id'] as string),
+    );
+    expect(
+      sortedTrial(restored.trialBalance ?? []).filter(
+        (row) => !archivedLedgerAccountIds.has(row.ledgerAccountId),
+      ),
+    ).toEqual(sortedTrial(liveTrial.rows));
 
     const publicDecisions = [
       ...body.manifest.include.map((entry) => entry.table),
