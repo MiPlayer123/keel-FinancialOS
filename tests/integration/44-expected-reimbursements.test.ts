@@ -242,6 +242,6 @@ describe('expected reimbursement vertical slice', () => {
         'expected-smuggle',
       ),
     });
-    expect(smuggle.status).toBe(400);
+    expect(smuggle.status).toBe(404);
   });
 });

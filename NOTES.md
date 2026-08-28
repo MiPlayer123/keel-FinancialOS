@@ -25,6 +25,14 @@ Record every decision, deviation, failed approach, command run, test result, mig
   snapshot's currency and use deterministic `(as_of, id)` ordering. Per-account Assistant
   balance tools remain disabled until account identity and balance data share one read
   contract.
+- CI follow-up: the integration job had already been failing on `main`. Corrected a
+  mathematically unbalanced contra-leg fixture, removed a race-prone comparison between
+  an exported snapshot and later live state, fixed a non-Promise PostgREST fallback, and
+  aligned cross-tenant smuggling with the existing 404 concealment contract. Receipt
+  reversal was a product defect: its generic immutable trigger blocked the command
+  function itself. A narrow trigger now permits only `keel_api` to change an active
+  receipt to reversed while preserving every original fact and continuing to reject
+  direct updates and all deletes.
 - Removed third-party screenshots and capture manifests from the current tree.
   Human checkpoint remains: public git history still contains previously committed
   sensitive and nonredistributable artifacts. Cleaning it requires coordinated
