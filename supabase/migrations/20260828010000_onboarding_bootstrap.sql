@@ -17,7 +17,9 @@ begin
     raise exception 'KEEL_NOT_AUTHENTICATED' using errcode = 'P0004';
   end if;
 
-  perform pg_advisory_xact_lock(hashtextextended(p_user_id::text, 0));
+  perform pg_advisory_xact_lock(
+    hashtextextended('keel_bootstrap_household:' || p_user_id::text, 0)
+  );
 
   select household_id
     into v_household_id
