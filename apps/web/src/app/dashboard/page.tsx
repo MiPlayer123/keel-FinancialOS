@@ -626,7 +626,7 @@ function HomeBody() {
   const balances = useKeelQuery<TrialBalanceRow>('ledger.trial_balance', householdId);
   // Net-worth trend now lives inside NetWorthHero (C11 fusion) — it fetches
   // the longest supported series once and subsets per range pill (C10).
-  const monthlyFlow = useKeelQuerySilent<MonthlyCashFlowRow>(
+  const monthlyFlow = useKeelQuery<MonthlyCashFlowRow>(
     'dashboard.cash_flow_monthly',
     householdId,
   );
@@ -823,9 +823,14 @@ function HomeBody() {
     rowCount: 0,
   };
 
-  const showMonthlyFlow =
-    monthlyFlow !== null &&
-    monthlyFlow.some((m) => m.inflowMinor !== '0' || m.outflowMinor !== '0');
+  const monthlyFlowGroups = [...new Set(monthlyFlow.rows.map((row) => row.currency))]
+    .map((currency) => ({
+      currency,
+      rows: monthlyFlow.rows.filter((row) => row.currency === currency),
+    }))
+    .filter((group) =>
+      group.rows.some((row) => row.inflowMinor !== '0' || row.outflowMinor !== '0'),
+    );
   // With no confirmed recurring occurrences in the window the forecast collapses
   // to a flat band (every balance equal) that reads as a broken chart
   // (DASHBOARD-7 / GOALSFORECAST-3). Only draw the chart once the series really
@@ -877,16 +882,26 @@ function HomeBody() {
         {lensActive ? null : (
           <div className="flex min-w-0 flex-col gap-4 [&>*]:max-w-none">
             <CashFlowCard householdId={householdId} />
-            {showMonthlyFlow ? (
-              <Card size="sm">
+            {monthlyFlow.error ? (
+              <QueryErrorState
+                onRetry={() => {
+                  void monthlyFlow.refetch();
+                }}
+              />
+            ) : null}
+            {monthlyFlowGroups.map((group) => (
+              <Card key={group.currency} size="sm">
                 <CardHeader>
-                  <CardTitle>Cash flow by month</CardTitle>
+                  <CardTitle>
+                    Cash flow by month
+                    {monthlyFlowGroups.length > 1 ? ` · ${group.currency}` : ''}
+                  </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <CashFlowMonthlyChart rows={monthlyFlow} height={180} />
+                  <CashFlowMonthlyChart rows={group.rows} height={180} />
                 </CardContent>
               </Card>
-            ) : null}
+            ))}
           </div>
         )}
 

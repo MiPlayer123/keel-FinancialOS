@@ -84,19 +84,16 @@ export function NetWorthHero({
   );
   const [selectedKey, setSelectedKey] = useState('90d');
 
-  // The daily series is per-currency; the hero plots the dominant one (same
-  // convention as the insight/free-to-spend cards — BigInt sums are only
-  // meaningful within one currency).
+  // The daily series is per-currency; the hero plots the same explicit
+  // presentation currency as its fallback headline.
   const { points, multiCurrency } = useMemo(() => {
     const rows = trend?.rows ?? [];
-    const counts = new Map<string, number>();
-    for (const r of rows) counts.set(r.currency, (counts.get(r.currency) ?? 0) + 1);
-    const dominant = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+    const currencies = new Set(rows.map((row) => row.currency));
     return {
-      points: dominant === undefined ? [] : rows.filter((r) => r.currency === dominant),
-      multiCurrency: counts.size > 1,
+      points: rows.filter((row) => row.currency === fallbackCurrency),
+      multiCurrency: currencies.size > 1,
     };
-  }, [trend]);
+  }, [fallbackCurrency, trend]);
 
   const historyDays = availableHistoryDays(points);
   // Shortest range is always offered (there is nothing shorter to fall back

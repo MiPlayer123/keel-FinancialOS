@@ -17,7 +17,7 @@ function isoDaysAgo(days: number): string {
 
 /** Cash flow over the last 30 days (primary-currency row). Wired to dashboard.cash_flow. */
 export function CashFlowCard({ householdId }: { householdId: string }) {
-  const [row, setRow] = useState<CashFlowRow | null | undefined>(undefined);
+  const [rows, setRows] = useState<CashFlowRow[] | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -28,11 +28,11 @@ export function CashFlowCard({ householdId }: { householdId: string }) {
     void keelQuery<CashFlowRow>('dashboard.cash_flow', householdId, { from, to })
       .then((res) => {
         if (!active) return;
-        setRow(res.rows[0] ?? null);
+        setRows(res.rows.length > 0 ? res.rows : null);
       })
       .catch((cause: unknown) => {
         if (active) {
-          setRow(null);
+          setRows(null);
           setError(cause instanceof Error ? cause.message : 'Could not load cash flow.');
         }
       });
@@ -41,7 +41,7 @@ export function CashFlowCard({ householdId }: { householdId: string }) {
     };
   }, [householdId]);
 
-  if (row === undefined) {
+  if (rows === undefined) {
     return <Skeleton className="h-40 w-full max-w-sm" />;
   }
 
@@ -49,7 +49,7 @@ export function CashFlowCard({ householdId }: { householdId: string }) {
     return <QueryErrorState />;
   }
 
-  if (row === null) {
+  if (rows === null) {
     return (
       <EmptyState
         title="No cash flow in the last 30 days"
@@ -58,11 +58,6 @@ export function CashFlowCard({ householdId }: { householdId: string }) {
     );
   }
 
-  const inflow = row.inflowMinor;
-  const outflow = row.outflowMinor;
-  const net = row.netMinor;
-  const currency = row.currency;
-
   return (
     <Card className="max-w-sm">
       <CardHeader className="pb-2">
@@ -70,25 +65,32 @@ export function CashFlowCard({ householdId }: { householdId: string }) {
           Cash flow · last 30 days
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex items-center justify-between text-sm">
-          <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-            <ArrowUpRight className="size-4 text-primary" />
-            In
-          </span>
-          <Money amountMinor={inflow} currency={currency} />
-        </div>
-        <div className="flex items-center justify-between text-sm">
-          <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-            <ArrowDownRight className="size-4" />
-            Out
-          </span>
-          <Money amountMinor={outflow} currency={currency} />
-        </div>
-        <div className="flex items-center justify-between border-t border-border pt-3 text-sm font-medium">
-          <span>Net</span>
-          <Money amountMinor={net} currency={currency} muteZero={false} />
-        </div>
+      <CardContent className="flex flex-col gap-4">
+        {rows.map((row) => (
+          <section key={row.currency} aria-label={`${row.currency} cash flow`} className="space-y-3">
+            {rows.length > 1 ? (
+              <p className="text-xs font-medium text-muted-foreground">{row.currency}</p>
+            ) : null}
+            <div className="flex items-center justify-between text-sm">
+              <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                <ArrowUpRight className="size-4 text-primary" />
+                In
+              </span>
+              <Money amountMinor={row.inflowMinor} currency={row.currency} />
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                <ArrowDownRight className="size-4" />
+                Out
+              </span>
+              <Money amountMinor={row.outflowMinor} currency={row.currency} />
+            </div>
+            <div className="flex items-center justify-between border-t border-border pt-3 text-sm font-medium">
+              <span>Net</span>
+              <Money amountMinor={row.netMinor} currency={row.currency} muteZero={false} />
+            </div>
+          </section>
+        ))}
       </CardContent>
     </Card>
   );
