@@ -2730,13 +2730,19 @@ export type AgentProposedAction = {
  * (approval-gated) — empty while the agent only read data.
  */
 export type AiChatRecord = {
+  verdict: 'yes' | 'no' | 'uncertain';
   tldr: string;
   body: string;
+  confidence: number;
   asOf: string;
   scope: { householdId: string; entityIds: string[] };
+  reasonCodes: string[];
+  evidenceRefs: string[];
+  requiresApproval: boolean;
   displayOnly: boolean;
   modelVersion: string;
   promptVersion: string;
+  policyVersion: string;
   toolsUsed: string[];
   steps: number;
   stoppedReason: 'final' | 'max_steps';

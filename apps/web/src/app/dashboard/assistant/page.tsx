@@ -39,13 +39,8 @@ import { useHousehold } from '@/components/keel/household-context';
 import {
   archiveNote,
   askKeel,
-  categorizeTransaction,
-  createCategory,
   detachDocument,
   getAiProfile,
-  keelCommand,
-  newId,
-  renameCategory,
   saveAiProfile,
   saveNote,
   saveTask,
@@ -133,7 +128,7 @@ const prettifyTool = (name: string): string =>
   TOOL_LABELS[name] ?? name.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
 
 const SUGGESTED_QUESTIONS = [
-  'What are my account balances?',
+  'What is my net worth today?',
   'What did I spend the most on recently?',
   'Am I over budget in any category this month?',
 ];
@@ -408,8 +403,7 @@ function EmptyThread() {
         <CardContent className="flex flex-col gap-3 text-sm text-muted-foreground">
           <p>
             Every figure comes from KEEL&apos;s ledger, not the model. The assistant can read
-            across your finances and manage notes for you — anything it changes is undoable.
-            Moving money and editing the ledger still require your explicit approval.
+            across your finances and explain what it finds. It cannot make or stage changes.
           </p>
           <div className="flex flex-wrap gap-2">
             {SUGGESTED_QUESTIONS.map((suggestion) => (
@@ -733,56 +727,6 @@ function ProposedActionsList({ actions }: { actions: AgentProposedAction[] }) {
 }
 
 function ProposedActionCard({ action }: { action: AgentProposedAction }) {
-  const { householdId, userId } = useHousehold();
-  const [state, setState] = useState<'idle' | 'approving' | 'approved' | 'rejected'>('idle');
-  // Stable per proposal: a double-submit that races the state guard replays
-  // idempotently server-side (keel_idempotency_check) instead of applying twice.
-  const commandId = useMemo(() => newId(), []);
-  const eventKey = useMemo(() => `${action.command}:${newId()}`, [action.command]);
-
-  async function approve() {
-    if (householdId === null || userId === null || state !== 'idle') return;
-    setState('approving');
-    try {
-      const p = action.payload;
-      // Most commands ride the /commands envelope; a few are bespoke routes with
-      // their own typed client fns. Route by command name.
-      if (action.command === 'transactions.categorize') {
-        await categorizeTransaction({
-          householdId,
-          transactionId: String(p['transactionId']),
-          categoryLedgerAccountId: String(p['categoryLedgerAccountId']),
-        });
-      } else if (action.command === 'categories.create') {
-        await createCategory({
-          householdId,
-          name: String(p['name']),
-          kind: p['kind'] === 'income' ? 'income' : 'expense',
-        });
-      } else if (action.command === 'categories.rename') {
-        await renameCategory({
-          householdId,
-          categoryLedgerAccountId: String(p['categoryLedgerAccountId']),
-          name: String(p['name']),
-        });
-      } else {
-        await keelCommand({
-          commandId,
-          command: action.command,
-          economicEventKey: eventKey,
-          actor: { kind: 'user', userId },
-          householdId,
-          payload: action.payload,
-        });
-      }
-      setState('approved');
-      toast.success('Approved and applied.');
-    } catch (err) {
-      setState('idle');
-      toast.error(err instanceof Error ? err.message : 'Could not apply the change.');
-    }
-  }
-
   return (
     <Card size="sm" className="max-w-xl">
       <CardHeader>
@@ -790,7 +734,9 @@ function ProposedActionCard({ action }: { action: AgentProposedAction }) {
           <Sparkles className="size-4 text-muted-foreground" />
           Proposed change
         </CardTitle>
-        <CardDescription>Nothing changes until you approve. This runs KEEL&apos;s normal command.</CardDescription>
+        <CardDescription>
+          Assistant changes are paused until payload-bound approvals are available.
+        </CardDescription>
       </CardHeader>
       <CardContent>
         <div className="rounded-lg border bg-secondary/20 px-3 py-2">
@@ -817,43 +763,7 @@ function ProposedActionCard({ action }: { action: AgentProposedAction }) {
             </div>
           </details>
         </div>
-        {state === 'approved' ? (
-          <p className="mt-2 text-sm text-muted-foreground">Applied. You can review it on the Budgets page.</p>
-        ) : state === 'rejected' ? (
-          <p className="mt-2 text-sm text-muted-foreground">Dismissed. Nothing changed.</p>
-        ) : null}
       </CardContent>
-      {state === 'idle' || state === 'approving' ? (
-        <CardFooter className="justify-end gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={state !== 'idle'}
-            onClick={() => {
-              setState('rejected');
-            }}
-          >
-            <X data-icon="inline-start" />
-            Reject
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            disabled={householdId === null || userId === null || state !== 'idle'}
-            onClick={() => {
-              void approve();
-            }}
-          >
-            {state === 'approving' ? (
-              <Loader2 data-icon="inline-start" className="animate-spin" />
-            ) : (
-              <Check data-icon="inline-start" />
-            )}
-            Approve
-          </Button>
-        </CardFooter>
-      ) : null}
     </Card>
   );
 }
@@ -1009,7 +919,7 @@ function Composer() {
               <ImagePlus />
             </Button>
             <Sparkles className="size-3.5" />
-            Attach an image, or ask. Financial changes need your approval.
+            Attach an image, or ask. This assistant session is read-only.
           </div>
           <AuiIf condition={(s) => !s.thread.isRunning}>
             <ComposerPrimitive.Send asChild>

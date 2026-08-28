@@ -102,7 +102,8 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
   },
   {
     name: 'get_account_balances',
-    description: 'Get every account and its current deterministic ledger balance (trial balance). Use this for "how much do I have" questions.',
+    description:
+      'Get the raw trial balance by ledger-account id. This does not return user account names and must not be presented as a list of bank-account balances.',
     action: 'ledger.trial_balance',
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
