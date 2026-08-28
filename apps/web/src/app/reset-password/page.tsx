@@ -28,29 +28,56 @@ export default function ResetPasswordPage() {
   useEffect(() => {
     const client = getSupabaseBrowserClient();
     let active = true;
-    const invalidTimer = window.setTimeout(() => {
-      if (active) setRecoveryState('invalid');
-    }, 1500);
+    let recoveryConfirmed = false;
+    const finishValidation = (valid: boolean) => {
+      if (!active) return;
+      if (!valid && recoveryConfirmed) return;
+      recoveryConfirmed = valid;
+      if (valid) window.history.replaceState(null, '', '/reset-password');
+      setRecoveryState(valid ? 'valid' : 'invalid');
+    };
     const { data: subscription } = client.auth.onAuthStateChange((event, session) => {
       if (!active) return;
       if (event === 'PASSWORD_RECOVERY') {
-        window.clearTimeout(invalidTimer);
-        setRecoveryState(session ? 'valid' : 'invalid');
+        finishValidation(session !== null);
       } else if (event === 'SIGNED_OUT') {
-        window.clearTimeout(invalidTimer);
-        setRecoveryState('invalid');
+        finishValidation(false);
       }
     });
+
     if (consumePasswordRecoveryEvent()) {
       void client.auth.getSession().then(({ data }) => {
-        if (!active) return;
-        window.clearTimeout(invalidTimer);
-        setRecoveryState(data.session ? 'valid' : 'invalid');
+        finishValidation(data.session !== null);
+      }).catch(() => {
+        finishValidation(false);
       });
+    } else {
+      const hash = new URLSearchParams(window.location.hash.slice(1));
+      const code = new URLSearchParams(window.location.search).get('code');
+      const accessToken = hash.get('access_token');
+      const refreshToken = hash.get('refresh_token');
+      if (hash.get('type') === 'recovery' && accessToken && refreshToken) {
+        void client.auth
+          .setSession({ access_token: accessToken, refresh_token: refreshToken })
+          .then(({ data, error }) => {
+            finishValidation(error === null && data.session !== null);
+          })
+          .catch(() => {
+            finishValidation(false);
+          });
+      } else if (code) {
+        void client.auth.exchangeCodeForSession(code).then(({ data, error }) => {
+          finishValidation(error === null && data.session !== null);
+        }).catch(() => {
+          finishValidation(false);
+        });
+      } else {
+        finishValidation(false);
+      }
     }
+
     return () => {
       active = false;
-      window.clearTimeout(invalidTimer);
       subscription.subscription.unsubscribe();
     };
   }, []);
