@@ -8,8 +8,8 @@ Record every decision, deviation, failed approach, command run, test result, mig
   the dashboard and account hero select one explicit primary currency instead of
   summing incompatible minor units. Core query failures render as errors rather than
   valid zero or empty states.
-- Entity scope: the entity switcher now appears only on the four routes that actually
-  honor it (Home, Accounts, Budgets, Ledger). Expanding the shared authorization
+- Entity scope: the entity switcher now appears only on the three routes that actually
+  honor it (Home, Accounts, Ledger). Expanding the shared authorization
   compiler to every read model remains separate backend contract work.
 - AI governance: the hosted Assistant is read-only until every Class B action carries
   a payload-bound approval token. The previous direct command path violated
@@ -18,12 +18,22 @@ Record every decision, deviation, failed approach, command run, test result, mig
   household, personal entity, and explicit A/B/C/D policies. Added password recovery.
 - Public surface: rewrote unsupported claims, added Privacy/Security/Terms pages,
   configurable public URL metadata, noindex auth routes, and GitHub community files.
+- Audit follow-up: reconciled the SQL and TypeScript export manifests at 99 portable
+  tables and 19 explicit public exclusions. The inline endpoint still rejects bundles
+  above its size ceiling, so the UI no longer promises an async path that does not exist.
+- Audit follow-up: net-worth market-value read models now preserve each investment
+  snapshot's currency and use deterministic `(as_of, id)` ordering. Per-account Assistant
+  balance tools remain disabled until account identity and balance data share one read
+  contract.
 - Removed third-party screenshots and capture manifests from the current tree.
   Human checkpoint remains: public git history still contains previously committed
   sensitive and nonredistributable artifacts. Cleaning it requires coordinated
   history replacement and force-push; this agent did not rewrite history.
 - Human checkpoint remains: the Terms and Privacy copy needs qualified legal review
   before a production launch. Plaid remains Sandbox-only.
+- Human checkpoint remains: GitHub private vulnerability reporting is disabled. Public
+  copy now says so; enable the repository setting and restore a confidential reporting
+  route before accepting external users.
 
 ## 2026-08-18 chore(repo): privacy + open-source prep pass (Law 12; user directive 2026-08-18)
 

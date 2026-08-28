@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, FileUp, Loader2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -112,7 +112,7 @@ export function ImportCsvDialog({
     [text, fileName],
   );
   const grid = useMemo(() => (text.trim() && !isQif ? parseCsv(text) : []), [text, isQif]);
-  const header = grid[0] ?? [];
+  const header = useMemo(() => grid[0] ?? [], [grid]);
   const guessed = useMemo(() => guessColumns(header), [header]);
   const cDate = touched ? dateCol : (dateCol ?? guessed.date);
   const cAmount = touched ? amountCol : (amountCol ?? guessed.amount);
@@ -165,6 +165,21 @@ export function ImportCsvDialog({
   }, [isQif, text, dataRows, cDate, cAmount, cDesc, flipSigns]);
 
   const account = accounts.find((a) => a.id === accountId);
+  const categoryByName = useCallback(
+    (name: string | null | undefined, sign: 'expense' | 'income') => {
+      if (!name) return undefined;
+      const find = (candidate: string) =>
+        categories.find(
+          (category) =>
+            category.entityId === account?.entityId &&
+            category.kind === sign &&
+            category.name.toLowerCase() === candidate.toLowerCase(),
+        );
+      const leaf = name.includes(':') ? name.split(':').at(-1) : null;
+      return find(name) ?? (leaf ? find(leaf) : undefined);
+    },
+    [account?.entityId, categories],
+  );
 
   const analysis = useMemo<ImportAnalysis>(() => {
     const notes: string[] = [];
@@ -248,7 +263,7 @@ export function ImportCsvDialog({
       missingCategories: [...missingByKey.values()].slice(0, 25),
       notes,
     };
-  }, [parsed, isQif, account?.entityId, categories]);
+  }, [parsed, isQif, categoryByName]);
 
   function uncategorizedFor(sign: 'expense' | 'income'): CategoryRow | undefined {
     const wantKey = sign === 'expense' ? 'uncategorized_expense' : 'uncategorized_income';
@@ -257,21 +272,6 @@ export function ImportCsvDialog({
       categories.find((c) => c.entityId === account?.entityId && c.pfcKey === wantKey) ??
       categories.find((c) => c.entityId === account?.entityId && c.name === wantName)
     );
-  }
-
-  /** Quicken category names ("Auto:Fuel") matched to KEEL categories: full
-   *  name first, then the leaf. Same entity + correct side only. */
-  function categoryByName(name: string | null | undefined, sign: 'expense' | 'income') {
-    if (!name) return undefined;
-    const find = (n: string) =>
-      categories.find(
-        (c) =>
-          c.entityId === account?.entityId &&
-          c.kind === sign &&
-          c.name.toLowerCase() === n.toLowerCase(),
-      );
-    const leaf = name.includes(':') ? name.split(':').at(-1) : null;
-    return find(name) ?? (leaf ? find(leaf) : undefined);
   }
 
   const categoryByNameFrom = (
