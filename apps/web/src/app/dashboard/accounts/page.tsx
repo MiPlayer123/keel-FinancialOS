@@ -172,7 +172,6 @@ function AccountsBody() {
   if (coreError) {
     return (
       <QueryErrorState
-        description={coreError}
         onRetry={() => {
           setReload((value) => value + 1);
           void balances.refetch();
@@ -374,12 +373,16 @@ function EntityGroupedAccounts({ entities, rows }: { entities: EntityRow[]; rows
             <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-border pb-2">
               <h2 className="text-base font-semibold">{s.name}</h2>
               <p className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                <span>
-                  Assets <CurrencyTotalValues rows={s.assets} />
-                </span>
-                <span>
-                  Liabilities <CurrencyTotalValues rows={s.liabilities} />
-                </span>
+                {s.assets.length > 0 ? (
+                  <span>
+                    Assets <CurrencyTotalValues rows={s.assets} />
+                  </span>
+                ) : null}
+                {s.liabilities.length > 0 ? (
+                  <span>
+                    Liabilities <CurrencyTotalValues rows={s.liabilities} />
+                  </span>
+                ) : null}
                 <span>
                   Net <CurrencyTotalValues rows={s.rows} />
                 </span>

@@ -119,7 +119,7 @@ function ReceiptsBody() {
 
   const load = useCallback(() => {
     if (!householdId) {
-      setRows([]);
+      setRows(null);
       setLoadError(null);
       return;
     }
@@ -280,7 +280,6 @@ function ReceiptsBody() {
   if (loadError) {
     return (
       <QueryErrorState
-        description={loadError}
         onRetry={() => {
           load();
         }}

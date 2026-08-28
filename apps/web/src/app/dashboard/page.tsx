@@ -786,7 +786,7 @@ function HomeBody() {
 
   if (!householdId) {
     if (householdError) {
-      return <QueryErrorState description={householdError} onRetry={retryHousehold} />;
+      return <QueryErrorState onRetry={retryHousehold} />;
     }
     return (
       <EmptyState
@@ -799,7 +799,7 @@ function HomeBody() {
 
   const coreError = balances.error ?? accountsError;
   if (coreError) {
-    return <QueryErrorState description={coreError} />;
+    return <QueryErrorState />;
   }
 
   // Under an active lens the accounts summary + net worth count only the

@@ -46,7 +46,7 @@ export function CashFlowCard({ householdId }: { householdId: string }) {
   }
 
   if (error) {
-    return <QueryErrorState description={error} />;
+    return <QueryErrorState />;
   }
 
   if (row === null) {

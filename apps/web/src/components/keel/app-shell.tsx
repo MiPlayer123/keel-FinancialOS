@@ -136,6 +136,9 @@ function NavLinks({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: 
     (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),
   );
   const [moreOpen, setMoreOpen] = useState(secondaryActive);
+  useEffect(() => {
+    if (secondaryActive) setMoreOpen(true);
+  }, [pathname, secondaryActive]);
   // Entity list rides the shared lens context (which reads entities.list once
   // per household) — the rail reuses it rather than opening a second entities
   // read, so its Personal/Business split is the SAME set, order, and names the
@@ -181,7 +184,7 @@ function NavLinks({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: 
         <>
           <button
             type="button"
-            aria-expanded={moreOpen || secondaryActive}
+            aria-expanded={moreOpen}
             className="flex items-center justify-between rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
             onClick={() => {
               setMoreOpen((open) => !open);
@@ -191,11 +194,11 @@ function NavLinks({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: 
             <ChevronDown
               className={cn(
                 'size-4 transition-transform',
-                (moreOpen || secondaryActive) && 'rotate-180',
+                moreOpen && 'rotate-180',
               )}
             />
           </button>
-          {moreOpen || secondaryActive
+          {moreOpen
             ? SECONDARY_NAV.map((item) => (
                 <NavItemLink
                   key={item.href}

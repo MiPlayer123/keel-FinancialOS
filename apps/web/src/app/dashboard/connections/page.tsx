@@ -236,7 +236,6 @@ function ConnectionsBody() {
           </div>
         ) : loadError ? (
           <QueryErrorState
-            description={loadError}
             onRetry={() => {
               void load();
             }}

@@ -126,14 +126,14 @@ export function QueryErrorState({
   description,
   onRetry,
 }: {
-  description: string;
+  description?: string;
   onRetry?: () => void;
 }) {
   return (
     <EmptyState
       icon={<AlertCircle className="size-6" />}
       title="We couldn't load this data"
-      description={description}
+      description={description ?? 'Try again. If the problem continues, check the service status.'}
       action={
         onRetry ? (
           <Button type="button" variant="outline" size="sm" onClick={onRetry}>

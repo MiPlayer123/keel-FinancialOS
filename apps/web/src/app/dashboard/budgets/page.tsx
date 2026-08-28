@@ -107,7 +107,6 @@ function BudgetsBody() {
   if (loadError) {
     return (
       <QueryErrorState
-        description={loadError}
         onRetry={() => {
           void load();
         }}
