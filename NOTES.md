@@ -8,12 +8,13 @@ Record every decision, deviation, failed approach, command run, test result, mig
   the dashboard and account hero select one explicit primary currency instead of
   summing incompatible minor units. Core query failures render as errors rather than
   valid zero or empty states.
-- Entity scope: the entity switcher now appears only on the three routes that actually
-  honor it (Home, Accounts, Ledger). Expanding the shared authorization
+- Entity scope: the entity switcher now appears only on the four routes that actually
+  honor it (Home, Accounts, Ledger, Budgets). Expanding the shared authorization
   compiler to every read model remains separate backend contract work.
-- AI governance: the hosted Assistant is read-only until every Class B action carries
-  a payload-bound approval token. The previous direct command path violated
-  BC-v2.1 §3/Law 11 and was removed rather than presented as safe.
+- AI governance: the hosted Assistant's financial tools are read-only until every Class B
+  action carries a payload-bound approval token. The previous direct command path violated
+  BC-v2.1 §3/Law 11 and was removed rather than presented as safe. A deterministic local
+  shortcut can still draft a household task and saves it only after explicit confirmation.
 - Onboarding: added an idempotent, audited, service-only bootstrap for a first
   household, personal entity, and explicit A/B/C/D policies. Added password recovery.
 - Public surface: rewrote unsupported claims, added Privacy/Security/Terms pages,
@@ -54,6 +55,11 @@ Record every decision, deviation, failed approach, command run, test result, mig
 - Human checkpoint remains: GitHub private vulnerability reporting is disabled. Public
   copy now says so; enable the repository setting and restore a confidential reporting
   route before accepting external users.
+- Independent completion review: exposed the active entity lens on Budgets, preserved
+  dashboard transaction/recurring read failures instead of rendering false empty states,
+  added recovery-link validity and replacement-link states, prevented dashboard indexing,
+  supplied route-specific social metadata, corrected local setup environment-file guidance,
+  and narrowed export-format claims to what each serializer contains.
 
 ## 2026-08-18 chore(repo): privacy + open-source prep pass (Law 12; user directive 2026-08-18)
 

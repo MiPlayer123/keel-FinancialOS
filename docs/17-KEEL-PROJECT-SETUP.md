@@ -24,7 +24,7 @@ The checked-in `.env.example` contains the current public Supabase URL and publi
 ```bash
 pnpm install
 supabase start
-cp .env.example apps/web/.env.local
+cp apps/web/.env.example apps/web/.env.local
 cp supabase/functions/.env.example supabase/functions/.env
 ```
 

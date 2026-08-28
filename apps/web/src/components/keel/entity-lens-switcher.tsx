@@ -31,7 +31,8 @@ export function EntityLensSwitcher({ className }: { className?: string }) {
   const supportedPath =
     pathname === '/dashboard' ||
     pathname === '/dashboard/accounts' ||
-    pathname === '/dashboard/ledger';
+    pathname === '/dashboard/ledger' ||
+    pathname === '/dashboard/budgets';
 
   if (!multiEntity || !supportedPath) return null;
 

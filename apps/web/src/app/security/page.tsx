@@ -6,6 +6,16 @@ export const metadata: Metadata = {
   title: 'Security',
   description: 'KEEL security architecture, current limitations, and responsible disclosure.',
   alternates: { canonical: '/security' },
+  openGraph: {
+    title: 'Security · KEEL',
+    description: 'KEEL security architecture, current limitations, and responsible disclosure.',
+    url: '/security',
+  },
+  twitter: {
+    card: 'summary',
+    title: 'Security · KEEL',
+    description: 'KEEL security architecture, current limitations, and responsible disclosure.',
+  },
 };
 
 export default function SecurityPage() {
@@ -39,7 +49,9 @@ export default function SecurityPage() {
         <p>
           Language models do not perform ledger arithmetic. Imported memos, documents, and
           other ingested text are treated as untrusted data. The hosted Assistant is currently
-          read-only while payload-bound approvals are being completed.
+          read-only for financial tools while payload-bound approvals are being completed.
+          A separate local shortcut can draft a household task, which is saved only after you
+          confirm it.
         </p>
       </PublicSection>
       <PublicSection title="Secrets and providers">

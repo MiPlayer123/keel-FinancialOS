@@ -14,12 +14,16 @@ export function RedirectIfAuthed() {
   useEffect(() => {
     const client = getSupabaseBrowserClient();
     const hashType = new URLSearchParams(window.location.hash.slice(1)).get('type');
+    const openRecovery = () => {
+      window.sessionStorage.setItem('keel-password-recovery', String(Date.now()));
+      router.replace('/reset-password');
+    };
     void client.auth.getSession().then(({ data }) => {
-      if (hashType === 'recovery') router.replace('/reset-password');
+      if (hashType === 'recovery') openRecovery();
       else if (data.session) router.replace('/dashboard');
     });
     const { data: sub } = client.auth.onAuthStateChange((event, session) => {
-      if (event === 'PASSWORD_RECOVERY') router.replace('/reset-password');
+      if (event === 'PASSWORD_RECOVERY') openRecovery();
       else if (session) router.replace('/dashboard');
     });
     return () => {

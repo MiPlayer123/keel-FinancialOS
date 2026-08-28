@@ -8,7 +8,7 @@ import { PageHeader, EmptyState, QueryErrorState } from '@/components/keel/page-
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
 import { useEntityLens, lensAccountIdSet } from '@/components/keel/entity-lens-context';
-import { useKeelQuery, useKeelQuerySilent } from '@/lib/use-keel-query';
+import { useKeelQuery } from '@/lib/use-keel-query';
 import {
   fetchAccounts,
   fetchBudgets,
@@ -630,8 +630,8 @@ function HomeBody() {
     'dashboard.cash_flow_monthly',
     householdId,
   );
-  const richTxns = useKeelQuerySilent<RichTransactionRow>('transactions.rich', householdId);
-  const recurringSeries = useKeelQuerySilent<RecurringSeriesRow>('recurring.list', householdId);
+  const richTxns = useKeelQuery<RichTransactionRow>('transactions.rich', householdId);
+  const recurringSeries = useKeelQuery<RecurringSeriesRow>('recurring.list', householdId);
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
   const [accountsError, setAccountsError] = useState<string | null>(null);
   const [connections, setConnections] = useState<ConnectionRow[] | null>(null);
@@ -727,7 +727,12 @@ function HomeBody() {
   }, [householdId]);
 
   const waitingForAccounts = householdId !== null && accounts === null;
-  const loading = !ready || balances.loading || waitingForAccounts;
+  const loading =
+    !ready ||
+    balances.loading ||
+    richTxns.loading ||
+    recurringSeries.loading ||
+    waitingForAccounts;
 
   // The account ids inside the current lens (null = blended, no restriction) —
   // the one mapping every decomposable widget below narrows through.
@@ -740,9 +745,9 @@ function HomeBody() {
   const lensTxns = useMemo(
     () =>
       lensAccountIds === null
-        ? (richTxns ?? [])
-        : (richTxns ?? []).filter((t) => lensAccountIds.has(t.accountId)),
-    [richTxns, lensAccountIds],
+        ? richTxns.rows
+        : richTxns.rows.filter((t) => lensAccountIds.has(t.accountId)),
+    [richTxns.rows, lensAccountIds],
   );
 
   // Hooks must run on EVERY render — these sit ABOVE the early returns below
@@ -760,7 +765,7 @@ function HomeBody() {
   const todayIso = new Date().toISOString().slice(0, 10);
   const upcomingRecurring = useMemo(
     () =>
-      (recurringSeries ?? [])
+      recurringSeries.rows
         .filter((series) => series.status === 'confirmed')
         .flatMap((series) =>
           series.occurrences
@@ -772,7 +777,7 @@ function HomeBody() {
         )
         .sort((a, b) => a.occurrence.expectedDate.localeCompare(b.occurrence.expectedDate))
         .slice(0, 6),
-    [recurringSeries, todayIso],
+    [recurringSeries.rows, todayIso],
   );
 
   if (loading) {
@@ -866,13 +871,19 @@ function HomeBody() {
           state that can't be split per entity client-side, so it's shown only
           in the blended view — an entity lens would otherwise imply its counts
           are scoped when they aren't. */}
-      {lensActive ? null : (
+      {richTxns.error || recurringSeries.error ? (
+        <QueryErrorState
+          onRetry={() => {
+            void richTxns.refetch();
+          }}
+        />
+      ) : lensActive ? null : (
         <NeedsAttention
           householdId={householdId}
-          recurring={recurringSeries}
+          recurring={recurringSeries.rows}
           bills={forecast?.bills ?? null}
           connections={connections}
-          transactions={richTxns}
+          transactions={richTxns.rows}
         />
       )}
 
@@ -907,9 +918,13 @@ function HomeBody() {
 
         {/* Transaction-derived cards ARE entity-decomposable — they run on the
             lens-scoped transactions/accounts computed above. */}
-        <SpendingCard spending={spending} insights={insights} />
-        <RecentTransactionsCard rows={recentTransactions} />
-        {lensActive ? null : (
+        {richTxns.error ? null : (
+          <>
+            <SpendingCard spending={spending} insights={insights} />
+            <RecentTransactionsCard rows={recentTransactions} />
+          </>
+        )}
+        {lensActive || recurringSeries.error ? null : (
           <UpcomingRecurringCard rows={upcomingRecurring} todayIso={todayIso} />
         )}
         {/* The flat account list card was removed here (founder ask
@@ -921,10 +936,10 @@ function HomeBody() {
         {!lensActive && forecast !== null ? (
           <ProjectedCashCard forecast={forecast} varies={forecastVaries} todayIso={todayIso} />
         ) : null}
-        {!lensActive && hasBudget ? (
+        {!lensActive && hasBudget && !richTxns.error && !recurringSeries.error ? (
           <FreeToSpendCard
-            richTxns={richTxns ?? []}
-            series={recurringSeries ?? []}
+            richTxns={richTxns.rows}
+            series={recurringSeries.rows}
             schedules={schedules}
           />
         ) : null}

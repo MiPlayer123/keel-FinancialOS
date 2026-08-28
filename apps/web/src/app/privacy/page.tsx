@@ -6,6 +6,16 @@ export const metadata: Metadata = {
   title: 'Privacy',
   description: 'How the hosted KEEL pre-release handles account and financial data.',
   alternates: { canonical: '/privacy' },
+  openGraph: {
+    title: 'Privacy · KEEL',
+    description: 'How the hosted KEEL pre-release handles account and financial data.',
+    url: '/privacy',
+  },
+  twitter: {
+    card: 'summary',
+    title: 'Privacy · KEEL',
+    description: 'How the hosted KEEL pre-release handles account and financial data.',
+  },
 };
 
 export default function PrivacyPage() {

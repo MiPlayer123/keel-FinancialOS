@@ -6,6 +6,16 @@ export const metadata: Metadata = {
   title: 'Terms',
   description: 'Terms for evaluating the hosted KEEL pre-release.',
   alternates: { canonical: '/terms' },
+  openGraph: {
+    title: 'Terms · KEEL',
+    description: 'Terms for evaluating the hosted KEEL pre-release.',
+    url: '/terms',
+  },
+  twitter: {
+    card: 'summary',
+    title: 'Terms · KEEL',
+    description: 'Terms for evaluating the hosted KEEL pre-release.',
+  },
 };
 
 export default function TermsPage() {

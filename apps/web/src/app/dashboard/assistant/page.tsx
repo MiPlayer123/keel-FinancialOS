@@ -236,7 +236,7 @@ export default function AssistantPage() {
     <>
       <PageHeader
         title="Assistant"
-        description="Ask about your accounts, spending, and budgets — read-only narration of KEEL's numbers."
+        description="Ask about your accounts, spending, and budgets. Financial tools are read-only; a confirmed shortcut can save a household task."
         actions={null}
       />
       <AssistantChat />
@@ -401,7 +401,8 @@ function EmptyThread() {
         <CardContent className="flex flex-col gap-3 text-sm text-muted-foreground">
           <p>
             Every figure comes from KEEL&apos;s ledger, not the model. The assistant can read
-            across your finances and explain what it finds. It cannot make or stage changes.
+            across your finances and explain what it finds. Its financial tools cannot make or
+            stage changes; a separate task shortcut saves only after you review and confirm it.
           </p>
           <div className="flex flex-wrap gap-2">
             {SUGGESTED_QUESTIONS.map((suggestion) => (

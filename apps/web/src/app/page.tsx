@@ -65,7 +65,7 @@ const FEATURES = [
   {
     icon: DownloadCloud,
     title: 'Portable records',
-    body: 'Download financial records as CSV, JSON, QIF, or Beancount, including audit history and document metadata.',
+    body: 'Download structured records, audit history, and document metadata as CSV or JSON, with compatible financial records in QIF and Beancount.',
   },
 ];
 
