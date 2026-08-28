@@ -1,6 +1,6 @@
 -- Stage 1D export: least-privilege ACL, owner-only scope, explicit DTOs.
 begin;
-select plan(25);
+select plan(28);
 
 create temporary table expected_export_tables (
   table_name text primary key,
@@ -133,13 +133,6 @@ insert into excluded_export_tables(table_name) values
   ('plaid_test_responses'), ('plaid_webhook_key_test_responses'), ('sync_test_pages'),
   ('sync_attempts'), ('sync_checkpoints'), ('link_attempts'), ('removal_attempts');
 insert into excluded_export_tables(table_name) values ('recurring_detection_claims');
--- Export layer pending (Law 6 gap, honestly excluded rather than silently
--- unclassified — tracked in NOTES.md, pgTAP-debt cleanup 2026-07-18):
---   household_notes / household_tasks: notes/tasks shipped 2026-07-18
---     (20260718000000) without export wiring.
--- keel_export has no SELECT grant on either, so assertion 4 ("zero SELECT on
--- every non-included table") already proves they are not exported today; flip
--- each to expected_export_tables when its layer ships.
 -- (documents / document_versions / document_attachments moved to INCLUDE by
 -- WS-J's receipts export layer, 20260718171000_receipts_export.sql.)
 -- (statement_outbox moved to INCLUDE by Slice 6's export layer,
@@ -162,10 +155,10 @@ insert into expected_export_tables(table_name,allowed_columns,omitted_columns) v
  ('statement_drafts',array['id','household_id','document_version_id','account_id','source_hash','status','extraction_id','statement_id','decided_by','decided_at','created_at'],'{}'),
  ('statement_extractions',array['id','household_id','document_version_id','account_id','kind_hint','period_start','period_end','opening_minor','ending_minor','currency','extractor','extractor_version','model_version','prompt_version','confidence','raw_evidence','status','error_code','created_at'],'{}'),
  ('statement_extraction_lines',array['id','household_id','extraction_id','line_no','line_date','amount_minor','description_raw','currency','src_page','src_bbox','src_row','src_col','src_byte_offset','ofx_path','field_confidence','null_reason','created_at'],'{}'),
- ('statement_extraction_holdings',array['id','household_id','extraction_id','symbol','cusip','isin','name','qty','price_minor','value_minor','cost_basis_minor','currency','src_page','src_bbox','ofx_path','field_confidence','null_reason','created_at'],'{}');
+ ('statement_extraction_holdings',array['id','household_id','extraction_id','symbol','cusip','isin','name','qty','price_minor','value_minor','cost_basis_minor','currency','src_page','src_bbox','ofx_path','field_confidence','null_reason','created_at'],'{}'),
+ ('household_notes',array['id','household_id','entity_id','account_id','canonical_transaction_id','category_ledger_account_id','goal_id','schedule_id','body','pinned','created_by','created_at','updated_at','archived_at'],'{}'),
+ ('household_tasks',array['id','household_id','entity_id','account_id','canonical_transaction_id','category_ledger_account_id','goal_id','schedule_id','title','description','status','due_on','priority','created_by','created_at','updated_at','completed_at','archived_at'],'{}');
 
-insert into excluded_export_tables(table_name) values
-  ('household_notes'), ('household_tasks');
 -- household_ai_profile holds AI personalization prefs (not exported today; no
 -- keel_export grant). regular_core_sweep_allowlist / _suppressions are internal
 -- detector control tables (granted to keel_api/keel_worker only, not keel_export).
@@ -189,8 +182,8 @@ select ok(
 select is(
   (select count(*)::int from expected_export_tables
     where has_table_privilege('keel_export', format('public.%I', table_name), 'SELECT')),
-  97,
-  'keel_export can SELECT all 97 included tables'
+  99,
+  'keel_export can SELECT all 99 included tables'
 );
 select is(
   (select count(*)::int
@@ -291,6 +284,12 @@ insert into public.command_executions
 values
   ('00000000-0000-4000-8000-00000000a001','pgtap:export:command:1','98000000-0000-4000-8000-0000000000c3',
    'journal.post_batch',repeat('a',64),'{"ok":true}',now());
+insert into public.household_notes (id, household_id, body, created_by) values
+  ('98000000-0000-4000-8000-0000000000a4','00000000-0000-4000-8000-00000000a001','alpha export note','98000000-0000-4000-8000-0000000000c4'),
+  ('98000000-0000-4000-8000-0000000000b4','00000000-0000-4000-8000-00000000b001','beta export note','98000000-0000-4000-8000-0000000000c5');
+insert into public.household_tasks (id, household_id, title, created_by) values
+  ('98000000-0000-4000-8000-0000000000a5','00000000-0000-4000-8000-00000000a001','alpha export task','98000000-0000-4000-8000-0000000000c4'),
+  ('98000000-0000-4000-8000-0000000000b5','00000000-0000-4000-8000-00000000b001','beta export task','98000000-0000-4000-8000-0000000000c5');
 
 grant create on schema public to keel_export;
 create function public.keel_test_export_credential_probe() returns bigint
@@ -321,8 +320,8 @@ reset role;
 select is(
   (select count(*)::int from jsonb_object_keys(
     public.keel_export_household('00000000-0000-4000-8000-00000000a001')->'tables')),
-  97,
-  'snapshot contains all 97 included table arrays'
+  99,
+  'snapshot contains all 99 included table arrays'
 );
 select is(
   (select count(*)::int from excluded_export_tables e
@@ -355,6 +354,23 @@ select is(
    where row->>'economic_event_key' = 'pgtap:export:command:1'),
   1,
   'v2 command_executions projection is included'
+);
+select is(
+  public.keel_export_household('00000000-0000-4000-8000-00000000a001')
+    #>> '{tables,household_notes,0,body}',
+  'alpha export note',
+  'household notes are included in the owning household export'
+);
+select is(
+  public.keel_export_household('00000000-0000-4000-8000-00000000a001')
+    #>> '{tables,household_tasks,0,title}',
+  'alpha export task',
+  'household tasks are included in the owning household export'
+);
+select ok(
+  public.keel_export_household('00000000-0000-4000-8000-00000000a001')::text
+    not like '%beta export %',
+  'other-household notes and tasks are absent from the export'
 );
 select is(
   public.keel_export_household('00000000-0000-4000-8000-00000000a001')->'trialBalance',
