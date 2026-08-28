@@ -127,6 +127,8 @@ export const INCLUDE = [
   include({ schema: 'public', table: 'document_attachments', columns: ['id', 'household_id', 'document_id', 'canonical_transaction_id', 'paycheck_id', 'reimbursement_claim_id', 'statement_id', 'attached_by', 'attached_at', 'detached_by', 'detached_at'], sortKey: ['id'], timestampColumns: ['attached_at', 'detached_at'], bigintColumns: [] }),
   include({ schema: 'public', table: 'document_extractions', columns: ['id', 'household_id', 'document_version_id', 'status', 'extractor', 'extractor_version', 'merchant', 'amount_minor', 'currency', 'txn_date', 'confidence', 'raw_evidence', 'error_code', 'created_at'], sortKey: ['id'], timestampColumns: ['created_at'], bigintColumns: ['amount_minor'] }),
   include({ schema: 'public', table: 'document_transaction_matches', columns: ['id', 'household_id', 'document_version_id', 'canonical_transaction_id', 'status', 'score', 'reason_codes', 'suggested_by', 'attachment_id', 'decided_by', 'decided_at', 'created_at'], sortKey: ['id'], timestampColumns: ['decided_at', 'created_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'household_notes', columns: ['id', 'household_id', 'entity_id', 'account_id', 'canonical_transaction_id', 'category_ledger_account_id', 'goal_id', 'schedule_id', 'body', 'pinned', 'created_by', 'created_at', 'updated_at', 'archived_at'], sortKey: ['id'], timestampColumns: ['created_at', 'updated_at', 'archived_at'], bigintColumns: [] }),
+  include({ schema: 'public', table: 'household_tasks', columns: ['id', 'household_id', 'entity_id', 'account_id', 'canonical_transaction_id', 'category_ledger_account_id', 'goal_id', 'schedule_id', 'title', 'description', 'status', 'due_on', 'priority', 'created_by', 'created_at', 'updated_at', 'completed_at', 'archived_at'], sortKey: ['id'], timestampColumns: ['created_at', 'updated_at', 'completed_at', 'archived_at'], bigintColumns: [] }),
   // Approval-token provenance (Law 11 / Law 6). The record of what was approved,
   // by whom, over which server-normalized payload, when — portable household
   // data. normalized_payload is INCLUDED verbatim: statement approvals embed no
@@ -159,8 +161,6 @@ export const EXCLUDE = [
   { schema: 'public', table: 'link_attempts', reason: 'Transient connection workflow state that can contain credential envelope material.' },
   { schema: 'public', table: 'removal_attempts', reason: 'Transient provider disconnection workflow state, not portable finance history.' },
   { schema: 'public', table: 'recurring_detection_claims', reason: 'Transient idempotent cron enqueue claims, not recurring financial history.' },
-  { schema: 'public', table: 'household_notes', reason: 'Export layer pending — notes shipped 2026-07-18 without export wiring (Law 6 gap tracked in NOTES.md); flip to INCLUDE when the layer ships.' },
-  { schema: 'public', table: 'household_tasks', reason: 'Export layer pending — tasks shipped 2026-07-18 without export wiring (Law 6 gap tracked in NOTES.md); flip to INCLUDE when the layer ships.' },
   { schema: 'auth', table: 'users', reason: 'Auth identities and secrets are excluded; household membership user_id mappings remain portable.' },
 ] as const satisfies readonly ExcludedTableDefinition[];
 
