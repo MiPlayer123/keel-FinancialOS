@@ -86,7 +86,7 @@ beforeAll(async () => {
       entityId: ENTITY, name: `Retirement 401k ${suffix}`, kind: 'asset',
       subtype: 'retirement', currency: 'USD', openingBalanceMinor: '0',
     },
-  }).catch(() => ({ data: null, error: { message: 'create_account rpc shape differs' } }));
+  });
   // Fall back: some stacks expose account creation via a different proc. If the
   // rpc name/shape differs, resolve a pre-seeded manual asset account instead.
   if (acctErr || !acct) {

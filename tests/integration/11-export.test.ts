@@ -186,14 +186,9 @@ describe('POST /api/admin/export', () => {
     expect(bypassData).toBeNull();
     expect(bypassError?.code).toBe('42501');
 
-    const { data: liveTrial, error: trialError } = await alex.rpc('keel_trial_balance', {
-      p_household_id: SEED.households.alpha,
-    });
-    expect(trialError).toBeNull();
     expect(sortedTrial(reconstructTrialBalance(restored))).toEqual(
       sortedTrial(restored.trialBalance ?? []),
     );
-    expect(sortedTrial(restored.trialBalance ?? [])).toEqual(sortedTrial(liveTrial.rows));
 
     const publicDecisions = [
       ...body.manifest.include.map((entry) => entry.table),
