@@ -143,19 +143,22 @@ begin
   end if;
 
   with inv as (
-    select a.id as account_id, a.ledger_account_id
+    select a.id as account_id,
+           a.ledger_account_id,
+           latest.currency as latest_currency
       from public.accounts a
+      cross join lateral (
+        select b.currency
+          from public.balance_snapshots b
+         where b.household_id = p_household_id
+           and b.account_id = a.id
+           and b.source = 'plaid'
+         order by b.as_of desc, b.id desc
+         limit 1
+      ) latest
      where a.household_id = p_household_id
        and a.archived_at is null
        and public.keel_is_investment_subtype(a.subtype)
-       and exists (
-         select 1
-           from public.balance_snapshots b
-          where b.household_id = p_household_id
-            and b.account_id = a.id
-            and b.source = 'plaid'
-            and b.as_of < ((p_to + 1)::timestamp at time zone 'utc')
-       )
   ),
   flows as (
     select
@@ -185,37 +188,12 @@ begin
        )
      group by 1, 2
   ),
-  currencies as (
-    select currency from flows
-    union
-    select distinct b.currency
-      from inv
-      join public.balance_snapshots b
-        on b.household_id = p_household_id
-       and b.account_id = inv.account_id
-       and b.source = 'plaid'
-       and b.as_of < ((p_to + 1)::timestamp at time zone 'utc')
-  ),
   days as (
     select generate_series(
       least(p_from, coalesce((select min(d) from flows), p_from)),
       p_to,
       interval '1 day'
     )::date as d
-  ),
-  cum as (
-    select grid.d,
-           grid.currency,
-           sum(coalesce(flows.amt, 0))
-             over (partition by grid.currency order by grid.d) as bal
-      from (
-        select days.d, currencies.currency
-          from days
-          cross join (select distinct currency from currencies) currencies
-      ) grid
-      left join flows
-        on flows.d = grid.d
-       and flows.currency = grid.currency
   ),
   inv_daily as (
     select days.d,
@@ -235,6 +213,27 @@ begin
       ) latest
      where days.d >= p_from
      group by days.d, latest.currency
+  ),
+  currencies as (
+    select currency from flows
+    union
+    select latest_currency from inv
+    union
+    select currency from inv_daily
+  ),
+  cum as (
+    select grid.d,
+           grid.currency,
+           sum(coalesce(flows.amt, 0))
+             over (partition by grid.currency order by grid.d) as bal
+      from (
+        select days.d, currencies.currency
+          from days
+          cross join (select distinct currency from currencies) currencies
+      ) grid
+      left join flows
+        on flows.d = grid.d
+       and flows.currency = grid.currency
   )
   select coalesce(
     jsonb_agg(
@@ -268,6 +267,14 @@ begin
   );
 end;
 $$;
+
+grant execute on function public.keel_is_investment_subtype(text) to keel_api;
+
+grant create on schema public to keel_api;
+alter function public.keel_net_worth_as_of(uuid, date) owner to keel_api;
+revoke create on schema public from keel_api;
+
+alter function public.keel_net_worth_daily(uuid, date, date) owner to postgres;
 
 revoke all on function public.keel_net_worth_as_of(uuid, date) from public, anon;
 grant execute on function public.keel_net_worth_as_of(uuid, date) to authenticated, service_role;
