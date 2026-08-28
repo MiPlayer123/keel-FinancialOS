@@ -51,8 +51,8 @@ export default function SecurityPage() {
       </PublicSection>
       <PublicSection title="Report a vulnerability">
         <p>
-          Use GitHub&apos;s private vulnerability reporting on the KEEL repository. Do not
-          open a public issue containing exploit details, credentials, or financial data.
+          Private vulnerability reporting is not enabled yet. Do not post exploit details,
+          credentials, financial data, or identifying information in a public issue.
         </p>
         <p>
           <a
@@ -61,7 +61,7 @@ export default function SecurityPage() {
             rel="noreferrer"
             className="font-medium text-foreground underline underline-offset-4"
           >
-            Open the repository Security page
+            Check the repository Security policy for current reporting options
           </a>
         </p>
       </PublicSection>

@@ -20,9 +20,9 @@ spaces.
 
 ## Reporting
 
-For ordinary conduct concerns, contact a repository maintainer. If a report
-contains sensitive or identifying information, use GitHub's private
-vulnerability-reporting channel instead of a public issue.
+For ordinary, non-sensitive conduct concerns, use a repository issue. Do not
+post sensitive or identifying information: a private reporting channel is not
+enabled yet.
 
 Maintainers may edit or remove contributions and temporarily or permanently
 restrict participation when needed to protect the community.

@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   },
   description:
     'Open-source personal and small-business finance built on a deterministic double-entry ledger, with review-first automation and portable records.',
-  alternates: { canonical: '/' },
+  alternates: { canonical: './' },
   openGraph: {
     title: 'KEEL · personal and entity finance on an exact ledger',
     description:

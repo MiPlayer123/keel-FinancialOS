@@ -17,7 +17,7 @@ export function PublicPageShell({
 }) {
   return (
     <div className="min-h-dvh bg-background">
-      <header className="border-b border-border">
+      <header aria-label="Site" className="border-b border-border">
         <div className="mx-auto flex w-full max-w-4xl items-center justify-between px-6 py-5">
           <Link href="/" aria-label="KEEL home">
             <KeelLogo />
@@ -43,7 +43,10 @@ export function PublicPageShell({
         </div>
       </main>
       <footer className="border-t border-border">
-        <nav className="mx-auto flex w-full max-w-4xl flex-wrap gap-x-5 gap-y-2 px-6 py-8 text-sm text-muted-foreground">
+        <nav
+          aria-label="Footer navigation"
+          className="mx-auto flex w-full max-w-4xl flex-wrap gap-x-5 gap-y-2 px-6 py-8 text-sm text-muted-foreground"
+        >
           <Link href="/privacy" className="hover:text-foreground">
             Privacy
           </Link>

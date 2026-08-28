@@ -1,6 +1,6 @@
 # KEEL
 
-KEEL is an open-source personal finance app built like an accounting system. Accounts, spending, and small-business books live in one exact double-entry ledger, so every number can show its work. Deterministic detectors suggest categories, receipt matches, transfers, and recurring activity for review.
+KEEL is an open-source personal finance app built like an accounting system. Accounts, spending, and small-business books live in one exact double-entry ledger, so every number can show its work. Detectors and review workflows suggest categories, receipt matches, transfers, and recurring activity.
 
 Live at [keel.mikulsaravanan.com](https://keel.mikulsaravanan.com).
 

@@ -46,8 +46,8 @@ export default function PrivacyPage() {
       </PublicSection>
       <PublicSection title="Questions or requests">
         <p>
-          Do not post sensitive information in a public issue. Use the repository&apos;s
-          private vulnerability-reporting channel for a sensitive privacy or security request.
+          Do not post sensitive information in a public issue. Private reporting is not
+          enabled yet; check the repository Security policy before sharing any private details.
         </p>
       </PublicSection>
     </PublicPageShell>

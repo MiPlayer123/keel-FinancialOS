@@ -85,7 +85,7 @@ const JSON_LD = {
   applicationCategory: 'FinanceApplication',
   operatingSystem: 'Web',
   isAccessibleForFree: true,
-  codeRepository: 'https://github.com/MiPlayer123/keel-FinancialOS',
+  sameAs: ['https://github.com/MiPlayer123/keel-FinancialOS'],
   license: 'https://www.gnu.org/licenses/agpl-3.0.html',
   offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
   description:
@@ -203,8 +203,8 @@ export default function LandingPage() {
               </h2>
               <p className="mt-4 max-w-2xl text-pretty leading-relaxed text-muted-foreground">
                 KEEL&apos;s application code, ledger contracts, migrations, and tests are
-                available on GitHub under AGPL-3.0. You can review the implementation,
-                report issues privately, or run your own instance.
+                available on GitHub under AGPL-3.0. You can review the implementation, open
+                issues, or run your own instance.
               </p>
             </Reveal>
             <Reveal delayMs={100}>

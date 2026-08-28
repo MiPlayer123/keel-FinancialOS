@@ -1,7 +1,7 @@
 import { ImageResponse } from 'next/og';
 
 export const runtime = 'edge';
-export const alt = 'KEEL · your financial system of record';
+export const alt = 'KEEL · open-source personal and entity finance';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
@@ -44,12 +44,11 @@ export default function OpenGraphImage() {
             flexDirection: 'column',
           }}
         >
-          <span>Every dollar,</span>
-          <span style={{ color: '#10b981' }}>accounted for.</span>
+          <span>Every number</span>
+          <span style={{ color: '#10b981' }}>can show its work.</span>
         </div>
         <div style={{ marginTop: 40, fontSize: 30, color: '#a8a29e', maxWidth: 900 }}>
-          All of your money and your business, in one place, with AI that asks before it
-          acts.
+          Double-entry records, review-first automation, and portable exports.
         </div>
       </div>
     ),

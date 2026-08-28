@@ -9,7 +9,7 @@ export default function robots(): MetadataRoute.Robots {
       {
         userAgent: '*',
         allow: '/',
-        disallow: ['/dashboard', '/login', '/reset-password'],
+        disallow: ['/dashboard'],
       },
     ],
     sitemap: new URL('/sitemap.xml', site).toString(),

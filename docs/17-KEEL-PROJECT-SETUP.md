@@ -82,7 +82,10 @@ supabase functions deploy scheduled --no-verify-jwt
 - `worker` and `scheduled`: `auth: 'secret:automations'`
 - `webhook-provider`: `auth: 'none'`, followed by Plaid webhook JWT/body-hash verification
 
-Deploy the Next.js app to Vercel Hobby with the two `NEXT_PUBLIC_SUPABASE_*` values from `.env.example`.
+Deploy the Next.js app to Vercel Hobby with the two `NEXT_PUBLIC_SUPABASE_*`
+values from `.env.example` and `NEXT_PUBLIC_SITE_URL` set to the public
+origin, without a trailing path. Add `<origin>/reset-password` to the Supabase
+Auth redirect allow-list before enabling password recovery.
 
 ## 3. Plaid Sandbox integration boundary
 
