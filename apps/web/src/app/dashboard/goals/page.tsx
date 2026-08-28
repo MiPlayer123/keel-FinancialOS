@@ -248,7 +248,14 @@ function GoalCard({
   const isDerived = isDebt || isTracked;
   const saved = BigInt((isDebt ? goal.paidMinor : goal.savedMinor) || '0');
   const target = BigInt(goal.targetMinor || '1');
-  const pct = Number((saved * 100n) / target);
+  const rawProgressBps = (saved * 10_000n) / target;
+  const progressBps = Number(
+    rawProgressBps < 0n ? 0n : rawProgressBps > 10_000n ? 10_000n : rawProgressBps,
+  );
+  const progressPercent = progressBps / 100;
+  const progressLabel =
+    saved > 0n && saved * 100n < target ? '<1%' : `${String(Math.floor(progressPercent))}%`;
+  const progressWidth = saved > 0n ? Math.max(progressPercent, 0.5) : progressPercent;
   const remaining = target - saved;
 
   const monthly = useMemo(() => {
@@ -317,7 +324,7 @@ function GoalCard({
               <Money amountMinor={isDebt ? (goal.paidMinor ?? '0') : goal.savedMinor} currency={goal.currency} className="text-xs" />{' '}
               of <Money amountMinor={goal.targetMinor} currency={goal.currency} className="text-xs" />
               {isDebt ? ' paid off' : ''}
-              {` · ${String(Math.min(Math.max(pct, 0), 100))}%`}
+              {` · ${progressLabel}`}
               {goal.targetDate ? ` · by ${goal.targetDate}${targetRelative ? ` (${targetRelative})` : ''}` : ''}
             </p>
             {isDebt ? (
@@ -355,10 +362,18 @@ function GoalCard({
           </span>
         </div>
 
-        <div className="h-2 overflow-hidden rounded-full bg-secondary">
+        <div
+          role="progressbar"
+          aria-label={`${goal.name} progress`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progressPercent}
+          aria-valuetext={progressLabel}
+          className="h-2 overflow-hidden rounded-full bg-secondary"
+        >
           <div
             className="h-full rounded-full bg-primary transition-[width]"
-            style={{ width: `${String(Math.min(pct, 100))}%` }}
+            style={{ width: `${String(progressWidth)}%` }}
           />
         </div>
 

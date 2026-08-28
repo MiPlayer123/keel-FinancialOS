@@ -254,6 +254,7 @@ export function CashFlowMonthlyChart({
         };
   const firstRow = rows.at(0);
   const lastRow = rows.at(-1);
+  const drilldownMonths = [...new Set(rows.map((row) => row.month))];
 
   return (
     <div className="space-y-2">
@@ -330,6 +331,25 @@ export function CashFlowMonthlyChart({
           </BarChart>
         </ResponsiveContainer>
       </div>
+      {onMonthClick ? (
+        <div
+          aria-label="Open transactions for a month"
+          className="flex flex-wrap items-center gap-1 px-2"
+        >
+          {drilldownMonths.map((month) => (
+            <button
+              key={month}
+              type="button"
+              className="rounded px-2 py-1 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() => {
+                onMonthClick(month);
+              }}
+            >
+              {monthLabel(month)}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="flex items-center gap-4 px-2 text-xs text-muted-foreground">
         <span className="flex items-center gap-1.5">
           <span className="size-2.5 rounded-[3px]" style={{ background: 'var(--keel-chart-inflow)' }} />
@@ -704,9 +724,17 @@ export function CashFlowSankey({
     // its own container rather than colliding (never the page).
     <div
       className="overflow-x-auto"
-      role="img"
+      role="group"
+      tabIndex={0}
       aria-label={`Cash flow diagram with ${String(nodes.length)} categories and ${String(links.length)} flows.`}
     >
+      <ul className="sr-only">
+        {nodes.map((node) => (
+          <li key={`${node.column}-${node.name}`}>
+            {node.name}: {formatMoney(node.totalMinor, { currency })}
+          </li>
+        ))}
+      </ul>
       <div className="min-w-[560px]">
         <ResponsiveContainer width="100%" height={h}>
           <Sankey
