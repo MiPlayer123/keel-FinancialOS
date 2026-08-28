@@ -39,6 +39,12 @@ Record every decision, deviation, failed approach, command run, test result, mig
   the `auth` schema. Restored JWT-claim GUC extraction without widening privileges. The
   invalid tracked-goal regression now requires the intended 400 response instead of
   allowing any error status to pass.
+- Full integration follow-up: account-balance goals now use a fresh zero-balance manual
+  account instead of assuming the heavily exercised seed checking account remains zero.
+  The paycheck suite now creates its retirement destination with the command's canonical
+  snake-case payload, replays the exact approved payload, and uses the Beta-only persona
+  for its cross-household denial. This removed three false fixture failures without
+  weakening the balance, approval-token, idempotency, or tenant-isolation assertions.
 - Removed third-party screenshots and capture manifests from the current tree.
   Human checkpoint remains: public git history still contains previously committed
   sensitive and nonredistributable artifacts. Cleaning it requires coordinated
