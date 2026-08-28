@@ -1,27 +1,24 @@
 begin;
 select plan(4);
 
-select unlike(
+select ok(
   pg_catalog.pg_get_functiondef(
     'public.keel_goal_save(uuid,uuid,text,bigint,date,uuid,text,text)'::regprocedure
-  ),
-  '%auth.uid()%',
+  ) not like '%auth.uid()%',
   'goal save reads the caller id without auth schema access'
 );
 
-select unlike(
+select ok(
   pg_catalog.pg_get_functiondef(
     'public.keel_goal_contribute(uuid,uuid,bigint,date)'::regprocedure
-  ),
-  '%auth.uid()%',
+  ) not like '%auth.uid()%',
   'goal contribution reads the caller id without auth schema access'
 );
 
-select unlike(
+select ok(
   pg_catalog.pg_get_functiondef(
     'public.keel_goal_set_status(uuid,uuid,text)'::regprocedure
-  ),
-  '%auth.uid()%',
+  ) not like '%auth.uid()%',
   'goal status reads the caller id without auth schema access'
 );
 
