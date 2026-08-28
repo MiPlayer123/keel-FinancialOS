@@ -86,7 +86,6 @@ import { toast } from 'sonner';
 /** Friendly labels for the read tools the agent can call (provenance display). */
 const TOOL_LABELS: Record<string, string> = {
   list_entities: 'Entities',
-  get_account_balances: 'Account balances',
   list_transactions: 'Transactions',
   search_transactions: 'Transaction search',
   list_categories: 'Categories',
@@ -121,7 +120,6 @@ const TOOL_LABELS: Record<string, string> = {
   list_documents_for_target: 'Documents for item',
   get_document_storage_summary: 'Document storage summary',
   get_receipts_inbox: 'Receipts inbox',
-  get_latest_balances: 'Latest balances',
 };
 
 const prettifyTool = (name: string): string =>

@@ -86,7 +86,7 @@ export const buildAgentSystemPrompt = (options?: AgentPromptOptions): string => 
       ? [
           '4. Be complete on multi-part requests. Use every relevant read tool and',
           '   answer every part that the deterministic data supports.',
-          '   get_account_balances returns raw ledger-account ids, not named bank accounts;',
+          '   per-account balances are unavailable until account identity and balance data share one read contract;',
           '   never turn it into a named account-balance list.',
           '5. This session cannot write or stage proposals. Never claim you changed or staged anything.',
           '   If the user asks for a change, explain where they can review and make it in KEEL.',

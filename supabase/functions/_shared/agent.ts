@@ -101,14 +101,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     buildArgs: householdOnly,
   },
   {
-    name: 'get_account_balances',
-    description:
-      'Get the raw trial balance by ledger-account id. This does not return user account names and must not be presented as a list of bank-account balances.',
-    action: 'ledger.trial_balance',
-    parameters: NO_PARAMS,
-    buildArgs: householdOnly,
-  },
-  {
     name: 'list_transactions',
     description: 'List recent transactions, optionally filtered. Returns one bounded page (newest first).',
     action: 'transactions.rich_page',
@@ -506,14 +498,6 @@ const READ_TOOL_SPECS: readonly ReadToolSpec[] = [
     parameters: NO_PARAMS,
     buildArgs: householdOnly,
     capResult: capRows(60),
-  },
-  {
-    name: 'get_latest_balances',
-    description: 'Get the latest per-account balance snapshot (a lighter, faster read than get_account_balances’ full trial balance).',
-    action: 'balances.latest',
-    parameters: NO_PARAMS,
-    buildArgs: householdOnly,
-    capResult: capRows(100),
   },
 ];
 
@@ -2078,7 +2062,7 @@ const WRITE_TOOL_SPECS: readonly WriteToolSpec[] = [
   {
     name: 'propose_set_statement_cadence',
     description:
-      'Propose setting (or clearing) the expected statement cadence for an account. Requires the user’s approval. Get accountId from get_account_balances.',
+      'Propose setting (or clearing) the expected statement cadence for an explicitly selected account. Requires the user’s approval; never infer an account id.',
     action: 'statements.set_cadence',
     parameters: {
       type: 'object',
