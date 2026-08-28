@@ -129,7 +129,7 @@ describe('goal tracking = account_balance', () => {
     });
   });
 
-  it('refuses a tracked goal without an account and against a liability', async () => {
+  it('refuses a tracked goal without an account', async () => {
     const noAccount = await callFunction('/api/goals/save', {
       headers: alexHeaders,
       body: {
@@ -142,7 +142,8 @@ describe('goal tracking = account_balance', () => {
         tracking: 'account_balance',
       },
     });
-    expect(noAccount.status).toBeGreaterThanOrEqual(400);
+    expect(noAccount.status).toBe(400);
+    expect(noAccount.body).toMatchObject({ code: 'invalid_command' });
   });
 
   it('manual savings goals still accumulate from contributions', async () => {

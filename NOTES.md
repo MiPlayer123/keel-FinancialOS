@@ -33,6 +33,11 @@ Record every decision, deviation, failed approach, command run, test result, mig
   function itself. A narrow trigger now permits only `keel_api` to change an active
   receipt to reversed while preserving every original fact and continuing to reject
   direct updates and all deletes.
+- CI follow-up: goal creation rolled back at its direct `audit_log` insert because the
+  hardened `keel_api` function had table privilege but no matching RLS insert policy.
+  Added the insert-only policy; append-only triggers still reject updates and deletes.
+  The invalid tracked-goal regression now requires the intended 400 response instead of
+  allowing any error status to pass.
 - Removed third-party screenshots and capture manifests from the current tree.
   Human checkpoint remains: public git history still contains previously committed
   sensitive and nonredistributable artifacts. Cleaning it requires coordinated
