@@ -317,6 +317,7 @@ function GoalCard({
               <Money amountMinor={isDebt ? (goal.paidMinor ?? '0') : goal.savedMinor} currency={goal.currency} className="text-xs" />{' '}
               of <Money amountMinor={goal.targetMinor} currency={goal.currency} className="text-xs" />
               {isDebt ? ' paid off' : ''}
+              {` · ${String(Math.min(Math.max(pct, 0), 100))}%`}
               {goal.targetDate ? ` · by ${goal.targetDate}${targetRelative ? ` (${targetRelative})` : ''}` : ''}
             </p>
             {isDebt ? (

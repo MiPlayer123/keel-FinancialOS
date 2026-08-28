@@ -67,15 +67,15 @@ const PRIMARY_NAV: NavItem[] = [
   { label: 'Home', href: '/dashboard', icon: LayoutDashboard },
   { label: 'Accounts', href: '/dashboard/accounts', icon: Wallet },
   { label: 'Transactions', href: '/dashboard/ledger', icon: ReceiptText },
-  { label: 'Investments', href: '/dashboard/investments', icon: TrendingUp },
-  { label: 'Recurring', href: '/dashboard/recurring', icon: Repeat },
-  { label: 'Budgets', href: '/dashboard/budgets', icon: PiggyBank },
-  { label: 'Goals', href: '/dashboard/goals', icon: Target },
-  { label: 'Reports', href: '/dashboard/reports', icon: BarChart3 },
   { label: 'Review', href: '/dashboard/review', icon: BadgeCheck },
+  { label: 'Reports', href: '/dashboard/reports', icon: BarChart3 },
 ];
 
 const SECONDARY_NAV: NavItem[] = [
+  { label: 'Budgets', href: '/dashboard/budgets', icon: PiggyBank },
+  { label: 'Recurring', href: '/dashboard/recurring', icon: Repeat },
+  { label: 'Goals', href: '/dashboard/goals', icon: Target },
+  { label: 'Investments', href: '/dashboard/investments', icon: TrendingUp },
   { label: 'Paychecks', href: '/dashboard/paychecks', icon: Banknote },
   { label: 'Reimbursements', href: '/dashboard/reimbursements', icon: ArrowLeftRight },
   { label: 'Statements', href: '/dashboard/statements', icon: FileCheck2 },
@@ -132,6 +132,10 @@ function NavItemLink({
 
 function NavLinks({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: () => void }) {
   const pathname = usePathname();
+  const secondaryActive = SECONDARY_NAV.some(
+    (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),
+  );
+  const [moreOpen, setMoreOpen] = useState(secondaryActive);
   // Entity list rides the shared lens context (which reads entities.list once
   // per household) — the rail reuses it rather than opening a second entities
   // read, so its Personal/Business split is the SAME set, order, and names the
@@ -163,20 +167,47 @@ function NavLinks({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: 
       )}
 
       <Separator className={cn('my-2', collapsed && 'mx-auto w-6')} />
-      {collapsed ? null : (
-        <p className="px-3 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
-          Manage
-        </p>
+      {collapsed ? (
+        SECONDARY_NAV.map((item) => (
+          <NavItemLink
+            key={item.href}
+            item={item}
+            pathname={pathname}
+            collapsed
+            onNavigate={onNavigate}
+          />
+        ))
+      ) : (
+        <>
+          <button
+            type="button"
+            aria-expanded={moreOpen || secondaryActive}
+            className="flex items-center justify-between rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+            onClick={() => {
+              setMoreOpen((open) => !open);
+            }}
+          >
+            More
+            <ChevronDown
+              className={cn(
+                'size-4 transition-transform',
+                (moreOpen || secondaryActive) && 'rotate-180',
+              )}
+            />
+          </button>
+          {moreOpen || secondaryActive
+            ? SECONDARY_NAV.map((item) => (
+                <NavItemLink
+                  key={item.href}
+                  item={item}
+                  pathname={pathname}
+                  collapsed={false}
+                  onNavigate={onNavigate}
+                />
+              ))
+            : null}
+        </>
       )}
-      {SECONDARY_NAV.map((item) => (
-        <NavItemLink
-          key={item.href}
-          item={item}
-          pathname={pathname}
-          collapsed={collapsed}
-          onNavigate={onNavigate}
-        />
-      ))}
     </nav>
   );
 }

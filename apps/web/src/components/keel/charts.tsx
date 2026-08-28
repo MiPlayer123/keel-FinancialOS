@@ -118,9 +118,15 @@ export function BalanceTrendChart({ points, height = 200 }: { points: BalancePoi
   const gid = useId();
   const fillId = `keel-balance-fill-${gid}`;
   const strokeId = `keel-balance-stroke-${gid}`;
+  const firstPoint = points[0];
+  const lastPoint = points[points.length - 1];
+  const chartLabel =
+    firstPoint && lastPoint
+      ? `Balance trend from ${firstPoint.date}, ${formatMoney(firstPoint.balanceMinor, { currency: firstPoint.currency })}, to ${lastPoint.date}, ${formatMoney(lastPoint.balanceMinor, { currency: lastPoint.currency })}.`
+      : 'Balance trend with no data.';
 
   return (
-    <div style={{ height }} className="w-full">
+    <div style={{ height }} className="w-full" role="img" aria-label={chartLabel}>
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 8 }}>
           <defs>
@@ -249,7 +255,16 @@ export function CashFlowMonthlyChart({
 
   return (
     <div className="space-y-2">
-      <div style={{ height }} className={`w-full${handleClick ? ' cursor-pointer' : ''}`}>
+      <div
+        style={{ height }}
+        className={`w-full${handleClick ? ' cursor-pointer' : ''}`}
+        role="group"
+        aria-label={
+          rows.length > 0
+            ? `Monthly income and spending from ${monthLabel(rows[0]!.month)} through ${monthLabel(rows[rows.length - 1]!.month)}.`
+            : 'Monthly income and spending with no data.'
+        }
+      >
         <ResponsiveContainer width="100%" height="100%">
           <BarChart
             data={data}
@@ -496,7 +511,11 @@ export function CategoryDonut({
         };
 
   return (
-    <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+    <div
+      className="flex flex-col gap-4 sm:flex-row sm:items-center"
+      role="group"
+      aria-label={`Category breakdown with ${String(items.length)} categories.`}
+    >
       <div className="relative mx-auto w-full max-w-[240px] shrink-0" style={{ height }}>
         <ResponsiveContainer width="100%" height="100%">
           <PieChart margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
@@ -681,7 +700,11 @@ export function CashFlowSankey({
   return (
     // Flow labels need real width — on narrow screens the diagram scrolls in
     // its own container rather than colliding (never the page).
-    <div className="overflow-x-auto">
+    <div
+      className="overflow-x-auto"
+      role="img"
+      aria-label={`Cash flow diagram with ${String(nodes.length)} categories and ${String(links.length)} flows.`}
+    >
       <div className="min-w-[560px]">
         <ResponsiveContainer width="100%" height={h}>
           <Sankey
