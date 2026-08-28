@@ -127,6 +127,14 @@ export async function fetchHouseholds(): Promise<HouseholdMembership[]> {
   });
 }
 
+export async function bootstrapHousehold(): Promise<{
+  householdId: string;
+  entityId?: string;
+  created: boolean;
+}> {
+  return invoke('api/onboarding/bootstrap', {});
+}
+
 /** Accounts for a household (RLS-scoped direct read). */
 export type AccountRow = {
   id: string;

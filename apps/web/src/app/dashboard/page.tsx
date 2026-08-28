@@ -613,7 +613,7 @@ function ProjectedCashCard({
 }
 
 function HomeBody() {
-  const { householdId, ready } = useHousehold();
+  const { householdId, ready, error: householdError, retry: retryHousehold } = useHousehold();
   // Global entity lens (persona theme #2). null = "All entities" (blended,
   // pre-lens dashboard). A concrete id scopes every widget that can be
   // decomposed client-side by account→entity (net worth, spending mix,
@@ -785,6 +785,9 @@ function HomeBody() {
   }
 
   if (!householdId) {
+    if (householdError) {
+      return <QueryErrorState description={householdError} onRetry={retryHousehold} />;
+    }
     return (
       <EmptyState
         icon={<Wallet className="size-6" />}

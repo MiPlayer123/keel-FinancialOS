@@ -405,6 +405,30 @@ export default {
       return json(400, { code: 'invalid_command', message: 'Invalid JSON.', details: {} });
     }
 
+    if (path === '/onboarding/bootstrap') {
+      const input = body as Record<string, unknown>;
+      const requestedName = input['householdName'];
+      if (
+        requestedName !== undefined &&
+        (typeof requestedName !== 'string' || requestedName.trim().length > 200)
+      ) {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Household name failed validation.',
+          details: {},
+        });
+      }
+      const { data, error } = await ctx.supabaseAdmin.rpc('keel_bootstrap_household', {
+        p_user_id: userId,
+        p_household_name:
+          typeof requestedName === 'string' && requestedName.trim().length > 0
+            ? requestedName.trim()
+            : 'My household',
+      });
+      if (error) return mapDbError(error);
+      return json(200, data);
+    }
+
     if (path === '/admin/export') {
       const input = body as Record<string, unknown>;
       const householdId = HouseholdIdSchema.safeParse(input['householdId']);
