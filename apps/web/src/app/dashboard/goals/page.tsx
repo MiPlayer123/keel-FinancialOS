@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { PageHeader, EmptyState } from '@/components/keel/page-header';
+import { PageHeader, EmptyState, QueryErrorState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
 import {
@@ -84,6 +84,7 @@ function GoalsBody() {
   const { householdId, ready } = useHousehold();
   const [goals, setGoals] = useState<GoalRow[] | null>(null);
   const [available, setAvailable] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
   const [ledgerKinds, setLedgerKinds] = useState<Map<string, string>>(new Map());
   const [balances, setBalances] = useState<Map<string, string>>(new Map());
@@ -92,14 +93,18 @@ function GoalsBody() {
 
   const load = useCallback(() => {
     if (!householdId) return;
+    setLoadError(false);
     fetchGoals(householdId)
-      .then(setGoals)
+      .then((rows) => {
+        setGoals(rows);
+        setLoadError(false);
+      })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : '';
         if (/unknown query|does not exist|not_found/i.test(msg)) {
           setAvailable(false);
         } else {
-          setGoals([]);
+          setLoadError(true);
           toast.error(msg || 'Could not load goals.');
         }
       });
@@ -138,7 +143,7 @@ function GoalsBody() {
     [accounts, ledgerKinds],
   );
 
-  if (!ready || (goals === null && available)) {
+  if (!ready || (goals === null && available && !loadError)) {
     return (
       <div className="space-y-3">
         {Array.from({ length: 3 }).map((_, i) => (
@@ -155,6 +160,9 @@ function GoalsBody() {
         description="The backend for goals hasn't been deployed to this environment."
       />
     );
+  }
+  if (loadError) {
+    return <QueryErrorState onRetry={load} />;
   }
 
   const rows = goals ?? [];

@@ -144,7 +144,7 @@ function NavLinks({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: 
   // read, so its Personal/Business split is the SAME set, order, and names the
   // Accounts page groups by. `entities` is [] until that read resolves; the
   // rail falls back to the flat (single-entity) layout until then.
-  const { entities } = useEntityLens();
+  const { entities, entityId } = useEntityLens();
   return (
     <nav aria-label="Main navigation" className="flex flex-col gap-0.5">
       {PRIMARY_NAV.map((item) =>
@@ -156,7 +156,12 @@ function NavLinks({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: 
               collapsed={collapsed}
               onNavigate={onNavigate}
             />
-            <SidebarAccounts pathname={pathname} onNavigate={onNavigate} entities={entities} />
+            <SidebarAccounts
+              pathname={pathname}
+              onNavigate={onNavigate}
+              entities={entities}
+              activeEntityId={entityId}
+            />
           </div>
         ) : (
           <NavItemLink
@@ -297,10 +302,12 @@ function SidebarAccounts({
   pathname,
   onNavigate,
   entities,
+  activeEntityId,
 }: {
   pathname: string;
   onNavigate?: (() => void) | undefined;
   entities: EntityRow[];
+  activeEntityId: string | null;
 }) {
   const { householdId } = useHousehold();
   // Queried under the shared 'keel-query' cache-key prefix (see
@@ -343,6 +350,10 @@ function SidebarAccounts({
     enabled: householdId !== null,
   });
   const accounts = data?.accounts ?? [];
+  const visibleAccounts =
+    activeEntityId === null
+      ? accounts
+      : accounts.filter((account) => account.entityId === activeEntityId);
   const kinds = data?.kinds ?? new Map<string, string>();
   const byLedger = new Map((data?.balances ?? []).map((r) => [r.ledgerAccountId, r]));
   const connById = new Map((data?.connections ?? []).map((c) => [c.id, c]));
@@ -372,7 +383,7 @@ function SidebarAccounts({
     });
   }
 
-  if (accounts.length === 0) return null;
+  if (visibleAccounts.length === 0) return null;
 
   // One account row — the stretched-link row shared by the flat layout and
   // every per-entity section, so both render identically.
@@ -475,7 +486,7 @@ function SidebarAccounts({
   // Accounts-page net worth for single-currency households (the common case);
   // for mixed-currency households the rail deliberately shows the dominant
   // currency only rather than mis-summing across currencies (Law 4).
-  const netWorth = currencySubtotal(accounts, byLedger);
+  const netWorth = currencySubtotal(visibleAccounts, byLedger);
 
   const netWorthFoot = (
     <div className="mt-1.5 flex items-baseline justify-between border-t border-border/60 px-3 pt-1.5">
@@ -501,7 +512,7 @@ function SidebarAccounts({
   if (entities.length <= 1) {
     return (
       <div className="mb-1">
-        {groupsFor(accounts)}
+        {groupsFor(visibleAccounts)}
         {netWorthFoot}
       </div>
     );
@@ -514,7 +525,7 @@ function SidebarAccounts({
   // (an archived entity still owning live accounts) rather than dropping them
   // from the household total.
   const byEntity = new Map<string, AccountRow[]>();
-  for (const a of accounts) {
+  for (const a of visibleAccounts) {
     const list = byEntity.get(a.entityId) ?? [];
     list.push(a);
     byEntity.set(a.entityId, list);
