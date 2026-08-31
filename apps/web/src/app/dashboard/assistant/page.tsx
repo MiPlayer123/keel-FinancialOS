@@ -236,7 +236,6 @@ export default function AssistantPage() {
     <>
       <PageHeader
         title="Assistant"
-        description="Ask about your accounts, spending, and budgets. Financial tools are read-only; a confirmed shortcut can save a household task."
         actions={null}
       />
       <AssistantChat />

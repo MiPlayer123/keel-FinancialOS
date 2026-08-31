@@ -206,7 +206,6 @@ export default function PaychecksPage() {
     <>
       <PageHeader
         title="Paychecks"
-        description="Gross to net, every deduction accounted for, reconciled to the deposit."
       />
       <div className="p-6">
         <PaychecksBody />

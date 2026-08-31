@@ -90,7 +90,6 @@ export default function StatementsPage() {
     <>
       <PageHeader
         title="Statements"
-        description="Enter a bank statement, reconcile it against the ledger, lock the period."
       />
       <div className="p-6">
         <StatementsBody />
@@ -234,7 +233,7 @@ function StatementsBody() {
         <EmptyState
           icon={<FileCheck2 className="size-6" />}
           title="No statements yet"
-          description="Enter your first bank statement to reconcile a period — the Quicken habit, kept."
+          description="Enter your first bank statement, reconcile it against the ledger, then lock the period so nothing can quietly change behind a closed month. The Quicken habit, kept."
         />
       ) : (
         <div className="space-y-2">

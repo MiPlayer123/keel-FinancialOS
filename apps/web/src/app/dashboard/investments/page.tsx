@@ -169,7 +169,6 @@ export default function InvestmentsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Investments"
-        description="Brokerage and retirement accounts, holdings, and allocation across your household."
       />
 
       {/* Holdings sync errors (F-014): tells the user to re-link. Rendered

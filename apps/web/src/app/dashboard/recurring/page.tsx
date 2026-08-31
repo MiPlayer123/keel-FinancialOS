@@ -81,7 +81,6 @@ export default function RecurringPage() {
     <>
       <PageHeader
         title="Recurring"
-        description="Subscriptions, bills, and recurring income KEEL has detected — confirm, pause or stop tracking them."
       />
       <div className="p-6">
         <RecurringBody />

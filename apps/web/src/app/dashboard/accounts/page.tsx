@@ -51,7 +51,6 @@ export default function AccountsPage() {
     <>
       <PageHeader
         title="Accounts"
-        description="Everything you own and owe, by type."
         actions={
           <Link
             href="/dashboard/connections"

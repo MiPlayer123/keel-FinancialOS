@@ -65,7 +65,7 @@ import {
 export default function LedgerPage() {
   return (
     <>
-      <PageHeader title="Ledger" description="Every transaction, categorized." />
+      <PageHeader title="Ledger" />
       <div className="p-6">
         {/* Suspense: useSearchParams in LedgerTable needs a boundary for the
             static prerender. */}

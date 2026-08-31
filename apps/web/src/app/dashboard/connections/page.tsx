@@ -183,7 +183,6 @@ function ConnectionsBody() {
     <>
       <PageHeader
         title="Connections"
-        description="Linked institutions and sync status."
         actions={
           householdId ? (
             <PlaidLinkButton
