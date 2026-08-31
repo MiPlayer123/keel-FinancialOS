@@ -1541,8 +1541,9 @@ function TxnEditForm({
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Enter a negative amount for a refund or reimbursement (a credit that
-              reduces that category).
+              Negative is money out (an expense, a tax withheld, a share you owe);
+              positive is money in (income, a refund, a reimbursement). The lines
+              add up to the transaction amount.
             </p>
             {/* 390px: each row stacks category over amount; sm+ is one line. */}
             {splitRows.map((s, i) => (
