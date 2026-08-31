@@ -274,6 +274,58 @@ open(sys.argv[2], 'w').write(s.replace(old, new))
 PY
 mutate "series partitioned by account only, ignoring source" "$TMP/p5.py"
 
+
+# ---------------------------------------------------------------------------
+# 5. Scale. The first live attempt exceeded the 60 s client ceiling and was
+#    killed (it rolled back cleanly, which is the design working, but it did
+#    not finish). Two shapes were responsible and neither is visible at 25
+#    rows: a `where id = any(<186,810-element array>)` removal, and a
+#    `left join lateral (... limit 1)` verification doing one index probe per
+#    archived row at the exact moment the index still physically holds every
+#    entry the same statement just removed. Both are now set-based, and this
+#    step exists so a future edit cannot quietly reintroduce either.
+# ---------------------------------------------------------------------------
+echo
+echo "=== 5. scale: production-shaped volume ==="
+SCALE="$TMP/scale.sql"
+cat > "$SCALE" <<'BULK'
+-- 16 accounts x 12,000 cycles, the live shape: a value that moves rarely and
+-- is otherwise reconfirmed every 3 minutes. ~99.9% of rows are repeats, and
+-- roughly a third of the accounts report a null available/limit, which is what
+-- makes the NULL-safe comparison load-bearing at this size too.
+insert into public.balance_snapshots
+  (household_id, account_id, as_of, available_minor, current_minor, limit_minor,
+   currency, source, snapshot_metadata, created_at)
+select '00000000-0000-4000-8000-000000000001',
+       ('00000000-0000-4000-8000-0000000001' || lpad(a::text, 2, '0'))::uuid,
+       timestamptz '2026-01-01T00:00:00Z' + (c * 3 || ' minutes')::interval,
+       case when a % 3 = 0 then null else 1000 + a * 100 + (c / 4000) end,
+       50000 + a * 1000 + (c / 4000) * 7,
+       case when a % 2 = 0 then null else 900000 end,
+       'USD', 'plaid', '{}'::jsonb,
+       timestamptz '2026-01-01T00:00:00Z' + (c * 3 || ' minutes')::interval
+  from generate_series(1, 16) a, generate_series(1, 12000) c;
+create index on public.balance_snapshots (household_id, account_id, as_of);
+analyze public.balance_snapshots;
+BULK
+fresh_db scale "$SCALE"
+SCALE_ROWS="$(q scale 'select count(*) from public.balance_snapshots')"
+START=$(date +%s)
+OUT="$(apply scale "$MIGRATION" || true)"
+ELAPSED=$(( $(date +%s) - START ))
+echo "$OUT" | grep -E 'NOTICE|ERROR' | sed 's/^/    /'
+expect "scale run committed"        "$(echo "$OUT" | grep -c 'KEEL_COMPACTION_ABORT' || true)" 0
+expect "scale rows archived"        "$(q scale 'select count(*) from keel_archive.balance_snapshots_20260831')" "$SCALE_ROWS"
+expect "scale: step function preserved for every original instant" \
+  "$(q scale "with i as (select household_id,account_id,source,as_of,id,current_minor,available_minor,limit_minor,currency,snapshot_metadata,false is_live from keel_archive.balance_snapshots_20260831 union all select household_id,account_id,source,as_of,id,current_minor,available_minor,limit_minor,currency,snapshot_metadata,true from public.balance_snapshots), s as (select i.*, row_number() over (partition by household_id,account_id,source order by as_of,id,is_live desc) rn from i), g as (select s.*, max(case when s.is_live then s.rn end) over (partition by s.household_id,s.account_id,s.source order by s.rn rows between unbounded preceding and current row) gov_rn from s) select count(*) from g a left join g c on c.household_id=a.household_id and c.account_id=a.account_id and c.source=a.source and c.rn=a.gov_rn where not a.is_live and (c.rn is null or c.current_minor is distinct from a.current_minor or c.available_minor is distinct from a.available_minor or c.limit_minor is distinct from a.limit_minor or c.currency is distinct from a.currency or c.snapshot_metadata is distinct from a.snapshot_metadata)")" 0
+echo "  ..  ${SCALE_ROWS} rows -> $(q scale 'select count(*) from public.balance_snapshots') survivors in ${ELAPSED}s"
+if [ "$ELAPSED" -gt 60 ]; then
+  echo "  FAIL scale run took ${ELAPSED}s, over the 60s client ceiling that killed the first live attempt"
+  FAILED=1
+else
+  echo "  ok   scale run inside the 60s client ceiling (${ELAPSED}s)"
+fi
+
 echo
 if [ "$FAILED" = 1 ]; then echo "=== RESULT: FAIL ==="; exit 1; fi
-echo "=== RESULT: PASS (correct on good data, atomic on every abort, refuses every broken predicate) ==="
+echo "=== RESULT: PASS (correct on good data, atomic on every abort, refuses every broken predicate, finishes at production volume) ==="

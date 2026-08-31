@@ -66,6 +66,32 @@ Verification, all run:
   from`, endpoints-only, and partitioning by account instead of by series — each rolling
   back to 25 rows with no archive.
 
+**The first live attempt failed, and the failure was worth having.** It ran past the
+60-second MCP client ceiling and was killed. It rolled back completely — 186,943 rows
+still there, no archive, no audit row — which is the atomicity the design promised, now
+demonstrated against a real interruption rather than only an injected one. Three defects
+came out of it, none of which the 25-row fixture could ever have shown:
+
+1. `delete ... where id = any(array_agg(...))` with a 186,810-element array. Replaced with
+   a `using` join against the classification table.
+2. `left join lateral (... order by as_of desc limit 1)` for the final verification, doing
+   one index probe per archived row *at the moment the index still physically holds every
+   entry the same statement just removed and which is invisible to it*, so each probe
+   walked past them. Replaced with a set-based interleave of the archive and the survivors
+   plus a running "last live row", which needs one sort of 2n rows and no probes.
+3. **The actual cause, which the first two only partly masked:** a temp table has no
+   statistics until it is analyzed, so the planner sized `_compaction_marked` by a
+   hardcoded default and planned the removal as a nested loop. Adding `analyze` (and an
+   index on `id`) took the removal phase to 0.27 s.
+
+So `scripts/run-balance-snapshot-compaction-pgtap.sh` gained a **scale step**: 16 accounts
+× 12,000 cycles = 192,025 rows in the live shape, asserting both correctness and that the
+run finishes inside the 60 s ceiling. Before the fixes it took **437 s**; after, **5 s**,
+and the per-phase notices now built into the migration say where the time goes (classify
+1.17 s, gate 0.77 s, archive + hash 1.87 s, remove 0.27 s, verify 1.02 s). The lesson is
+the general one: a fixture small enough to be readable cannot exhibit a quadratic plan, so
+a migration that will meet production volume needs a test that does too.
+
 Deferred deliberately: `VACUUM (FULL)` and `REINDEX` cannot run inside a transaction, so
 they are documented at the top of the migration to run immediately after it commits. A
 plain removal returns none of the 50 MB and the 27 MB of index bloats worst.

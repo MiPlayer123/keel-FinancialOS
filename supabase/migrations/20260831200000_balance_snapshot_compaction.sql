@@ -60,8 +60,11 @@ declare
   v_hash_source  text;
   v_hash_archive text;
   v_household    uuid;
-  v_ids          uuid[];
+  -- Per-phase timing. This is not decoration: the first live attempt blew a
+  -- 60 s client ceiling and there was no way to tell which phase had eaten it.
+  v_t            timestamptz;
 begin
+  v_t := clock_timestamp();
   -- -------------------------------------------------------------------------
   -- 0. Already done? This file is applied by hand against the live project
   --    with no migration-history table, so it must be safe to re-run.
@@ -145,7 +148,13 @@ begin
     from ordered o;
 
   create index on _compaction_marked (household_id, account_id, source, rn_asc);
+  create index on _compaction_marked (id);
+  -- A temp table has NO statistics until it is analyzed, so the planner sizes
+  -- it by a hardcoded default. That is how the removal below can be planned as
+  -- a nested loop over 186k x 186k rows instead of a hash join.
+  analyze _compaction_marked;
 
+  raise notice '  [compaction] %: %', 'classify', clock_timestamp() - v_t; v_t := clock_timestamp();
   select count(*) into v_bad
     from _compaction_marked where p_created is not null and created_at < p_created;
   if v_bad <> 0 then
@@ -199,6 +208,7 @@ begin
   -- per account: keel_latest_balances filters on no source at all, so an
   -- account-level rule plus a second source arriving later drops the newest
   -- row of one of them.
+  raise notice '  [compaction] %: %', 'gate prop1 (step function)', clock_timestamp() - v_t; v_t := clock_timestamp();
   select count(*) into v_bad from (
     select household_id, account_id, source from _compaction_marked
     except
@@ -285,6 +295,7 @@ begin
   --    to be explicitly classified. No grants are issued, so only the table
   --    owner and service_role can read it.
   -- -------------------------------------------------------------------------
+  raise notice '  [compaction] %: %', 'gate prop2 + prop3', clock_timestamp() - v_t; v_t := clock_timestamp();
   create schema if not exists keel_archive;
   revoke all on schema keel_archive from public;
   comment on schema keel_archive is
@@ -322,15 +333,21 @@ begin
   --    otherwise leave zero trace anywhere, and Law 2 requires the actor, the
   --    counts, the archive location and the predicate be recorded.
   -- -------------------------------------------------------------------------
-  select array_agg(id) into v_ids from _compaction_marked where not is_surv;
-
+  raise notice '  [compaction] %: %', 'archive + verify hashes', clock_timestamp() - v_t; v_t := clock_timestamp();
+  -- `using` join, NOT `id = any(array_agg(...))`. The array form is the
+  -- obvious way to write this and it is what the first live attempt used; it
+  -- ran past 60 s and was killed. A 186,810-element array is a quadratic trap,
+  -- and building it also materialises the whole id set in backend memory for
+  -- no reason when the classification is already sitting in a table.
   delete from public.balance_snapshots bs
-   where bs.id = any(v_ids);
+   using _compaction_marked m
+   where m.id = bs.id and not m.is_surv;
   get diagnostics v_bad = row_count;
   if v_bad <> v_removable then
     raise exception 'KEEL_COMPACTION_ABORT: removed % rows, classified % as removable', v_bad, v_removable;
   end if;
 
+  raise notice '  [compaction] %: %', 'remove', clock_timestamp() - v_t; v_t := clock_timestamp();
   for v_household in select distinct household_id from keel_archive.balance_snapshots_20260831 loop
     insert into public.audit_log
       (household_id, actor, action, object_type, object_id, command_id, before, after)
@@ -365,29 +382,60 @@ begin
   --    or from scripts/audit/balance-snapshot-compaction-gate.sql -- still
   --    fails closed here and rolls everything back.
   -- -------------------------------------------------------------------------
+  --    Set-based, deliberately: the obvious `left join lateral (... order by
+  --    as_of desc limit 1)` does one index probe per archived row, and at this
+  --    point in the transaction the index still physically contains all
+  --    186,810 entries this statement just removed and which are invisible to
+  --    it, so every probe walks past them to reach a live one. That is the
+  --    other half of what made the first live attempt exceed 60 s. Interleaving
+  --    the two tables and taking a running "last live row" instead costs one
+  --    sort of 2n rows and no probes at all.
+  --
+  --    `is_live desc` in the ordering matters: a surviving row and its own
+  --    archived copy share (as_of, id), and the live one has to sort first so
+  --    that a kept row is governed by itself rather than by its predecessor.
+  with interleaved as (
+    select household_id, account_id, source, as_of, id,
+           current_minor, available_minor, limit_minor, currency, snapshot_metadata,
+           false as is_live
+      from keel_archive.balance_snapshots_20260831
+    union all
+    select household_id, account_id, source, as_of, id,
+           current_minor, available_minor, limit_minor, currency, snapshot_metadata,
+           true
+      from public.balance_snapshots
+  ),
+  seq as (
+    select i.*,
+           row_number() over (partition by household_id, account_id, source
+                              order by as_of, id, is_live desc) as rn
+      from interleaved i
+  ),
+  gov as (
+    select s.*,
+           max(case when s.is_live then s.rn end) over (
+             partition by s.household_id, s.account_id, s.source
+             order by s.rn rows between unbounded preceding and current row
+           ) as gov_rn
+      from seq s
+  )
   select count(*) into v_bad
-    from keel_archive.balance_snapshots_20260831 a
-    left join lateral (
-      select 1 as found, b.current_minor, b.available_minor, b.limit_minor,
-             b.currency, b.snapshot_metadata
-        from public.balance_snapshots b
-       where b.household_id = a.household_id
-         and b.account_id   = a.account_id
-         and b.source       = a.source
-         and (b.as_of, b.id) <= (a.as_of, a.id)
-       order by b.as_of desc, b.id desc
-       limit 1
-    ) c on true
-   where c.found is null
+    from gov a
+    left join gov c
+      on c.household_id = a.household_id and c.account_id = a.account_id
+     and c.source = a.source and c.rn = a.gov_rn
+   where not a.is_live
+     and (c.rn is null
       or c.current_minor     is distinct from a.current_minor
       or c.available_minor   is distinct from a.available_minor
       or c.limit_minor       is distinct from a.limit_minor
       or c.currency          is distinct from a.currency
-      or c.snapshot_metadata is distinct from a.snapshot_metadata;
+      or c.snapshot_metadata is distinct from a.snapshot_metadata);
   if v_bad <> 0 then
     raise exception 'KEEL_COMPACTION_ABORT: compacted table disagrees with the before-image at % instants', v_bad;
   end if;
 
+  raise notice '  [compaction] %: %', 'verify against the before-image', clock_timestamp() - v_t; v_t := clock_timestamp();
   select count(*) into v_bad from (
     select household_id, account_id, source from keel_archive.balance_snapshots_20260831
     except
@@ -402,6 +450,7 @@ begin
     raise exception 'KEEL_COMPACTION_ABORT: % rows remain, expected %', v_bad, v_survivors;
   end if;
 
+  raise notice '  [compaction] %: %', 'final counts', clock_timestamp() - v_t; v_t := clock_timestamp();
   raise notice 'balance snapshot compaction: % rows -> % survivors (% removed), archived to keel_archive.balance_snapshots_20260831',
     v_total, v_survivors, v_removable;
 end
