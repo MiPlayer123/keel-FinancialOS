@@ -184,9 +184,14 @@ begin
       using errcode = 'P0009';
   end if;
 
+  -- FOR UPDATE: a concurrent ensure() for a different entity whose name
+  -- normalizes to this same tag name blocks here, and on waking re-reads the
+  -- committed row, so it sees the binding we are about to write and refuses
+  -- rather than overwriting it.
   select t.id, t.entity_id into v_tag_id, v_existing_entity
     from public.tags t
-   where t.household_id = p_household_id and lower(t.name) = lower(v_tag_name);
+   where t.household_id = p_household_id and lower(t.name) = lower(v_tag_name)
+     for update;
 
   if v_tag_id is not null then
     if v_existing_entity is not null then
@@ -195,7 +200,13 @@ begin
         v_tag_name using errcode = 'P0009';
     end if;
     perform public.keel_assert_adoptable_business_tag(v_tag_id, v_tag_name);
-    update public.tags set entity_id = p_entity_id where id = v_tag_id;
+    update public.tags set entity_id = p_entity_id
+     where id = v_tag_id and entity_id is null;
+    if not found then
+      raise exception
+        'KEEL_INVALID_COMMAND: the tag "%" was just bound to another business; reload and try again',
+        v_tag_name using errcode = 'P0009';
+    end if;
   else
     begin
       insert into public.tags (household_id, name, entity_id)
@@ -205,7 +216,8 @@ begin
       -- Concurrent creator won the name race; adopt theirs if it is unbound.
       select t.id, t.entity_id into v_tag_id, v_existing_entity
         from public.tags t
-       where t.household_id = p_household_id and lower(t.name) = lower(v_tag_name);
+       where t.household_id = p_household_id and lower(t.name) = lower(v_tag_name)
+         for update;
       -- The common race is two calls binding the SAME entity (a double-click on
       -- the first attribution, or a client retry). The winner already did what
       -- this call wanted, so return its tag rather than failing a caller whose
@@ -220,7 +232,13 @@ begin
           using errcode = 'P0009';
       end if;
       perform public.keel_assert_adoptable_business_tag(v_tag_id, v_tag_name);
-      update public.tags set entity_id = p_entity_id where id = v_tag_id;
+      update public.tags set entity_id = p_entity_id
+       where id = v_tag_id and entity_id is null;
+      if not found then
+        raise exception
+          'KEEL_INVALID_COMMAND: the tag "%" was just bound to another business; reload and try again',
+          v_tag_name using errcode = 'P0009';
+      end if;
     end;
   end if;
 

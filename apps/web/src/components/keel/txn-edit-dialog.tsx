@@ -1222,9 +1222,22 @@ function TxnEditForm({
     if (!householdId || tagBusy) return;
     const trimmed = newTag.trim();
     if (trimmed.length === 0) return;
+    // A business tag is not creatable or assignable from here, and typing its
+    // name must not become a back door into the Business control: it would
+    // attribute the transaction while the Business control still read Personal.
+    // Caught before the ordinary lookup, because the name is taken either way
+    // and the household-unique index would otherwise reject it with a message
+    // that explains nothing.
+    const businessNamed = allTags.find(
+      (t) => t.entityId !== null && t.name.toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (businessNamed) {
+      toast.error(`"${businessNamed.name}" is a business. Use the Business control above.`);
+      return;
+    }
     // Typing an existing tag's name assigns it instead of erroring on the
     // household-unique index.
-    const existing = [...allTags, ...createdTags].find(
+    const existing = [...pickerTags, ...createdTags].find(
       (t) => t.name.toLowerCase() === trimmed.toLowerCase(),
     );
     if (existing) {
@@ -1771,7 +1784,7 @@ function TxnEditForm({
             )}
           </div>
         ) : null}
-        {businesses.length > 0 ? (
+        {businesses.length > 0 || rowBusiness !== null ? (
           <div className="space-y-1.5">
             <Label id="txn-business-label">Business</Label>
             <BusinessToggle

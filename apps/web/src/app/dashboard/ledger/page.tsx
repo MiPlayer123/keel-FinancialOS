@@ -814,7 +814,7 @@ function LedgerTable() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All tags</SelectItem>
-              {tags.map((t) => (
+              {plainTags.map((t) => (
                 <SelectItem key={t.tagId} value={t.tagId}>
                   #{t.name}
                 </SelectItem>
