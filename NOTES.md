@@ -2,6 +2,31 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+## 2026-08-31 Landing copy, header density, business-expense research
+
+- Removed the em dashes from every rendered string on the public surface (`/`, `/login`,
+  `/reset-password`, `/privacy`, `/terms`, `/security`, layout metadata, opengraph image,
+  landing components). Standing rule: no em dashes in user-visible copy on public pages.
+  Remaining em dashes in `app/page.tsx` and `components/keel/landing` are source comments
+  and JSX section banners, which never render.
+- Dropped the `description` subtitle from `PageHeader` and from all 16 dashboard routes.
+  On every route it restated the title and the content below it, costing above-the-fold
+  height for no information. The prop is gone from the component so the pattern cannot
+  return. Five descriptions carried a real rule rather than a restatement: goals do not
+  move money, a reimbursement is not income, and the assistant's tools are read-only were
+  already stated more fully in those pages' own empty/welcome states; statement period
+  locking and receipt original immutability (Law 6) were moved into their empty states,
+  adjacent to what they qualify per Addendum §D.
+- Researched business-expense attribution (Quicken Business & Personal business tags,
+  Monarch tag-and-filter, QuickBooks Solopreneur business/personal split) and wrote
+  `docs/BUSINESS-EXPENSE-RESEARCH.md`. Ruling: an entity-bound tag, rendered as a single
+  "Business expense" checkbox when the household has one business entity and a picker
+  when it has more. Rejected a plain `is_business` boolean (needs migration at the second
+  entity) and a per-transaction `entity_id` override (collides with `postings.entity_id`
+  and the balanced-posting trigger). Classification (layer 1) is deliberately separated
+  from economics (layer 2, owner contribution / due-to-owner settling through the existing
+  reimbursements machinery). Not built yet; slices S1 to S5 are listed in the doc.
+
 ## 2026-08-28 P0/P1 trust and public-readiness pass
 
 - Financial correctness: cross-currency account totals are now grouped by currency;
