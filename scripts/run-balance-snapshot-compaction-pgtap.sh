@@ -177,8 +177,43 @@ echo "$OUT" | grep -E 'ERROR|DETAIL' | head -2 | sed 's/^/    /'
 expect "aborted on the as_of tie" \
   "$(echo "$OUT" | grep -c 'KEEL_COMPACTION_ABORT: 1 as_of ties' || true)" 1
 expect "every row still present after the abort" "$(q tie 'select count(*) from public.balance_snapshots')" 26
+# The precondition is checked in BOTH statements, so a tie is caught before the
+# archive statement creates anything at all.
 expect "no archive left behind after the abort" \
   "$(q tie "select coalesce(to_regclass('keel_archive.balance_snapshots_20260831')::text,'none')")" none
+
+echo
+echo "=== 3b. the removal statement refuses to run without an archive ==="
+SECOND="$TMP/second_only.sql"
+python3 - "$MIGRATION" "$SECOND" <<'PY'
+import sys
+# Everything from the third `do` block onwards: the removal on its own.
+s = open(sys.argv[1]).read()
+open(sys.argv[2], 'w').write(s[s.index('do $compact$'):])
+PY
+fresh_db noarchive
+OUT="$(apply noarchive "$SECOND" || true)"
+expect "removal refuses without an archive" \
+  "$(echo "$OUT" | grep -c 'no archive; run the archive statement first' || true)" 1
+expect "and removed nothing" "$(q noarchive 'select count(*) from public.balance_snapshots')" 25
+
+# ...and refuses with an archive but no plan, so the gate can never be skipped.
+PLANLESS="$TMP/planless.sql"
+python3 - "$MIGRATION" "$PLANLESS" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+# The archive statement, then the removal statement, with the plan step (and
+# therefore the whole equivalence gate) omitted.
+open(sys.argv[2], 'w').write(
+    s[s.index('do $archive$'):s.index('do $plan$')] + s[s.index('do $compact$'):])
+PY
+fresh_db noplan
+OUT="$(apply noplan "$PLANLESS" || true)"
+expect "removal refuses without a plan (the gate cannot be skipped)" \
+  "$(echo "$OUT" | grep -c 'no plan; run the plan statement first' || true)" 1
+expect "and removed nothing" "$(q noplan 'select count(*) from public.balance_snapshots')" 25
+expect "though the before-image was still taken" \
+  "$(q noplan 'select count(*) from keel_archive.balance_snapshots_20260831')" 25
 
 if [ "$MUTATE" != "1" ]; then
   echo
@@ -204,11 +239,17 @@ mutate() { # mutate <name> <python-file>
     echo "MUTATION '$1': COMMITTED with a broken predicate -- the gate is not load-bearing"
     echo "$out" | tail -3 | sed 's/^/    /'; FAILED=1; return
   fi
-  local rows arch
+  # The archive statement commits before the removal statement runs, so after
+  # a rejected removal the archive is expected to EXIST and hold the complete
+  # before-image, while the table itself is untouched. That is the safe way
+  # round: an archive without a removal costs disk, a removal without an
+  # archive costs the data.
+  local rows arch audit
   rows="$(q mut 'select count(*) from public.balance_snapshots')"
-  arch="$(q mut "select coalesce(to_regclass('keel_archive.balance_snapshots_20260831')::text,'none')")"
-  if [ "$rows" != "25" ] || [ "$arch" != "none" ]; then
-    echo "MUTATION '$1': aborted but NOT atomically (rows=$rows archive=$arch)"; FAILED=1; return
+  arch="$(q mut 'select count(*) from keel_archive.balance_snapshots_20260831')"
+  audit="$(q mut "select count(*) from public.audit_log where action='balance_snapshots.compact'")"
+  if [ "$rows" != "25" ] || [ "$arch" != "25" ] || [ "$audit" != "0" ]; then
+    echo "MUTATION '$1': aborted but NOT atomically (rows=$rows archive=$arch audit=$audit)"; FAILED=1; return
   fi
   echo "MUTATION '$1': refused and rolled back cleanly"
   echo "$out" | grep -o 'KEEL_COMPACTION_ABORT[^"]*' | head -1 | sed 's/^/    /'

@@ -2,18 +2,72 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
-## 2026-08-31 Balance snapshot compaction, phase 2 (built and tested; live apply is a ⚑)
+## 2026-08-31 Balance snapshot compaction, phase 2 APPLIED to the live project
+
+Applied after the human approved the hard delete (the ⚑ CLAUDE.md requires). Result:
+
+    186,943 rows -> 133 survivors (186,810 removed)
+    all 16 (account, source) series intact
+    before-image: keel_archive.balance_snapshots_20260831 (186,943 rows, hash-verified)
+    plan:         keel_archive.compaction_plan_20260831 (which ids went, and why)
+    audit_log:    one row, 'balance_snapshots.compact', before 186943 -> after 133
+
+`keel_latest_balances`-shaped read, same query before and after:
+
+| | rows scanned | buffers | time |
+| --- | --- | --- | --- |
+| before | 186,943 | 89,618 | 4,841 ms |
+| after (autovacuum done) | 133 | 3,043 | 1,459 ms |
+
+**Not finished: `VACUUM (FULL)` still needs running by an owner.** Autovacuum cleared all
+186,810 dead tuples, which is what took buffers from 89,618 to 3,043, but it does not
+return pages to the OS: the heap is still 24 MB of mostly-empty pages and the indexes
+27 MB. With 133 live rows the planner now picks a **seq scan** over that bloated heap
+(3,037 pages), which is the entire remaining 1.46 s. `VACUUM (FULL)` should take it to
+roughly nothing.
+
+I could not run it from this session. `execute_sql` connects as `supabase_read_only_user`
+(so `vacuum` is a silent no-op — it reported success and changed nothing, which is worth
+knowing), and `apply_migration` wraps its payload in `begin;`, and VACUUM cannot run
+inside a transaction block. It needs the Supabase SQL editor or a psql session as an
+owner:
+
+    vacuum (full, analyze) public.balance_snapshots;
+    reindex table public.balance_snapshots;   -- optional; vacuum full rebuilds indexes
+
+Database size went 189 MB -> 267 MB, because the before-image (24 MB) and the plan
+(54 MB, it carries the lag columns and two indexes) both live in `keel_archive` now. On a
+500 MB Free-tier cap that is worth a decision: the plan table is fully derivable from
+`archive except live`, so it is the obvious thing to drop once the result has been lived
+with. Not dropping it on my own initiative, per the soft-delete directive.
+
+## 2026-08-31 Balance snapshot compaction, phase 2 (design, and how it was tested)
 
 `docs/BALANCE-SNAPSHOT-COMPACTION.md` §3 phase 2 + §4, shipped as
 `supabase/migrations/20260831200000_balance_snapshot_compaction.sql`.
-**Not applied to the live project.** It removes 186,810 production rows, and CLAUDE.md's
-soft-delete directive requires a human say-so before any hard delete, so the apply waits
-on the ⚑. Everything up to it is done and evidenced.
 
-Shape: one `do` block, therefore one statement, therefore atomic however the caller wraps
-it. Sequence is **archive → verify the archive → gate → remove → prove against the
-before-image**, and every check is a `raise exception`, so any failure rolls back the
-archive and the removal together.
+Sequence is **archive → verify the archive → gate → remove → prove against the
+before-image**, and every check is a `raise exception`.
+
+It is **three** `do` blocks, so three statements, each atomic on its own and each
+separately re-runnable. That was not the first design: it started as one statement, and
+three live attempts were killed at the client's hard 60 s ceiling — all three rolled back
+completely, which is the atomicity working, but none of them finished. The audited plan
+had actually called for this split (§3 step 4, "in batches, each in its own
+transaction"); writing it as one statement was my deviation, and splitting it is that
+deviation corrected. Each step is a precondition of the next and refuses to run without
+it, so the gate cannot be skipped and the removal cannot precede the archive:
+
+1. `$archive$` — the complete before-image, verified by count and by an order-independent
+   hash of every column, committed alone.
+2. `$plan$` — classify every row into `keel_archive.compaction_plan_20260831` and run the
+   whole gate against that classification. Writes nothing to `public`.
+3. `$compact$` — remove exactly what the committed plan marks removable, write the Law 2
+   audit row in the same transaction, verify against the committed archive.
+
+Committing the plan before anything is removed also means the removal is a fixed,
+inspectable set of ids rather than something re-derived next to the delete, and the plan
+table is now the record of what went.
 
 The archive is the WHOLE table, into a new `keel_archive` schema with no grants — not the
 survivor set. v1 of the proposal had it backwards (audit P0-1): the survivors are exactly
@@ -66,11 +120,11 @@ Verification, all run:
   from`, endpoints-only, and partitioning by account instead of by series — each rolling
   back to 25 rows with no archive.
 
-**The first live attempt failed, and the failure was worth having.** It ran past the
-60-second MCP client ceiling and was killed. It rolled back completely — 186,943 rows
-still there, no archive, no audit row — which is the atomicity the design promised, now
-demonstrated against a real interruption rather than only an injected one. Three defects
-came out of it, none of which the 25-row fixture could ever have shown:
+**Three live attempts failed before one succeeded, and the failures were worth having.**
+Each ran past the 60-second client ceiling and was killed; each rolled back completely —
+186,943 rows still there, no archive, no audit row — which is the atomicity the design
+promised, demonstrated against real interruptions rather than only injected ones. Four
+defects came out of them, none of which a 25-row fixture could ever have shown:
 
 1. `delete ... where id = any(array_agg(...))` with a 186,810-element array. Replaced with
    a `using` join against the classification table.
@@ -79,10 +133,15 @@ came out of it, none of which the 25-row fixture could ever have shown:
    entry the same statement just removed and which is invisible to it*, so each probe
    walked past them. Replaced with a set-based interleave of the archive and the survivors
    plus a running "last live row", which needs one sort of 2n rows and no probes.
-3. **The actual cause, which the first two only partly masked:** a temp table has no
-   statistics until it is analyzed, so the planner sized `_compaction_marked` by a
-   hardcoded default and planned the removal as a nested loop. Adding `analyze` (and an
-   index on `id`) took the removal phase to 0.27 s.
+3. **The cause the first two masked:** a freshly created table has no statistics until it
+   is analyzed, so the planner sized the classification table by a hardcoded default and
+   planned the removal as a nested loop. Adding `analyze` (and an index on `id`) took the
+   removal phase to 0.27 s.
+4. **And on the live instance only:** even set-based, the verification's self-join over a
+   materialised 373,886-row interleaving measured **over 60 s** — locally it was 1 s, so
+   nothing but a measurement against the real instance would have found it. Rewritten as
+   a running "last live row" carry (the standard grouping trick, since Postgres has no
+   `IGNORE NULLS`) it measures **6.4 s** on the same data with no self-join at all.
 
 So `scripts/run-balance-snapshot-compaction-pgtap.sh` gained a **scale step**: 16 accounts
 × 12,000 cycles = 192,025 rows in the live shape, asserting both correctness and that the
