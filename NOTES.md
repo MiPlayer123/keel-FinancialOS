@@ -49,11 +49,25 @@ internet-reachable endpoint whose job is running maintenance SQL as the superuse
 (Law 7). **So: a human runs `vacuum (full, analyze) public.balance_snapshots;` in the
 Supabase SQL editor.** `reindex` is unnecessary — `vacuum full` rebuilds the indexes.
 
-Database size went 189 MB -> 267 MB -> **217 MB**: the before-image (24 MB) and the plan
-(54 MB, it carries the lag columns and two indexes) were added, then 50 MB came back from
-the vacuum. On a 500 MB Free-tier cap the plan table is fully derivable from
-`archive except live` and is the obvious thing to drop once the result has been lived
-with. Not dropping it on my own initiative, per the soft-delete directive.
+**`keel_archive.compaction_plan_20260831` dropped on human instruction**, which is the
+confirmation CLAUDE.md's soft-delete directive requires. Not dropped on assertion: the
+claim that it was derivable was *proved* first, and then re-proved inside the dropping
+transaction so it would abort rather than destroy if the claim ever stopped holding. The
+set of ids it marked removable is exactly
+`keel_archive.balance_snapshots_20260831 except public.balance_snapshots` — 186,810 ids,
+**0 symmetric difference in both directions**. Its derived columns (`rn_asc`, `rn_desc`,
+`is_surv`, `starts_run`, the `p_*` lags) are recomputable by replaying the window query
+that is in the migration file. So nothing unique died with it.
+
+The compaction's own audit row names that table, so dropping it left a dangling
+reference. `audit_log` is append-only (no UPDATE grant), so the correction is a second
+row — `balance_snapshots.compaction_plan_dropped` — carrying why it was safe and the two
+reconstruction recipes, rather than an edit to the first.
+
+Database size, end to end: **189 MB -> 267 MB -> 217 MB -> 163 MB.** Up while the
+before-image and plan were both held, down 50 MB from the vacuum, down another 54 MB when
+the plan went. It finishes 26 MB *below* where it started, still holding a complete
+before-image of every row that was removed.
 
 ## 2026-08-31 Balance snapshot compaction, phase 2 (design, and how it was tested)
 
