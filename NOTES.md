@@ -2,6 +2,74 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+## 2026-08-31 Balance snapshot compaction, phase 2 (built and tested; live apply is a ⚑)
+
+`docs/BALANCE-SNAPSHOT-COMPACTION.md` §3 phase 2 + §4, shipped as
+`supabase/migrations/20260831200000_balance_snapshot_compaction.sql`.
+**Not applied to the live project.** It removes 186,810 production rows, and CLAUDE.md's
+soft-delete directive requires a human say-so before any hard delete, so the apply waits
+on the ⚑. Everything up to it is done and evidenced.
+
+Shape: one `do` block, therefore one statement, therefore atomic however the caller wraps
+it. Sequence is **archive → verify the archive → gate → remove → prove against the
+before-image**, and every check is a `raise exception`, so any failure rolls back the
+archive and the removal together.
+
+The archive is the WHOLE table, into a new `keel_archive` schema with no grants — not the
+survivor set. v1 of the proposal had it backwards (audit P0-1): the survivors are exactly
+the rows that are *not* removed, so archiving them would have left the 186k rows being
+destroyed with no copy anywhere. That is the `connection_credentials` shape that cost two
+live Plaid Items, on the same Free-tier project with the same absence of PITR. It is
+verified by row count and by an order-independent md5 over every column of every row
+before anything is removed.
+
+`keel_archive` rather than `public` because `supabase/tests/008_export.sql` requires every
+`public` base table to be explicitly classified INCLUDE or EXCLUDE, and an operator
+recovery artifact is neither household data nor an export omission to justify.
+
+The last check is the one that actually protects the data, because it does not reference
+the survivor predicate at all: for every row in the archived before-image, ask the
+COMPACTED table what the value was at that row's instant and require the archived answer.
+If the migration's predicate ever drifts from
+`scripts/audit/balance-snapshot-compaction-gate.sql`, that check still fails closed.
+
+Law 6 ruling recorded in the doc §5 (the audit flagged that v1 never gave one): the export
+keeps every distinct observation and its first instant; `balance_last_observed_at` is
+exported; the before-image is retained until a human says otherwise; and an `audit_log`
+row per household records actor, both counts, archive relation and predicate in the same
+transaction. What a user loses is the count of times a provider repeated a value it had
+already reported — a property of our polling interval, not of their money.
+
+Deviation from CLAUDE.md's soft-delete default, stated per the "deviations must cite the
+spec line and why" rule: a status flag cannot work here. The whole cost being removed is
+that `order by as_of desc` walks 186k rows; a soft-deleted row is still a row the index
+walks, so a flag keeps 100% of the latency and 100% of the storage and adds a filter to
+every consumer. The archive supplies the recoverability the directive exists to protect.
+
+Verification, all run:
+
+- The gate (`scripts/audit/balance-snapshot-compaction-gate.sql`, read-only) was validated
+  BEFORE being pointed at production, by `scripts/run-balance-snapshot-gate-check.sh`: it
+  is all-clear on a 25-row fixture built to hit every branch (plain runs, two sources on
+  one account, a series of one, nulls, snapshot_metadata, a length-1 final run, an
+  all-duplicate two-row series, and a run boundary only a NULL-safe comparison can see),
+  and it trips on four deliberately broken predicates. A gate that cannot fail is worth
+  nothing, and this one is what authorises removing the rows.
+- Run against the live table: all seven checks 0. 186,943 rows, 133 survivors,
+  186,810 removable, one household, one source.
+- `scripts/run-balance-snapshot-compaction-pgtap.sh --mutate` loads the migration verbatim
+  and proves: correct on good data (25 → 18, archive hash matches the pre-run hash, audit
+  row says 25→18, step function preserved at all 25 original instants); re-runnable (a
+  second apply is a notice, not a second archive); **atomic on abort** (an injected `as_of`
+  tie leaves all 26 rows and no archive); and refuses all five broken predicates —
+  newest-row rule dropped, snapshot_metadata dropped, `=` instead of `is not distinct
+  from`, endpoints-only, and partitioning by account instead of by series — each rolling
+  back to 25 rows with no archive.
+
+Deferred deliberately: `VACUUM (FULL)` and `REINDEX` cannot run inside a transaction, so
+they are documented at the top of the migration to run immediately after it commits. A
+plain removal returns none of the 50 MB and the 27 MB of index bloats worst.
+
 ## 2026-08-31 Balance snapshot write amplification, phase 1 (stop writing repeats)
 
 `docs/BALANCE-SNAPSHOT-COMPACTION.md` §3 phase 1, shipped as

@@ -243,6 +243,43 @@ full export contains for that table** (audit P1-6). That is probably
 acceptable — the surviving rows still reconstruct every value at every instant
 — but it is a Law 6 change and needs an explicit ruling, which v1 did not give.
 
+**Ruling (2026-08-31, taken when phase 2 shipped).** Compaction is permitted,
+on these terms:
+
+1. The export continues to contain every *distinct observation* of every
+   account, with the instant each value first appeared. The removed rows carry
+   no value, no instant, and no field that a surviving row does not already
+   carry; the migration proves this before it commits, exhaustively, against
+   the before-image rather than against its own predicate.
+2. `accounts.balance_last_observed_at` is exported (phase 1 added it to the
+   manifest and to the `008_export.sql` mirror), so "when did the provider last
+   confirm this" leaves with the export too. Nothing that was exportable before
+   phase 1 stops being exportable after phase 2.
+3. The complete before-image is retained in
+   `keel_archive.balance_snapshots_20260831` — every original row, verified by
+   count and by an order-independent hash of every column, *before* anything is
+   removed — and is discarded only on an explicit human instruction. So the
+   change is reversible in the sense Law 2 means, not merely logged.
+4. The removal writes an `audit_log` row per household in the same transaction,
+   naming the actor, both row counts, the archive relation and the survivor
+   predicate. `balance_snapshots` has no trigger and no audit coverage, so
+   without this the change would leave no trace anywhere (audit P1-5).
+
+What a user loses is the count of times a provider repeated a value it had
+already reported. That is a property of our polling interval, not of their
+money, and after phase 1 it is not recorded for new observations either.
+
+This is also the point where CLAUDE.md's "prefer soft delete over hard delete"
+directive is deliberately not followed, so the reason belongs on the record: a
+status flag cannot serve here. The entire cost being removed is that
+`order by as_of desc` walks 186k rows, and a soft-deleted row is still a row
+the index walks — a flag would keep 100% of the latency and 100% of the
+storage while adding a filter to every consumer. The archive is what supplies
+the recoverability the directive exists to protect, which is why the sequence
+is archive → verify → gate → remove, and why every check is an abort rather
+than a warning. Applying phase 2 to the live project is a human checkpoint (⚑)
+in its own right, per that same directive.
+
 **Separately, and worth fixing regardless of this proposal:** the live export
 **omits `limit_minor`**. No `keel_export_household*` function body contains the
 string, yet the manifest and `supabase/tests/008_export.sql:35` both list it.
