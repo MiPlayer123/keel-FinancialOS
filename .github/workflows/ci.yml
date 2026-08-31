@@ -117,6 +117,30 @@ jobs:
               echo "::error::function ${fn} never answered (last code ${code})"; exit 1
             fi
           done
+          # /health was not enough. Run 33420152390 warmed all four /health
+          # endpoints, then still took a 404 on the FIRST /api/commands of the
+          # suite (02-commands.test.ts:49) — the third time this flake has hit
+          # main after passing on the PR, and this time it skipped the function
+          # deploy and left production without the merged route.
+          #
+          # So warm the exact paths the suite actually calls, not a liveness
+          # route that can answer while the real routing table is still coming
+          # up. Same accept-set as above; 404 is the symptom and keeps waiting.
+          for path in api/commands api/queries; do
+            ok=0
+            for i in $(seq 1 30); do
+              code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+                -H 'content-type: application/json' -d '{}' \
+                "http://127.0.0.1:55321/functions/v1/${path}" || echo 000)
+              case "$code" in
+                2*|400|401|403|405) ok=1; break;;
+              esac
+              sleep 2
+            done
+            if [ "$ok" != "1" ]; then
+              echo "::error::route ${path} never routed (last code ${code})"; exit 1
+            fi
+          done
       - run: pnpm test:integration
 
   secrets:
