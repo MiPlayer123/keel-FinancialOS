@@ -93,7 +93,6 @@ export default function ReportsPage() {
     <>
       <PageHeader
         title="Reports"
-        description="Where the money went — by category, by month, exactly."
       />
       <div className="space-y-6 p-6">
         {/* Suspense: useSearchParams (scope-in-URL) needs a boundary for the

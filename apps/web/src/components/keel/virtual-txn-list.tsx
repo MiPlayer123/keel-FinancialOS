@@ -28,6 +28,7 @@ export function VirtualTxnList({
   categories,
   running,
   bordered,
+  businessNames,
   onRecategorize,
   onEdit,
   selecting,
@@ -40,6 +41,8 @@ export function VirtualTxnList({
   running?: Map<string, string> | undefined;
   /** Match TxnList's non-virtual container chrome for a seamless swap. */
   bordered?: boolean | undefined;
+  /** tagId -> business name; see TxnRow. */
+  businessNames?: Map<string, string> | undefined;
 } & ListCallbacks) {
   const parentRef = useRef<HTMLDivElement | null>(null);
 
@@ -97,6 +100,7 @@ export function VirtualTxnList({
                 topBorder={item.index > 0}
                 categories={categories}
                 running={running}
+                businessNames={businessNames}
                 onRecategorize={onRecategorize}
                 onEdit={onEdit}
                 selecting={selecting}

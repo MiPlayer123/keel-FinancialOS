@@ -112,7 +112,6 @@ export default function ReimbursementsPage() {
     <>
       <PageHeader
         title="Reimbursements"
-        description="Money someone owes you back — tracked against the original expense, never fake income."
       />
       <div className="p-6">
         <ReimbursementsBody />

@@ -66,20 +66,31 @@ function QuickNavTrigger() {
   );
 }
 
+/**
+ * Page chrome: the page's name and its actions, nothing else.
+ *
+ * There is deliberately no subtitle slot. Every page previously carried a
+ * one-line description under the title ("Everything you own and owe, by
+ * type."), and on every page it restated what the title and the content
+ * below it already said, costing a band of vertical space above the fold on
+ * every route. The few descriptions that carried a real rule rather than a
+ * restatement (goals don't move money, a reimbursement isn't income, the
+ * assistant's tools are read-only, statements lock a period, receipt
+ * originals are immutable) now live in each page's empty state, next to the
+ * thing they qualify, per Addendum §D "status adjacent to the number it
+ * qualifies".
+ */
 export function PageHeader({
   title,
-  description,
   actions,
 }: {
   title: string;
-  description?: string;
   actions?: ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-3 border-b border-border px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
       <div className="space-y-1">
         <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
-        {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {actions}

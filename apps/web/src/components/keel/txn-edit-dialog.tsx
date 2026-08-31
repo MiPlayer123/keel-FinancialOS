@@ -29,6 +29,7 @@ import {
   createCategory,
   saveTag,
   overrideTransaction,
+  setTransactionBusiness,
   setTransactionDate,
   setTransactionSplits,
   undoTransfer,
@@ -59,6 +60,13 @@ import {
   recentCategoriesKey,
   scopeToEntity,
 } from '@/lib/category-picker';
+import {
+  businessEntities,
+  businessTagIndex,
+  ordinaryTags,
+  rowBusinessEntityId,
+  splitRowTags,
+} from '@/lib/business-tags';
 import { maskAccountLabel } from '@/lib/account-label';
 import { merchantDisplayName } from '@/lib/merchant-name';
 import { shortDateWithYear } from '@/lib/relative-date';
@@ -66,6 +74,8 @@ import { isUncategorized } from '@/lib/needs-attention';
 import { canApproveAuto, isAutoCategorized } from '@/lib/review-state';
 import { useHousehold } from '@/components/keel/household-context';
 import { AttachmentsSection } from '@/components/keel/attachments-section';
+import { BusinessToggle } from '@/components/keel/business-toggle';
+import { useEntityLens } from '@/components/keel/entity-lens-context';
 import { TransferCounterpartyFlow } from '@/components/keel/transfer-counterparty-flow';
 import { Money } from '@/components/keel/money';
 import { Badge } from '@/components/ui/badge';
@@ -151,6 +161,7 @@ export function TxnList({
   categories,
   bordered,
   running,
+  businessNames,
   onRecategorize,
   onEdit,
   selecting,
@@ -163,6 +174,8 @@ export function TxnList({
   bordered?: boolean;
   /** Optional Quicken-style running balance per transactionId (register view). */
   running?: Map<string, string>;
+  /** tagId -> business name; see TxnRow. */
+  businessNames?: Map<string, string> | undefined;
 } & ListCallbacks) {
   return (
     <div
@@ -181,6 +194,7 @@ export function TxnList({
           topBorder={i > 0}
           categories={categories}
           running={running}
+          businessNames={businessNames}
           onRecategorize={onRecategorize}
           onEdit={onEdit}
           selecting={selecting}
@@ -205,6 +219,7 @@ export function TxnRow({
   topBorder,
   categories,
   running,
+  businessNames,
   onRecategorize,
   onEdit,
   selecting,
@@ -216,6 +231,13 @@ export function TxnRow({
   topBorder: boolean;
   categories: CategoryRow[];
   running?: Map<string, string> | undefined;
+  /**
+   * tagId -> business name, for every business tag in the household
+   * (business-tags.ts). Optional: a caller that has not loaded the tag list
+   * simply renders no business badge, and the business tag then shows as an
+   * ordinary #chip rather than disappearing.
+   */
+  businessNames?: Map<string, string> | undefined;
 } & ListCallbacks) {
   // Quicken-style inline approve: offered only on an auto-categorized row that
   // carries a concrete category. Approving re-files that SAME category with
@@ -227,6 +249,11 @@ export function TxnRow({
   // Concrete category to re-affirm (canApproveAuto already guarantees non-null
   // when showApprove; captured here to avoid a forbidden non-null assertion).
   const approveCatId = t.categoryLedgerAccountId;
+  // The business marker gets its own badge rather than a #chip: it answers a
+  // different question from a label ("whose books is this on?") and is the one
+  // tag that changes what a report counts. Derivation lives in business-tags.ts
+  // so the rendered path is the tested path.
+  const { businessName, plainTags } = splitRowTags(t, businessNames);
   return (
     <div
       className={`flex items-center gap-3 px-4 py-2.5 ${topBorder ? 'border-t border-border' : ''}`}
@@ -287,7 +314,7 @@ export function TxnRow({
                 (review feedback: "even a little overflow" should still show
                 something). A dedicated line means these only compete with
                 each other, never with the account name. */}
-            {t.note || (t.tags?.length ?? 0) > 0 ? (
+            {t.note || plainTags.length > 0 || businessName !== undefined ? (
               <p className="flex items-center gap-1.5 overflow-hidden text-xs text-muted-foreground/80">
                 {/* Review r3605876939: neither group is allowed a fixed/natural
                     width anymore — both can shrink and clip on their own, and
@@ -303,14 +330,28 @@ export function TxnRow({
                     </span>
                   </span>
                 ) : null}
-                {(t.tags ?? []).length > 0 ? (
+                {businessName !== undefined ? (
+                  // max-w + truncate + shrink, per the review note above: the
+                  // badge shows the ENTITY name, which the schema caps at 200
+                  // chars (only the derived tag name is cut to 40), so a legal
+                  // name would otherwise take the whole line at 390px and
+                  // squeeze the note and every #tag to zero.
+                  <span
+                    className="min-w-0 max-w-[9rem] shrink truncate rounded-full border border-border px-1.5 py-px text-[0.7rem] font-medium text-foreground/80"
+                    title={`Counted in ${businessName}'s books`}
+                  >
+                    <span className="sr-only">Business: </span>
+                    {businessName}
+                  </span>
+                ) : null}
+                {plainTags.length > 0 ? (
                   <span className="flex min-w-0 shrink items-center gap-1 truncate">
-                    {(t.tags ?? []).slice(0, 2).map((x) => (
+                    {plainTags.slice(0, 2).map((x) => (
                       <span key={x.tagId} className="shrink-0">#{x.name}</span>
                     ))}
-                    {(t.tags?.length ?? 0) > 2 ? (
+                    {plainTags.length > 2 ? (
                       <span className="shrink-0 text-muted-foreground/60">
-                        +{String((t.tags?.length ?? 0) - 2)}
+                        +{String(plainTags.length - 2)}
                       </span>
                     ) : null}
                   </span>
@@ -1005,22 +1046,58 @@ function TxnEditForm({
   const [splitAttemptKey, setSplitAttemptKey] = useState(() => crypto.randomUUID());
   // Optimistic tag state for THIS row; parent data refreshes on close.
   const [rowTags, setRowTags] = useState<{ tagId: string; name: string }[]>([]);
+  // Business attribution (20260831120000) rides the same tag overlay. It is
+  // DERIVED from the row rather than seeded into state, with an optional
+  // override for the in-flight optimistic value: the first attribution to a
+  // business mints that business's tag server-side, so the parent refetches
+  // both the row and the tag list right after the write. Seeding state from
+  // the row would let that refetch clobber the optimistic value mid-flight;
+  // deriving means the override simply stops mattering once truth catches up.
+  // `undefined` = no override, show what the row says.
+  const [businessOverride, setBusinessOverride] = useState<string | null | undefined>(undefined);
+  const [businessBusy, setBusinessBusy] = useState(false);
+  // Which row is open RIGHT NOW, readable from an async completion that closed
+  // over an older one.
+  const rowRef = useRef(row.transactionId);
+  useEffect(() => {
+    rowRef.current = row.transactionId;
+  }, [row.transactionId]);
   const [createdTags, setCreatedTags] = useState<TagRow[]>([]);
   const [newTag, setNewTag] = useState('');
   const [tagsDirty, setTagsDirty] = useState(false);
   const [tagBusy, setTagBusy] = useState(false);
-  // Latest in-flight tag write; the close-flush waits on it so a refetch can't
-  // race a write that hasn't committed yet. tagBusy serializes writes, so one
-  // slot is enough.
-  const pendingTagWrite = useRef<Promise<unknown> | null>(null);
+  // Every in-flight overlay write; the close-flush waits on ALL of them so a
+  // refetch can't race a write that hasn't committed yet.
+  //
+  // This was a single slot when tag chips were the only writer here. Business
+  // attribution added a SECOND lane with its own busy flag, and the two do not
+  // disable each other: a slow first attribution (which mints the business's
+  // tag server-side) overlapping a fast tag toggle would leave the slot holding
+  // the tag write, so closing the dialog refetched while the business write was
+  // still open and the register showed the row as personal. A set of promises
+  // is the fix; awaiting all of them is what "flush" was always supposed to mean.
+  const pendingWrites = useRef<Set<Promise<unknown>>>(new Set());
+
+  /** Track a write for the close-flush, and stop tracking it once it settles. */
+  function trackWrite(write: Promise<unknown>): void {
+    pendingWrites.current.add(write);
+    void write
+      .catch(() => undefined)
+      .finally(() => {
+        pendingWrites.current.delete(write);
+      });
+  }
 
   // Every close path funnels here: tag writes commit immediately, so the parent
   // must refresh even on "Cancel" — nothing is discarded.
   function flushTagsAndClose() {
     if (tagsDirty) {
-      const pending = pendingTagWrite.current;
-      if (pending) {
-        void pending.finally(() => {
+      const pending = [...pendingWrites.current];
+      if (pending.length > 0) {
+        // allSettled, not all: a rejected write has already toasted and rolled
+        // back its optimistic value, and the refetch still has to happen for
+        // the writes that DID land.
+        void Promise.allSettled(pending).then(() => {
           onTagsMutated();
         });
       } else {
@@ -1029,6 +1106,17 @@ function TxnEditForm({
     }
     onClose();
   }
+
+  // The household's businesses, and which tag ids attribute to them. Entities
+  // come from the lens provider, which already loads them household-wide.
+  const { entities } = useEntityLens();
+  const businesses = useMemo(() => businessEntities(entities, allTags), [entities, allTags]);
+  const businessIndex = useMemo(() => businessTagIndex(allTags), [allTags]);
+  // Business tags are set through BusinessToggle, never the ordinary chips —
+  // offering two paths to the same fact is how ambiguity gets in.
+  const pickerTags = useMemo(() => ordinaryTags(allTags), [allTags]);
+  const rowBusiness =
+    businessOverride !== undefined ? businessOverride : rowBusinessEntityId(row, businessIndex);
 
   // Recomputed every render (no deps array) so it always closes over the
   // latest flushTagsAndClose — the only thing external callers ever need.
@@ -1057,10 +1145,54 @@ function TxnEditForm({
     setSplitBusy(false);
     setSplitAttemptKey(crypto.randomUUID());
     setRowTags(row.tags ?? []);
+    setBusinessOverride(undefined);
+    setBusinessBusy(false);
     setCreatedTags([]);
     setNewTag('');
     setTagsDirty(false);
   }, [row]);
+
+  /**
+   * Attribute this transaction to a business, or clear it. The proc replaces
+   * any previous business rather than adding one, so the optimistic state is a
+   * straight assignment. tagsDirty is set because the parent must refetch: the
+   * first attribution to a business creates that business's tag, and the row's
+   * own tag list changes.
+   */
+  async function setBusiness(entityId: string | null) {
+    if (!householdId || businessBusy) return;
+    if (rowBusiness === entityId) return;
+    // Capture the row this write is FOR. The user can switch rows while it is
+    // in flight, and a completion must never touch the state of whatever row is
+    // open now — the same rule lib/txn-edit-guard.ts exists to enforce for
+    // saves.
+    const forTxn = row.transactionId;
+    setBusinessOverride(entityId);
+    setTagsDirty(true);
+    setBusinessBusy(true);
+    try {
+      const write = setTransactionBusiness({
+        householdId,
+        transactionId: forTxn,
+        entityId,
+      });
+      trackWrite(write);
+      await write;
+    } catch (err) {
+      if (rowRef.current === forTxn) {
+        // Fall back to what the row actually says rather than to a remembered
+        // value that may itself be stale.
+        setBusinessOverride(undefined);
+        toast.error(
+          err instanceof Error
+            ? err.message
+            : 'Could not change the business for this transaction.',
+        );
+      }
+    } finally {
+      if (rowRef.current === forTxn) setBusinessBusy(false);
+    }
+  }
 
   async function toggleTag(tag: { tagId: string; name: string }) {
     if (!householdId) return;
@@ -1076,7 +1208,7 @@ function TxnEditForm({
         tagId: tag.tagId,
         assigned,
       });
-      pendingTagWrite.current = write;
+      trackWrite(write);
       await write;
     } catch (err) {
       setRowTags(prev);
@@ -1090,9 +1222,22 @@ function TxnEditForm({
     if (!householdId || tagBusy) return;
     const trimmed = newTag.trim();
     if (trimmed.length === 0) return;
+    // A business tag is not creatable or assignable from here, and typing its
+    // name must not become a back door into the Business control: it would
+    // attribute the transaction while the Business control still read Personal.
+    // Caught before the ordinary lookup, because the name is taken either way
+    // and the household-unique index would otherwise reject it with a message
+    // that explains nothing.
+    const businessNamed = allTags.find(
+      (t) => t.entityId !== null && t.name.toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (businessNamed) {
+      toast.error(`"${businessNamed.name}" is a business. Use the Business control above.`);
+      return;
+    }
     // Typing an existing tag's name assigns it instead of erroring on the
     // household-unique index.
-    const existing = [...allTags, ...createdTags].find(
+    const existing = [...pickerTags, ...createdTags].find(
       (t) => t.name.toLowerCase() === trimmed.toLowerCase(),
     );
     if (existing) {
@@ -1109,14 +1254,15 @@ function TxnEditForm({
         const tag = { tagId: res.tagId, name: trimmed };
         // The tag exists server-side from here on, even if the assign fails.
         setTagsDirty(true);
-        setCreatedTags((prevTags) => [...prevTags, { ...tag, usageCount: 1 }]);
+        // Never a business tag: the ordinary picker only mints plain labels.
+        setCreatedTags((prevTags) => [...prevTags, { ...tag, usageCount: 1, entityId: null }]);
         const write = assignTag({
           householdId,
           transactionId: row.transactionId,
           tagId: tag.tagId,
           assigned: true,
         });
-        pendingTagWrite.current = write;
+        trackWrite(write);
         await write;
         setRowTags((prevTags) => [...prevTags, tag]);
         setNewTag('');
@@ -1638,12 +1784,30 @@ function TxnEditForm({
             )}
           </div>
         ) : null}
+        {businesses.length > 0 || rowBusiness !== null ? (
+          <div className="space-y-1.5">
+            <Label id="txn-business-label">Business</Label>
+            <BusinessToggle
+              businesses={businesses}
+              value={rowBusiness}
+              disabled={businessBusy}
+              labelledBy="txn-business-label"
+              onChange={(entityId) => {
+                void setBusiness(entityId);
+              }}
+            />
+            <p className="text-xs text-muted-foreground">
+              Counts this expense in that business&apos;s books even though a personal account
+              paid for it. Nothing moves.
+            </p>
+          </div>
+        ) : null}
         <div className="space-y-1.5">
           <Label>Tags</Label>
           <div className="flex flex-wrap items-center gap-1.5">
             {[
-              ...allTags,
-              ...createdTags.filter((c) => !allTags.some((a) => a.tagId === c.tagId)),
+              ...pickerTags,
+              ...createdTags.filter((c) => !pickerTags.some((a) => a.tagId === c.tagId)),
             ].map((t) => {
               const active = rowTags.some((x) => x.tagId === t.tagId);
               return (

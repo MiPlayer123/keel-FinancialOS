@@ -39,7 +39,6 @@ export default function BudgetsPage() {
     <>
       <PageHeader
         title="Budgets"
-        description="A plan total you steer, the categories you choose, and everything else in one line."
       />
       <div className="p-6">
         <BudgetsBody />

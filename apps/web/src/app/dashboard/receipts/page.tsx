@@ -84,7 +84,6 @@ export default function ReceiptsPage() {
     <>
       <PageHeader
         title="Receipts"
-        description="Upload receipts, let KEEL read them, and confirm the transaction each one belongs to. Every original is kept immutably and exported with your books."
       />
       <div className="p-6">
         <ReceiptsBody />
@@ -322,7 +321,7 @@ function ReceiptsBody() {
         <EmptyState
           icon={<Receipt className="size-6" />}
           title="No receipts yet"
-          description="Upload a receipt image or PDF. KEEL reads the merchant, amount, and date, then suggests the transaction it belongs to for you to confirm."
+          description="Upload a receipt image or PDF. KEEL reads the merchant, amount, and date, then suggests the transaction it belongs to for you to confirm. Every original is kept immutably and exported with your books."
         />
       ) : (
         <>

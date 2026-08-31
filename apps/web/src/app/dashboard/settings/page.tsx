@@ -44,7 +44,7 @@ function download(name: string, mime: string, content: string) {
 export default function SettingsPage() {
   return (
     <>
-      <PageHeader title="Settings" description="Account, household and data export." />
+      <PageHeader title="Settings" />
       <div className="max-w-2xl space-y-6 p-6">
         <HouseholdCard />
         <CategoriesCard />

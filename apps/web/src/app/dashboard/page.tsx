@@ -51,7 +51,7 @@ import { cn } from '@/lib/utils';
 export default function HomePage() {
   return (
     <>
-      <PageHeader title="Home" description="Your financial position at a glance." />
+      <PageHeader title="Home" />
       <div className="flex flex-col gap-6 p-4 sm:p-6">
         <HomeBody />
       </div>

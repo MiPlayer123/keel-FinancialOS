@@ -43,6 +43,13 @@ import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
 import { ImportCsvDialog } from '@/components/keel/import-csv-dialog';
 import { ManageTagsDialog } from '@/components/keel/manage-tags-dialog';
 import {
+  businessEntities,
+  businessTagIndex,
+  businessTagNames,
+  ordinaryTags,
+  rowBusinessEntityId,
+} from '@/lib/business-tags';
+import {
   TxnDetailSheet,
   TxnList,
   isUncategorized,
@@ -65,7 +72,7 @@ import {
 export default function LedgerPage() {
   return (
     <>
-      <PageHeader title="Ledger" description="Every transaction, categorized." />
+      <PageHeader title="Ledger" />
       <div className="p-6">
         {/* Suspense: useSearchParams in LedgerTable needs a boundary for the
             static prerender. */}
@@ -146,7 +153,7 @@ function LedgerTable() {
   // Global entity lens (persona theme #2): narrows the register to the accounts
   // of the selected entity. Always null for a single-entity household, so this
   // page is unchanged for them. A VIEW filter only — no transaction is edited.
-  const { entityId: entityLens } = useEntityLens();
+  const { entityId: entityLens, entities } = useEntityLens();
   const router = useRouter();
   const searchParams = useSearchParams();
   const { rows, loading, error } = useKeelQuery<RichTransactionRow>(
@@ -187,6 +194,10 @@ function LedgerTable() {
   // chip — never a silent filter.
   const [excludeTax, setExcludeTax] = useState(false);
   const [tagFilter, setTagFilter] = useState('all');
+  // Business attribution facet (20260831120000): 'all' | 'personal' |
+  // 'business' (any) | a concrete entityId. Same select-pattern as the facets
+  // around it — no new filter paradigm.
+  const [businessFilter, setBusinessFilter] = useState('all');
   // D-047 status facet: All / Reconciled / Unreconciled, same select-pattern
   // as account/category/tag above — no new filter paradigm.
   const [reconciledFilter, setReconciledFilter] = useState<'all' | 'reconciled' | 'unreconciled'>(
@@ -266,7 +277,16 @@ function LedgerTable() {
     void fetchTags(householdId)
       .then(setTags)
       .catch(() => {
+        // Without the tag list nothing can be identified as a business tag, so
+        // every row derives "personal". Leaving the facet set would then show
+        // an empty register under "Acme LLC", or the FULL register under
+        // "Personal only" — a filter that silently stops excluding what it
+        // claims to exclude. Fail back to unfiltered and disclose it.
         setTags([]);
+        setBusinessFilter((prev) => {
+          if (prev !== 'all') toast.error('Could not load tags; the business filter was cleared.');
+          return 'all';
+        });
       });
   }, [householdId]);
 
@@ -302,6 +322,17 @@ function LedgerTable() {
     );
   }, [categorySubs, categoryFilter, categories]);
 
+  // Business attribution is derived from (row.tags x the tag list) rather than
+  // from a new column on the transaction read model: every row already carries
+  // its tags, and the tag list already says which tags are business tags
+  // (business-tags.ts). Entities come from the lens provider.
+  const businessIndex = useMemo(() => businessTagIndex(tags), [tags]);
+  const businessNames = useMemo(() => businessTagNames(tags, entities), [tags, entities]);
+  const businesses = useMemo(() => businessEntities(entities, tags), [entities, tags]);
+  // Business tags are steered by the Business facet, so they are not offered
+  // twice in the ordinary tag facet.
+  const plainTags = useMemo(() => ordinaryTags(tags), [tags]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     const [from, to] = customRange
@@ -329,6 +360,16 @@ function LedgerTable() {
       }
       if (tagFilter !== 'all' && !(t.tags ?? []).some((x) => x.tagId === tagFilter)) {
         return false;
+      }
+      if (businessFilter !== 'all') {
+        const attributedTo = rowBusinessEntityId(t, businessIndex);
+        if (businessFilter === 'personal') {
+          if (attributedTo !== null) return false;
+        } else if (businessFilter === 'business') {
+          if (attributedTo === null) return false;
+        } else if (attributedTo !== businessFilter) {
+          return false;
+        }
       }
       if (reconciledFilter === 'reconciled' && !t.reconciled) return false;
       if (reconciledFilter === 'unreconciled' && t.reconciled) return false;
@@ -376,6 +417,8 @@ function LedgerTable() {
     excludeTax,
     taxIds,
     tagFilter,
+    businessFilter,
+    businessIndex,
     reconciledFilter,
     sort,
     lensAccountIds,
@@ -567,6 +610,7 @@ function LedgerTable() {
     setAccountFilter('all');
     setCategoryFilter('all');
     setTagFilter('all');
+    setBusinessFilter('all');
   };
   const recategorizeEditing = (id: string, cat: string) => {
     void recategorize(id, cat);
@@ -717,12 +761,49 @@ function LedgerTable() {
             Taxes excluded ✕
           </Button>
         ) : null}
-        {tags.length > 0 ? (
+        {businesses.length > 0 && entityLens !== null && businessFilter === entityLens ? (
+          <span className="text-xs text-muted-foreground">
+            The entity switcher already narrows to this entity&apos;s accounts, so this shows
+            only its own accounts&apos; transactions. Switch to All entities to see what it
+            paid for from personal accounts.
+          </span>
+        ) : null}
+        {businesses.length > 0 ? (
+          <Select
+            value={businessFilter}
+            items={{
+              all: 'Personal + business',
+              personal: 'Personal only',
+              business: 'Any business',
+              ...Object.fromEntries(businesses.map((b) => [b.entityId, b.name])),
+            }}
+            onValueChange={(v) => {
+              if (v) setBusinessFilter(v);
+            }}
+          >
+            <SelectTrigger className="h-9 w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Personal + business</SelectItem>
+              <SelectItem value="personal">Personal only</SelectItem>
+              {businesses.length > 1 ? (
+                <SelectItem value="business">Any business</SelectItem>
+              ) : null}
+              {businesses.map((b) => (
+                <SelectItem key={b.entityId} value={b.entityId}>
+                  {b.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null}
+        {plainTags.length > 0 ? (
           <Select
             value={tagFilter}
             items={{
               all: 'All tags',
-              ...Object.fromEntries(tags.map((t) => [t.tagId, `#${t.name}`])),
+              ...Object.fromEntries(plainTags.map((t) => [t.tagId, `#${t.name}`])),
             }}
             onValueChange={(v) => {
               if (v) setTagFilter(v);
@@ -733,7 +814,7 @@ function LedgerTable() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All tags</SelectItem>
-              {tags.map((t) => (
+              {plainTags.map((t) => (
                 <SelectItem key={t.tagId} value={t.tagId}>
                   #{t.name}
                 </SelectItem>
@@ -881,6 +962,7 @@ function LedgerTable() {
           <VirtualTxnList
             rows={filtered}
             categories={categories}
+            businessNames={businessNames}
             onRecategorize={recategorizeEditing}
             onApproveAuto={approveAutoEditing}
             onEdit={selectForEdit}
@@ -892,6 +974,7 @@ function LedgerTable() {
           <GroupedList
             rows={filtered}
             categories={categories}
+            businessNames={businessNames}
             groupBy={grouping}
             onRecategorize={recategorizeEditing}
             onApproveAuto={approveAutoEditing}
@@ -1129,11 +1212,14 @@ function GroupedList({
   rows,
   categories,
   groupBy,
+  businessNames,
   ...cb
 }: {
   rows: RichTransactionRow[];
   categories: CategoryRow[];
   groupBy: Grouping;
+  /** tagId -> business name; see TxnRow. */
+  businessNames?: Map<string, string> | undefined;
 } & ListCallbacks) {
   const groups = useMemo(() => groupRows(rows, groupBy), [rows, groupBy]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -1161,7 +1247,13 @@ function GroupedList({
               <Money amountMinor={sumMinor(groupRowsList)} signed className="text-sm tabular-nums" />
             </button>
             {isOpen ? (
-              <TxnList rows={groupRowsList} categories={categories} bordered {...cb} />
+              <TxnList
+                rows={groupRowsList}
+                categories={categories}
+                businessNames={businessNames}
+                bordered
+                {...cb}
+              />
             ) : null}
           </div>
         );

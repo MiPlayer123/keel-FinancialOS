@@ -59,7 +59,6 @@ export default function GoalsPage() {
     <>
       <PageHeader
         title="Goals"
-        description="Earmark money toward what's next — nothing moves, it's just spoken for."
       />
       <div className="p-6">
         <GoalsBody />

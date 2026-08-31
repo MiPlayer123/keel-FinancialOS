@@ -1547,7 +1547,13 @@ export default {
       return json(200, { ok: true });
     }
 
-    if (path === '/tags/save' || path === '/tags/delete' || path === '/tags/assign') {
+    if (
+      path === '/tags/save' ||
+      path === '/tags/delete' ||
+      path === '/tags/assign' ||
+      path === '/tags/set-business' ||
+      path === '/tags/unbind-business'
+    ) {
       const input = body as Record<string, unknown>;
       const householdId = HouseholdIdSchema.safeParse(input['householdId']);
       const uuidReTag = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1582,6 +1588,53 @@ export default {
         });
         if (error) return mapDbError(error);
         return json(200, { tagId: data });
+      }
+      if (path === '/tags/unbind-business') {
+        // Undo a business/tag binding (20260831120000). The tag survives and
+        // keeps every assignment; it just stops counting as that business's,
+        // which is what makes bind a reversible correction rather than a
+        // one-way door. No UI yet: the repair path exists on the authorized
+        // surface so it never needs raw SQL against production (Law 7).
+        const entityId = input['entityId'];
+        if (typeof entityId !== 'string' || !uuidReTag.test(entityId)) {
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Tag request failed validation.',
+            details: {},
+          });
+        }
+        const { data, error } = await ctx.supabase.rpc('keel_entity_business_tag_unbind', {
+          p_household_id: householdId.data,
+          p_entity_id: entityId,
+        });
+        if (error) return mapDbError(error);
+        return json(200, { tagId: data ?? null });
+      }
+      if (path === '/tags/set-business') {
+        // Business expense attribution, layer 1 (20260831120000). entityId null
+        // clears the attribution; any other value must be a uuid. The proc owns
+        // every rule (write role, entity kind, one business per transaction) —
+        // this only shapes the input.
+        const txnId = input['transactionId'];
+        const entityId = input['entityId'];
+        if (
+          typeof txnId !== 'string' ||
+          !uuidReTag.test(txnId) ||
+          (entityId !== null && (typeof entityId !== 'string' || !uuidReTag.test(entityId)))
+        ) {
+          return json(400, {
+            code: 'invalid_command',
+            message: 'Tag request failed validation.',
+            details: {},
+          });
+        }
+        const { data, error } = await ctx.supabase.rpc('keel_transaction_set_business', {
+          p_household_id: householdId.data,
+          p_txn_id: txnId,
+          p_entity_id: entityId,
+        });
+        if (error) return mapDbError(error);
+        return json(200, { tagId: data ?? null });
       }
       if (path === '/tags/delete') {
         const tagId = input['tagId'];

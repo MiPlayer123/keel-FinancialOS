@@ -1442,7 +1442,19 @@ export async function reparentCategory(input: {
 }
 
 /** One user label (orthogonal to categories). */
-export type TagRow = { tagId: string; name: string; usageCount: number };
+export type TagRow = {
+  tagId: string;
+  name: string;
+  usageCount: number;
+  /**
+   * Set when this tag is a business entity's business tag (20260831120000):
+   * a transaction carrying it belongs to that entity's books no matter which
+   * account paid. This is the only field the client needs to derive a row's
+   * business attribution — every transaction row already carries its tags, so
+   * no transaction read model changed.
+   */
+  entityId: string | null;
+};
 
 export async function fetchTags(householdId: string): Promise<TagRow[]> {
   const data = await invoke<TagRow[]>('api/queries', { query: 'tags.list', householdId });
@@ -1478,6 +1490,40 @@ export async function assignTag(input: {
     transactionId: input.transactionId,
     tagId: input.tagId,
     assigned: input.assigned,
+  });
+}
+
+/**
+ * Attribute one transaction to a business entity, or clear it (entityId null).
+ * Replaces any previous business on the transaction rather than adding one, so
+ * a transaction is never ambiguous between two businesses. Returns the business
+ * tag id, or null after a clear.
+ */
+export async function setTransactionBusiness(input: {
+  householdId: string;
+  transactionId: string;
+  entityId: string | null;
+}): Promise<{ tagId: string | null }> {
+  return invoke('api/tags/set-business', {
+    householdId: input.householdId,
+    transactionId: input.transactionId,
+    entityId: input.entityId,
+  });
+}
+
+/**
+ * Release a business's tag: the tag and all its assignments survive, they just
+ * stop counting as that business's. The inverse of the bind that
+ * setTransactionBusiness performs implicitly on first use, so choosing the
+ * wrong entity is recoverable without touching the database by hand.
+ */
+export async function unbindBusinessTag(input: {
+  householdId: string;
+  entityId: string;
+}): Promise<{ tagId: string | null }> {
+  return invoke('api/tags/unbind-business', {
+    householdId: input.householdId,
+    entityId: input.entityId,
   });
 }
 
