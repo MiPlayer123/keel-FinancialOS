@@ -1,0 +1,26 @@
+-- Add 'paystub' to public.document_kind.
+--
+-- Why: document_target_type already carries 'paycheck', so a document could
+-- always ATTACH to a paycheck — but document_kind offered only ('receipt',
+-- 'statement'), so there was no way to say what the file IS. Pay stubs were
+-- therefore unfilable: labelling them 'receipt' drops them into
+-- keel_receipts_inbox (which filters kind = 'receipt') alongside real receipts
+-- awaiting match, and labelling them 'statement' would mint a statement_draft
+-- and an extraction job for a document the statement pipeline cannot read.
+-- This closes that enum gap. Operator request 2026-08-31; logged in NOTES.md.
+--
+-- Deliberately NOT changed:
+--   * document_versions.storage_bucket keeps its CHECK in ('receipts',
+--     'statements'). Physical storage stays in the 'receipts' bucket (same
+--     10 MB cap, same PDF/image mime allowlist, same RLS); only the semantic
+--     label is new. Adding a third bucket would need its own policies for no
+--     benefit here.
+--   * keel_receipts_inbox and the statement pipeline are untouched. Because
+--     the inbox filters kind = 'receipt', a 'paystub' row is invisible to it
+--     by construction — that is the point of this migration.
+--
+-- Idempotent (ADD VALUE IF NOT EXISTS), per the repo's manual-apply convention.
+-- Note: a value added by ALTER TYPE cannot be USED in the same transaction, so
+-- nothing here references 'paystub'.
+
+alter type public.document_kind add value if not exists 'paystub';
