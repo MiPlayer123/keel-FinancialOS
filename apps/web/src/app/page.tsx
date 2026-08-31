@@ -33,7 +33,7 @@ const FEATURES = [
   {
     icon: Sparkles,
     title: 'Automation around the math',
-    body: 'KEEL can suggest categories, recurring activity, transfers, and receipt matches. The ledger—not a language model—does every calculation.',
+    body: 'KEEL can suggest categories, recurring activity, transfers, and receipt matches. The ledger, not a language model, does every calculation.',
     ladder: true,
     wide: true,
   },
@@ -130,7 +130,7 @@ export default function LandingPage() {
               </h1>
               <p className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-4 motion-safe:fill-mode-backwards mx-auto mt-6 max-w-2xl text-balance text-lg leading-relaxed text-muted-foreground delay-100 duration-700">
                 KEEL combines accounts, transactions, budgets, receipts, and entity books
-                in one exact ledger—so every total can show where it came from.
+                in one exact ledger, so every total can show where it came from.
               </p>
               <div className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-4 motion-safe:fill-mode-backwards mt-9 flex flex-wrap items-center justify-center gap-3 delay-200 duration-700">
                 <Link href="/login#signup" className={buttonVariants({ size: 'lg' })}>
@@ -184,8 +184,8 @@ export default function LandingPage() {
               </h2>
               <p className="mt-4 text-pretty leading-relaxed text-muted-foreground">
                 A deterministic double-entry ledger does the arithmetic. Automation works
-                around the fuzzy edges—categorizing, matching, detecting, and explaining—
-                while review steps protect material changes.
+                around the fuzzy edges: categorizing, matching, detecting, and explaining.
+                Review steps protect material changes.
               </p>
             </Reveal>
           </div>
