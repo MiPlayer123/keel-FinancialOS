@@ -32,6 +32,16 @@ describe('export manifest', () => {
     for (const entry of EXCLUDE) expect(entry.reason.length).toBeGreaterThan(10);
   });
 
+  it('exports the business-tag binding, not just the tag label (Law 6)', () => {
+    // canonical.ts projects strictly onto `columns`, so a schema addition that
+    // is not listed here is silently dropped from every export. tags.entity_id
+    // is the whole of business expense attribution (20260831120000): without
+    // it an export says which tags exist and which transactions carry them,
+    // but not which tag IS a business's, and the 40-char tag-name truncation
+    // means it cannot be re-derived by name either.
+    expect(INCLUDE.find((entry) => entry.table === 'tags')?.columns).toContain('entity_id');
+  });
+
   it('defines explicit columns, timestamp columns, bigint columns, and composite sort keys', () => {
     for (const entry of INCLUDE) {
       expect(entry.columns.length, entry.table).toBeGreaterThan(0);

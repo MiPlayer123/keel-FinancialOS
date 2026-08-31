@@ -15,7 +15,7 @@
 -- recreates (keel_tag_assign, keel_tag_delete) call it.
 
 begin;
-select plan(31);
+select plan(48);
 
 -- ---------------------------------------------------------------------------
 -- Minimal schema
@@ -173,6 +173,19 @@ insert into public.canonical_transactions
   ('22222222-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222222',
    'e5555555-5555-5555-5555-555555555555', 'posted', 'sync', 'Foreign txn', '2026-08-01', null);
 
+-- Two entities whose names collide once truncated to tags' 40-char limit, and
+-- one whose name is whitespace only (reachable through seeds/imports, since
+-- entities' own check only requires 1..200 characters).
+insert into public.entities (id, household_id, name, kind) values
+  ('e6666666-6666-6666-6666-666666666666', '11111111-1111-1111-1111-111111111111',
+   'Northwest Consulting Group of Greater Seattle LLC', 'llc_single'),
+  ('e7777777-7777-7777-7777-777777777777', '11111111-1111-1111-1111-111111111111',
+   'Northwest Consulting Group of Greater Seattle Inc', 'llc_single'),
+  ('e8888888-8888-8888-8888-888888888888', '11111111-1111-1111-1111-111111111111',
+   '   ', 'llc_single'),
+  ('e9999999-9999-9999-9999-999999999999', '11111111-1111-1111-1111-111111111111',
+   'Gamma Works', 'sole_prop');
+
 select public._act('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa');
 
 -- ---------------------------------------------------------------------------
@@ -311,7 +324,7 @@ select is(
 );
 
 select is(
-  (select before->>'entityId' from public.audit_log
+  (select before->'entityIds'->>0 from public.audit_log
     where action = 'transaction.set_business'
       and object_id = '11111111-0000-0000-0000-000000000001'
     order by id desc limit 1),
@@ -439,7 +452,8 @@ select is(
 );
 
 insert into public.tags (household_id, name)
-  values ('11111111-1111-1111-1111-111111111111', 'Reimbursable');
+  values ('11111111-1111-1111-1111-111111111111', 'Reimbursable'),
+         ('11111111-1111-1111-1111-111111111111', 'Reimbursable-2');
 select is(
   public._try(format($$select public.keel_tag_assign(
     '11111111-1111-1111-1111-111111111111',
@@ -466,6 +480,172 @@ select is(
     (select id from public.tags where name = 'Reimbursable'))),
   'ok',
   'E2 an ordinary tag still deletes'
+);
+
+-- ---------------------------------------------------------------------------
+-- G. Adoption must not manufacture the ambiguity the design refuses
+--    (review finding H2). Adopting a hand-rolled tag retro-attributes every
+--    transaction already carrying it, in bulk, with no per-transaction audit.
+-- ---------------------------------------------------------------------------
+insert into public.tags (household_id, name)
+  values ('11111111-1111-1111-1111-111111111111', 'Gamma Works');
+insert into public.transaction_tags (canonical_transaction_id, tag_id, household_id)
+  select '11111111-0000-0000-0000-000000000002',
+         t.id,
+         '11111111-1111-1111-1111-111111111111'
+    from public.tags t
+   where t.household_id = '11111111-1111-1111-1111-111111111111'
+     and t.name = 'Gamma Works';
+
+select is(
+  public._try($$select public.keel_entity_business_tag_ensure(
+    '11111111-1111-1111-1111-111111111111', 'e9999999-9999-9999-9999-999999999999')$$),
+  'P0009',
+  'G1 adopting a tag that sits on a transaction already owned by another business is refused'
+);
+
+select is(
+  (select count(*)::text
+     from public.transaction_tags tt join public.tags t on t.id = tt.tag_id
+    where tt.canonical_transaction_id = '11111111-0000-0000-0000-000000000002'
+      and t.entity_id is not null),
+  '1',
+  'G2 the refused adoption left the transaction with exactly one business'
+);
+
+select is(
+  (select coalesce(entity_id::text, 'null') from public.tags
+    where household_id = '11111111-1111-1111-1111-111111111111' and name = 'Gamma Works'),
+  'null',
+  'G3 the refused adoption did not bind the tag'
+);
+
+-- Adoption IS allowed when the tag sits only on unattributed transactions.
+insert into public.transaction_tags (canonical_transaction_id, tag_id, household_id)
+  select '11111111-0000-0000-0000-000000000001',
+         t.id,
+         '11111111-1111-1111-1111-111111111111'
+    from public.tags t
+   where t.household_id = '11111111-1111-1111-1111-111111111111'
+     and t.name = 'Reimbursable-2';
+select is(
+  public._try($$select public.keel_entity_business_tag_ensure(
+    '11111111-1111-1111-1111-111111111111', 'e9999999-9999-9999-9999-999999999999')$$),
+  'P0009',
+  'G4 still refused while the clashing transaction stands (guard is on the tag, not the caller)'
+);
+
+-- ---------------------------------------------------------------------------
+-- H. Truncation and degenerate names (review findings L1, L2, L3)
+-- ---------------------------------------------------------------------------
+insert into _ids (k, v) values ('nw1', public.keel_entity_business_tag_ensure(
+  '11111111-1111-1111-1111-111111111111', 'e6666666-6666-6666-6666-666666666666'));
+
+select is(
+  (select length(t.name)::text from public.tags t join _ids i on i.v = t.id where i.k = 'nw1'),
+  '40',
+  'H1 a long entity name is truncated to the 40-char tag limit'
+);
+
+select is(
+  (select (t.name = btrim(t.name))::text
+     from public.tags t join _ids i on i.v = t.id where i.k = 'nw1'),
+  'true',
+  'H2 truncation never leaves a trailing space'
+);
+
+select is(
+  public._try($$select public.keel_entity_business_tag_ensure(
+    '11111111-1111-1111-1111-111111111111', 'e7777777-7777-7777-7777-777777777777')$$),
+  'P0009',
+  'H3 a second entity truncating to the same 40 chars is refused, not silently merged'
+);
+
+select is(
+  public._try($$select public.keel_entity_business_tag_ensure(
+    '11111111-1111-1111-1111-111111111111', 'e8888888-8888-8888-8888-888888888888')$$),
+  'P0009',
+  'H4 a whitespace-only entity name raises a KEEL error, not a raw check violation'
+);
+
+-- ---------------------------------------------------------------------------
+-- I. A voided transaction is on nobody's books, through EITHER door
+--    (review finding M4)
+-- ---------------------------------------------------------------------------
+select is(
+  public._try(format($$select public.keel_tag_assign(
+    '11111111-1111-1111-1111-111111111111',
+    '11111111-0000-0000-0000-000000000003', %L, true)$$,
+    (select id from public.tags where entity_id = 'e2222222-2222-2222-2222-222222222222'))),
+  'P0009',
+  'I1 the tag picker cannot attribute a VOIDED transaction to a business either'
+);
+
+select is(
+  public._try(format($$select public.keel_tag_assign(
+    '11111111-1111-1111-1111-111111111111',
+    '11111111-0000-0000-0000-000000000003', %L, true)$$,
+    (select id from public.tags where name = 'Reimbursable-2'))),
+  'ok',
+  'I2 an ORDINARY tag still applies to a voided row (no drift from 20260713120000)'
+);
+
+-- ---------------------------------------------------------------------------
+-- J. The bind is undoable (review finding M3)
+-- ---------------------------------------------------------------------------
+select is(
+  (public.keel_entity_business_tag_unbind(
+     '11111111-1111-1111-1111-111111111111', 'e6666666-6666-6666-6666-666666666666')
+   = (select v from _ids where k = 'nw1'))::text,
+  'true',
+  'J1 unbind returns the tag it released'
+);
+
+select is(
+  (select coalesce(t.entity_id::text, 'null')
+     from public.tags t join _ids i on i.v = t.id where i.k = 'nw1'),
+  'null',
+  'J2 the tag is no longer a business tag'
+);
+
+select is(
+  (select before->>'assignments' from public.audit_log
+    where action = 'tags.unbind_entity' order by id desc limit 1),
+  '0',
+  'J3 unbind audits how many assignments it released'
+);
+
+select is(
+  coalesce(public.keel_entity_business_tag_unbind(
+    '11111111-1111-1111-1111-111111111111', 'e6666666-6666-6666-6666-666666666666')::text, 'null'),
+  'null',
+  'J4 unbinding an already-unbound entity is idempotent'
+);
+
+select is(
+  public._try(format($$select public.keel_tag_delete(
+    '11111111-1111-1111-1111-111111111111', %L)$$, (select v from _ids where k = 'nw1'))),
+  'ok',
+  'J5 once unbound, the tag deletes like any other (the guard has a way out)'
+);
+
+-- ---------------------------------------------------------------------------
+-- K. The clear before-image is complete (review finding M2)
+-- ---------------------------------------------------------------------------
+select is(
+  (select after->>'entityId' is not null
+     from public.audit_log where action = 'tags.bind_entity' order by id desc limit 1)::text,
+  'true',
+  'K1 bind records the entity it bound'
+);
+
+select is(
+  (select before from public.audit_log
+    where action = 'transaction.clear_business'
+      and object_id = '11111111-0000-0000-0000-000000000001'
+    order by id desc limit 1)->>'entityIds',
+  '["e3333333-3333-3333-3333-333333333333"]',
+  'K2 clearing records EVERY attribution it removed, as a list, not just the first'
 );
 
 -- ---------------------------------------------------------------------------

@@ -61,20 +61,40 @@ echo "sliced $(wc -l < "$MEMBERWRITE") lines of keel_assert_member_write from th
 echo "loading $(wc -l < "$MIGRATION") lines of migration verbatim"
 
 RENDERED="$TMP/rendered.sql"
-python3 - "$TESTSQL" "$MEMBERWRITE" "$MIGRATION" "$RENDERED" <<'PY'
+IDEMPOTENT="$TMP/idempotent.sql"
+python3 - "$TESTSQL" "$MEMBERWRITE" "$MIGRATION" "$RENDERED" "$IDEMPOTENT" <<'PY'
 import sys
-test, member, migration, out = sys.argv[1:5]
+test, member, migration, out, idem = sys.argv[1:6]
 src = open(test).read()
-markers = {
-    '-- __MEMBER_WRITE_BODY__  (replaced by the runner with the real function DDL)': open(member).read(),
-    '-- __MIGRATION_BODY__  (replaced by the runner with the real migration file)': open(migration).read(),
-}
-for marker, body in markers.items():
+member_marker = '-- __MEMBER_WRITE_BODY__  (replaced by the runner with the real function DDL)'
+migration_marker = '-- __MIGRATION_BODY__  (replaced by the runner with the real migration file)'
+member_body, migration_body = open(member).read(), open(migration).read()
+for marker in (member_marker, migration_marker):
     if marker not in src:
-        raise SystemExit(f'FATAL: marker not found in test file: {marker}')
-    src = src.replace(marker, body)
-open(out, 'w').write(src)
+        raise SystemExit('FATAL: marker not found in test file: ' + marker)
+open(out, 'w').write(src.replace(member_marker, member_body).replace(migration_marker, migration_body))
+
+# Re-runnability probe: the minimal schema (everything the test file declares
+# before the injection point), then the migration applied TWICE. CLAUDE.md
+# applies migrations by hand to the live project with no migration-history
+# table, so a file that errors on a second apply is a production hazard.
+prelude = src.split(member_marker)[0]
+prelude = chr(10).join(
+    line for line in prelude.splitlines()
+    if line.strip() != 'begin;' and not line.strip().startswith('select plan(')
+)
+open(idem, 'w').write(prelude + member_body + migration_body + migration_body)
 PY
+
+echo "=== re-runnability: applying the migration twice ==="
+"$PGBIN/createdb" -h "$SOCK" -U postgres idempotency_probe >/dev/null
+if ! "$PGBIN/psql" -X -v ON_ERROR_STOP=1 -h "$SOCK" -U postgres -d idempotency_probe \
+     -f "$IDEMPOTENT" >"$TMP/idem.log" 2>&1; then
+  echo "=== RESULT: FAIL (migration is not re-runnable) ==="
+  tail -20 "$TMP/idem.log"
+  exit 1
+fi
+echo "second apply clean ($(grep -c 'already exists, skipping' "$TMP/idem.log") guarded objects skipped)"
 
 # pgTAP shim (plan/is/finish -> TAP) unless the real extension is available.
 if "${PSQL[@]}" -tAc "select 1 from pg_available_extensions where name='pgtap'" | grep -q 1; then

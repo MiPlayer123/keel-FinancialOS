@@ -27,8 +27,11 @@
 --   - Reversible correction: clearing is a first-class command, and the
 --     binding is metadata on a mutable overlay, never on a posting.
 --   - Law 2: every mutation writes audit_log, and only when something changed.
---   - Law 6: tags/transaction_tags are already exported with `to_jsonb(x)`,
---     so entity_id flows into the export with no export change needed.
+--   - Law 6: `packages/exports` enumerates columns explicitly and projects
+--     strictly onto that list, so the new column is added to the `tags` entry
+--     in packages/exports/src/manifest.ts in the same change. (The SQL-side
+--     keel_export_household uses to_jsonb and picks it up on its own; the
+--     manifest is the surface admin.export_all actually serves.)
 
 -- ---------------------------------------------------------------------------
 -- 1. The binding. On tags rather than on entities, because "is this a business
@@ -54,6 +57,47 @@ comment on column public.tags.entity_id is
 
 create unique index if not exists tags_business_entity_unique
   on public.tags (entity_id) where entity_id is not null;
+
+-- ---------------------------------------------------------------------------
+-- 1b. Adoption guard.
+--
+--     Adopting a hand-rolled tag turns every transaction already carrying it
+--     into that business's, in one statement. If any of those transactions
+--     already belongs to a DIFFERENT business, adoption would create exactly
+--     the two-business state that keel_tag_assign refuses and
+--     keel_transaction_set_business is built to make impossible — silently,
+--     in bulk, and with no per-transaction audit. Refused at the door.
+-- ---------------------------------------------------------------------------
+create or replace function public.keel_assert_adoptable_business_tag(
+  p_tag_id uuid,
+  p_tag_name text
+) returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_clash text;
+begin
+  select other.name into v_clash
+    from public.transaction_tags mine
+    join public.transaction_tags theirs
+      on theirs.canonical_transaction_id = mine.canonical_transaction_id
+     and theirs.tag_id <> mine.tag_id
+    join public.tags other on other.id = theirs.tag_id
+   where mine.tag_id = p_tag_id
+     and other.entity_id is not null
+   limit 1;
+  if v_clash is not null then
+    raise exception
+      'KEEL_INVALID_COMMAND: the tag "%" is already on a transaction that belongs to "%"; a transaction can belong to one business, so remove it there first',
+      p_tag_name, v_clash using errcode = 'P0009';
+  end if;
+end;
+$$;
+
+revoke all on function public.keel_assert_adoptable_business_tag(uuid, text)
+  from public, anon, authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 2. Bind (idempotently) a business tag to an entity, creating it on first use.
@@ -110,8 +154,16 @@ begin
     return v_tag_id;
   end if;
 
-  -- tags.name is capped at 40 chars; entities.name at 200.
-  v_tag_name := left(btrim(v_entity_name), 40);
+  -- tags.name is capped at 40 chars; entities.name at 200. btrim on BOTH
+  -- sides of the truncation: entities' own check only requires 1..200 chars,
+  -- so a seeded/imported whitespace-only name would otherwise fall through to
+  -- tags' check constraint as a raw 23514 with no KEEL_ error code, and a cut
+  -- landing mid-space would leave a trailing space in the picker.
+  v_tag_name := btrim(left(btrim(v_entity_name), 40));
+  if char_length(v_tag_name) = 0 then
+    raise exception 'KEEL_INVALID_COMMAND: entity has no usable name for a business tag'
+      using errcode = 'P0009';
+  end if;
 
   select t.id, t.entity_id into v_tag_id, v_existing_entity
     from public.tags t
@@ -120,9 +172,10 @@ begin
   if v_tag_id is not null then
     if v_existing_entity is not null then
       raise exception
-        'KEEL_INVALID_COMMAND: the tag "%" is already another business''s tag; rename the entity or that tag',
+        'KEEL_INVALID_COMMAND: the tag "%" is already another business''s tag; rename the entity or that tag (entity names are shortened to 40 characters for the tag, so two long names can collide here)',
         v_tag_name using errcode = 'P0009';
     end if;
+    perform public.keel_assert_adoptable_business_tag(v_tag_id, v_tag_name);
     update public.tags set entity_id = p_entity_id where id = v_tag_id;
   else
     begin
@@ -134,19 +187,36 @@ begin
       select t.id, t.entity_id into v_tag_id, v_existing_entity
         from public.tags t
        where t.household_id = p_household_id and lower(t.name) = lower(v_tag_name);
+      -- The common race is two calls binding the SAME entity (a double-click on
+      -- the first attribution, or a client retry). The winner already did what
+      -- this call wanted, so return its tag rather than failing a caller whose
+      -- request in fact succeeded — "bind idempotently" has to hold under
+      -- concurrency too, not just on replay.
+      if v_tag_id is not null and v_existing_entity = p_entity_id then
+        return v_tag_id;
+      end if;
       if v_tag_id is null or v_existing_entity is not null then
         raise exception
           'KEEL_INVALID_COMMAND: could not bind a business tag named "%"', v_tag_name
           using errcode = 'P0009';
       end if;
+      perform public.keel_assert_adoptable_business_tag(v_tag_id, v_tag_name);
       update public.tags set entity_id = p_entity_id where id = v_tag_id;
     end;
   end if;
 
-  insert into public.audit_log (household_id, actor, action, object_type, object_id, after)
+  -- Adoption retro-attributes every transaction already carrying the tag, so
+  -- the audit records how many, and that the tag was previously unbound. Law 2:
+  -- the record has to be enough to reverse the change, not just to notice it.
+  insert into public.audit_log (household_id, actor, action, object_type, object_id, before, after)
   values (p_household_id, jsonb_build_object('kind', 'user', 'userId', v_uid),
           'tags.bind_entity', 'tag', v_tag_id,
-          jsonb_build_object('entityId', p_entity_id, 'name', v_tag_name));
+          jsonb_build_object('entityId', null),
+          jsonb_build_object(
+            'entityId', p_entity_id,
+            'name', v_tag_name,
+            'assignments',
+            (select count(*)::int from public.transaction_tags tt where tt.tag_id = v_tag_id)));
 
   return v_tag_id;
 end;
@@ -154,6 +224,66 @@ $$;
 
 revoke all on function public.keel_entity_business_tag_ensure(uuid, uuid) from public, anon;
 grant execute on function public.keel_entity_business_tag_ensure(uuid, uuid) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 2b. Undo the bind.
+--
+--     Without this, binding the wrong entity is unrecoverable from inside the
+--     product: keel_tag_delete refuses a business tag (section 5), and nothing
+--     else writes tags.entity_id, so the only repair would be hand-written SQL
+--     against production. Law 2 requires every mutation be undoable, and the
+--     CLAUDE.md soft-delete directive exists precisely because an
+--     unrecoverable path shipped once before.
+--
+--     Unbinding does NOT remove the tag from any transaction: the rows keep the
+--     label, they simply stop counting as that business's. That is the
+--     reversible-correction shape (nothing is destroyed) and it means bind and
+--     unbind are exact inverses.
+-- ---------------------------------------------------------------------------
+create or replace function public.keel_entity_business_tag_unbind(
+  p_household_id uuid,
+  p_entity_id uuid
+) returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := coalesce(
+    nullif(pg_catalog.current_setting('request.jwt.claim.sub', true), ''),
+    nullif(pg_catalog.current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'
+  )::uuid;
+  v_tag_id uuid;
+  v_name text;
+  v_uses int;
+begin
+  perform public.keel_assert_member_write(p_household_id);
+
+  select t.id, t.name into v_tag_id, v_name
+    from public.tags t
+   where t.household_id = p_household_id and t.entity_id = p_entity_id;
+  -- Idempotent: an entity with no business tag is already unbound.
+  if v_tag_id is null then
+    return null;
+  end if;
+
+  select count(*)::int into v_uses
+    from public.transaction_tags tt where tt.tag_id = v_tag_id;
+
+  update public.tags set entity_id = null where id = v_tag_id;
+
+  insert into public.audit_log (household_id, actor, action, object_type, object_id, before, after)
+  values (p_household_id, jsonb_build_object('kind', 'user', 'userId', v_uid),
+          'tags.unbind_entity', 'tag', v_tag_id,
+          jsonb_build_object('entityId', p_entity_id, 'name', v_name, 'assignments', v_uses),
+          jsonb_build_object('entityId', null));
+
+  return v_tag_id;
+end;
+$$;
+
+revoke all on function public.keel_entity_business_tag_unbind(uuid, uuid) from public, anon;
+grant execute on function public.keel_entity_business_tag_unbind(uuid, uuid) to authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 3. The command behind the checkbox: attribute one transaction to one
@@ -182,7 +312,7 @@ declare
     nullif(pg_catalog.current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'
   )::uuid;
   v_tag_id uuid;
-  v_before uuid;
+  v_before jsonb;
   v_removed int := 0;
   v_added int := 0;
 begin
@@ -195,12 +325,20 @@ begin
     raise exception 'KEEL_NOT_FOUND: transaction' using errcode = 'P0006';
   end if;
 
-  -- Current attribution, for the audit before-image and for idempotency.
-  select t.entity_id into v_before
+  -- Serialize concurrent attribution of the SAME transaction. Without this,
+  -- two sessions setting different businesses each delete what they can see
+  -- (neither sees the other's uncommitted insert under READ COMMITTED) and
+  -- both commit, leaving two business tags and telling both callers it worked.
+  perform 1 from public.canonical_transactions where id = p_txn_id for update;
+
+  -- Current attribution, for the audit before-image and for idempotency. An
+  -- aggregate rather than `limit 1`: if the row somehow carries more than one
+  -- business, a clear removes them ALL, and Law 2's reversible correction is
+  -- worth nothing if the before-image only records one of them.
+  select jsonb_agg(distinct t.entity_id) into v_before
     from public.transaction_tags tt
     join public.tags t on t.id = tt.tag_id
-   where tt.canonical_transaction_id = p_txn_id and t.entity_id is not null
-   limit 1;
+   where tt.canonical_transaction_id = p_txn_id and t.entity_id is not null;
 
   if p_entity_id is not null then
     v_tag_id := public.keel_entity_business_tag_ensure(p_household_id, p_entity_id);
@@ -232,7 +370,7 @@ begin
                  then 'transaction.clear_business'
                  else 'transaction.set_business' end,
             'canonical_transaction', p_txn_id,
-            jsonb_build_object('entityId', v_before),
+            jsonb_build_object('entityIds', coalesce(v_before, '[]'::jsonb)),
             jsonb_build_object('entityId', p_entity_id, 'tagId', v_tag_id));
   end if;
 
@@ -242,6 +380,17 @@ $$;
 
 revoke all on function public.keel_transaction_set_business(uuid, uuid, uuid) from public, anon;
 grant execute on function public.keel_transaction_set_business(uuid, uuid, uuid) to authenticated;
+
+-- Deviation from the entity-proc house pattern, recorded deliberately
+-- (CLAUDE.md: deviations without justification are bugs). keel_create_entity /
+-- keel_list_entities are handed to keel_api for least privilege
+-- (20260713210000). The functions above are NOT, because they would stop
+-- working: 20260713120000 grants keel_api nothing on public.tags or
+-- public.transaction_tags, and the definer_all RLS policy loop
+-- (20260710210500) predates those tables, so keel_api has no policy on them
+-- either. They therefore stay owned by the migration role, like every other
+-- proc in 20260713120000. Handing them over is a follow-up that must add the
+-- table grants and policies first.
 
 -- ---------------------------------------------------------------------------
 -- 4. Guard the generic tag picker. Business tags remain ordinary tags in the
@@ -292,9 +441,21 @@ begin
     raise exception 'KEEL_NOT_FOUND: tag' using errcode = 'P0006';
   end if;
 
-  -- One business per transaction (20260831120000). Refuse rather than record
-  -- an attribution nobody can act on.
+  -- Business-tag rules (20260831120000). Only the business path is tightened;
+  -- ordinary tags keep the 20260713120000 behaviour exactly, including on
+  -- voided rows.
   if p_assigned and v_entity_id is not null then
+    -- A voided transaction is not on anyone's books. keel_transaction_set_business
+    -- refuses one, and it must not be reachable through the side door either:
+    -- that door can attribute a voided row, and the front door then refuses to
+    -- clear it.
+    if exists (
+      select 1 from public.canonical_transactions
+       where id = p_txn_id and voided_at is not null
+    ) then
+      raise exception 'KEEL_INVALID_COMMAND: a voided transaction cannot belong to a business'
+        using errcode = 'P0009';
+    end if;
     select t.name into v_other
       from public.transaction_tags tt
       join public.tags t on t.id = tt.tag_id
@@ -304,7 +465,7 @@ begin
      limit 1;
     if v_other is not null then
       raise exception
-        'KEEL_INVALID_COMMAND: this transaction already belongs to "%"; a transaction can belong to one business — split it to divide the amount between businesses',
+        'KEEL_INVALID_COMMAND: this transaction already belongs to "%". A transaction can belong to one business; change it to this one instead, or record the two shares as separate transactions.',
         v_other using errcode = 'P0009';
     end if;
   end if;
@@ -367,7 +528,7 @@ begin
   end if;
   if v_entity_id is not null then
     raise exception
-      'KEEL_INVALID_COMMAND: "%" is a business tag; deleting it would un-attribute every transaction that business owns',
+      'KEEL_INVALID_COMMAND: "%" is a business tag; deleting it would un-attribute every transaction that business owns. Unbind it from the business first, then delete it.',
       v_name using errcode = 'P0009';
   end if;
   select count(*)::int into v_uses from public.transaction_tags where tag_id = p_tag_id;
