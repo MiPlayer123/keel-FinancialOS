@@ -271,7 +271,7 @@ describe('a paycheck reads like a payslip', () => {
       { categoryLedgerAccountId: CAT_A, amountMinor: '26847' },
       { categoryLedgerAccountId: CAT_B, amountMinor: '33438' },
     ];
-    expect(seedRowsFromSplits(stored)[0].amount).toBe('1992.18'); // gross, positive
+    expect(seedRowsFromSplits(stored)[0]?.amount).toBe('1992.18'); // gross, positive
     expect(buildSplitsPayload('138933', seedRowsFromSplits(stored))).toEqual(stored);
   });
 });
