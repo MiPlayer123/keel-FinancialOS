@@ -2,6 +2,237 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+## 2026-08-31 Balance snapshot compaction, phase 2 APPLIED to the live project
+
+Applied after the human approved the hard delete (the ⚑ CLAUDE.md requires). Result:
+
+    186,943 rows -> 133 survivors (186,810 removed)
+    all 16 (account, source) series intact
+    before-image: keel_archive.balance_snapshots_20260831 (186,943 rows, hash-verified)
+    plan:         keel_archive.compaction_plan_20260831 (which ids went, and why)
+    audit_log:    one row, 'balance_snapshots.compact', before 186943 -> after 133
+
+`keel_latest_balances`-shaped read, same query before and after:
+
+| | rows scanned | buffers | time |
+| --- | --- | --- | --- |
+| before | 186,943 | 89,618 | 4,841 ms |
+| after (autovacuum done) | 133 | 3,043 | 1,459 ms |
+
+**Not finished: `VACUUM (FULL)` still needs running by an owner.** Autovacuum cleared all
+186,810 dead tuples, which is what took buffers from 89,618 to 3,043, but it does not
+return pages to the OS: the heap is still 24 MB of mostly-empty pages and the indexes
+27 MB. With 133 live rows the planner now picks a **seq scan** over that bloated heap
+(3,037 pages), which is the entire remaining 1.46 s. `VACUUM (FULL)` should take it to
+roughly nothing.
+
+I could not run it from this session. `execute_sql` connects as `supabase_read_only_user`
+(so `vacuum` is a silent no-op — it reported success and changed nothing, which is worth
+knowing), and `apply_migration` wraps its payload in `begin;`, and VACUUM cannot run
+inside a transaction block. It needs the Supabase SQL editor or a psql session as an
+owner:
+
+    vacuum (full, analyze) public.balance_snapshots;
+    reindex table public.balance_snapshots;   -- optional; vacuum full rebuilds indexes
+
+Database size went 189 MB -> 267 MB, because the before-image (24 MB) and the plan
+(54 MB, it carries the lag columns and two indexes) both live in `keel_archive` now. On a
+500 MB Free-tier cap that is worth a decision: the plan table is fully derivable from
+`archive except live`, so it is the obvious thing to drop once the result has been lived
+with. Not dropping it on my own initiative, per the soft-delete directive.
+
+## 2026-08-31 Balance snapshot compaction, phase 2 (design, and how it was tested)
+
+`docs/BALANCE-SNAPSHOT-COMPACTION.md` §3 phase 2 + §4, shipped as
+`supabase/migrations/20260831200000_balance_snapshot_compaction.sql`.
+
+Sequence is **archive → verify the archive → gate → remove → prove against the
+before-image**, and every check is a `raise exception`.
+
+It is **three** `do` blocks, so three statements, each atomic on its own and each
+separately re-runnable. That was not the first design: it started as one statement, and
+three live attempts were killed at the client's hard 60 s ceiling — all three rolled back
+completely, which is the atomicity working, but none of them finished. The audited plan
+had actually called for this split (§3 step 4, "in batches, each in its own
+transaction"); writing it as one statement was my deviation, and splitting it is that
+deviation corrected. Each step is a precondition of the next and refuses to run without
+it, so the gate cannot be skipped and the removal cannot precede the archive:
+
+1. `$archive$` — the complete before-image, verified by count and by an order-independent
+   hash of every column, committed alone.
+2. `$plan$` — classify every row into `keel_archive.compaction_plan_20260831` and run the
+   whole gate against that classification. Writes nothing to `public`.
+3. `$compact$` — remove exactly what the committed plan marks removable, write the Law 2
+   audit row in the same transaction, verify against the committed archive.
+
+Committing the plan before anything is removed also means the removal is a fixed,
+inspectable set of ids rather than something re-derived next to the delete, and the plan
+table is now the record of what went.
+
+The archive is the WHOLE table, into a new `keel_archive` schema with no grants — not the
+survivor set. v1 of the proposal had it backwards (audit P0-1): the survivors are exactly
+the rows that are *not* removed, so archiving them would have left the 186k rows being
+destroyed with no copy anywhere. That is the `connection_credentials` shape that cost two
+live Plaid Items, on the same Free-tier project with the same absence of PITR. It is
+verified by row count and by an order-independent md5 over every column of every row
+before anything is removed.
+
+`keel_archive` rather than `public` because `supabase/tests/008_export.sql` requires every
+`public` base table to be explicitly classified INCLUDE or EXCLUDE, and an operator
+recovery artifact is neither household data nor an export omission to justify.
+
+The last check is the one that actually protects the data, because it does not reference
+the survivor predicate at all: for every row in the archived before-image, ask the
+COMPACTED table what the value was at that row's instant and require the archived answer.
+If the migration's predicate ever drifts from
+`scripts/audit/balance-snapshot-compaction-gate.sql`, that check still fails closed.
+
+Law 6 ruling recorded in the doc §5 (the audit flagged that v1 never gave one): the export
+keeps every distinct observation and its first instant; `balance_last_observed_at` is
+exported; the before-image is retained until a human says otherwise; and an `audit_log`
+row per household records actor, both counts, archive relation and predicate in the same
+transaction. What a user loses is the count of times a provider repeated a value it had
+already reported — a property of our polling interval, not of their money.
+
+Deviation from CLAUDE.md's soft-delete default, stated per the "deviations must cite the
+spec line and why" rule: a status flag cannot work here. The whole cost being removed is
+that `order by as_of desc` walks 186k rows; a soft-deleted row is still a row the index
+walks, so a flag keeps 100% of the latency and 100% of the storage and adds a filter to
+every consumer. The archive supplies the recoverability the directive exists to protect.
+
+Verification, all run:
+
+- The gate (`scripts/audit/balance-snapshot-compaction-gate.sql`, read-only) was validated
+  BEFORE being pointed at production, by `scripts/run-balance-snapshot-gate-check.sh`: it
+  is all-clear on a 25-row fixture built to hit every branch (plain runs, two sources on
+  one account, a series of one, nulls, snapshot_metadata, a length-1 final run, an
+  all-duplicate two-row series, and a run boundary only a NULL-safe comparison can see),
+  and it trips on four deliberately broken predicates. A gate that cannot fail is worth
+  nothing, and this one is what authorises removing the rows.
+- Run against the live table: all seven checks 0. 186,943 rows, 133 survivors,
+  186,810 removable, one household, one source.
+- `scripts/run-balance-snapshot-compaction-pgtap.sh --mutate` loads the migration verbatim
+  and proves: correct on good data (25 → 18, archive hash matches the pre-run hash, audit
+  row says 25→18, step function preserved at all 25 original instants); re-runnable (a
+  second apply is a notice, not a second archive); **atomic on abort** (an injected `as_of`
+  tie leaves all 26 rows and no archive); and refuses all five broken predicates —
+  newest-row rule dropped, snapshot_metadata dropped, `=` instead of `is not distinct
+  from`, endpoints-only, and partitioning by account instead of by series — each rolling
+  back to 25 rows with no archive.
+
+**Three live attempts failed before one succeeded, and the failures were worth having.**
+Each ran past the 60-second client ceiling and was killed; each rolled back completely —
+186,943 rows still there, no archive, no audit row — which is the atomicity the design
+promised, demonstrated against real interruptions rather than only injected ones. Four
+defects came out of them, none of which a 25-row fixture could ever have shown:
+
+1. `delete ... where id = any(array_agg(...))` with a 186,810-element array. Replaced with
+   a `using` join against the classification table.
+2. `left join lateral (... order by as_of desc limit 1)` for the final verification, doing
+   one index probe per archived row *at the moment the index still physically holds every
+   entry the same statement just removed and which is invisible to it*, so each probe
+   walked past them. Replaced with a set-based interleave of the archive and the survivors
+   plus a running "last live row", which needs one sort of 2n rows and no probes.
+3. **The cause the first two masked:** a freshly created table has no statistics until it
+   is analyzed, so the planner sized the classification table by a hardcoded default and
+   planned the removal as a nested loop. Adding `analyze` (and an index on `id`) took the
+   removal phase to 0.27 s.
+4. **And on the live instance only:** even set-based, the verification's self-join over a
+   materialised 373,886-row interleaving measured **over 60 s** — locally it was 1 s, so
+   nothing but a measurement against the real instance would have found it. Rewritten as
+   a running "last live row" carry (the standard grouping trick, since Postgres has no
+   `IGNORE NULLS`) it measures **6.4 s** on the same data with no self-join at all.
+
+So `scripts/run-balance-snapshot-compaction-pgtap.sh` gained a **scale step**: 16 accounts
+× 12,000 cycles = 192,025 rows in the live shape, asserting both correctness and that the
+run finishes inside the 60 s ceiling. Before the fixes it took **437 s**; after, **5 s**,
+and the per-phase notices now built into the migration say where the time goes (classify
+1.17 s, gate 0.77 s, archive + hash 1.87 s, remove 0.27 s, verify 1.02 s). The lesson is
+the general one: a fixture small enough to be readable cannot exhibit a quadratic plan, so
+a migration that will meet production volume needs a test that does too.
+
+Deferred deliberately: `VACUUM (FULL)` and `REINDEX` cannot run inside a transaction, so
+they are documented at the top of the migration to run immediately after it commits. A
+plain removal returns none of the 50 MB and the 27 MB of index bloats worst.
+
+## 2026-08-31 Balance snapshot write amplification, phase 1 (stop writing repeats)
+
+`docs/BALANCE-SNAPSHOT-COMPACTION.md` §3 phase 1, shipped as
+`supabase/migrations/20260831190000_balance_snapshot_dedupe.sql` and applied to the live
+project.
+
+Measured problem: `keel-drain-sync` runs every 3 minutes and
+`keel_apply_account_balance` wrote a `balance_snapshots` row per account per cycle
+whether or not the balance moved. 186,943 rows across 16 snapshot-bearing accounts,
+~50 MB, 26% of the database, +4,320 rows/day, 99.94% of them exact repeats of their
+predecessor. `keel_latest_balances` and `keel_investments_overview` both do
+`distinct on (account_id) ... order by as_of desc`, which has no index-skip scan, so
+their cost is linear in snapshot count: EXPLAIN showed 186,889 rows and 87,233 buffers
+scanned to return 10 rows in 2.06 s.
+
+What shipped: the INSERT is now wrapped in a NULL-safe comparison against the newest row
+of that account's `source='plaid'` series (`current_minor`, `available_minor`,
+`limit_minor`, `currency`, `snapshot_metadata`), plus a new
+`accounts.balance_last_observed_at` written every cycle regardless.
+
+Three things the adversarial audit of the proposal changed, all of which would have been
+defects if the obvious version had shipped:
+
+1. **The guard wraps only the INSERT, not the function.** `keel_apply_account_balance`
+   runs mask backfill -> snapshot insert -> `last_successful_sync_at` gate (returns) ->
+   opening-balance-exists check (returns) -> book the anchor. An early `return` on
+   "nothing changed" would strand the anchor permanently for any account linked while its
+   balance is static: insert once, return early because the first sync had not completed,
+   then return early forever because the value never moved. Two live accounts have gone
+   43+ days without a value change, so this was reachable. pgTAP test 26 is exactly this
+   sequence, and the `early_return` mutation proves the test catches it.
+2. **Comparison is `is distinct from`, not `=`.** 149,481 of the live rows have a null
+   `limit_minor` and 43,609 a null `available_minor`. Over the real table `=` identifies
+   20.0% of rows as duplicates and `is not distinct from` identifies 99.94%; written with
+   `=` this migration would have kept four fifths of the amplification.
+3. **Freshness is preserved, not lost.** Once repeats stop being written, a snapshot's
+   `as_of` means "when the value last CHANGED", so "unchanged since 18 July" and "not
+   checked since 18 July" become indistinguishable. `balance_last_observed_at` carries the
+   confirmation instant instead, backfilled from `max(as_of)` per account, so phase 1
+   loses no information. It advances monotonically (`greatest(...)`) because the sync
+   simulator emits delayed and out-of-order events by design.
+
+Law 6: `balance_last_observed_at` was added to `packages/exports/src/manifest.ts` AND to
+the column mirror in `supabase/tests/008_export.sql` in the same change. That mirror is
+the drift test that broke #179's CI when only the TypeScript side was updated.
+
+Testing: `tests/pgtap/balance_snapshot_dedupe.sql`, 39 assertions, run by
+`scripts/run-balance-snapshot-dedupe-pgtap.sh` against a throwaway Postgres 16 cluster.
+The runner loads the REAL prior function body sliced out of
+`20260717220000_account_mask.sql` (verified byte-identical to the live `prosrc` modulo one
+comment block: same 4,044 chars, same normalized md5), exercises the old
+row-per-cycle behaviour and asserts it, then loads the whole migration verbatim and
+asserts the new behaviour. `--mutate` breaks each of 12 guards in turn and requires the
+suite to go red; all 12 are killed.
+
+Two predicates are deliberately NOT mutation-tested because they are unkillable rather
+than untested, and both are documented in the runner: the guard's
+`bs.household_id = p_household_id` (accounts.id is a PK and balance_snapshots has a
+composite FK on (household_id, account_id), so no snapshot can disagree with its account)
+and `not v_found` (v_effective_currency is never null, so the first-ever observation
+already inserts via the currency comparison). Both are kept for readability and
+tenant-scoping convention.
+
+Two bugs found in the harness itself while writing this:
+
+- The re-runnability probe in both this runner and
+  `scripts/run-business-entity-tag-pgtap.sh` rebuilt its prelude with `'\n'.join(...)`,
+  which drops the trailing newline, so the last prelude line swallowed the first line of
+  the next file. In the business-tag runner that silently degraded the "applies twice
+  cleanly" check. Fixed in both.
+- The first `freshness rewinds` mutation only rewrote the UPDATE's SET clause; the WHERE
+  clause's own `greatest(...)` then blocked the rewind, so the mutation was DEFEATED
+  rather than survived -- which reads identically to an untested guard in the output. The
+  mutation now replaces both occurrences.
+
+Nothing is deleted here. Compaction of the existing 186k rows is phase 2 and is
+deliberately a separate change, sequenced archive-first per the audit.
+
 ## 2026-08-31 PR #179 merged, then broke in production: the deploy chain
 
 The feature 404'd for the user immediately after merge. Not a code defect —

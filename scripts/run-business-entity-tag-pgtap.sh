@@ -83,7 +83,7 @@ prelude = chr(10).join(
     line for line in prelude.splitlines()
     if line.strip() != 'begin;' and not line.strip().startswith('select plan(')
 )
-open(idem, 'w').write(prelude + member_body + migration_body + migration_body)
+open(idem, 'w').write(prelude + chr(10) + member_body + migration_body + migration_body)
 PY
 
 echo "=== re-runnability: applying the migration twice ==="

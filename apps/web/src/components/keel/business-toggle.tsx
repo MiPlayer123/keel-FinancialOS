@@ -67,13 +67,30 @@ export function BusinessToggle({
         type="button"
         disabled={disabled}
         aria-pressed={active}
-        className={`inline-flex items-center gap-1.5 ${base} ${active ? on : off}`}
+        // The visible text is the entity name alone. It used to read
+        // "Business (<name>)", which doubles up under the section's own
+        // "Business" heading and reads absurdly when the entity is itself
+        // named for the fact it is a business: an entity called "Business
+        // (LLC)" rendered as "Business (Business (LLC))". The name also
+        // matches what the multi-business shape shows, so the two shapes
+        // no longer label the same thing differently.
+        //
+        // A bare name does not say what pressing it DOES, so the accessible
+        // name spells that out. It contains the visible text, so voice
+        // control still matches on the name (WCAG 2.5.3).
+        aria-label={`Count this expense in ${only.name}'s books`}
+        className={`inline-flex max-w-full items-center gap-1.5 ${base} ${active ? on : off}`}
         onClick={() => {
           onChange(active ? null : only.entityId);
         }}
       >
-        <Check className={`size-3.5 ${active ? '' : 'opacity-30'}`} aria-hidden="true" />
-        Business ({only.name})
+        <Check
+          className={`size-3.5 shrink-0 ${active ? '' : 'opacity-30'}`}
+          aria-hidden="true"
+        />
+        {/* Entity names run to 200 chars in the schema; without this a legal
+            name blows past 390px, the same trap the ledger badge fell into. */}
+        <span className="truncate">{only.name}</span>
       </button>
     );
   }
@@ -108,13 +125,13 @@ export function BusinessToggle({
             role="radio"
             disabled={disabled}
             aria-checked={active}
-            className={`inline-flex items-center gap-1.5 ${base} ${active ? on : off}`}
+            className={`inline-flex max-w-full items-center gap-1.5 ${base} ${active ? on : off}`}
             onClick={() => {
               onChange(active ? null : business.entityId);
             }}
           >
-            {active ? <Check className="size-3.5" aria-hidden="true" /> : null}
-            {business.name}
+            {active ? <Check className="size-3.5 shrink-0" aria-hidden="true" /> : null}
+            <span className="truncate">{business.name}</span>
           </button>
         );
       })}
