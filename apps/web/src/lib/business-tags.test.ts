@@ -8,6 +8,7 @@ import {
   ordinaryTags,
   rowBusinessEntityId,
   rowBusinessName,
+  splitRowTags,
 } from './business-tags';
 import type { EntityRow, TagRow } from './keel-api';
 
@@ -175,6 +176,52 @@ describe('businessTagNames', () => {
     expect(businessTagNames([tag('tag-acme', 'Acme LLC', 'ent-acme')], renamed).get('tag-acme')).toBe(
       'Acme Holdings LLC',
     );
+  });
+});
+
+describe('splitRowTags', () => {
+  const names = businessTagNames(TAGS, ENTITIES);
+
+  it('pulls the business out of the row and leaves the ordinary tags', () => {
+    const row = {
+      tags: [
+        { tagId: 'tag-reimb', name: 'Reimbursable' },
+        { tagId: 'tag-acme', name: 'Acme LLC' },
+      ],
+    };
+    expect(splitRowTags(row, names)).toEqual({
+      businessName: 'Acme LLC',
+      plainTags: [{ tagId: 'tag-reimb', name: 'Reimbursable' }],
+    });
+  });
+
+  it('reports no business for a row that has none', () => {
+    const row = { tags: [{ tagId: 'tag-reimb', name: 'Reimbursable' }] };
+    expect(splitRowTags(row, names)).toEqual({
+      businessName: undefined,
+      plainTags: [{ tagId: 'tag-reimb', name: 'Reimbursable' }],
+    });
+  });
+
+  it('handles an empty and a null tag list', () => {
+    expect(splitRowTags({ tags: [] }, names)).toEqual({ businessName: undefined, plainTags: [] });
+    expect(splitRowTags({ tags: null }, names)).toEqual({ businessName: undefined, plainTags: [] });
+  });
+
+  it('degrades a business tag to an ordinary chip when the caller has no map', () => {
+    // A surface that has not loaded the tag list must still show the label,
+    // never drop it silently.
+    const row = { tags: [{ tagId: 'tag-acme', name: 'Acme LLC' }] };
+    expect(splitRowTags(row, undefined)).toEqual({
+      businessName: undefined,
+      plainTags: [{ tagId: 'tag-acme', name: 'Acme LLC' }],
+    });
+  });
+
+  it('shows the entity name on the badge even when the tag was renamed', () => {
+    const renamed = businessTagNames([tag('tag-acme', 'old label', 'ent-acme')], ENTITIES);
+    const row = { tags: [{ tagId: 'tag-acme', name: 'old label' }] };
+    expect(splitRowTags(row, renamed).businessName).toBe('Acme LLC');
   });
 });
 

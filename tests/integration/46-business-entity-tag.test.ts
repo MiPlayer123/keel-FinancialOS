@@ -3,8 +3,9 @@
  * (20260831120000_business_entity_tag.sql + the /tags/set-business route).
  *
  * The DB behaviour itself is covered exhaustively and independently by
- * tests/pgtap/business_entity_tag.sql (31 assertions, run against a real
- * Postgres via scripts/run-business-entity-tag-pgtap.sh). This suite covers
+ * tests/pgtap/business_entity_tag.sql (62 assertions, run against a real
+ * Postgres via scripts/run-business-entity-tag-pgtap.sh, each guard
+ * mutation-tested to confirm the suite fails without it). This suite covers
  * what pgTAP cannot reach: the Edge Function route's input validation, its
  * error mapping, and the tags.list read the client derives attribution from.
  *
@@ -166,6 +167,42 @@ describe('business expense attribution over HTTP', () => {
       body: { householdId: SEED.households.alpha, transactionId: txnId, entityId: businessEntityId },
     });
     expect(res.status).toBe(404);
+  });
+
+  it('unbinds a business tag, leaving the tag and its assignments in place', async () => {
+    await callFunction('/api/tags/set-business', {
+      headers: alexHeaders,
+      body: { householdId: SEED.households.alpha, transactionId: txnId, entityId: businessEntityId },
+    });
+    const res = await callFunction('/api/tags/unbind-business', {
+      headers: alexHeaders,
+      body: { householdId: SEED.households.alpha, entityId: businessEntityId },
+    });
+    expect(res.status).toBe(200);
+    expect((res.body as { tagId: string | null }).tagId).toBeTruthy();
+
+    // The tag survives, still attached: unbind is a reversible correction, not
+    // a delete. It simply stops counting as that business's.
+    const tags = await callFunction('/api/queries', {
+      headers: alexHeaders,
+      body: { query: 'tags.list', householdId: SEED.households.alpha },
+    });
+    expect(tags.body).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'Acme LLC', entityId: null })]),
+    );
+    const { data } = await serviceClient()
+      .from('transaction_tags')
+      .select('tag_id')
+      .eq('canonical_transaction_id', txnId);
+    expect(data).toHaveLength(1);
+
+    // Idempotent, and re-binding restores the same tag.
+    const again = await callFunction('/api/tags/unbind-business', {
+      headers: alexHeaders,
+      body: { householdId: SEED.households.alpha, entityId: businessEntityId },
+    });
+    expect(again.status).toBe(200);
+    expect((again.body as { tagId: string | null }).tagId).toBeNull();
   });
 
   it('refuses to delete a business tag through the tag manager', async () => {

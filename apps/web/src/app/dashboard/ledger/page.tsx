@@ -277,7 +277,16 @@ function LedgerTable() {
     void fetchTags(householdId)
       .then(setTags)
       .catch(() => {
+        // Without the tag list nothing can be identified as a business tag, so
+        // every row derives "personal". Leaving the facet set would then show
+        // an empty register under "Acme LLC", or the FULL register under
+        // "Personal only" — a filter that silently stops excluding what it
+        // claims to exclude. Fail back to unfiltered and disclose it.
         setTags([]);
+        setBusinessFilter((prev) => {
+          if (prev !== 'all') toast.error('Could not load tags; the business filter was cleared.');
+          return 'all';
+        });
       });
   }, [householdId]);
 
@@ -751,6 +760,13 @@ function LedgerTable() {
           >
             Taxes excluded ✕
           </Button>
+        ) : null}
+        {businesses.length > 0 && entityLens !== null && businessFilter === entityLens ? (
+          <span className="text-xs text-muted-foreground">
+            The entity switcher already narrows to this entity&apos;s accounts, so this shows
+            only its own accounts&apos; transactions. Switch to All entities to see what it
+            paid for from personal accounts.
+          </span>
         ) : null}
         {businesses.length > 0 ? (
           <Select

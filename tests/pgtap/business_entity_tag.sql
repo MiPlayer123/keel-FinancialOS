@@ -15,7 +15,7 @@
 -- recreates (keel_tag_assign, keel_tag_delete) call it.
 
 begin;
-select plan(48);
+select plan(62);
 
 -- ---------------------------------------------------------------------------
 -- Minimal schema
@@ -170,6 +170,12 @@ insert into public.canonical_transactions
    'e1111111-1111-1111-1111-111111111111', 'posted', 'sync', 'Client lunch', '2026-08-02', null),
   ('11111111-0000-0000-0000-000000000003', '11111111-1111-1111-1111-111111111111',
    'e1111111-1111-1111-1111-111111111111', 'posted', 'sync', 'Voided row', '2026-08-03', now()),
+  ('11111111-0000-0000-0000-000000000004', '11111111-1111-1111-1111-111111111111',
+   'e1111111-1111-1111-1111-111111111111', 'posted', 'sync', 'Untouched row', '2026-08-04', null),
+  ('11111111-0000-0000-0000-000000000005', '11111111-1111-1111-1111-111111111111',
+   'e1111111-1111-1111-1111-111111111111', 'posted', 'sync', 'Second untouched row', '2026-08-05', null),
+  ('11111111-0000-0000-0000-000000000006', '11111111-1111-1111-1111-111111111111',
+   'e1111111-1111-1111-1111-111111111111', 'posted', 'sync', 'Voided row for adoption', '2026-08-06', now()),
   ('22222222-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222222',
    'e5555555-5555-5555-5555-555555555555', 'posted', 'sync', 'Foreign txn', '2026-08-01', null);
 
@@ -520,19 +526,69 @@ select is(
   'G3 the refused adoption did not bind the tag'
 );
 
--- Adoption IS allowed when the tag sits only on unattributed transactions.
+-- Adoption IS allowed when the tag sits only on transactions with no business.
+-- This assertion is the reason the guard cannot simply refuse any tag that
+-- carries assignments: mutation testing showed an over-broad guard (dropping
+-- `other.entity_id is not null`) passing the whole suite without it.
+insert into public.tags (household_id, name)
+  values ('11111111-1111-1111-1111-111111111111', 'Delta Works');
 insert into public.transaction_tags (canonical_transaction_id, tag_id, household_id)
-  select '11111111-0000-0000-0000-000000000001',
-         t.id,
-         '11111111-1111-1111-1111-111111111111'
+  select '11111111-0000-0000-0000-000000000001', t.id, '11111111-1111-1111-1111-111111111111'
     from public.tags t
    where t.household_id = '11111111-1111-1111-1111-111111111111'
-     and t.name = 'Reimbursable-2';
+     and t.name in ('Delta Works', 'Reimbursable-2');
+insert into public.entities (id, household_id, name, kind) values
+  ('eaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '11111111-1111-1111-1111-111111111111',
+   'Delta Works', 'sole_prop');
+
 select is(
   public._try($$select public.keel_entity_business_tag_ensure(
-    '11111111-1111-1111-1111-111111111111', 'e9999999-9999-9999-9999-999999999999')$$),
-  'P0009',
-  'G4 still refused while the clashing transaction stands (guard is on the tag, not the caller)'
+    '11111111-1111-1111-1111-111111111111', 'eaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')$$),
+  'ok',
+  'G4 adoption SUCCEEDS when the tag only sits on transactions with no business'
+);
+
+select is(
+  (select count(*)::text from public.tags
+    where household_id = '11111111-1111-1111-1111-111111111111' and name = 'Delta Works'),
+  '1',
+  'G5 the adopted tag was bound, not duplicated'
+);
+
+select is(
+  (select (t.entity_id = 'eaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')::text from public.tags t
+    where t.household_id = '11111111-1111-1111-1111-111111111111' and t.name = 'Delta Works'),
+  'true',
+  'G6 adoption bound the existing tag to the entity'
+);
+
+select is(
+  (select after->>'assignments' from public.audit_log
+    where action = 'tags.bind_entity' order by id desc limit 1),
+  '1',
+  'G7 the bind audit records how many transactions the adoption retro-attributed'
+);
+
+-- A stale business tag on a VOIDED transaction must not block an unrelated
+-- adoption: the front door refuses to clear a voided row, so that block would
+-- be unliftable.
+insert into public.tags (household_id, name)
+  values ('11111111-1111-1111-1111-111111111111', 'Omega Works');
+insert into public.transaction_tags (canonical_transaction_id, tag_id, household_id)
+  select '11111111-0000-0000-0000-000000000006', t.id, '11111111-1111-1111-1111-111111111111'
+    from public.tags t
+   where t.household_id = '11111111-1111-1111-1111-111111111111' and t.name = 'Omega Works';
+insert into public.transaction_tags (canonical_transaction_id, tag_id, household_id)
+  select '11111111-0000-0000-0000-000000000006', t.id, '11111111-1111-1111-1111-111111111111'
+    from public.tags t where t.entity_id = 'e2222222-2222-2222-2222-222222222222';
+insert into public.entities (id, household_id, name, kind) values
+  ('ebbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '11111111-1111-1111-1111-111111111111',
+   'Omega Works', 'sole_prop');
+select is(
+  public._try($$select public.keel_entity_business_tag_ensure(
+    '11111111-1111-1111-1111-111111111111', 'ebbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb')$$),
+  'ok',
+  'G8 a clash on a VOIDED transaction does not block adoption (it could never be cleared)'
 );
 
 -- ---------------------------------------------------------------------------
@@ -649,15 +705,125 @@ select is(
 );
 
 -- ---------------------------------------------------------------------------
+-- L. Guards the earlier suite left unpinned (found by mutation testing the
+--    review fixes: reverting each of these passed 48/48).
+-- ---------------------------------------------------------------------------
+
+-- L1: attributing a row that had NO business must audit an EMPTY before-image,
+-- not a null one. jsonb_agg over zero rows returns SQL NULL; the coalesce is
+-- what makes the record readable.
+do $$ begin perform public.keel_transaction_set_business(
+  '11111111-1111-1111-1111-111111111111',
+  '11111111-0000-0000-0000-000000000004',
+  'e2222222-2222-2222-2222-222222222222'); end $$;
+select is(
+  (select before->>'entityIds' from public.audit_log
+    where action = 'transaction.set_business'
+      and object_id = '11111111-0000-0000-0000-000000000004'
+    order by id desc limit 1),
+  '[]',
+  'L1 a first attribution audits an empty before-image, never null'
+);
+
+-- L2: the write-role gate on the tag picker's business path. The front door
+-- refuses a viewer; the side door must too, or the gate is decorative.
+select public._act('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb');
+select is(
+  public._try(format($$select public.keel_tag_assign(
+    '11111111-1111-1111-1111-111111111111',
+    '11111111-0000-0000-0000-000000000002', %L, true)$$,
+    (select id from public.tags where entity_id = 'e2222222-2222-2222-2222-222222222222'))),
+  'P0005',
+  'L2 a viewer cannot attribute a business through the tag picker either'
+);
+
+select is(
+  public._try(format($$select public.keel_tag_assign(
+    '11111111-1111-1111-1111-111111111111',
+    '11111111-0000-0000-0000-000000000002', %L, false)$$,
+    (select id from public.tags where entity_id = 'e2222222-2222-2222-2222-222222222222'))),
+  'P0005',
+  'L3 a viewer cannot DESTROY an attribution through the tag picker either'
+);
+
+select is(
+  public._try(format($$select public.keel_tag_assign(
+    '11111111-1111-1111-1111-111111111111',
+    '11111111-0000-0000-0000-000000000002', %L, true)$$,
+    (select id from public.tags where name = 'Reimbursable-2'))),
+  'ok',
+  'L4 a viewer''s ORDINARY tagging is unchanged (no drift from 20260713120000)'
+);
+select public._act('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa');
+
+-- L5: archived businesses are closed books through BOTH doors.
+update public.entities set archived_at = now()
+  where id = 'e3333333-3333-3333-3333-333333333333';
+select is(
+  public._try(format($$select public.keel_tag_assign(
+    '11111111-1111-1111-1111-111111111111',
+    '11111111-0000-0000-0000-000000000005', %L, true)$$,
+    (select id from public.tags where entity_id = 'e3333333-3333-3333-3333-333333333333'))),
+  'P0009',
+  'L5 an archived business cannot take new expenses through the tag picker'
+);
+
+select is(
+  (select count(*)::text from public.transaction_tags
+    where canonical_transaction_id = '11111111-0000-0000-0000-000000000005'),
+  '0',
+  'L6 the archived refusal wrote nothing (it is not the ambiguity guard firing)'
+);
+update public.entities set archived_at = null
+  where id = 'e3333333-3333-3333-3333-333333333333';
+
+-- L6: unbind records WHICH transactions it released, so the unbind-then-delete
+-- path stays reconstructible (a count cannot rebuild it, a list can).
+do $$ begin perform public.keel_entity_business_tag_unbind(
+  '11111111-1111-1111-1111-111111111111', 'e2222222-2222-2222-2222-222222222222'); end $$;
+select is(
+  (select jsonb_typeof(before->'transactionIds') from public.audit_log
+    where action = 'tags.unbind_entity' order by id desc limit 1),
+  'array',
+  'L7 unbind audits the transaction ids it released, not just a count'
+);
+
+select is(
+  (select jsonb_array_length(before->'transactionIds') > 0 from public.audit_log
+    where action = 'tags.unbind_entity' order by id desc limit 1)::text,
+  'true',
+  'L8 and that list is not empty when the business owned transactions'
+);
+
+-- ---------------------------------------------------------------------------
 -- F. The read model
 -- ---------------------------------------------------------------------------
 select is(
   (select x->>'entityId'
      from jsonb_array_elements(
        public.keel_list_tags('11111111-1111-1111-1111-111111111111')) x
-    where x->>'name' = 'Acme LLC'),
-  'e2222222-2222-2222-2222-222222222222',
+    where x->>'name' = 'Beta Studio'),
+  'e3333333-3333-3333-3333-333333333333',
   'F1 tags.list carries entityId so the client can derive business attribution'
+);
+
+select is(
+  (select x->>'entityId'
+     from jsonb_array_elements(
+       public.keel_list_tags('11111111-1111-1111-1111-111111111111')) x
+    where x->>'name' = 'Acme LLC'),
+  null,
+  'F2 an UNBOUND tag reports a null entityId, so the client stops treating it as a business'
+);
+
+select is(
+  (select count(*)::text
+     from jsonb_array_elements(
+       public.keel_list_tags('11111111-1111-1111-1111-111111111111')) x
+    where x->>'entityId' is null),
+  (select count(*)::text from public.tags
+    where household_id = '11111111-1111-1111-1111-111111111111' and entity_id is null),
+  'F3 every unbound tag is reported as unbound'
 );
 
 select * from finish();

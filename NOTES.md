@@ -2,6 +2,85 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+## 2026-08-31 Business attribution: second review round, and applied to the live project
+
+Two more adversarial reviews (one re-reviewing the SQL with mutation testing, one
+on the client and API). Both found real defects; all are fixed.
+
+Blocking, from the SQL re-review:
+- `keel_tag_assign` had no write-role gate. It has only ever checked MEMBERSHIP,
+  which was defensible while it moved presentation labels around; this migration
+  turned it into a business-attribution command and kept the weaker gate, so a
+  read-only VIEWER could set and clear attribution through it while the front
+  door refused them (Law 7, privileged side door). Now asserts write role on the
+  business path; ordinary tagging is deliberately unchanged.
+- Two business tags on one transaction were still reachable: `keel_tag_assign`
+  read its guard on a snapshot and inserted without a lock, so two concurrent
+  calls each saw "no business". It now takes the same row lock
+  `keel_transaction_set_business` does, which also closes the mixed
+  set_business-vs-tag_assign race and (separately) the adoption-vs-set_business
+  race, by locking the rows adoption is about to re-attribute.
+- The archived-entity door mismatch, same shape as the voided one fixed in the
+  first round: `ensure` refuses an archived entity, `keel_tag_assign` did not.
+
+Also: the adoption guard reported a false clash on VOIDED transactions, which was
+unliftable because the front door refuses to clear a voided row; unbind now
+records WHICH transactions it released, not just a count, because
+unbind-then-delete is a two-call path around the delete guard and a count cannot
+rebuild what the cascade destroyed.
+
+**Test-suite honesty.** Mutation testing showed the previous round's claim that
+"each fix has a test that fails without it" was wrong for three of six fixes:
+reverting the lock, the concurrency early-return, and the coalesce'd before-image
+all left 48/48 green. Worse, one assertion (G4) asserted the OPPOSITE of its own
+comment and was a duplicate of G1, so nothing checked that adoption ever
+SUCCEEDS — an over-broad guard refusing every adoption passed the suite. The
+suite is now 62 assertions and every guard was mutation-tested individually: each
+one, when removed, fails the suite. Two more assertions were found to be passing
+for the wrong reason (the archived guard was firing the ambiguity guard; the
+voided guard was firing the ambiguity guard) and were given isolated fixtures.
+Still NOT covered, and single-session pgTAP cannot cover it: concurrency. The
+locks were verified by the reviewing agent with two live sessions.
+
+From the client review: two write lanes shared one pending-write slot, so closing
+the dialog could refetch before a business write landed and leave the register
+showing the row as personal; `businessBusy` was not reset on row switch and its
+failure toast was not keyed to the transaction it was for; the tag manager still
+offered Delete on business tags with the DB's helpful refusal swallowed by
+`mapDbError` into "Invalid command."; a `tags.list` failure silently emptied
+attribution while the facet kept claiming to filter on it; the badge was
+`shrink-0` with no truncate and would take the whole row at 390px for a real
+legal name (the earlier UI check used short fixture names and missed it); and the
+account register did not pass `businessNames`, so the same transaction showed a
+badge on one screen and a #chip on the other.
+
+The tag manager now offers **Unbind** instead of Delete for a business tag, which
+gives `keel_entity_business_tag_unbind` its first UI caller and makes the
+reversible correction reachable without hand SQL (Law 2). The multi-business
+picker is now a real `radiogroup` rather than a row of `aria-pressed` toggles,
+and a business the entity list does not contain renders as "Other business"
+rather than as an unselected chip — in the single-business shape that had read as
+OFF, so one click would have silently re-attributed the row.
+
+Known, deliberately not fixed here: `keel_tag_assign` still has only a membership
+gate for ORDINARY tags (pre-existing since 20260713120000; tightening it is a
+behaviour change outside this slice). `packages/exports` still has no
+schema-to-manifest drift test, which is how the export gap survived. The entity
+lens and the Business facet still intersect rather than compose — disclosed in
+the UI, properly resolved by S3's authorization compiler.
+
+**Applied to the live project** (`yrbteeownwjhcushwaga`) via the Supabase MCP, per
+the CLAUDE.md directive that migrations go straight to the cloud project. Before
+applying, the live definitions of the three recreated functions were diffed
+against 20260713120000 to confirm no production drift. Behaviour was then verified
+ON the live schema, roles and data by running the assertions inside a block that
+ends in a deliberate RAISE, so the whole transaction aborts: 12 assertions on the
+first pass (including multi-business paths, using a fictional second entity
+created inside the aborting transaction) and 6 on the review fixes, all passing,
+with tags/transaction_tags/audit counts confirmed unchanged afterward. The write
+path is read-only through `execute_sql`, so this abort-on-purpose pattern is the
+only way to exercise writes against production without leaving data behind.
+
 ## 2026-08-31 Business expense attribution, layer 1 (S1 + S2)
 
 Built the entity-bound business tag from `docs/BUSINESS-EXPENSE-RESEARCH.md` §4

@@ -120,6 +120,32 @@ export function businessTagNames(tags: TagRow[], entities: EntityRow[]): Map<str
 }
 
 /**
+ * Split a row's tags into "the business it belongs to" and "everything else",
+ * given the tagId -> business-name map from businessTagNames.
+ *
+ * This is the shape a transaction ROW needs, and it lives here rather than
+ * inline in the row component so the rendering path is covered by the same
+ * tests as the rest of the derivation: a badge that silently stops rendering
+ * is exactly the regression unit tests should catch.
+ *
+ * `businessName` is undefined when the row belongs to no business, or when the
+ * caller passed no map (a surface that has not loaded the tag list). In that
+ * second case every tag stays in `plainTags`, so a business tag degrades to an
+ * ordinary #chip rather than disappearing from the row entirely.
+ */
+export function splitRowTags(
+  row: TaggedRow,
+  businessNames: Map<string, string> | undefined,
+): { businessName: string | undefined; plainTags: { tagId: string; name: string }[] } {
+  const tags = row.tags ?? [];
+  if (!businessNames) return { businessName: undefined, plainTags: tags };
+  return {
+    businessName: tags.map((t) => businessNames.get(t.tagId)).find((n) => n !== undefined),
+    plainTags: tags.filter((t) => !businessNames.has(t.tagId)),
+  };
+}
+
+/**
  * Tags to show in the ordinary tag picker: business tags are excluded, because
  * they are set through the Business control instead. Assigning one by hand
  * still works at the database level (and is guarded there against a second

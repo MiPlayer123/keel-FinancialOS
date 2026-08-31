@@ -67,6 +67,12 @@ create unique index if not exists tags_business_entity_unique
 --     the two-business state that keel_tag_assign refuses and
 --     keel_transaction_set_business is built to make impossible — silently,
 --     in bulk, and with no per-transaction audit. Refused at the door.
+--
+--     VOIDED transactions are excluded from the clash check: a voided row is on
+--     nobody's books (same rule as keel_transaction_set_business and the
+--     keel_tag_assign guard), so a stale business tag on one must not block an
+--     unrelated adoption the user cannot then unblock — the front door refuses
+--     to clear a voided row at all.
 -- ---------------------------------------------------------------------------
 create or replace function public.keel_assert_adoptable_business_tag(
   p_tag_id uuid,
@@ -79,8 +85,21 @@ as $$
 declare
   v_clash text;
 begin
+  -- Lock every transaction this adoption would re-attribute, BEFORE reading
+  -- their current attribution. Without the lock the guard reads a snapshot and
+  -- a concurrent keel_transaction_set_business can attribute one of these rows
+  -- between the read and the update, leaving two businesses on it.
+  perform 1
+     from public.canonical_transactions c
+     join public.transaction_tags tt on tt.canonical_transaction_id = c.id
+    where tt.tag_id = p_tag_id and c.voided_at is null
+    order by c.id
+      for update of c;
+
   select other.name into v_clash
     from public.transaction_tags mine
+    join public.canonical_transactions c
+      on c.id = mine.canonical_transaction_id and c.voided_at is null
     join public.transaction_tags theirs
       on theirs.canonical_transaction_id = mine.canonical_transaction_id
      and theirs.tag_id <> mine.tag_id
@@ -256,6 +275,7 @@ declare
   v_tag_id uuid;
   v_name text;
   v_uses int;
+  v_txns jsonb;
 begin
   perform public.keel_assert_member_write(p_household_id);
 
@@ -267,7 +287,12 @@ begin
     return null;
   end if;
 
-  select count(*)::int into v_uses
+  -- Record WHICH transactions this business owned, not just how many.
+  -- keel_tag_delete cascades transaction_tags away, so unbind-then-delete is a
+  -- two-call path to destroying every attribution; a count cannot rebuild that,
+  -- a list can. Law 2: the audit has to be enough to reverse the change.
+  select count(*)::int, coalesce(jsonb_agg(tt.canonical_transaction_id order by tt.canonical_transaction_id), '[]'::jsonb)
+    into v_uses, v_txns
     from public.transaction_tags tt where tt.tag_id = v_tag_id;
 
   update public.tags set entity_id = null where id = v_tag_id;
@@ -275,7 +300,8 @@ begin
   insert into public.audit_log (household_id, actor, action, object_type, object_id, before, after)
   values (p_household_id, jsonb_build_object('kind', 'user', 'userId', v_uid),
           'tags.unbind_entity', 'tag', v_tag_id,
-          jsonb_build_object('entityId', p_entity_id, 'name', v_name, 'assignments', v_uses),
+          jsonb_build_object('entityId', p_entity_id, 'name', v_name,
+                             'assignments', v_uses, 'transactionIds', v_txns),
           jsonb_build_object('entityId', null));
 
   return v_tag_id;
@@ -397,6 +423,10 @@ grant execute on function public.keel_transaction_set_business(uuid, uuid, uuid)
 --    picker (so "#Acme LLC" is visible on the row like any other label), but a
 --    SECOND business tag makes the transaction's business ambiguous.
 --
+--    On the business path this proc now also enforces the write role and takes
+--    the same row lock as keel_transaction_set_business, so the two doors agree
+--    on who may write and cannot race each other. Ordinary tags are untouched.
+--
 --    Quicken reports that state as "Unknown Business". KEEL refuses it: this
 --    attribution feeds a tax artifact, and silent ambiguity there violates the
 --    explicit-ownership invariant. The user is pointed at splits, which is the
@@ -417,6 +447,7 @@ as $$
 declare
   v_changed integer;
   v_entity_id uuid;
+  v_entity_archived timestamptz;
   v_other text;
 begin
   if auth.uid() is null then
@@ -434,8 +465,9 @@ begin
   ) then
     raise exception 'KEEL_NOT_FOUND: transaction' using errcode = 'P0006';
   end if;
-  select t.entity_id into v_entity_id
+  select t.entity_id, e.archived_at into v_entity_id, v_entity_archived
     from public.tags t
+    left join public.entities e on e.id = t.entity_id
    where t.id = p_tag_id and t.household_id = p_household_id;
   if not found then
     raise exception 'KEEL_NOT_FOUND: tag' using errcode = 'P0006';
@@ -443,7 +475,24 @@ begin
 
   -- Business-tag rules (20260831120000). Only the business path is tightened;
   -- ordinary tags keep the 20260713120000 behaviour exactly, including on
-  -- voided rows.
+  -- voided rows and for whatever role this proc has always allowed.
+  if v_entity_id is not null then
+    -- Write-role gate. This proc has only ever checked MEMBERSHIP, which was
+    -- defensible while it only moved presentation labels around. It now writes
+    -- business attribution — a tax artifact — so on that path it must enforce
+    -- what keel_transaction_set_business enforces, or the front door refuses a
+    -- viewer (P0005) while the door beside it accepts the identical write
+    -- (Law 7: no privileged side doors). Assign AND unassign: destroying an
+    -- attribution is as much a write as creating one.
+    perform public.keel_assert_member_write(p_household_id);
+
+    -- Serialize against keel_transaction_set_business and against another
+    -- concurrent assign. The guard below reads which businesses the row already
+    -- has; without the lock that read is a snapshot, and two sessions can each
+    -- see "no business" and each insert a different one.
+    perform 1 from public.canonical_transactions where id = p_txn_id for update;
+  end if;
+
   if p_assigned and v_entity_id is not null then
     -- A voided transaction is not on anyone's books. keel_transaction_set_business
     -- refuses one, and it must not be reachable through the side door either:
@@ -454,6 +503,14 @@ begin
        where id = p_txn_id and voided_at is not null
     ) then
       raise exception 'KEEL_INVALID_COMMAND: a voided transaction cannot belong to a business'
+        using errcode = 'P0009';
+    end if;
+    -- Same mismatch, other axis: keel_entity_business_tag_ensure refuses an
+    -- archived entity, so the front door cannot book new expenses into closed
+    -- books. This door must not either.
+    if v_entity_archived is not null then
+      raise exception
+        'KEEL_INVALID_COMMAND: that business is archived; reopen it before attributing expenses to it'
         using errcode = 'P0009';
     end if;
     select t.name into v_other

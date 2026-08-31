@@ -48,6 +48,7 @@ import {
   type TagRow,
   type TrialBalanceRow,
 } from '@/lib/keel-api';
+import { businessTagNames } from '@/lib/business-tags';
 import { relativeSyncLabel } from '@/lib/relative-date';
 import { utilizationPercent } from '@/lib/credit-utilization';
 import { resolveEditingAfterSave } from '@/lib/txn-edit-guard';
@@ -224,6 +225,10 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
   const [tags, setTags] = useState<TagRow[]>([]);
   const [goals, setGoals] = useState<GoalRow[]>([]);
   const [entities, setEntities] = useState<EntityRow[]>([]);
+  // Same badge as the ledger register: without this the account page showed a
+  // business as a plain #chip, and its edit dialog then offered no such tag
+  // (business tags are steered by the Business control, not the tag picker).
+  const businessNames = useMemo(() => businessTagNames(tags, entities), [tags, entities]);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<RichTransactionRow | null>(null);
   // F-010: one full-height right-side detail sheet, same surface as the ledger
@@ -843,6 +848,7 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
               <VirtualTxnList
                 rows={accountTxns}
                 categories={categories}
+                businessNames={businessNames}
                 running={runningByTxn}
                 selecting={false}
                 selected={EMPTY_SELECTION}

@@ -29,14 +29,28 @@ export function BusinessToggle({
   value,
   onChange,
   disabled = false,
+  labelledBy,
 }: {
   businesses: BusinessEntity[];
   /** Currently attributed entity id, or null for personal. */
   value: string | null;
   onChange: (entityId: string | null) => void;
   disabled?: boolean;
+  /** id of the visible label, so the group is announced with its name. */
+  labelledBy?: string | undefined;
 }) {
-  if (businesses.length === 0) return null;
+  // A row can be attributed to a business the list does not contain — an
+  // archived one, or a stale entity fetch. Rendering that as "no chip selected"
+  // would be a lie the user can act on: in the single-business shape the one
+  // chip reads OFF, so a single click silently RE-attributes the row from the
+  // invisible business to the visible one. Surface it instead.
+  const known = businesses.some((b) => b.entityId === value);
+  const options: BusinessEntity[] =
+    value !== null && !known
+      ? [...businesses, { entityId: value, name: 'Other business', tagId: null }]
+      : businesses;
+
+  if (options.length === 0) return null;
 
   const base =
     'rounded-full border px-2.5 py-0.5 text-xs transition-colors disabled:opacity-50' +
@@ -45,7 +59,7 @@ export function BusinessToggle({
   const on = 'border-foreground/40 bg-secondary text-foreground';
   const off = 'border-dashed border-border text-muted-foreground hover:text-foreground';
 
-  const only = businesses.length === 1 ? businesses[0] : undefined;
+  const only = options.length === 1 ? options[0] : undefined;
   if (only) {
     const active = value === only.entityId;
     return (
@@ -64,12 +78,20 @@ export function BusinessToggle({
     );
   }
 
+  // Exclusive choice, so radio semantics rather than a row of toggle buttons:
+  // aria-pressed would announce each chip independently with nothing saying
+  // they are one set.
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div
+      role="radiogroup"
+      aria-labelledby={labelledBy}
+      className="flex flex-wrap items-center gap-1.5"
+    >
       <button
         type="button"
+        role="radio"
         disabled={disabled}
-        aria-pressed={value === null}
+        aria-checked={value === null}
         className={`${base} ${value === null ? on : off}`}
         onClick={() => {
           onChange(null);
@@ -77,14 +99,15 @@ export function BusinessToggle({
       >
         Personal
       </button>
-      {businesses.map((business) => {
+      {options.map((business) => {
         const active = value === business.entityId;
         return (
           <button
             key={business.entityId}
             type="button"
+            role="radio"
             disabled={disabled}
-            aria-pressed={active}
+            aria-checked={active}
             className={`inline-flex items-center gap-1.5 ${base} ${active ? on : off}`}
             onClick={() => {
               onChange(active ? null : business.entityId);

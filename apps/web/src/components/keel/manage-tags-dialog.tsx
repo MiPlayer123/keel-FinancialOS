@@ -1,10 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { Check, Loader2, Pencil, Trash2, X } from 'lucide-react';
+import { Check, Link2Off, Loader2, Pencil, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { saveTag, deleteTag, type TagRow } from '@/lib/keel-api';
+import { saveTag, deleteTag, unbindBusinessTag, type TagRow } from '@/lib/keel-api';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -20,6 +20,13 @@ import { Input } from '@/components/ui/input';
  * Rename or delete tags. Deleting removes the tag from every transaction
  * (server-side cascade, audited with the assignment count) — the usage count
  * shown next to each tag is the blast radius.
+ *
+ * A BUSINESS tag (20260831120000) is shown here too, but its destructive action
+ * is Unbind, not Delete: deleting it would un-attribute every transaction that
+ * business owns, and the database refuses it outright. Unbind is the reversible
+ * correction — the tag and all its assignments survive, they just stop counting
+ * as that business's — and this is the only place in the UI that offers it, so
+ * choosing the wrong entity is repairable without hand-written SQL (Law 2).
  */
 export function ManageTagsDialog({
   open,
@@ -64,6 +71,20 @@ export function ManageTagsDialog({
     }
   }
 
+  async function unbind(tag: TagRow) {
+    if (!householdId || !tag.entityId) return;
+    setBusyId(tag.tagId);
+    try {
+      await unbindBusinessTag({ householdId, entityId: tag.entityId });
+      setConfirmingId(null);
+      onMutated();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not unbind the tag.');
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function remove(tag: TagRow) {
     if (!householdId) return;
     setBusyId(tag.tagId);
@@ -89,8 +110,9 @@ export function ManageTagsDialog({
         <DialogHeader>
           <DialogTitle>Manage tags</DialogTitle>
           <DialogDescription>
-            Rename a tag everywhere it&apos;s used, or delete it — deleting removes it
-            from every transaction.
+            Rename a tag everywhere it&apos;s used, or delete it: deleting removes it from
+            every transaction. A business tag can be unbound instead, which leaves the tag
+            and its transactions alone and only stops them counting as that business&apos;s.
           </DialogDescription>
         </DialogHeader>
         <div className="max-h-80 space-y-1 overflow-y-auto">
@@ -145,21 +167,32 @@ export function ManageTagsDialog({
                 </>
               ) : confirmingId === t.tagId ? (
                 <>
-                  <span className="min-w-0 flex-1 truncate text-sm">
-                    Remove <span className="font-medium">#{t.name}</span> from{' '}
-                    {String(t.usageCount)} transaction{t.usageCount === 1 ? '' : 's'}?
+                  <span className="min-w-0 flex-1 text-sm">
+                    {t.entityId ? (
+                      <>
+                        Stop counting {String(t.usageCount)} transaction
+                        {t.usageCount === 1 ? '' : 's'} as this business? The tag stays on
+                        them.
+                      </>
+                    ) : (
+                      <>
+                        Remove <span className="font-medium">#{t.name}</span> from{' '}
+                        {String(t.usageCount)} transaction{t.usageCount === 1 ? '' : 's'}?
+                      </>
+                    )}
                   </span>
                   <Button
-                    variant="destructive"
+                    variant={t.entityId ? 'secondary' : 'destructive'}
                     size="sm"
                     className="h-7 text-xs"
                     disabled={busyId === t.tagId}
                     onClick={() => {
-                      void remove(t);
+                      if (t.entityId) void unbind(t);
+                      else void remove(t);
                     }}
                   >
                     {busyId === t.tagId ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                    Delete
+                    {t.entityId ? 'Unbind' : 'Delete'}
                   </Button>
                   <Button
                     variant="ghost"
@@ -174,7 +207,14 @@ export function ManageTagsDialog({
                 </>
               ) : (
                 <>
-                  <span className="min-w-0 flex-1 truncate text-sm">#{t.name}</span>
+                  <span className="min-w-0 flex-1 truncate text-sm">
+                    {t.entityId ? t.name : `#${t.name}`}
+                  </span>
+                  {t.entityId ? (
+                    <span className="shrink-0 rounded-full border border-border px-1.5 py-px text-[0.7rem] text-muted-foreground">
+                      Business
+                    </span>
+                  ) : null}
                   <span className="shrink-0 text-xs text-muted-foreground">
                     {String(t.usageCount)} txn{t.usageCount === 1 ? '' : 's'}
                   </span>
@@ -193,13 +233,24 @@ export function ManageTagsDialog({
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    aria-label={`Delete ${t.name}`}
+                    aria-label={
+                      t.entityId ? `Unbind ${t.name} from its business` : `Delete ${t.name}`
+                    }
+                    title={
+                      t.entityId
+                        ? 'Unbind from the business (the tag and its transactions stay)'
+                        : undefined
+                    }
                     onClick={() => {
                       setConfirmingId(t.tagId);
                       setEditingId(null);
                     }}
                   >
-                    <Trash2 className="size-3.5" />
+                    {t.entityId ? (
+                      <Link2Off className="size-3.5" />
+                    ) : (
+                      <Trash2 className="size-3.5" />
+                    )}
                   </Button>
                 </>
               )}
