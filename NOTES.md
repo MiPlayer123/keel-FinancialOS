@@ -121,9 +121,16 @@ the design refuses; `ensure` raised a false error when a concurrent call had
 already bound the same entity; concurrent `set_business` left two tags; the clear
 audit recorded only the first attribution removed; and a bound tag could be
 neither unbound nor deleted, making a wrong bind repairable only by hand SQL.
-There is still no schema-to-manifest drift test in `packages/exports` — the
-manifest's own comment claims additions "fail completeness checks until ruled",
-and they do not. Worth building; not built here.
+Correction (CI caught it): the drift check the manifest's comment refers to DOES
+exist, at the SQL layer — `supabase/tests/008_export.sql` test 13 keeps its own
+allow/omit list per exported table and fails when any live column is on neither.
+It failed on this branch because `tags.entity_id` was added to
+`packages/exports/src/manifest.ts` but not to that mirror. So the earlier claim
+here that "no drift test exists" was wrong. The real gap is narrower: nothing
+verifies that the pgTAP mirror and `manifest.ts` agree with EACH OTHER, so
+listing a column in one and forgetting the other still ships a silently
+truncated export. A cross-check between the two is worth building; not built
+here.
 
 Testing, and its limits. No Docker daemon and no Supabase CLI in this
 environment, so the local stack could not run.
