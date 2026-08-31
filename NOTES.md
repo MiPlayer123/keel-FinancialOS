@@ -2,6 +2,84 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+## 2026-08-31 Balance snapshot write amplification, phase 1 (stop writing repeats)
+
+`docs/BALANCE-SNAPSHOT-COMPACTION.md` §3 phase 1, shipped as
+`supabase/migrations/20260831190000_balance_snapshot_dedupe.sql` and applied to the live
+project.
+
+Measured problem: `keel-drain-sync` runs every 3 minutes and
+`keel_apply_account_balance` wrote a `balance_snapshots` row per account per cycle
+whether or not the balance moved. 186,943 rows across 16 snapshot-bearing accounts,
+~50 MB, 26% of the database, +4,320 rows/day, 99.94% of them exact repeats of their
+predecessor. `keel_latest_balances` and `keel_investments_overview` both do
+`distinct on (account_id) ... order by as_of desc`, which has no index-skip scan, so
+their cost is linear in snapshot count: EXPLAIN showed 186,889 rows and 87,233 buffers
+scanned to return 10 rows in 2.06 s.
+
+What shipped: the INSERT is now wrapped in a NULL-safe comparison against the newest row
+of that account's `source='plaid'` series (`current_minor`, `available_minor`,
+`limit_minor`, `currency`, `snapshot_metadata`), plus a new
+`accounts.balance_last_observed_at` written every cycle regardless.
+
+Three things the adversarial audit of the proposal changed, all of which would have been
+defects if the obvious version had shipped:
+
+1. **The guard wraps only the INSERT, not the function.** `keel_apply_account_balance`
+   runs mask backfill -> snapshot insert -> `last_successful_sync_at` gate (returns) ->
+   opening-balance-exists check (returns) -> book the anchor. An early `return` on
+   "nothing changed" would strand the anchor permanently for any account linked while its
+   balance is static: insert once, return early because the first sync had not completed,
+   then return early forever because the value never moved. Two live accounts have gone
+   43+ days without a value change, so this was reachable. pgTAP test 26 is exactly this
+   sequence, and the `early_return` mutation proves the test catches it.
+2. **Comparison is `is distinct from`, not `=`.** 149,481 of the live rows have a null
+   `limit_minor` and 43,609 a null `available_minor`. Over the real table `=` identifies
+   20.0% of rows as duplicates and `is not distinct from` identifies 99.94%; written with
+   `=` this migration would have kept four fifths of the amplification.
+3. **Freshness is preserved, not lost.** Once repeats stop being written, a snapshot's
+   `as_of` means "when the value last CHANGED", so "unchanged since 18 July" and "not
+   checked since 18 July" become indistinguishable. `balance_last_observed_at` carries the
+   confirmation instant instead, backfilled from `max(as_of)` per account, so phase 1
+   loses no information. It advances monotonically (`greatest(...)`) because the sync
+   simulator emits delayed and out-of-order events by design.
+
+Law 6: `balance_last_observed_at` was added to `packages/exports/src/manifest.ts` AND to
+the column mirror in `supabase/tests/008_export.sql` in the same change. That mirror is
+the drift test that broke #179's CI when only the TypeScript side was updated.
+
+Testing: `tests/pgtap/balance_snapshot_dedupe.sql`, 39 assertions, run by
+`scripts/run-balance-snapshot-dedupe-pgtap.sh` against a throwaway Postgres 16 cluster.
+The runner loads the REAL prior function body sliced out of
+`20260717220000_account_mask.sql` (verified byte-identical to the live `prosrc` modulo one
+comment block: same 4,044 chars, same normalized md5), exercises the old
+row-per-cycle behaviour and asserts it, then loads the whole migration verbatim and
+asserts the new behaviour. `--mutate` breaks each of 12 guards in turn and requires the
+suite to go red; all 12 are killed.
+
+Two predicates are deliberately NOT mutation-tested because they are unkillable rather
+than untested, and both are documented in the runner: the guard's
+`bs.household_id = p_household_id` (accounts.id is a PK and balance_snapshots has a
+composite FK on (household_id, account_id), so no snapshot can disagree with its account)
+and `not v_found` (v_effective_currency is never null, so the first-ever observation
+already inserts via the currency comparison). Both are kept for readability and
+tenant-scoping convention.
+
+Two bugs found in the harness itself while writing this:
+
+- The re-runnability probe in both this runner and
+  `scripts/run-business-entity-tag-pgtap.sh` rebuilt its prelude with `'\n'.join(...)`,
+  which drops the trailing newline, so the last prelude line swallowed the first line of
+  the next file. In the business-tag runner that silently degraded the "applies twice
+  cleanly" check. Fixed in both.
+- The first `freshness rewinds` mutation only rewrote the UPDATE's SET clause; the WHERE
+  clause's own `greatest(...)` then blocked the rewind, so the mutation was DEFEATED
+  rather than survived -- which reads identically to an untested guard in the output. The
+  mutation now replaces both occurrences.
+
+Nothing is deleted here. Compaction of the existing 186k rows is phase 2 and is
+deliberately a separate change, sequenced archive-first per the audit.
+
 ## 2026-08-31 PR #179 merged, then broke in production: the deploy chain
 
 The feature 404'd for the user immediately after merge. Not a code defect —
