@@ -1,7 +1,9 @@
 # Business expense attribution: research and proposed design
 
-Status: proposal, not built. Written 2026-08-31 in response to "I want to track a
-personal expense that I should count as business, maybe a check mark."
+Status: S1 and S2 built (migration 20260831120000 + the Business control, the
+ledger badge and facet). S3 to S5 remain proposals. Written 2026-08-31 in
+response to "I want to track a personal expense that I should count as business,
+maybe a check mark."
 
 Related: `docs/PERSONA-FEEDBACK.md` §1 items 1, 3, 4; `docs/BACKEND-SURFACING-AUDIT.md`
 tier 2 item 10 and tier 3 item 14; `docs/09-KEEL-BUILD-PLAN.md` T2.1, T2.3.
@@ -100,8 +102,11 @@ one transaction. KEEL should refuse instead: block the second business tag at th
 command layer and offer split. Silent ambiguity in an attribution that feeds a tax
 artifact is not acceptable under the explicit-ownership invariant.
 
-**Mixed receipts.** Reuse splits, which already exist. Tag the business leg. Same
-answer QuickBooks gives, with machinery KEEL already has.
+**Mixed receipts.** Reuse splits. Correction found during S1 review: this does not
+work yet. `keel_cmd_set_splits` adds postings to the *same* canonical transaction
+rather than creating child rows, and `transaction_tags` is keyed on the canonical
+transaction, so there is nothing per-leg to tag. Splitting a charge between two
+businesses needs S4, and the refusal message no longer promises otherwise.
 
 **Reporting.** This is the one genuinely careful part. The entity scope currently means
 "accounts owned by this entity." It has to become "accounts owned by this entity, plus
@@ -133,8 +138,8 @@ transactions layer 2 needs to act on.
 
 | Slice | Content | Size |
 |---|---|---|
-| S1 | Migration: bind tag to entity, `keel_transaction_set_business(entity)` command, audit, grants. Property test: second business tag rejected, split offered. | small |
-| S2 | UI: checkbox / picker on the ledger row and edit dialog, plus a Business filter in the ledger. | small |
+| S1 | **Built.** Migration: bind tag to entity, `keel_transaction_set_business`, `keel_entity_business_tag_unbind`, the one-business and delete guards, audit, grants. 48 pgTAP assertions. | small |
+| S2 | **Built.** UI: the Business control in the edit dialog, a business badge on ledger rows, a Business facet in the ledger, and the `/tags/set-business` route. | small |
 | S3 | Scope compiler: entity scope includes tagged transactions. Reports, Schedule C view, per-entity tax-year export. | medium, the careful one |
 | S4 | Mixed-receipt splits: tag a split leg from the split editor. | small |
 | S5 | Layer 2: owner-paid / due-to-owner, capital account categories. | medium, separate decision |

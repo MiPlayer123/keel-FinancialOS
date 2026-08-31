@@ -2,6 +2,71 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+## 2026-08-31 Business expense attribution, layer 1 (S1 + S2)
+
+Built the entity-bound business tag from `docs/BUSINESS-EXPENSE-RESEARCH.md` §4
+(build plan T2.3). A business entity owns one tag; putting that tag on a
+transaction attributes it to that business no matter which account paid, so a
+personal-card purchase can be counted in the LLC's books. Classification only:
+no postings, no money moved. Whether the business owes the payer back stays
+layer 2 (research doc §5).
+
+- Migration `20260831120000_business_entity_tag.sql`: `tags.entity_id` with a
+  partial unique index, `keel_entity_business_tag_ensure` (idempotent bind,
+  adopting an existing unbound tag of the same name),
+  `keel_entity_business_tag_unbind`, `keel_transaction_set_business`, guards on
+  `keel_tag_assign` (one business per transaction, none on a voided row) and
+  `keel_tag_delete` (a business tag must be unbound first), and `entityId` on
+  `keel_list_tags`.
+- Deliberately did NOT widen `keel_list_transactions_rich` / `_rich_page`: every
+  row already carries its tags, so the client derives attribution from
+  (row.tags x tags.list). Those two are the largest and most-recreated read
+  models in the schema and recreating both was the main risk in the slice.
+  Server-side entity scope (accounts owned by the entity UNION transactions
+  carrying its business tag) belongs in the one authorization compiler and is
+  slice S3, not this one.
+- Deviation, recorded per CLAUDE.md: the two new definer procs are NOT handed to
+  `keel_api` the way `keel_create_entity`/`keel_list_entities` are. `keel_api`
+  holds no grant and no RLS policy on `public.tags` (20260713120000 predates the
+  `definer_all` policy loop), so the handoff would break them. They stay owned by
+  the migration role like every other proc in that file. A follow-up that adds
+  the grants and policies first could move them.
+
+Review found and fixed (adversarial subagent, reproduced against a throwaway
+Postgres): `tags.entity_id` was dropped from `admin.export_all` because
+`packages/exports` enumerates columns explicitly and projects strictly onto that
+list (Law 6 — the migration's header comment had claimed the opposite, reasoning
+from the SQL-side `keel_export_household`, which is not the surface that serves
+the export); tag adoption was a bulk back door into the two-business ambiguity
+the design refuses; `ensure` raised a false error when a concurrent call had
+already bound the same entity; concurrent `set_business` left two tags; the clear
+audit recorded only the first attribution removed; and a bound tag could be
+neither unbound nor deleted, making a wrong bind repairable only by hand SQL.
+There is still no schema-to-manifest drift test in `packages/exports` — the
+manifest's own comment claims additions "fail completeness checks until ruled",
+and they do not. Worth building; not built here.
+
+Testing, and its limits. No Docker daemon and no Supabase CLI in this
+environment, so the local stack could not run.
+- `tests/pgtap/business_entity_tag.sql`, 48 assertions, EXECUTED against a real
+  Postgres 16 via `scripts/run-business-entity-tag-pgtap.sh`, which loads the
+  whole migration file verbatim plus `keel_assert_member_write` sliced from
+  20260710210600 — the shipped SQL, not a paraphrase. The runner also applies
+  the migration twice against a scratch database and fails if the second apply
+  errors, since migrations go to the live project by hand with no
+  migration-history table.
+- `apps/web/src/lib/business-tags.test.ts`, 22 unit tests, executed.
+- `tests/integration/46-business-entity-tag.test.ts` written in house style but
+  NOT executed (needs the stack).
+- UI verified by server-rendering the real components with the built Tailwind
+  CSS and screenshotting in Chromium: 0 elements overflowing a 390px box,
+  scrollWidth exactly 390 (Law 8). The repo has no component-test tooling and
+  `apps/web/vitest.config.ts` deliberately excludes jsdom tests, so this was a
+  throwaway harness in the scratchpad rather than a committed suite.
+- Concurrency fixes (the `for update` serialization and the bind race) are NOT
+  covered by the suite: the pgTAP harness is single-session. They were verified
+  by the reviewing agent with two concurrent sessions.
+
 ## 2026-08-31 Landing copy, header density, business-expense research
 
 - Removed the em dashes from every rendered string on the public surface (`/`, `/login`,
