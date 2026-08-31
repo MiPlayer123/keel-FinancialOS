@@ -2,6 +2,53 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+## 2026-08-31 PR #179 merged, then broke in production: the deploy chain
+
+The feature 404'd for the user immediately after merge. Not a code defect —
+a deploy that silently did not happen.
+
+Chain of events: #179 merged; `ci` ran on main and FAILED on
+`tests/integration/02-commands.test.ts:49` (the first `/api/commands` call of
+the suite, 404, 151/152 passing); `deploy-functions` is gated on
+`workflow_run.conclusion == 'success'`, so it was SKIPPED; the api Edge Function
+stayed on the pre-merge version with no `/tags/set-business` route. Meanwhile
+the migration was already applied to the live project and Vercel had shipped the
+new web app. Database and browser had moved; the API had not.
+
+Recovered by re-running the failed job (the flake did not reproduce), which
+re-fired `deploy-functions`; it deployed all four functions and `api` went
+version 88 to 89 with a changed content hash. Verified against the functions
+list rather than trusting the workflow.
+
+Two fixes, because both failures were required for the outage:
+
+1. **A skipped deploy is now a failed run, not a skipped one**
+   (`deploy-functions.yml`). GitHub shows skipped runs quietly and nobody looks
+   at them; main and production drifting apart is precisely the thing that must
+   be loud. The new `guard` job fires when ci did not succeed and fails with the
+   reason and the manual deploy command. It costs a red X on an already-red
+   main, which is the point.
+
+2. **CI warms the routes the suite actually calls** (`ci.yml`). There was
+   already a warm-up for this exact flake, added after it hit main twice before
+   (runs 29552336466 / 29553427394, both green on their PRs). It polls
+   `/functions/v1/<fn>/health` for all four functions and treats any definitive
+   non-404 as warm. That was not enough: run 33420152390 passed the /health
+   warm-up and still 404'd on the first `/api/commands`. A liveness route can
+   answer while the routing the tests use is still coming up, so the warm-up now
+   also polls `api/commands` and `api/queries` with the same accept-set. Verified
+   both directions against stub servers: 404s keep waiting and then fail the job,
+   401s pass.
+
+Process lessons, recorded because both were mine:
+- Green CI on a PR is not green CI on main. They are separate runs, and on this
+  repo the second one gates the function deploy. Merging on PR-green alone left
+  a window where nothing had verified the merge commit.
+- "Migration first, then frontend" is not the whole deploy ordering. The API
+  layer deploys separately and was never checked; I asserted the ordering was
+  fine while the middle tier had not shipped at all. Check every tier that
+  deploys independently, not just the two that are easy to remember.
+
 ## 2026-08-31 Business attribution: second review round, and applied to the live project
 
 Two more adversarial reviews (one re-reviewing the SQL with mutation testing, one

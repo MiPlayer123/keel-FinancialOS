@@ -19,6 +19,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A red CI on main used to leave this workflow "skipped", which GitHub shows
+  # quietly and nobody notices. That is how PR #179 shipped: the merge landed,
+  # a known-flaky integration test failed on main, the deploy silently did not
+  # run, and production kept serving an api function with no /tags/set-business
+  # route while the database and the web app had already moved on. The feature
+  # 404'd for the user with no signal anywhere that a deploy had been skipped.
+  #
+  # main and production drifting apart is exactly the thing that must never be
+  # quiet, so a skipped deploy is now a FAILED run on main instead of a skipped
+  # one. It costs a red X on an already-red main, which is the point.
+  guard:
+    if: github.event.workflow_run.conclusion != 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: report the skipped deploy
+        run: |
+          echo "::error::CI concluded '${{ github.event.workflow_run.conclusion }}' on main, so the edge functions were NOT deployed. main and production are now out of sync: migrations apply through the Supabase integration but api/worker/webhook-provider/scheduled do not. Fix CI on main and re-run it (re-running the failed jobs is enough — this workflow fires again on completion), or deploy by hand: pnpm build:functions && supabase functions deploy api worker webhook-provider scheduled --project-ref yrbteeownwjhcushwaga"
+          exit 1
+
   deploy:
     if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
@@ -47,3 +66,9 @@ jobs:
           fi
           supabase functions deploy api worker webhook-provider scheduled \
             --project-ref yrbteeownwjhcushwaga
+      - name: record what shipped
+        run: |
+          echo "Deployed api, worker, webhook-provider, scheduled to yrbteeownwjhcushwaga" >> "$GITHUB_STEP_SUMMARY"
+          echo "from commit ${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Verify: the Edge Functions list in the Supabase dashboard should show a bumped version for all four." >> "$GITHUB_STEP_SUMMARY"
