@@ -2,7 +2,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { CATALOG_SQL, diffCatalogs, formatReport, functionDefsSql, unifiedDiff } from './live-drift.mjs';
+import {
+  CATALOG_SQL,
+  diffCatalogs,
+  formatReport,
+  functionDefsSql,
+  tablePoliciesSql,
+  tablesWithMissingPolicies,
+  unifiedDiff,
+} from './live-drift.mjs';
 
 const fn = (key, fp = 'a') => ({ kind: 'function', key, fp });
 
@@ -77,4 +85,28 @@ test('the report shows each differing function as a collapsible diff', () => {
   );
   assert.match(report, /<details><summary><code>public\.keel_goal_save\(uuid\)<\/code>/);
   assert.match(report, /```diff\n-old\n\+new\n```/);
+});
+
+test('missing policies are grouped by their table', () => {
+  const missing = [
+    { kind: 'policy', key: 'public.budgets.budgets_export', fp: 'x' },
+    { kind: 'policy', key: 'public.budgets.budgets_member_read', fp: 'x' },
+    { kind: 'policy', key: 'public.category_rules.category_rules_export', fp: 'x' },
+    fn('public.f()'),
+  ];
+  assert.deepEqual(tablesWithMissingPolicies(missing), ['public.budgets', 'public.category_rules']);
+  assert.match(tablePoliciesSql(['public.budgets']), /in \('public\.budgets'\)/);
+});
+
+test('the report lists the policies production has on those tables', () => {
+  const report = formatReport(
+    { missing: [{ kind: 'policy', key: 'public.budgets.budgets_export', fp: 'x' }], differs: [] },
+    { expectedCount: 1, liveCount: 1, livePolicies: [{ table: 'public.budgets', policy: 'budgets_read', cmd: 'SELECT', roles: 'authenticated' }] },
+  );
+  assert.match(report, /`public\.budgets` `budgets_read` \(SELECT to authenticated\)/);
+  const none = formatReport(
+    { missing: [{ kind: 'policy', key: 'public.budgets.budgets_export', fp: 'x' }], differs: [] },
+    { expectedCount: 1, liveCount: 1, livePolicies: [] },
+  );
+  assert.match(none, /no RLS policies at all/);
 });

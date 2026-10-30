@@ -156,6 +156,27 @@ select coalesce(json_object_agg(key, def), '{}'::json)
 `;
 }
 
+/**
+ * For tables with a policy missing on live: every policy production does have
+ * on them, so a renamed policy can be told apart from an absent one.
+ */
+export function tablePoliciesSql(tables) {
+  const list = tables.map((t) => `'${t.replaceAll("'", "''")}'`).join(', ');
+  return `
+select coalesce(json_agg(json_build_object(
+         'table', schemaname || '.' || tablename, 'policy', policyname,
+         'cmd', cmd, 'roles', array_to_string(roles, ', ')
+       ) order by schemaname, tablename, policyname), '[]'::json)
+  from pg_catalog.pg_policies
+ where schemaname || '.' || tablename in (${list});
+`;
+}
+
+/** Table ("schema.table") of each missing policy, deduplicated. */
+export function tablesWithMissingPolicies(missing) {
+  return [...new Set(missing.filter((o) => o.kind === 'policy').map((o) => o.key.split('.').slice(0, 2).join('.')))];
+}
+
 /** Unified diff of two texts via diff(1); '' when identical. */
 export function unifiedDiff(expected, live, label) {
   const dir = mkdtempSync(join(tmpdir(), 'keel-drift-'));
@@ -197,7 +218,7 @@ export function diffCatalogs(expected, actual) {
  * because they are the actionable part; the fix is to apply the migration
  * that defines each one.
  */
-export function formatReport({ missing, differs }, { expectedCount, liveCount, diffs = {} }) {
+export function formatReport({ missing, differs }, { expectedCount, liveCount, diffs = {}, livePolicies = null }) {
   const lines = ['## Live schema drift', ''];
   if (missing.length === 0 && differs.length === 0) {
     lines.push(
@@ -221,6 +242,17 @@ export function formatReport({ missing, differs }, { expectedCount, liveCount, d
   };
   section('Missing on live', missing);
   section('Different on live', differs);
+  if (livePolicies) {
+    lines.push('### Policies production has on those tables', '');
+    lines.push(
+      livePolicies.length === 0
+        ? 'None: these tables have no RLS policies at all on production.'
+        : 'If one of these does the same job under another name, the missing policy may be a rename rather than a gap.',
+      '',
+    );
+    for (const p of livePolicies) lines.push(`- \`${p.table}\` \`${p.policy}\` (${p.cmd} to ${p.roles})`);
+    lines.push('');
+  }
   const shown = differs.filter((o) => diffs[o.key]);
   if (shown.length > 0) {
     lines.push('### What differs', '', 'Lines starting `-` are what the migrations define; `+` is what production runs.', '');
@@ -299,7 +331,16 @@ async function main() {
     }
   }
 
-  const report = formatReport(result, { expectedCount: expected.length, liveCount: actual.length, diffs });
+  const policyTables = tablesWithMissingPolicies(result.missing);
+  const livePolicies =
+    policyTables.length > 0 ? await readLive(projectRef, token, tablePoliciesSql(policyTables)) : null;
+
+  const report = formatReport(result, {
+    expectedCount: expected.length,
+    liveCount: actual.length,
+    diffs,
+    livePolicies,
+  });
 
   console.log(report);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${report}\n`);
