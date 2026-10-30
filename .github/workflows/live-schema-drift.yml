@@ -1,0 +1,71 @@
+name: live-schema-drift
+
+# Fails when production does not contain what supabase/migrations defines.
+#
+# Migrations reach the live project by hand (CLAUDE.md "Ops facts"); the
+# Supabase GitHub integration only builds branch previews and never applies to
+# production. PR #178 merged five migrations on 2026-08-28 and none were
+# applied, so every account created afterwards had no household and no
+# "Connect a bank" button. Nothing was red anywhere. This check is that signal.
+#
+#   pull_request  a PR adding a migration goes red until it is applied to live,
+#                 which is the intended order: apply, then merge.
+#   main          re-checks after every merge, and after each apply-migration run.
+#   schedule      catches drift from changes made outside git.
+#
+# Read-only: one SELECT against each side. Needs the SUPABASE_ACCESS_TOKEN
+# repository secret, the same one deploy-functions uses.
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/**'
+      - 'scripts/db/**'
+      - '.github/workflows/live-schema-drift.yml'
+  workflow_run:
+    workflows: [ci, apply-migration]
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: '23 15 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: live-schema-drift-${{ github.event.pull_request.number || 'main' }}
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    name: production matches migrations
+    runs-on: ubuntu-latest
+    # Fork PRs get no secrets, so they cannot reach production; skip them.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: script unit tests
+        run: node --test scripts/db/live-drift.test.mjs scripts/db/apply-migration.test.mjs
+      - run: pnpm install --frozen-lockfile
+      # `supabase start` bundles the edge functions in config.toml, which import
+      # this git-ignored generated bundle (same as the ci database job).
+      - run: pnpm build:functions
+      - name: build the expected schema from migrations
+        run: |
+          supabase start
+          supabase db reset
+      - name: compare with production
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          node scripts/db/live-drift.mjs \
+            --local-db postgresql://postgres:postgres@127.0.0.1:55322/postgres \
+            --project-ref yrbteeownwjhcushwaga

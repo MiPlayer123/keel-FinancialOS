@@ -39,6 +39,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { KeelLogo, KeelMark } from '@/components/keel/logo';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { useHousehold } from '@/components/keel/household-context';
+import { HouseholdSetupNotice } from '@/components/keel/household-setup-notice';
 import { EntityLensSwitcher } from '@/components/keel/entity-lens-switcher';
 import { useEntityLens } from '@/components/keel/entity-lens-context';
 import {
@@ -835,6 +836,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             finding). 0 at lg+ where the tab bar itself is hidden. */}
         <main className="min-w-0 flex-1 pb-[calc(4rem+env(safe-area-inset-bottom))] lg:pb-0">
           <QuickNav />
+          <HouseholdSetupNotice />
           {children}
         </main>
         <QueryTimingPanel />

@@ -51,6 +51,10 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
         if (uid && list.length === 0) {
           await bootstrapHousehold();
           list = await fetchHouseholds();
+          // Without a household every household-scoped control (Connect a
+          // bank, Add account, entity pickers) hides itself. Surface this as
+          // an error instead of a quietly empty app.
+          if (list.length === 0) throw new Error('Your household could not be created.');
         }
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- flag flips in cleanup
         if (!active) return;
