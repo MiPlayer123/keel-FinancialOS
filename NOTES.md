@@ -28,6 +28,7 @@ Also seen in the same session (already resolved before this fix, not changed her
 
 Gap: Plaid Link `onExit`/`onEvent` metadata (link_session_id, error codes) is not recorded
 anywhere, which is why this took log archaeology to diagnose.
+
 ## 2026-10-30 New accounts had no household: PR #178's migrations never reached production
 
 **Symptom.** A new user signed up and had no "Connect a bank" button, and no entity
