@@ -849,15 +849,25 @@ export default {
           Deno.env.get('PLAID_TRANSACTIONS_DAYS_REQUESTED') ?? '730',
           10,
         );
+        // Investments must be OPTIONAL, never required. Every product in
+        // `products` is required, and Plaid hides any institution that lacks
+        // one — with investments required, plain Bank of America (and most
+        // checking/card-only banks) vanished from Link search entirely
+        // (2026-10-30 incident: a new user could not find their bank).
+        // `optional_products` adds Investments only where the institution
+        // supports it, so the worker's holdings sync (processRefreshBalances)
+        // still gets /investments/holdings/get on brokerage items. Anything
+        // listed as optional is stripped from the required list, so a stale
+        // PLAID_PRODUCTS=transactions,investments secret cannot re-break this.
+        const optionalProducts = splitEnv('PLAID_OPTIONAL_PRODUCTS', 'investments');
+        const requiredProducts = splitEnv('PLAID_PRODUCTS', 'transactions').filter(
+          (p) => !optionalProducts.includes(p),
+        );
         const result = await plaid.linkTokenCreate(`linktoken:${householdId.data}:${userId}`, {
           user: { client_user_id: userId },
           client_name: 'KEEL',
-          // S-inv-1b: 'investments' lets Link authorize the Investments
-          // product on new items so the worker's holdings sync
-          // (processRefreshBalances) can call /investments/holdings/get.
-          // Sandbox and existing trial-tier Plaid access both cover this
-          // with no dashboard step; only true production needs one later.
-          products: splitEnv('PLAID_PRODUCTS', 'transactions,investments'),
+          products: requiredProducts.length > 0 ? requiredProducts : ['transactions'],
+          ...(optionalProducts.length > 0 ? { optional_products: optionalProducts } : {}),
           country_codes: splitEnv('PLAID_COUNTRY_CODES', 'US'),
           language: 'en',
           ...(Number.isSafeInteger(daysRequested) && daysRequested > 0
