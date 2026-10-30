@@ -37,6 +37,33 @@ correctly refuses with `bigint_overflow`; the property never excluded that regio
 Reproduced on main. Fixed test-side in #187, with the counterexample pinned as a
 regression test for the `gross*bps` guard.
 
+## 2026-10-30 Plaid Link: investments moved to optional_products (new user could not find Bank of America)
+
+A new user signed up and tried to connect Bank of America four times; every link token was
+issued (200) but no public_token ever came back, so no link_attempt or connection was created.
+
+Root cause: `/connections/link-token` sent `products: [transactions, investments]` (cloud secret
+`PLAID_PRODUCTS`, changed 2026-07-19 for Fidelity holdings). Every entry in `products` is
+required, and Plaid hides any institution that lacks one. Plaid's main Bank of America
+institution (`ins_127989`) supports transactions but not investments, so it was absent from
+Link search; only "Charitable Gift Fund" / "Private Bank" variants matched. Verified with
+`/institutions/search` under both product sets. This affected every bank or card issuer without
+Investments support; existing connections predate the change or are at institutions that have it.
+
+Fix (`supabase/functions/api/index.ts`): `investments` goes in `optional_products`
+(`PLAID_OPTIONAL_PRODUCTS`, default `investments`), and anything optional is stripped from the
+required list so the stale cloud secret cannot re-break it. Holdings sync already only calls
+Investments when an item has investment accounts, so non-brokerage items are unaffected.
+Deployed `api` to the live project; a live token's `/link/token/get` metadata now shows
+`initial_products: [transactions]`.
+
+Also seen in the same session (already resolved before this fix, not changed here):
+`/onboarding/bootstrap` returned 500 `PGRST202 keel_bootstrap_household` five times on
+2026-10-29/30 until ~05:56 UTC, when it began succeeding.
+
+Gap: Plaid Link `onExit`/`onEvent` metadata (link_session_id, error codes) is not recorded
+anywhere, which is why this took log archaeology to diagnose.
+
 ## 2026-10-30 New accounts had no household: PR #178's migrations never reached production
 
 **Symptom.** A new user signed up and had no "Connect a bank" button, and no entity
