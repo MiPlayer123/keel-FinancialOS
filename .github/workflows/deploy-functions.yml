@@ -1,9 +1,10 @@
 name: deploy-functions
 
-# Edge functions don't auto-deploy the way migrations do (the Supabase GitHub
-# integration applies supabase/migrations on merge, but api/worker were going
-# stale). This deploys the four functions whenever their source changes on
-# main. Requires the SUPABASE_ACCESS_TOKEN repository secret (Supabase
+# Edge functions need their own deploy (api/worker were going stale). This
+# deploys the four functions whenever CI passes on main. Migrations do NOT
+# deploy on merge: the Supabase GitHub integration only builds branch previews.
+# They are applied by hand or with the apply-migration workflow, and
+# live-schema-drift fails while production is missing any of them. Requires the SUPABASE_ACCESS_TOKEN repository secret (Supabase
 # dashboard → Account → Access Tokens); the project ref is public config.
 
 on:
@@ -35,7 +36,7 @@ jobs:
     steps:
       - name: report the skipped deploy
         run: |
-          echo "::error::CI concluded '${{ github.event.workflow_run.conclusion }}' on main, so the edge functions were NOT deployed. main and production are now out of sync: migrations apply through the Supabase integration but api/worker/webhook-provider/scheduled do not. Fix CI on main and re-run it (re-running the failed jobs is enough — this workflow fires again on completion), or deploy by hand: pnpm build:functions && supabase functions deploy api worker webhook-provider scheduled --project-ref yrbteeownwjhcushwaga"
+          echo "::error::CI concluded '${{ github.event.workflow_run.conclusion }}' on main, so the edge functions were NOT deployed. main and production are now out of sync: api/worker/webhook-provider/scheduled were not deployed. Fix CI on main and re-run it (re-running the failed jobs is enough — this workflow fires again on completion), or deploy by hand: pnpm build:functions && supabase functions deploy api worker webhook-provider scheduled --project-ref yrbteeownwjhcushwaga"
           exit 1
 
   deploy:
