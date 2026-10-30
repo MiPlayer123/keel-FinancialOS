@@ -613,7 +613,7 @@ function ProjectedCashCard({
 }
 
 function HomeBody() {
-  const { householdId, ready, error: householdError, retry: retryHousehold } = useHousehold();
+  const { householdId, ready } = useHousehold();
   const invalidate = useKeelInvalidate(householdId);
   // Global entity lens (persona theme #2). null = "All entities" (blended,
   // pre-lens dashboard). A concrete id scopes every widget that can be
@@ -803,9 +803,8 @@ function HomeBody() {
   }
 
   if (!householdId) {
-    if (householdError) {
-      return <QueryErrorState onRetry={retryHousehold} />;
-    }
+    // A failed setup is explained, with a retry, by HouseholdSetupNotice in
+    // the app shell on every page; repeating it here would show two prompts.
     return (
       <EmptyState
         icon={<Wallet className="size-6" />}
