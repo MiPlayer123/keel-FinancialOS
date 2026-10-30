@@ -22,12 +22,17 @@
 // the script only runs the SELECT below on each side.
 
 import { execFileSync } from 'node:child_process';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-// Schemas owned by Supabase or extensions. Everything else in the database is
-// ours and gets compared.
-const MANAGED_SCHEMAS = [
+// Schemas that are not compared. Most are owned by Supabase or extensions.
+// keel_archive holds one-off before-images and plans written by data
+// migrations (e.g. the 2026-08-31 snapshot compaction); they are meant to be
+// dropped once no longer needed, so their absence on live is not drift.
+export const SKIPPED_SCHEMAS = [
+  'keel_archive',
   'information_schema',
   'auth',
   'storage',
@@ -51,6 +56,9 @@ const MANAGED_SCHEMAS = [
   'repack',
 ];
 
+const OWNER_SQL = `case when pg_get_userbyid(p.proowner) in ('postgres', 'supabase_admin') then 'postgres'
+                     else pg_get_userbyid(p.proowner) end`;
+
 // One row, one column: a JSON array of {kind, key, fp}. `key` names the
 // object; `fp` (fingerprint) changes when its definition changes.
 //
@@ -65,7 +73,7 @@ with schemas as (
   select n.oid, n.nspname
     from pg_namespace n
    where n.nspname not like 'pg\\_%' escape '\\'
-     and n.nspname not in (${MANAGED_SCHEMAS.map((s) => `'${s}'`).join(', ')})
+     and n.nspname not in (${SKIPPED_SCHEMAS.map((s) => `'${s}'`).join(', ')})
 ),
 ext_objs as (
   select objid from pg_depend where deptype = 'e'
@@ -73,9 +81,7 @@ ext_objs as (
 objs as (
   select 'function' as kind,
          s.nspname || '.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' as key,
-         md5(p.prosrc || '|' || p.prosecdef::text || '|'
-             || case when pg_get_userbyid(p.proowner) in ('postgres', 'supabase_admin') then 'postgres'
-                     else pg_get_userbyid(p.proowner) end
+         md5(p.prosrc || '|' || p.prosecdef::text || '|' || ${OWNER_SQL}
              || '|' || coalesce(array_to_string(p.proconfig, ','), '')) as fp
     from pg_proc p
     join schemas s on s.oid = p.pronamespace
@@ -128,6 +134,48 @@ select coalesce(json_agg(json_build_object('kind', kind, 'key', key, 'fp', fp) o
 `;
 
 /**
+ * For functions that differ: the exact text their fingerprint is built from
+ * (owner, SECURITY DEFINER, SET options, body), so the report can show a diff
+ * of what is actually different instead of only a name.
+ */
+export function functionDefsSql(keys) {
+  const list = keys.map((k) => `'${k.replaceAll("'", "''")}'`).join(', ');
+  return `
+set search_path = pg_catalog;
+select coalesce(json_object_agg(key, def), '{}'::json)
+  from (
+    select n.nspname || '.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' as key,
+           '-- owner: ' || ${OWNER_SQL}
+           || E'\n-- security definer: ' || p.prosecdef::text
+           || E'\n-- set: ' || coalesce(array_to_string(p.proconfig, ', '), '(none)')
+           || E'\n' || p.prosrc as def
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+  ) f
+ where key in (${list});
+`;
+}
+
+/** Unified diff of two texts via diff(1); '' when identical. */
+export function unifiedDiff(expected, live, label) {
+  const dir = mkdtempSync(join(tmpdir(), 'keel-drift-'));
+  const a = join(dir, 'expected');
+  const b = join(dir, 'live');
+  writeFileSync(a, `${expected}\n`);
+  writeFileSync(b, `${live}\n`);
+  try {
+    execFileSync('diff', ['-u', '--label', `${label} (migrations)`, '--label', `${label} (production)`, a, b], {
+      encoding: 'utf8',
+    });
+    return '';
+  } catch (err) {
+    // diff exits 1 when the files differ; its output is the diff.
+    if (err && typeof err === 'object' && 'status' in err && err.status === 1) return String(err.stdout);
+    throw err;
+  }
+}
+
+/**
  * Compare the catalog the migrations produce (expected) with production
  * (actual). Pure, so it is unit-tested without a database.
  * Returns objects missing on live, and objects whose definition differs.
@@ -149,7 +197,7 @@ export function diffCatalogs(expected, actual) {
  * because they are the actionable part; the fix is to apply the migration
  * that defines each one.
  */
-export function formatReport({ missing, differs }, { expectedCount, liveCount }) {
+export function formatReport({ missing, differs }, { expectedCount, liveCount, diffs = {} }) {
   const lines = ['## Live schema drift', ''];
   if (missing.length === 0 && differs.length === 0) {
     lines.push(
@@ -173,22 +221,31 @@ export function formatReport({ missing, differs }, { expectedCount, liveCount })
   };
   section('Missing on live', missing);
   section('Different on live', differs);
+  const shown = differs.filter((o) => diffs[o.key]);
+  if (shown.length > 0) {
+    lines.push('### What differs', '', 'Lines starting `-` are what the migrations define; `+` is what production runs.', '');
+    for (const o of shown) {
+      const body = diffs[o.key].split('\n');
+      const clipped = body.length > 300 ? [...body.slice(0, 300), `... (${String(body.length - 300)} more lines)`] : body;
+      lines.push(`<details><summary><code>${o.key}</code></summary>`, '', '```diff', ...clipped, '```', '', '</details>', '');
+    }
+  }
   return lines.join('\n');
 }
 
-function readLocal(dbUrl) {
-  const out = execFileSync('psql', [dbUrl, '-X', '-q', '-At', '-v', 'ON_ERROR_STOP=1', '-c', CATALOG_SQL], {
+function readLocal(dbUrl, sql = CATALOG_SQL) {
+  const out = execFileSync('psql', [dbUrl, '-X', '-q', '-At', '-v', 'ON_ERROR_STOP=1', '-c', sql], {
     encoding: 'utf8',
     maxBuffer: 256 * 1024 * 1024,
   });
   return JSON.parse(out);
 }
 
-async function readLive(projectRef, token) {
+async function readLive(projectRef, token, sql = CATALOG_SQL) {
   const res = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/database/query`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query: CATALOG_SQL }),
+    body: JSON.stringify({ query: sql }),
   });
   const text = await res.text();
   if (!res.ok) {
@@ -230,7 +287,19 @@ async function main() {
     );
   }
   const result = diffCatalogs(expected, actual);
-  const report = formatReport(result, { expectedCount: expected.length, liveCount: actual.length });
+
+  const diffs = {};
+  const changedFns = result.differs.filter((o) => o.kind === 'function').map((o) => o.key);
+  if (changedFns.length > 0) {
+    const sql = functionDefsSql(changedFns);
+    const localDefs = readLocal(localDb, sql);
+    const liveDefs = await readLive(projectRef, token, sql);
+    for (const key of changedFns) {
+      diffs[key] = unifiedDiff(localDefs[key] ?? '', liveDefs[key] ?? '', key);
+    }
+  }
+
+  const report = formatReport(result, { expectedCount: expected.length, liveCount: actual.length, diffs });
 
   console.log(report);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${report}\n`);

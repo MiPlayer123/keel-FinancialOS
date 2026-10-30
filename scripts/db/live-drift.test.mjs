@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { CATALOG_SQL, diffCatalogs, formatReport } from './live-drift.mjs';
+import { CATALOG_SQL, diffCatalogs, formatReport, functionDefsSql, unifiedDiff } from './live-drift.mjs';
 
 const fn = (key, fp = 'a') => ({ kind: 'function', key, fp });
 
@@ -50,8 +50,31 @@ test('a clean report says production matches', () => {
 });
 
 test('the catalog query skips Supabase-managed schemas and extension objects', () => {
-  for (const schema of ['auth', 'storage', 'extensions', 'supabase_migrations']) {
+  for (const schema of ['auth', 'storage', 'extensions', 'supabase_migrations', 'keel_archive']) {
     assert.ok(CATALOG_SQL.includes(`'${schema}'`), schema);
   }
   assert.match(CATALOG_SQL, /deptype = 'e'/);
+});
+
+test('function definitions are looked up by exact key, with quotes escaped', () => {
+  const sql = functionDefsSql(["public.f(p text)", "public.o'brien()"]);
+  assert.match(sql, /'public\.f\(p text\)'/);
+  assert.match(sql, /'public\.o''brien\(\)'/);
+});
+
+test('unifiedDiff is empty for identical text and shows both sides otherwise', () => {
+  assert.equal(unifiedDiff('a\nb', 'a\nb', 'f'), '');
+  const d = unifiedDiff('v_uid := coalesce(claim);', 'v_uid := auth.uid();', 'public.keel_goal_save(uuid)');
+  assert.match(d, /^-v_uid := coalesce\(claim\);$/m);
+  assert.match(d, /^\+v_uid := auth\.uid\(\);$/m);
+  assert.match(d, /\(production\)/);
+});
+
+test('the report shows each differing function as a collapsible diff', () => {
+  const report = formatReport(
+    { missing: [], differs: [fn('public.keel_goal_save(uuid)')] },
+    { expectedCount: 1, liveCount: 1, diffs: { 'public.keel_goal_save(uuid)': '-old\n+new' } },
+  );
+  assert.match(report, /<details><summary><code>public\.keel_goal_save\(uuid\)<\/code>/);
+  assert.match(report, /```diff\n-old\n\+new\n```/);
 });
