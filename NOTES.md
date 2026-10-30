@@ -28,6 +28,55 @@ Also seen in the same session (already resolved before this fix, not changed her
 
 Gap: Plaid Link `onExit`/`onEvent` metadata (link_session_id, error codes) is not recorded
 anywhere, which is why this took log archaeology to diagnose.
+## 2026-10-30 New accounts had no household: PR #178's migrations never reached production
+
+**Symptom.** A new user signed up and had no "Connect a bank" button, and no entity
+list in Add account. Every household-scoped control renders only when
+`useHousehold().householdId` is set.
+
+**Cause.** On first login `HouseholdProvider` calls `api/onboarding/bootstrap`, which calls
+`keel_bootstrap_household` (`20260828010000_onboarding_bootstrap.sql`, Stage 2 gate 2).
+That function did not exist on the live project. Probed with the public publishable key:
+`rpc/keel_bootstrap_household` returned PGRST202 (not in the schema cache), while a
+function that exists but is equally locked down (`keel_export_household`) returned
+42501. The bootstrap failed, the provider set `error`, and nothing on the Connections
+page showed it. Every account created after 2026-08-28 is affected; older accounts
+predate bootstrap.
+
+PR #178 merged five migrations (`20260828010000` to `20260828014000`). None were
+applied. `keel_export_household_pre_notes_tasks`, which `20260828011000` creates by
+renaming, is also absent. The deploy workflow comment said "the Supabase GitHub
+integration applies supabase/migrations on merge". It does not: the integration only
+runs branch previews (its check reads "Supabase Preview: skipped"). CLAUDE.md "Ops facts"
+already says migrations are applied by hand, and nothing noticed when that step was
+skipped.
+
+**Fix applied.** The human ran `20260828010000_onboarding_bootstrap.sql` in the Supabase
+SQL editor. The probe now returns 42501, so the function exists. The account bootstraps
+on its next load.
+
+**Prevention (this PR).**
+- `scripts/db/live-drift.mjs` plus the `live-schema-drift` workflow: build the expected
+  catalog by resetting a local stack from the migrations, read production's catalog over
+  the Management API, and fail if any function, table, column, trigger, RLS policy or
+  enum the migrations define is missing or different on live. Objects only on live are
+  ignored. Runs on PRs that touch migrations (red until applied, matching the
+  apply-then-merge order), after every main CI run, after apply-migration, and daily.
+  Verified on throwaway local Postgres 16 databases: it reports exactly the missing
+  bootstrap function and a changed body, then goes green once both are applied.
+- `scripts/db/apply-migration.mjs` plus the manual `apply-migration` workflow (main only):
+  applies named migration files in order through `POST /v1/projects/{ref}/database/migrations`,
+  which wraps each payload in a transaction, and stops at the first failure.
+- `HouseholdSetupNotice` in the app shell: a failed setup now says so on every page,
+  with a retry button, instead of silently hiding the controls. `HouseholdProvider`
+  also treats "bootstrap returned but still no household" as an error.
+- Corrected the misleading deploy-functions comment.
+
+**Not verified from this session.** The `KEEL_SUPABASE_ACCESS_TOKEN` in the cloud agent
+environment is rejected by the Management API ("Invalid access token"), and the Supabase
+MCP here is signed into a different account, so the agent could not read production
+directly. The new workflow's first run is the real end-to-end check of the
+`SUPABASE_ACCESS_TOKEN` repository secret as well.
 
 ## 2026-08-31 Balance snapshot compaction, phase 2 APPLIED to the live project
 
