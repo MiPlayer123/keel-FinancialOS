@@ -96,7 +96,10 @@ objs as (
   union all
   select 'table',
          s.nspname || '.' || c.relname,
-         c.relkind::text
+         -- kind plus whether RLS is on (and forced): a table whose policies
+         -- match but whose RLS is off is open to every role with a grant.
+         c.relkind::text || case when c.relrowsecurity then ' rls' else ' no-rls' end
+           || case when c.relforcerowsecurity then ' forced' else '' end
     from pg_class c
     join schemas s on s.oid = c.relnamespace
    where c.relkind in ('r', 'p', 'v', 'm')
