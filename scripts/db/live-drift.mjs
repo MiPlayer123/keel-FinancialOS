@@ -56,6 +56,13 @@ export const SKIPPED_SCHEMAS = [
   'repack',
 ];
 
+// Function bodies are compared without SQL comments or whitespace layout.
+// Several production functions were applied from copies with their comments
+// stripped, so comment-only differences are expected and are not drift. (A
+// '--' inside a string literal would also be dropped; harmless for a
+// fingerprint, and the diff shown on a real difference is the raw text.)
+const BODY_SQL = `btrim(regexp_replace(regexp_replace(regexp_replace(p.prosrc, '/\\*.*?\\*/', '', 'g'), '--[^\\n]*', '', 'g'), '\\s+', ' ', 'g'))`;
+
 const OWNER_SQL = `case when pg_get_userbyid(p.proowner) in ('postgres', 'supabase_admin') then 'postgres'
                      else pg_get_userbyid(p.proowner) end`;
 
@@ -81,7 +88,7 @@ ext_objs as (
 objs as (
   select 'function' as kind,
          s.nspname || '.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' as key,
-         md5(p.prosrc || '|' || p.prosecdef::text || '|' || ${OWNER_SQL}
+         md5(${BODY_SQL} || '|' || p.prosecdef::text || '|' || ${OWNER_SQL}
              || '|' || coalesce(array_to_string(p.proconfig, ','), '')) as fp
     from pg_proc p
     join schemas s on s.oid = p.pronamespace
