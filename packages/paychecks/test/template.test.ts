@@ -293,6 +293,19 @@ describe('applyPaycheckTemplate — validation / typed rejections', () => {
     );
   });
 
+  it('guards BIGINT overflow in a per-line tax when gross is huge (gross*bps guard)', () => {
+    // Counterexample fast-check found in CI (seed 1662250065): withholdings sum to
+    // 99.97%, so a ~$9.9B take-home needs a ~$3.3 quadrillion gross, and
+    // gross·bps + 5000 no longer fits in int64. The template must refuse, not wrap.
+    expectRejection(
+      () => applyPaycheckTemplate({
+        template: template([earning, ...[2801, 2061, 2471, 428, 2236].map((b, i) => percent(`p${String(i)}`, b)), takeHome]),
+        netDepositMinor: '987865623371',
+      }),
+      'bigint_overflow',
+    );
+  });
+
   it('guards BIGINT overflow when summing fixed deductions (add guard)', () => {
     // Two near-int64-max fixed deductions overflow int64 in Σ fixed deductions.
     const big = '9000000000000000000';
@@ -424,6 +437,19 @@ describe('applyPaycheckTemplate — property tests (fast-check, Law 1/4/9)', () 
   it('(a,b,c) Σ earnings = G, derived net = N, idempotent re-apply', () => {
     fc.assert(
       fc.property(validTemplate, fc.bigInt({ min: 0n, max: 1_000_000_000_000n }), (r, n) => {
+        // Keep to paychecks whose gross is representable. Near ΣP = 10000 a large N
+        // needs a gross so big that gross·bps overflows int64, which the template
+        // rightly refuses (bigint_overflow, pinned by the guard tests above). Bound:
+        // the highest gross selectGross scans is seed + ceil(k·10000/(10000−P)) + 2.
+        const aggregate = BigInt(r.bpsList.reduce((a, b) => a + b, 0));
+        const denominator = 10_000n - aggregate;
+        const fixedTotal = r.fixedList.reduce((a, b) => a + b, 0n);
+        const k = BigInt(r.bpsList.length);
+        const highestGross =
+          ((n + fixedTotal) * 10_000n + denominator - 1n) / denominator + (k * 10_000n + denominator - 1n) / denominator + 2n;
+        const maxBps = BigInt(Math.max(...r.bpsList));
+        fc.pre(highestGross * maxBps + 5_000n <= 9_223_372_036_854_775_807n);
+
         const lines: PaycheckTemplateLine[] = [
           earning,
           ...r.bpsList.map((bps, i) => percent(`p${String(i)}`, bps)),
