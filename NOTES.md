@@ -2,6 +2,41 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+## 2026-10-30 What the first live-schema-drift runs found, and the repair
+
+Applied PR #178's other four migrations (`20260828011000`–`014000`) with the new
+`apply-migration` workflow; all four reported applied, and
+`keel_export_household_pre_notes_tasks` now exists on live.
+
+The first full report then listed older drift. Refined the check so it reports only
+real differences: per-function diffs; bodies compared without comments or layout
+(9 production functions were applied from comment-stripped copies and differ in
+comments only, including all the business-tag functions, so their review fixes ARE
+live); `keel_archive` skipped (one-off backups, the compaction plan table was dropped
+on purpose); RLS on/off now part of each table's fingerprint. What remained:
+
+- `keel_disconnect_complete` lacked the credential-delete re-arm line (20260718051000).
+- Nine 2026-07-13 policies were absent on live (`*_member_read`, `*_export` on budgets,
+  category_rules, rule_renames, transaction_categories, transaction_overrides). RLS is
+  on for all five, so nothing was exposed, but `admin.export_all` runs those layers as
+  `keel_export` (NOBYPASSRLS) and so exported zero rows from them. Law 6 gap. The web
+  reads none of these tables directly, which is why nothing looked wrong. Live also
+  has two hand-made policies not in any migration (`category_rules_api_read`,
+  `transaction_overrides_worker_read`); left alone.
+- Three export wrapper layers sit under different names on live, because five July
+  export migrations were applied out of order. All tables were still exported.
+
+`20261030010000_restore_live_drift.sql` re-states all of it verbatim (CREATE OR REPLACE,
+DROP POLICY IF EXISTS first), so it is a no-op where the originals applied as written.
+Test-applied twice on a stubbed Postgres. Not yet applied to production at time of
+writing.
+
+Also: PR #186's unit job failed on the paycheck `(a,b,c)` fast-check property (seed
+1662250065). Not a code defect: the input needs a ~3.3e15 gross and the template
+correctly refuses with `bigint_overflow`; the property never excluded that region.
+Reproduced on main. Fixed test-side in #187, with the counterexample pinned as a
+regression test for the `gross*bps` guard.
+
 ## 2026-10-30 Plaid Link: investments moved to optional_products (new user could not find Bank of America)
 
 A new user signed up and tried to connect Bank of America four times; every link token was
