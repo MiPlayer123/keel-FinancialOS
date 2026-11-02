@@ -8,6 +8,7 @@ import {
   ArrowDownRight,
   ArrowLeft,
   ArrowUpRight,
+  CalendarRange,
   ChevronDown,
   ChevronRight,
   Download,
@@ -791,6 +792,72 @@ function DeltaLine({ deltaMinor, vsLabel }: { deltaMinor: bigint; vsLabel: strin
   );
 }
 
+/** Signed-direction delta as neutral text ("↓ $1,863 vs Jun") — Law 8: a
+ *  delta's direction is arithmetic, never red. */
+function InlineDelta({ deltaMinor, vsLabel, currency }: { deltaMinor: bigint; vsLabel: string; currency: string }) {
+  if (deltaMinor === 0n) return null;
+  const magnitude = (deltaMinor < 0n ? -deltaMinor : deltaMinor).toString();
+  return (
+    <span className="inline-flex items-center gap-0.5 text-xs text-muted-foreground">
+      {deltaMinor > 0n ? <ArrowUpRight className="size-3" /> : <ArrowDownRight className="size-3" />}
+      <Money amountMinor={magnitude} currency={currency} className="text-xs text-muted-foreground" />
+      <span className="ml-0.5">vs {vsLabel}</span>
+    </span>
+  );
+}
+
+/** The one-line Month in review: spent / earned / net / savings rate / top
+ *  category, with the full breakdown one click away. */
+function MonthReviewHeadline({
+  review,
+  expanded,
+  onToggle,
+}: {
+  review: MonthReview;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const vs = monthLabel(review.prevMonth);
+  const top = review.topCategories[0];
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1.5 text-sm">
+      <span className="flex flex-wrap items-baseline gap-x-1.5">
+        <span className="text-muted-foreground">Spent</span>
+        <Money amountMinor={review.spendingMinor.toString()} currency={review.currency} className="font-semibold" />
+        <InlineDelta deltaMinor={review.spendingDeltaMinor} vsLabel={vs} currency={review.currency} />
+      </span>
+      <span className="flex flex-wrap items-baseline gap-x-1.5">
+        <span className="text-muted-foreground">Earned</span>
+        <Money amountMinor={review.incomeMinor.toString()} currency={review.currency} className="font-semibold" />
+      </span>
+      <span className="flex flex-wrap items-baseline gap-x-1.5">
+        <span className="text-muted-foreground">Net</span>
+        <Money amountMinor={review.netMinor.toString()} currency={review.currency} signed className="font-semibold" />
+        {review.savingsRatePct !== null ? (
+          <span className="text-xs text-muted-foreground">({String(review.savingsRatePct)}% saved)</span>
+        ) : null}
+      </span>
+      {top ? (
+        <span className="flex min-w-0 items-baseline gap-x-1.5">
+          <span className="text-muted-foreground">Top</span>
+          <span className="truncate">{top.name}</span>
+          <Money amountMinor={top.amountMinor.toString()} currency={review.currency} className="text-muted-foreground" />
+        </span>
+      ) : null}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="ml-auto h-7 text-xs text-muted-foreground"
+        aria-expanded={expanded}
+        onClick={onToggle}
+      >
+        {expanded ? 'Hide details' : 'Details'}
+        <ChevronDown className={`size-3.5 transition-transform${expanded ? ' rotate-180' : ''}`} />
+      </Button>
+    </div>
+  );
+}
+
 /** Refund-heavy rows a donut can't plot, listed under it (Law 9: disclosed,
  *  never silently dropped). Renders nothing when there are none. */
 function NetRefundsStrip({
@@ -905,11 +972,13 @@ function ScopeBar({
   accounts,
   entities,
   onScopeChange,
+  onExport,
 }: {
   scope: ReportScope;
   accounts: AccountRow[];
   entities: EntityRow[];
   onScopeChange: (next: ReportScope) => void;
+  onExport: () => void;
 }) {
   const entityAccounts =
     scope.entityId === null ? accounts : accounts.filter((a) => a.entityId === scope.entityId);
@@ -933,45 +1002,67 @@ function ScopeBar({
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-3">
-      <span className="flex flex-wrap gap-1">
-        {RANGE_PRESETS.map((p) => (
-          <Button
-            key={p.key}
-            variant={scope.preset === p.key ? 'secondary' : 'ghost'}
-            size="sm"
-            className="h-7 text-xs"
-            onClick={() => {
-              onScopeChange({ ...scope, preset: p.key, ...presetRange(p.key) });
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-2">
+      <Select
+        value={scope.preset ?? 'custom'}
+        items={{
+          ...Object.fromEntries(RANGE_PRESETS.map((p) => [p.key, p.label])),
+          custom: 'Custom range',
+        }}
+        onValueChange={(v) => {
+          if (!v) return;
+          if (v === 'custom') {
+            onScopeChange({ ...scope, preset: null });
+            return;
+          }
+          const preset = RANGE_PRESETS.find((p) => p.key === v)?.key;
+          if (preset) onScopeChange({ ...scope, preset, ...presetRange(preset) });
+        }}
+      >
+        <SelectTrigger className="h-8 w-40" aria-label="Date range">
+          <CalendarRange className="size-4 text-muted-foreground" />
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {RANGE_PRESETS.map((p) => (
+            <SelectItem key={p.key} value={p.key}>
+              {p.label}
+            </SelectItem>
+          ))}
+          <SelectItem value="custom">Custom range</SelectItem>
+        </SelectContent>
+      </Select>
+      {scope.preset === null ? (
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Input
+            type="date"
+            aria-label="From"
+            value={scope.from}
+            max={scope.to}
+            className="h-8 w-[8.75rem] text-xs"
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v && v <= scope.to) onScopeChange({ ...scope, preset: null, from: v });
             }}
-          >
-            {p.label}
-          </Button>
-        ))}
-      </span>
-      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Input
-          type="date"
-          value={scope.from}
-          max={scope.to}
-          className="h-8 w-[9.5rem] text-xs"
-          onChange={(e) => {
-            const v = e.target.value;
-            if (v && v <= scope.to) onScopeChange({ ...scope, preset: null, from: v });
-          }}
-        />
-        <span>to</span>
-        <Input
-          type="date"
-          value={scope.to}
-          min={scope.from}
-          className="h-8 w-[9.5rem] text-xs"
-          onChange={(e) => {
-            const v = e.target.value;
-            if (v && v >= scope.from) onScopeChange({ ...scope, preset: null, to: v });
-          }}
-        />
-      </span>
+          />
+          <span>–</span>
+          <Input
+            type="date"
+            aria-label="To"
+            value={scope.to}
+            min={scope.from}
+            className="h-8 w-[8.75rem] text-xs"
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v && v >= scope.from) onScopeChange({ ...scope, preset: null, to: v });
+            }}
+          />
+        </span>
+      ) : (
+        <span className="hidden text-xs text-muted-foreground tabular-nums sm:inline">
+          {rangeLabel(scope.from, scope.to)}
+        </span>
+      )}
       {entities.length > 1 ? (
         <Select
           value={scope.entityId ?? 'all'}
@@ -1049,6 +1140,11 @@ function ScopeBar({
         }}
       >
         {scope.includeTaxes ? 'Taxes: on' : 'Taxes: off'}
+      </Button>
+      <Button variant="outline" size="sm" className="ml-auto h-8" onClick={onExport}>
+        <Download className="size-4" />
+        <span className="hidden sm:inline">Export CSV</span>
+        <span className="sm:hidden">CSV</span>
       </Button>
     </div>
   );
@@ -1190,31 +1286,48 @@ function ReportsBody() {
   // you currently hold, not a range of activity like the rest of this page.
   const holdings = useKeelQuerySilent<HoldingRow>('holdings.list', householdId);
   const allocation = useMemo(() => allocationMix(holdings ?? []), [holdings]);
-  // Month chips: the months the scope range touches (last 6). Default to the
-  // last FULL month — the newest month is usually still in progress.
-  const reviewMonths = useMemo(() => months.slice(-6), [months]);
-  const [reviewMonth, setReviewMonth] = useState<string>(
-    () => reviewMonths[reviewMonths.length - 2] ?? reviewMonths[reviewMonths.length - 1] ?? '',
+  // Month in review follows the scope: its chips are the in-range months that
+  // actually have activity (last 6), and it defaults to the newest COMPLETE
+  // month with activity (the current month is usually partial) — falling back
+  // to the current month only when that's all there is. Any scope change
+  // drops a manual pick so the review re-anchors instead of sitting on an
+  // empty month.
+  const reviewCurrency = useMemo(
+    () => dominantCurrency(spendScopedRows.filter((t) => !isDebtOrTransferLike(t))),
+    [spendScopedRows],
   );
-  useEffect(() => {
-    if (reviewMonths.length === 0) return;
-    if (!reviewMonths.includes(reviewMonth)) {
-      setReviewMonth(
-        reviewMonths[reviewMonths.length - 2] ?? reviewMonths[reviewMonths.length - 1] ?? '',
-      );
+  const reviewMonths = useMemo(() => {
+    const active = new Set<string>();
+    for (const t of spendScopedRows) {
+      if (isDebtOrTransferLike(t) || t.currency !== reviewCurrency) continue;
+      active.add(monthKey(t.effectiveDate));
     }
-  }, [reviewMonths, reviewMonth]);
+    return months.filter((m) => active.has(m)).slice(-6);
+  }, [spendScopedRows, reviewCurrency, months]);
+  const defaultReviewMonth = useMemo(() => {
+    const thisMonth = new Date().toISOString().slice(0, 7);
+    const complete = reviewMonths.filter((m) => m !== thisMonth);
+    return complete[complete.length - 1] ?? reviewMonths[reviewMonths.length - 1] ?? '';
+  }, [reviewMonths]);
+  const scopeKey = `${scope.from}|${scope.to}|${scope.entityId ?? ''}|${scope.accountIds.join(',')}|${String(scope.includeTaxes)}`;
+  const [reviewPick, setReviewPick] = useState<{ month: string; scopeKey: string } | null>(null);
+  const reviewMonth =
+    reviewPick && reviewPick.scopeKey === scopeKey && reviewMonths.includes(reviewPick.month)
+      ? reviewPick.month
+      : defaultReviewMonth;
+  const setReviewMonth = useCallback(
+    (m: string) => {
+      setReviewPick({ month: m, scopeKey });
+    },
+    [scopeKey],
+  );
+  const [reviewExpanded, setReviewExpanded] = useState(false);
   // Month review is month-granular by design: it honors the ACCOUNT/entity
   // scope, offers only in-range months, and states its month in the footnote;
   // the "vs previous month" baseline deliberately reads the full prior month
   // (a range-clamped baseline would fake huge deltas — Law 9 over-honesty).
   // Currency voted over the SAME tax-filtered population the review sums
-  // (codex r2264 on PR #162): borrowing the tag report's vote (unfiltered by
-  // design) could pick a currency the taxes-off view has no activity in.
-  const reviewCurrency = useMemo(
-    () => dominantCurrency(spendScopedRows.filter((t) => !isDebtOrTransferLike(t))),
-    [spendScopedRows],
-  );
+  // (codex r2264 on PR #162).
   const monthReview = useMemo(
     () => (reviewMonth ? buildMonthReview(spendScopedRows, reviewMonth, reviewCurrency) : null),
     [spendScopedRows, reviewMonth, reviewCurrency],
@@ -1389,18 +1502,13 @@ function ReportsBody() {
     <>
       <TransferNudgeBanner count={suggestedCount} />
 
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-        <ScopeBar scope={scope} accounts={accounts} entities={entities} onScopeChange={setScope} />
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 shrink-0"
-          onClick={handleExportCsv}
-        >
-          <Download className="size-4" />
-          Export CSV
-        </Button>
-      </div>
+      <ScopeBar
+        scope={scope}
+        accounts={accounts}
+        entities={entities}
+        onScopeChange={setScope}
+        onExport={handleExportCsv}
+      />
 
       {rangedRowsFull.length === 0 ? (
         <EmptyState
@@ -1434,6 +1542,15 @@ function ReportsBody() {
         <CardContent className="space-y-4">
           {monthReview && monthReview.transactionCount > 0 ? (
             <>
+              <MonthReviewHeadline
+                review={monthReview}
+                expanded={reviewExpanded}
+                onToggle={() => {
+                  setReviewExpanded((v) => !v);
+                }}
+              />
+              {reviewExpanded ? (
+                <>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div>
                   <p className="text-xs text-muted-foreground">Income</p>
@@ -1544,9 +1661,13 @@ function ReportsBody() {
                 debt payments excluded.
                 {scope.includeTaxes ? '' : ' Taxes excluded.'}
               </p>
+                </>
+              ) : null}
             </>
           ) : (
-            <p className="text-sm text-muted-foreground">No activity in {monthLabel(reviewMonth)}.</p>
+            <p className="text-sm text-muted-foreground">
+              {reviewMonth ? `No activity in ${monthLabel(reviewMonth)}.` : 'No activity in this range.'}
+            </p>
           )}
         </CardContent>
       </Card>

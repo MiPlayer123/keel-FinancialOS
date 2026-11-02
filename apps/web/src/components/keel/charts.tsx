@@ -334,7 +334,10 @@ export function CashFlowMonthlyChart({
       {onMonthClick ? (
         <div
           aria-label="Open transactions for a month"
-          className="flex flex-wrap items-center gap-1 px-2"
+          // Keyboard/screen-reader path to the same drill-down the bars give
+          // mouse users. Visually it duplicated the x-axis, so it stays
+          // hidden until a button inside it takes focus.
+          className="sr-only flex-wrap items-center gap-1 px-2 focus-within:not-sr-only focus-within:flex"
         >
           {drilldownMonths.map((month) => (
             <button
@@ -729,8 +732,9 @@ export function CashFlowSankey({
       aria-label={`Cash flow diagram with ${String(nodes.length)} categories and ${String(links.length)} flows.`}
     >
       <ul className="sr-only">
-        {nodes.map((node) => (
-          <li key={`${node.column}-${node.name}`}>
+        {nodes.map((node, i) => (
+          // Index-qualified: two categories can share a display name.
+          <li key={`${node.column}-${node.name}-${String(i)}`}>
             {node.name}: {formatMoney(node.totalMinor, { currency })}
           </li>
         ))}

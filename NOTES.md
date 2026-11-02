@@ -725,3 +725,12 @@ landing page; CLAUDE.md still carries operator-specific directives; `design/refe
 (competitor screenshots, not redistributable) and full git history must be excluded from
 any public release; no seeded demo household yet; docs/research/NET-WORTH doc summarizes
 a private forum thread and needs a call before publishing.
+
+## 2026-11-02 — Reports UX pass (Stage 2, Addendum §D / Law 8)
+- Audit: `docs/UX-AUDIT-2026-11-home-reports.md` (Home + Reports, desktop + 390px, competitor research).
+- Reports scope bar collapsed to one row (range dropdown, custom dates only for "Custom range", Export inside).
+- Month in review: one-line summary + expandable details; chips limited to months with activity; defaults to
+  newest complete month and re-anchors on any scope change (previously could sit on an empty month).
+- Monthly chart's keyboard drill row is sr-only until focused (it read as a duplicate x-axis).
+- Sankey sr-only list keys index-qualified (duplicate category names collided).
+- No number/formula changes; all Law 9 footnotes kept.
