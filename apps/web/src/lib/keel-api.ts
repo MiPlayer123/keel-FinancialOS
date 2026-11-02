@@ -189,6 +189,18 @@ export async function fetchAccounts(
 }
 
 /** Rename a real-world account (checking, card, …). Plain metadata edit. */
+/**
+ * Remove (archive) or restore a manual account. Soft delete: the account and
+ * its transactions stay in the ledger and can be restored.
+ */
+export async function setAccountArchived(input: {
+  householdId: string;
+  accountId: string;
+  archived: boolean;
+}): Promise<unknown> {
+  return invoke('api/accounts/archive', input);
+}
+
 export async function renameAccount(input: {
   householdId: string;
   accountId: string;
@@ -644,6 +656,30 @@ export async function linkConnection(input: {
 export async function createLinkToken(householdId: string): Promise<string> {
   const res = await invoke<{ linkToken: string }>('api/connections/link-token', { householdId });
   return res.linkToken;
+}
+
+/**
+ * Fire-and-forget: tell the backend why a Plaid Link session ended without a
+ * connection (error code, institution, Link event trail) so failures like a
+ * broken Fidelity login are diagnosable from the function logs. Never throws.
+ */
+export async function reportLinkExit(input: {
+  householdId: string;
+  status?: string | null;
+  errorType?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  institutionId?: string | null;
+  institutionName?: string | null;
+  linkSessionId?: string | null;
+  requestId?: string | null;
+  events?: { eventName: string; errorCode?: string | null; viewName?: string | null }[];
+}): Promise<void> {
+  try {
+    await invoke('api/connections/link-exit', input);
+  } catch {
+    // diagnostics only
+  }
 }
 
 /**

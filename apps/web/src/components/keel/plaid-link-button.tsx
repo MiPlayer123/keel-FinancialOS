@@ -1,7 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { usePlaidLink, type PlaidLinkOnExit, type PlaidLinkOnSuccess } from 'react-plaid-link';
+import {
+  usePlaidLink,
+  type PlaidLinkOnEvent,
+  type PlaidLinkOnExit,
+  type PlaidLinkOnSuccess,
+} from 'react-plaid-link';
 import { useQueryClient } from '@tanstack/react-query';
 import { Plus, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -10,6 +15,7 @@ import {
   createLinkToken,
   exchangePublicToken,
   fetchEntities,
+  reportLinkExit,
 } from '@/lib/keel-api';
 import { Button } from '@/components/ui/button';
 
@@ -17,13 +23,15 @@ function PlaidLinkLauncher({
   token,
   onSuccess,
   onExit,
+  onEvent,
 }: {
   token: string;
   onSuccess: PlaidLinkOnSuccess;
   onExit: PlaidLinkOnExit;
+  onEvent: PlaidLinkOnEvent;
 }) {
   const opened = useRef(false);
-  const { open, ready } = usePlaidLink({ token, onSuccess, onExit });
+  const { open, ready } = usePlaidLink({ token, onSuccess, onExit, onEvent });
 
   useEffect(() => {
     if (!ready || opened.current) return;
@@ -61,6 +69,19 @@ export function PlaidLinkButton({
   const [token, setToken] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  // Link event trail for the current session, reported on exit so a failed
+  // institution login (e.g. Fidelity OAuth) leaves a diagnosable log line.
+  const linkEvents = useRef<{ eventName: string; errorCode?: string | null; viewName?: string | null }[]>(
+    [],
+  );
+
+  const onEvent = useCallback<PlaidLinkOnEvent>((eventName, metadata) => {
+    linkEvents.current.push({
+      eventName,
+      errorCode: metadata.error_code ?? null,
+      viewName: metadata.view_name || null,
+    });
+  }, []);
 
   const onSuccess = useCallback<PlaidLinkOnSuccess>(
     (publicToken, metadata) => {
@@ -91,20 +112,37 @@ export function PlaidLinkButton({
     [householdId, onLinked, queryClient, selectedEntityId],
   );
 
-  const onExit = useCallback<PlaidLinkOnExit>((error) => {
-    if (error) {
-      const detail = error.display_message || error.error_code || 'unknown error';
-      toast.error(`Plaid couldn't connect: ${detail}`);
-    }
-    setBusy(false);
-    setToken(null);
-  }, []);
+  const onExit = useCallback<PlaidLinkOnExit>(
+    (error, metadata) => {
+      if (error) {
+        const detail = error.display_message || error.error_code || 'unknown error';
+        toast.error(`Plaid couldn't connect: ${detail}`);
+      }
+      void reportLinkExit({
+        householdId,
+        status: metadata.status ?? null,
+        errorType: error?.error_type ?? null,
+        errorCode: error?.error_code ?? null,
+        errorMessage: error?.error_message ?? null,
+        institutionId: metadata.institution?.institution_id ?? null,
+        institutionName: metadata.institution?.name ?? null,
+        linkSessionId: metadata.link_session_id,
+        requestId: metadata.request_id,
+        events: linkEvents.current,
+      });
+      linkEvents.current = [];
+      setBusy(false);
+      setToken(null);
+    },
+    [householdId],
+  );
 
   async function beginPlaidFlow(entityId: string) {
     setSelectedEntityId(entityId);
     setBusy(true);
     try {
       const t = await createLinkToken(householdId);
+      linkEvents.current = [];
       setToken(t);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not start Plaid.');
@@ -140,7 +178,13 @@ export function PlaidLinkButton({
   return (
     <>
       {token ? (
-        <PlaidLinkLauncher key={token} token={token} onSuccess={onSuccess} onExit={onExit} />
+        <PlaidLinkLauncher
+          key={token}
+          token={token}
+          onSuccess={onSuccess}
+          onExit={onExit}
+          onEvent={onEvent}
+        />
       ) : null}
       <Button
         size="sm"
