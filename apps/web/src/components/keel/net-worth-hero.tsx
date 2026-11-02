@@ -53,7 +53,10 @@ export function NetWorthHero({
   entityScoped = false,
   scopeLabel,
   chartHeight = 180,
+  breakdown,
 }: {
+  /** Optional line under the number (Home: assets · liabilities). */
+  breakdown?: React.ReactNode;
   /** Trend chart height in px (Home uses a compact hero beside the month card). */
   chartHeight?: number;
   householdId: string | null;
@@ -151,6 +154,7 @@ export function NetWorthHero({
                 </span>
               ) : null}
             </div>
+            {breakdown}
             {asOf !== null ? (
               <p className="text-xs text-muted-foreground">
                 As of {asOfLabel(asOf)}

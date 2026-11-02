@@ -756,3 +756,8 @@ a private forum thread and needs a call before publishing.
 - Reports follow-ups: early-month default preset (days 1–7 → last_month; serializer takes `now`, tests pinned),
   Month in review rolled to parent grain, monthly chart average-spend reference line + prior-month Δ tooltip,
   entity suffix only for collisions active in scope. Demo-data redate was cancelled by the user (nothing written).
+- Home/Reports polish: net-worth assets · liabilities line (same kinds/balances as the sidebar subtotals),
+  one-row page header (Review shortcut hidden < sm; tab bar carries it), transfer nudge moved under the
+  scope bar, % in the monthly Δ tooltip, Upcoming card now merges active schedules (overdue labelled) with
+  confirmed series occurrences. Finding: demo login's recurring.list returns no series (Recurring page empty)
+  despite 5 confirmed series with candidates — data/access issue, not UI; flagged for follow-up.

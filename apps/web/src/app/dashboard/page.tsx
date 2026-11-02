@@ -14,6 +14,7 @@ import {
   fetchBudgets,
   fetchCashFlowForecast,
   fetchConnections,
+  fetchLedgerKinds,
   fetchSchedules,
   syncConnection,
   type AccountRow,
@@ -479,18 +480,9 @@ function MonthPaceCard({ pace }: { pace: MonthPace }) {
               <span className="flex items-center gap-1.5">
                 <span className="h-0 w-4 border-t border-dashed border-muted-foreground" />
                 {prevName}
-                {prevHasData ? (
-                  <>
-                    {' '}
-                    (total{' '}
-                    <Money
-                      amountMinor={pace.prevSpentTotalMinor.toString()}
-                      currency={pace.currency}
-                      className="text-xs text-muted-foreground"
-                    />
-                    )
-                  </>
-                ) : null}
+                {prevHasData
+                  ? ` (total ${formatMoney(pace.prevSpentTotalMinor.toString(), { currency: pace.currency })})`
+                  : null}
               </span>
             </div>
           </>
@@ -503,9 +495,18 @@ function MonthPaceCard({ pace }: { pace: MonthPace }) {
   );
 }
 
-type UpcomingRecurring = {
-  series: RecurringSeriesRow;
-  occurrence: RecurringSeriesRow['occurrences'][number];
+/** One upcoming money event: a confirmed series' expected occurrence or an
+ *  active schedule's next due date (overdue schedules included — they're
+ *  still ahead of you until entered). */
+type UpcomingItem = {
+  key: string;
+  name: string;
+  date: string;
+  /** Signed: negative = money out. */
+  amountMinor: string;
+  currency: string;
+  href: string;
+  scheduled: boolean;
 };
 
 function RecentTransactionsCard({ rows }: { rows: RichTransactionRow[] }) {
@@ -562,9 +563,11 @@ function RecentTransactionsCard({ rows }: { rows: RichTransactionRow[] }) {
 function UpcomingRecurringCard({
   rows,
   todayIso,
+  confirmedCount,
 }: {
-  rows: UpcomingRecurring[];
+  rows: UpcomingItem[];
   todayIso: string;
+  confirmedCount: number;
 }) {
   return (
     <Card size="sm">
@@ -582,36 +585,29 @@ function UpcomingRecurringCard({
       <CardContent>
         {rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            Confirm recurring bills and income to see what is coming up.
+            {confirmedCount > 0
+              ? `Nothing scheduled yet from your ${String(confirmedCount)} confirmed recurring series — upcoming dates appear after the next sync projects them.`
+              : 'Confirm recurring bills and income to see what is coming up.'}
           </p>
         ) : (
-          rows.map(({ series, occurrence }, index) => (
-            <Fragment key={occurrence.occurrenceId}>
-              {/* The occurrence is still EXPECTED (no posted txn yet), so drill
-                  into the ledger for this counterparty's PAST postings — the
-                  underlying transactions behind the recurring figure (same
-                  counterparty `?q=` drill Recent transactions uses). */}
+          rows.map((item, index) => (
+            <Fragment key={item.key}>
               <Link
-                href={`/dashboard/ledger?q=${encodeURIComponent(series.counterpartyKey)}`}
+                href={item.href}
                 className="-mx-2 flex min-w-0 items-center gap-3 rounded-md px-2 py-2 transition-colors first:pt-0 last:pb-0 hover:bg-accent"
               >
                 <CalendarClock className="size-4 shrink-0 text-muted-foreground" />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">
-                    {merchantDisplayName(series.counterpartyKey)}
-                  </p>
+                  <p className="truncate text-sm font-medium">{item.name}</p>
                   <p className="text-xs text-muted-foreground">
-                    {relativeDueLabel(occurrence.expectedDate, todayIso) ??
-                      occurrence.expectedDate.slice(5)}
+                    {item.date < todayIso ? 'Overdue · ' : ''}
+                    {relativeDueLabel(item.date, todayIso) ?? item.date.slice(5)}
+                    {item.scheduled ? ' · scheduled' : ''}
                   </p>
                 </div>
                 <Money
-                  amountMinor={
-                    series.sign === 'outflow'
-                      ? `-${occurrence.expectedAmountMinor}`
-                      : occurrence.expectedAmountMinor
-                  }
-                  currency={occurrence.currency}
+                  amountMinor={item.amountMinor}
+                  currency={item.currency}
                   signed
                   className="shrink-0 text-sm"
                 />
@@ -785,6 +781,7 @@ function HomeBody() {
   const [accountsAttempt, setAccountsAttempt] = useState(0);
   const [connections, setConnections] = useState<ConnectionRow[] | null>(null);
   const [schedules, setSchedules] = useState<ScheduleRow[]>([]);
+  const [ledgerKinds, setLedgerKinds] = useState<Map<string, string> | null>(null);
   const [budgets, setBudgets] = useState<BudgetRow[] | null>(null);
   const [forecast, setForecast] = useState<{
     rows: DailyBalanceRow[];
@@ -871,6 +868,23 @@ function HomeBody() {
     };
   }, [householdId]);
 
+  // Ledger-account kinds for the assets / liabilities line under net worth
+  // (the same split the sidebar's account rail and Accounts page use).
+  useEffect(() => {
+    if (!householdId) return;
+    let active = true;
+    void fetchLedgerKinds(householdId)
+      .then((k) => {
+        if (active) setLedgerKinds(k);
+      })
+      .catch(() => {
+        if (active) setLedgerKinds(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [householdId]);
+
   useEffect(() => {
     if (!householdId) return;
     let active = true;
@@ -924,22 +938,48 @@ function HomeBody() {
   );
   const todayIso = new Date().toISOString().slice(0, 10);
   const pace = useMemo(() => monthPace(lensTxns, todayIso), [lensTxns, todayIso]);
-  const upcomingRecurring = useMemo(
-    () =>
-      recurringSeries.rows
-        .filter((series) => series.status === 'confirmed')
-        .flatMap((series) =>
-          series.occurrences
-            .filter(
-              (occurrence) =>
-                occurrence.status === 'expected' && occurrence.expectedDate >= todayIso,
-            )
-            .map((occurrence) => ({ series, occurrence })),
-        )
-        .sort((a, b) => a.occurrence.expectedDate.localeCompare(b.occurrence.expectedDate))
-        .slice(0, 6),
-    [recurringSeries.rows, todayIso],
-  );
+  const upcomingRecurring = useMemo<UpcomingItem[]>(() => {
+    const horizon = new Date(`${todayIso}T00:00:00Z`);
+    horizon.setUTCDate(horizon.getUTCDate() + 30);
+    const horizonIso = horizon.toISOString().slice(0, 10);
+    const fromSeries: UpcomingItem[] = recurringSeries.rows
+      .filter((series) => series.status === 'confirmed')
+      .flatMap((series) =>
+        series.occurrences
+          .filter(
+            (occurrence) =>
+              occurrence.status === 'expected' && occurrence.expectedDate >= todayIso,
+          )
+          .map((occurrence) => ({
+            key: occurrence.occurrenceId,
+            name: merchantDisplayName(series.counterpartyKey),
+            date: occurrence.expectedDate,
+            amountMinor:
+              series.sign === 'outflow'
+                ? `-${occurrence.expectedAmountMinor}`
+                : occurrence.expectedAmountMinor,
+            currency: occurrence.currency,
+            // Still EXPECTED (no posted txn yet): drill into this
+            // counterparty's past postings behind the recurring figure.
+            href: `/dashboard/ledger?q=${encodeURIComponent(series.counterpartyKey)}`,
+            scheduled: false,
+          })),
+      );
+    const fromSchedules: UpcomingItem[] = schedules
+      .filter((sc) => sc.status === 'active' && sc.nextDueDate <= horizonIso)
+      .map((sc) => ({
+        key: `schedule-${sc.scheduleId}`,
+        name: merchantDisplayName(sc.description),
+        date: sc.nextDueDate,
+        amountMinor: sc.amountMinor,
+        currency: sc.currency,
+        href: '/dashboard/recurring',
+        scheduled: true,
+      }));
+    return [...fromSeries, ...fromSchedules]
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .slice(0, 6);
+  }, [recurringSeries.rows, schedules, todayIso]);
 
   if (loading) {
     return (
@@ -996,6 +1036,46 @@ function HomeBody() {
     rowCount: 0,
   };
 
+  // Assets / liabilities in the primary currency, summed exactly as the
+  // sidebar subtotals are (same balances, same kinds) so the three reconcile.
+  let assetsMinor = 0n;
+  let liabilitiesMinor = 0n;
+  let hasLiabilities = false;
+  if (ledgerKinds) {
+    for (const account of accountList) {
+      if (account.currency !== primaryNet.currency) continue;
+      const bal = BigInt(balanceByLedger.get(account.ledgerAccountId) ?? '0');
+      const kind = ledgerKinds.get(account.ledgerAccountId);
+      if (kind === 'asset') assetsMinor += bal;
+      else if (kind === 'liability') {
+        liabilitiesMinor += bal;
+        hasLiabilities = true;
+      }
+    }
+  }
+  const netBreakdown = ledgerKinds ? (
+    <p className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+      <span>
+        Assets{' '}
+        <Money
+          amountMinor={assetsMinor.toString()}
+          currency={primaryNet.currency}
+          className="text-xs text-foreground"
+        />
+      </span>
+      {hasLiabilities ? (
+        <span>
+          Liabilities{' '}
+          <Money
+            amountMinor={liabilitiesMinor.toString()}
+            currency={primaryNet.currency}
+            className="text-xs text-foreground"
+          />
+        </span>
+      ) : null}
+    </p>
+  ) : null;
+
   const monthlyFlowGroups = [...new Set(monthlyFlow.rows.map((row) => row.currency))]
     .map((currency) => ({
       currency,
@@ -1034,6 +1114,7 @@ function HomeBody() {
             fallbackAsOf={balances.asOf}
             entityScoped={lensActive}
             chartHeight={120}
+            breakdown={netBreakdown}
             {...(lensActive && lensEntity ? { scopeLabel: `${lensEntity.name} only` } : {})}
           />
           <div className="flex justify-end px-1">
@@ -1074,7 +1155,11 @@ function HomeBody() {
         </div>
         <div className="flex min-w-0 flex-col gap-4 lg:col-span-5">
           {lensActive || recurringSeries.error ? null : (
-            <UpcomingRecurringCard rows={upcomingRecurring} todayIso={todayIso} />
+            <UpcomingRecurringCard
+              rows={upcomingRecurring}
+              todayIso={todayIso}
+              confirmedCount={recurringSeries.rows.filter((r) => r.status === 'confirmed').length}
+            />
           )}
           {/* Pre-aggregated household read model — hidden under a lens. */}
           {lensActive ? null : monthlyFlow.error ? (

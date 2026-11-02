@@ -425,11 +425,15 @@ export function CashFlowMonthlyChart({
                       (() => {
                         const d = BigInt(p.row.outflowMinor || '0') - BigInt(p.prevOutMinor || '0');
                         if (d === 0n) return null;
-                        const mag = (d < 0n ? -d : d).toString();
+                        const magBig = d < 0n ? -d : d;
+                        const base = BigInt(p.prevOutMinor || '0');
+                        // Display-only percent (integer BigInt division).
+                        const pct = base > 0n ? `${String((magBig * 100n) / base)}%` : null;
                         return (
                           <p className="text-muted-foreground">
                             Spending {d > 0n ? '↑' : '↓'}{' '}
-                            {formatMoney(mag, { currency: p.row.currency })} vs prior month
+                            {formatMoney(magBig.toString(), { currency: p.row.currency })}
+                            {pct ? ` (${pct})` : ''} vs prior month
                           </p>
                         );
                       })()

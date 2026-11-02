@@ -1562,8 +1562,6 @@ function ReportsBody() {
 
   return (
     <>
-      <TransferNudgeBanner count={suggestedCount} />
-
       <ScopeBar
         scope={scope}
         accounts={accounts}
@@ -1571,6 +1569,10 @@ function ReportsBody() {
         onScopeChange={setScope}
         onExport={handleExportCsv}
       />
+
+      {/* Data-quality nudge sits under the filters, not above them — the
+          scope bar is the page's primary control. */}
+      <TransferNudgeBanner count={suggestedCount} />
 
       {rangedRowsFull.length === 0 ? (
         <EmptyState
