@@ -20,6 +20,7 @@ import {
   LineChart,
   Pie,
   PieChart,
+  ReferenceLine,
   ResponsiveContainer,
   Sankey,
   Tooltip,
@@ -328,9 +329,20 @@ export function CashFlowMonthlyChart({
   onMonthClick?: (month: string) => void;
 }) {
   const thisMonth = currentMonthKey();
-  const data = rows.map((r) => {
+  // Average monthly spend over COMPLETE months with activity — the dashed
+  // baseline each bar is read against. BigInt sum, Number only for geometry.
+  const avgBase = rows.filter(
+    (r) => r.month !== thisMonth && (r.outflowMinor !== '0' || r.inflowMinor !== '0'),
+  );
+  const avgOutMinor =
+    avgBase.length >= 2
+      ? avgBase.reduce((acc, r) => acc + BigInt(r.outflowMinor || '0'), 0n) / BigInt(avgBase.length)
+      : null;
+  const data = rows.map((r, i) => {
     const inProgress = r.month === thisMonth;
+    const prevRow = i > 0 ? rows[i - 1] : undefined;
     return {
+      prevOutMinor: prevRow ? prevRow.outflowMinor : null,
       month: r.month,
       inflow: toGeometry(r.inflowMinor),
       outflow: toGeometry(r.outflowMinor),
@@ -409,10 +421,32 @@ export function CashFlowMonthlyChart({
                     <p className="font-mono font-medium tabular-nums">
                       Net {formatMoney(p.row.netMinor, { currency: p.row.currency, signed: true })}
                     </p>
+                    {p.prevOutMinor !== null && !p.inProgress ? (
+                      (() => {
+                        const d = BigInt(p.row.outflowMinor || '0') - BigInt(p.prevOutMinor || '0');
+                        if (d === 0n) return null;
+                        const mag = (d < 0n ? -d : d).toString();
+                        return (
+                          <p className="text-muted-foreground">
+                            Spending {d > 0n ? '↑' : '↓'}{' '}
+                            {formatMoney(mag, { currency: p.row.currency })} vs prior month
+                          </p>
+                        );
+                      })()
+                    ) : null}
                   </TooltipShell>
                 );
               }}
             />
+            {avgOutMinor !== null ? (
+              <ReferenceLine
+                y={toGeometry(avgOutMinor.toString())}
+                stroke={INK_MUTED}
+                strokeOpacity={0.7}
+                strokeDasharray="4 4"
+                ifOverflow="extendDomain"
+              />
+            ) : null}
             <Bar
               dataKey="inflow"
               fill="var(--keel-chart-inflow)"
@@ -452,7 +486,7 @@ export function CashFlowMonthlyChart({
           ))}
         </div>
       ) : null}
-      <div className="flex items-center gap-4 px-2 text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-2 text-xs text-muted-foreground">
         <span className="flex items-center gap-1.5">
           <span className="size-2.5 rounded-[3px]" style={{ background: 'var(--keel-chart-inflow)' }} />
           Money in
@@ -461,6 +495,12 @@ export function CashFlowMonthlyChart({
           <span className="size-2.5 rounded-[3px]" style={{ background: 'var(--keel-chart-outflow)' }} />
           Money out
         </span>
+        {avgOutMinor !== null && rows[0] ? (
+          <span className="flex items-center gap-1.5">
+            <span className="h-0 w-4 border-t border-dashed border-muted-foreground" />
+            Avg out {formatMoney(avgOutMinor.toString(), { currency: rows[0].currency })}
+          </span>
+        ) : null}
         {data.some((d) => d.inProgress) ? (
           <span className="text-muted-foreground/80">* this month so far</span>
         ) : null}

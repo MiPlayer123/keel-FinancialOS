@@ -21,6 +21,11 @@ Monarch, Copilot, YNAB, Simplifi, Lunch Money, Empower and Origin. Severity: **P
 | R7 | Reports | Duplicate category names across entities | Colliding names get the entity suffix ("Shopping · Personal") — display only |
 | R8 | Reports | Matrix totals `$0.00` vs cells `—`; mobile opened on oldest months | Totals show `—`; table starts scrolled to the newest months |
 | R9 | Reports | Sankey clipped on phones; allocation card 100% "Unclassified" | Sankey hidden below `sm` (donut covers it); allocation hidden until something is classified |
+| R10 | Reports | "This month" landing view is near-empty early in a month | Bare /dashboard/reports opens on Last month for days 1–7 (`defaultScopePreset`) |
+| R11 | Reports | Month in review used leaf categories while the donut used parents | Top categories roll up to parents, so they reconcile with the donut/matrix |
+| R12 | Reports | Monthly bars had no baseline | Dashed average-spend line (complete months) + "spending ↑/↓ vs prior month" in the tooltip |
+
+Entity suffixes appear only when same-named categories from different entities both have activity in scope.
 
 ## Open findings
 

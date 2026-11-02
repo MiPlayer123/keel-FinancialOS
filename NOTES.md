@@ -738,3 +738,6 @@ a private forum thread and needs a call before publishing.
   Reports' spend semantics), compact net-worth hero (`chartHeight`), 7/5 two-column layout, empty projection hidden.
   Reports: movers use newest active months; cross-entity duplicate category names suffixed (display-only copy,
   tax matching untouched); matrix zero totals as —; Sankey hidden < sm; all-unclassified allocation hidden.
+- Reports follow-ups: early-month default preset (days 1–7 → last_month; serializer takes `now`, tests pinned),
+  Month in review rolled to parent grain, monthly chart average-spend reference line + prior-month Δ tooltip,
+  entity suffix only for collisions active in scope. Demo-data redate was cancelled by the user (nothing written).

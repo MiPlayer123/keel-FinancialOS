@@ -726,6 +726,7 @@ function buildMonthReview(
   rows: RichTransactionRow[],
   month: string,
   currency: string,
+  categories: CategoryRow[],
 ): MonthReview {
   const prevMonth = prevMonthKey(month);
   const curr = monthIncomeAndSpending(rows, month, currency);
@@ -737,12 +738,27 @@ function buildMonthReview(
   const netMinor = curr.incomeMinor - currSpendingMinor;
   const prevNetMinor = prev.incomeMinor - prevSpendingMinor;
 
-  const topCategories: MonthReviewCategory[] = [...curr.categories.entries()]
-    .map(([key, c]) => ({
+  // Parent grain, matching the donut / matrix / Sankey (subcategories roll
+  // up into their parents) so the review's top categories reconcile with them.
+  const toEntries = (m: Map<string, { name: string; amountMinor: bigint }>) =>
+    [...m.entries()].map(([key, c]) => ({
       categoryId: key === 'uncategorized' ? null : key,
       name: c.name,
       amountMinor: c.amountMinor,
-      deltaMinor: c.amountMinor - (prev.categories.get(key)?.amountMinor ?? 0n),
+    }));
+  const currGroups = rollupCategoryTotals(toEntries(curr.categories), categories);
+  const prevByKey = new Map(
+    rollupCategoryTotals(toEntries(prev.categories), categories).map((g) => [
+      g.categoryId ?? 'uncategorized',
+      g.amountMinor,
+    ]),
+  );
+  const topCategories: MonthReviewCategory[] = currGroups
+    .map((g) => ({
+      categoryId: g.categoryId,
+      name: g.name,
+      amountMinor: g.amountMinor,
+      deltaMinor: g.amountMinor - (prevByKey.get(g.categoryId ?? 'uncategorized') ?? 0n),
     }))
     .sort((a, b) => (b.amountMinor > a.amountMinor ? 1 : b.amountMinor < a.amountMinor ? -1 : 0))
     .slice(0, 5);
@@ -1209,16 +1225,39 @@ function ReportsBody() {
   );
   const taxIds = useMemo(() => taxCategoryIdSet(categories), [categories]);
   /** Display copy of the category list: categories are per entity, so an
-   *  "All entities" view can show two "Shopping" parents — suffix the entity
-   *  name on colliding names. Display-only; ids and tax matching use
-   *  `categories`. */
+   *  "All entities" view can show two "Shopping" parents. Suffix the entity
+   *  name only when same-named categories from different entities BOTH have
+   *  activity in the account/entity scope (a dormant twin shouldn't make every
+   *  label noisy). Display-only; ids and tax matching use `categories`. */
   const displayCategories = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const c of categories) counts.set(c.name, (counts.get(c.name) ?? 0) + 1);
+    const byId = new Map(categories.map((c) => [c.ledgerAccountId, c]));
+    const used = new Set<string>();
+    const mark = (id: string | null | undefined) => {
+      let cur = id ? byId.get(id) : undefined;
+      let guard = 0;
+      while (cur && guard < 4) {
+        used.add(cur.ledgerAccountId);
+        cur = cur.parentLedgerAccountId ? byId.get(cur.parentLedgerAccountId) : undefined;
+        guard += 1;
+      }
+    };
+    for (const t of scopedRows) {
+      mark(t.categoryLedgerAccountId);
+      for (const sp of t.splits ?? []) mark(sp.categoryLedgerAccountId);
+    }
+    const entitiesByName = new Map<string, Set<string>>();
+    for (const c of categories) {
+      if (!used.has(c.ledgerAccountId)) continue;
+      const set = entitiesByName.get(c.name) ?? new Set<string>();
+      set.add(c.entityId);
+      entitiesByName.set(c.name, set);
+    }
     return categories.map((c) =>
-      (counts.get(c.name) ?? 0) > 1 && c.entityName ? { ...c, name: `${c.name} · ${c.entityName}` } : c,
+      (entitiesByName.get(c.name)?.size ?? 0) > 1 && c.entityName
+        ? { ...c, name: `${c.name} · ${c.entityName}` }
+        : c,
     );
-  }, [categories]);
+  }, [categories, scopedRows]);
   /** Scoped rows with tax payments removed when the scope bar says taxes off. */
   const spendScopedRows = useMemo(
     () => (scope.includeTaxes ? scopedRows : excludeTaxSpend(scopedRows, taxIds)),
@@ -1340,8 +1379,11 @@ function ReportsBody() {
   // Currency voted over the SAME tax-filtered population the review sums
   // (codex r2264 on PR #162).
   const monthReview = useMemo(
-    () => (reviewMonth ? buildMonthReview(spendScopedRows, reviewMonth, reviewCurrency) : null),
-    [spendScopedRows, reviewMonth, reviewCurrency],
+    () =>
+      reviewMonth
+        ? buildMonthReview(spendScopedRows, reviewMonth, reviewCurrency, displayCategories)
+        : null,
+    [spendScopedRows, reviewMonth, reviewCurrency, displayCategories],
   );
   // Includes archived categories: their history stays on the tax schedule.
   const [taxLines, setTaxLines] = useState<Map<string, string>>(new Map());

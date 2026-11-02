@@ -24,6 +24,16 @@ export type RangePresetKey = (typeof RANGE_PRESETS)[number]['key'];
 
 export const DEFAULT_SCOPE_PRESET: RangePresetKey = 'this_month';
 
+/** Days into a month during which "This month" is still too thin to be the
+ *  landing view; Reports opens on last month instead (audit 2026-11-02). */
+export const EARLY_MONTH_DAYS = 7;
+
+/** The preset a bare /dashboard/reports opens on: last month for the first
+ *  week of a month, otherwise this month. */
+export function defaultScopePreset(now: Date = new Date()): RangePresetKey {
+  return now.getUTCDate() <= EARLY_MONTH_DAYS ? 'last_month' : DEFAULT_SCOPE_PRESET;
+}
+
 const PRESET_KEYS = new Set<string>(RANGE_PRESETS.map((p) => p.key));
 const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -102,7 +112,7 @@ export function parseReportScope(params: ScopeParamsLike, now: Date = new Date()
     from = fromParam;
     to = toParam;
   } else {
-    preset = DEFAULT_SCOPE_PRESET;
+    preset = defaultScopePreset(now);
     ({ from, to } = presetRange(preset, now));
   }
 
@@ -123,10 +133,10 @@ export function parseReportScope(params: ScopeParamsLike, now: Date = new Date()
  * plain /dashboard/reports stays canonical; presets serialize as `range` (not
  * frozen dates) so a bookmarked "This month" is always this month.
  */
-export function reportScopeToSearch(scope: ReportScope): string {
+export function reportScopeToSearch(scope: ReportScope, now: Date = new Date()): string {
   const p = new URLSearchParams();
   if (scope.preset !== null) {
-    if (scope.preset !== DEFAULT_SCOPE_PRESET) p.set('range', scope.preset);
+    if (scope.preset !== defaultScopePreset(now)) p.set('range', scope.preset);
   } else {
     p.set('from', scope.from);
     p.set('to', scope.to);
