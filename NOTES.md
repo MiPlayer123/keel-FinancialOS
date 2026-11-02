@@ -2,6 +2,21 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+## 2026-11-02 Supabase CLI 3.0.0 broke CI, so function deploys stopped
+
+Every workflow installed the Supabase CLI as `version: latest`. Latest became 3.0.0, which
+refuses `[inbucket]` in `supabase/config.toml` ("no longer supported. Use [local_smtp]
+instead"), so `supabase start` failed in the `database`, `integration` and
+`live-schema-drift` jobs. CI on main went red from c9bfd20 (first red run 2026-11-02 15:32
+UTC), and `deploy-functions` refused to deploy, as designed. Migrations still went out (the
+apply-migration runs succeeded), but the edge functions did not: `POST /accounts/archive`
+and `POST /connections/link-exit` from the two entries below were not live.
+
+Fix: renamed the section to `[local_smtp]` (same keys) and pinned the CLI to 3.0.0 in all
+four `setup-cli` steps, so a new major cannot change CI overnight again. Verified locally
+with CLI 3.0.0: config now loads. Remaining warnings, not errors: `auth.email.enable_signup`
+and `auth.sms.enable_signup` are deprecated in favour of `auth.*.enabled` and go away in v4.
+
 ## 2026-10-30 What the first live-schema-drift runs found, and the repair
 
 Applied PR #178's other four migrations (`20260828011000`–`014000`) with the new
