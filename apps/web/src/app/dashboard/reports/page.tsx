@@ -1208,6 +1208,17 @@ function ReportsBody() {
     [txns.rows, accountSet],
   );
   const taxIds = useMemo(() => taxCategoryIdSet(categories), [categories]);
+  /** Display copy of the category list: categories are per entity, so an
+   *  "All entities" view can show two "Shopping" parents — suffix the entity
+   *  name on colliding names. Display-only; ids and tax matching use
+   *  `categories`. */
+  const displayCategories = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const c of categories) counts.set(c.name, (counts.get(c.name) ?? 0) + 1);
+    return categories.map((c) =>
+      (counts.get(c.name) ?? 0) > 1 && c.entityName ? { ...c, name: `${c.name} · ${c.entityName}` } : c,
+    );
+  }, [categories]);
   /** Scoped rows with tax payments removed when the scope bar says taxes off. */
   const spendScopedRows = useMemo(
     () => (scope.includeTaxes ? scopedRows : excludeTaxSpend(scopedRows, taxIds)),
@@ -1236,7 +1247,7 @@ function ReportsBody() {
   const scopeText = scope.includeTaxes ? baseScopeText : `${baseScopeText} · taxes excluded`;
 
   const [view, setView] = useState<'expense' | 'income'>('expense');
-  const flow = useMemo(() => buildFlow(rangedRows, categories), [rangedRows, categories]);
+  const flow = useMemo(() => buildFlow(rangedRows, displayCategories), [rangedRows, displayCategories]);
 
   const donutReport = useMemo(
     () => categoryRangeTotals(spendScopedRows, scope.from, scope.to),
@@ -1246,8 +1257,8 @@ function ReportsBody() {
   // a slice is a parent's rolled-up net; its leaves live one click (or one
   // hover) below.
   const donutGroups = useMemo(
-    () => rollupCategoryTotals(donutReport.entries, categories),
-    [donutReport, categories],
+    () => rollupCategoryTotals(donutReport.entries, displayCategories),
+    [donutReport, displayCategories],
   );
   const donutPositive = useMemo(
     () => donutGroups.filter((g) => g.amountMinor > 0n),
@@ -1353,7 +1364,10 @@ function ReportsBody() {
   );
   // F-016b: parent-level rollup is the default view of the matrix; leaves
   // stay reachable behind each parent's chevron.
-  const rolledMatrix = useMemo(() => rollupMatrix(matrix, categories), [matrix, categories]);
+  const rolledMatrix = useMemo(
+    () => rollupMatrix(matrix, displayCategories),
+    [matrix, displayCategories],
+  );
   const matrixMonthTotals = useMemo(() => {
     const totals = new Map<string, bigint>();
     for (const row of rolledMatrix) {
@@ -1412,10 +1426,16 @@ function ReportsBody() {
     [rangedRows, creditCardIds],
   );
 
+  // The two newest months with any activity — comparing two empty trailing
+  // months would hide the card for no reason.
+  const moverMonths = useMemo(() => {
+    const active = months.filter((m) => (matrixMonthTotals.get(m) ?? 0n) !== 0n);
+    return [active[active.length - 2], active[active.length - 1]] as const;
+  }, [months, matrixMonthTotals]);
   // Parent grain (rolledMatrix), matching the matrix's default view — a
   // seeded subcategory tree at leaf grain would fragment the biggest movers.
   const comparison = useMemo(() => {
-    const [prev, curr] = [months[months.length - 2], months[months.length - 1]];
+    const [prev, curr] = moverMonths;
     if (!prev || !curr) return [];
     return rolledMatrix
       .map((row) => {
@@ -1437,7 +1457,7 @@ function ReportsBody() {
         return ay > ax ? 1 : ay < ax ? -1 : 0;
       })
       .slice(0, 8);
-  }, [rolledMatrix, months]);
+  }, [rolledMatrix, moverMonths]);
 
   // C15: export EXACTLY the current scope bar's resolution — the full
   // scoped transaction set (accounts ∩ entity, [from, to]), not any single
@@ -1769,7 +1789,7 @@ function ReportsBody() {
       </Card>
 
       {flow ? (
-        <Card>
+        <Card className="hidden sm:flex">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
               Where the money went
@@ -1879,7 +1899,14 @@ function ReportsBody() {
             subcategories.
             {monthsTruncatedNote}
           </p>
-          <div className="overflow-x-auto">
+          <div
+            className="overflow-x-auto"
+            ref={(el) => {
+              // Narrow screens: start scrolled to the newest months, not the
+              // oldest (often empty) ones.
+              if (el && el.scrollLeft === 0) el.scrollLeft = el.scrollWidth;
+            }}
+          >
             <table className="w-full min-w-[560px] text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs text-muted-foreground">
@@ -2039,7 +2066,11 @@ function ReportsBody() {
                     const v = matrixMonthTotals.get(m) ?? 0n;
                     return (
                       <td key={m} className="px-2 py-2 text-right">
-                        <Money amountMinor={v.toString()} className="text-sm font-medium" />
+                        {v === 0n ? (
+                          <span className="text-muted-foreground">—</span>
+                        ) : (
+                          <Money amountMinor={v.toString()} className="text-sm font-medium" />
+                        )}
                       </td>
                     );
                   })}
@@ -2088,7 +2119,7 @@ function ReportsBody() {
         </Card>
       ) : null}
 
-      {allocation.length > 0 ? (
+      {allocation.length > 0 && allocation.some((a) => a.name !== 'Unclassified') ? (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -2176,8 +2207,7 @@ function ReportsBody() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              {monthLabel(months[months.length - 1] ?? '')} vs{' '}
-              {monthLabel(months[months.length - 2] ?? '')}
+              {monthLabel(moverMonths[1] ?? '')} vs {monthLabel(moverMonths[0] ?? '')}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">

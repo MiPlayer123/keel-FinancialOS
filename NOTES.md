@@ -734,3 +734,7 @@ a private forum thread and needs a call before publishing.
 - Monthly chart's keyboard drill row is sr-only until focused (it read as a duplicate x-axis).
 - Sankey sr-only list keys index-qualified (duplicate category names collided).
 - No number/formula changes; all Law 9 footnotes kept.
+- Home redesign (same branch): This-month pace card (`lib/month-pace.ts`, tested; same-day-last-month comparison,
+  Reports' spend semantics), compact net-worth hero (`chartHeight`), 7/5 two-column layout, empty projection hidden.
+  Reports: movers use newest active months; cross-entity duplicate category names suffixed (display-only copy,
+  tax matching untouched); matrix zero totals as —; Sankey hidden < sm; all-unclassified allocation hidden.

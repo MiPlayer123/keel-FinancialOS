@@ -14,6 +14,14 @@ Monarch, Copilot, YNAB, Simplifi, Lunch Money, Empower and Origin. Severity: **P
 | R4 | Reports | Monthly chart showed a second row of month labels (keyboard drill buttons) that read as a broken, misaligned x-axis | Row is visually hidden until it receives keyboard focus |
 | R5 | Reports | Duplicate React keys in the Sankey when two categories share a name (console errors) | Index-qualified keys |
 
+| H1 | Home | No "where do I stand this month" number | New **This month** card: month-to-date spend vs the same day last month, earned, net, cumulative pace chart (last month dashed) |
+| H2 | Home | Ragged two-column grid with holes; net worth hero took the full top row | 7/5 two-column layout: This month + compact net worth on top; spending + recent left; upcoming, cash flow (6 mo), free-to-spend, projection, notes right |
+| H3 | Home | Empty "Cash flow · last 30 days" and empty "Projected cash" cards | Cash-flow card replaced by This month; projection card only shows once it has a real forecast |
+| R6 | Reports | Biggest movers compared the last two months of the range even when empty | Compares the two newest months with activity (title follows) |
+| R7 | Reports | Duplicate category names across entities | Colliding names get the entity suffix ("Shopping · Personal") — display only |
+| R8 | Reports | Matrix totals `$0.00` vs cells `—`; mobile opened on oldest months | Totals show `—`; table starts scrolled to the newest months |
+| R9 | Reports | Sankey clipped on phones; allocation card 100% "Unclassified" | Sankey hidden below `sm` (donut covers it); allocation hidden until something is classified |
+
 ## Open findings
 
 ### P0

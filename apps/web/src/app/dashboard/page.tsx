@@ -32,8 +32,13 @@ import { buildInsights, type Insight } from '@/lib/dashboard-insights';
 import { stepScheduleDue } from '@/lib/recurring';
 import { relativeDueLabel } from '@/lib/relative-date';
 import { Badge } from '@/components/ui/badge';
-import { CashFlowCard } from '@/components/keel/cash-flow-card';
-import { BalanceTrendChart, CashFlowMonthlyChart, CategoryBarList } from '@/components/keel/charts';
+import {
+  BalanceTrendChart,
+  CashFlowMonthlyChart,
+  CategoryBarList,
+  MonthPaceChart,
+} from '@/components/keel/charts';
+import { monthPace, type MonthPace } from '@/lib/month-pace';
 import { spendingMix } from '@/lib/spending';
 import { NetWorthHero } from '@/components/keel/net-worth-hero';
 import { NotesTasksCard } from '@/components/keel/notes-tasks-card';
@@ -43,7 +48,14 @@ import { currencyTotals, primaryCurrencyTotal } from '@/lib/currency-totals';
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button, buttonVariants } from '@/components/ui/button';
-import { CalendarClock, RefreshCw, Loader2, TrendingUp } from 'lucide-react';
+import {
+  ArrowDownRight,
+  ArrowUpRight,
+  CalendarClock,
+  RefreshCw,
+  Loader2,
+  TrendingUp,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
@@ -351,6 +363,141 @@ function FreeToSpendCard({
             pause one on the Recurring page).
           </p>
         ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function shortMonth(key: string): string {
+  return MONTH_NAMES[Number(key.slice(5, 7)) - 1] ?? key;
+}
+
+/**
+ * "Where do I stand this month" — the first thing on Home. Month-to-date
+ * spend vs the SAME day last month (never vs a full month, which would read
+ * "way under" every early-month visit), with last month's curve as the pace
+ * line. Lens-scoped like every transaction-derived card.
+ */
+function MonthPaceCard({ pace }: { pace: MonthPace }) {
+  const thisName = shortMonth(pace.month);
+  const prevName = shortMonth(pace.prevMonth);
+  const delta = pace.spentMinor - pace.prevSpentToDateMinor;
+  const netMinor = pace.incomeMinor - pace.spentMinor;
+  const empty = pace.spentMinor === 0n && pace.incomeMinor === 0n;
+  const prevHasData = pace.prevSpentTotalMinor !== 0n;
+  return (
+    <Card size="sm" className="h-full">
+      <CardHeader>
+        <CardTitle>This month</CardTitle>
+        <CardAction>
+          <Link
+            href="/dashboard/reports?range=this_month"
+            className={buttonVariants({ variant: 'ghost', size: 'xs' })}
+          >
+            Reports
+          </Link>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {empty ? (
+          <p className="text-sm text-muted-foreground">
+            Nothing posted yet in {thisName}.
+            {pace.lastActivityDate && pace.lastActivityDate.slice(0, 7) < pace.prevMonth
+              ? ` Latest activity was ${pace.lastActivityDate}.`
+              : ''}
+          </p>
+        ) : (
+          <div className="flex flex-wrap items-end gap-x-8 gap-y-2">
+            <div>
+              <p className="text-xs text-muted-foreground">Spent so far</p>
+              <Money
+                amountMinor={pace.spentMinor.toString()}
+                currency={pace.currency}
+                className="text-3xl font-semibold"
+                muteZero={false}
+              />
+              {prevHasData ? (
+                <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                  {delta === 0n ? (
+                    <span>Same as this point in {prevName}</span>
+                  ) : (
+                    <>
+                      {delta > 0n ? (
+                        <ArrowUpRight className="size-3.5" />
+                      ) : (
+                        <ArrowDownRight className="size-3.5" />
+                      )}
+                      <Money
+                        amountMinor={(delta < 0n ? -delta : delta).toString()}
+                        currency={pace.currency}
+                        className="text-xs text-muted-foreground"
+                      />
+                      <span>
+                        {delta > 0n ? 'more' : 'less'} than this point in {prevName}
+                      </span>
+                    </>
+                  )}
+                </p>
+              ) : null}
+            </div>
+            <div className="flex gap-6 pb-1">
+              <div>
+                <p className="text-xs text-muted-foreground">Earned</p>
+                <Money
+                  amountMinor={pace.incomeMinor.toString()}
+                  currency={pace.currency}
+                  className="text-sm font-medium"
+                />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Net</p>
+                <Money
+                  amountMinor={netMinor.toString()}
+                  currency={pace.currency}
+                  signed
+                  className="text-sm font-medium"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+        {!empty || prevHasData ? (
+          <>
+            <MonthPaceChart
+              points={pace.series}
+              currency={pace.currency}
+              thisLabel={thisName}
+              lastLabel={prevName}
+              height={140}
+            />
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1.5">
+                <span className="h-0.5 w-4 rounded" style={{ background: 'var(--chart-1)' }} />
+                {thisName} cumulative spend
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="h-0 w-4 border-t border-dashed border-muted-foreground" />
+                {prevName}
+                {prevHasData ? (
+                  <>
+                    {' '}
+                    (total{' '}
+                    <Money
+                      amountMinor={pace.prevSpentTotalMinor.toString()}
+                      currency={pace.currency}
+                      className="text-xs text-muted-foreground"
+                    />
+                    )
+                  </>
+                ) : null}
+              </span>
+            </div>
+          </>
+        ) : null}
+        <p className="text-xs text-muted-foreground">
+          Net of refunds; transfers & debt payments excluded; {pace.currency} only.
+        </p>
       </CardContent>
     </Card>
   );
@@ -776,6 +923,7 @@ function HomeBody() {
     [lensTxns],
   );
   const todayIso = new Date().toISOString().slice(0, 10);
+  const pace = useMemo(() => monthPace(lensTxns, todayIso), [lensTxns, todayIso]);
   const upcomingRecurring = useMemo(
     () =>
       recurringSeries.rows
@@ -868,29 +1016,34 @@ function HomeBody() {
 
   return (
     <>
-      {/* Fused net-worth hero (C11): number + Δ + % + window + chart as one
-          unit, with range pills (C10). Under an active entity lens it's
-          entity-scoped — the household-wide trend is suppressed and the number
-          equals this entity's accounts (see NetWorthHero). */}
-      <div className="flex flex-col gap-2">
-        <NetWorthHero
-          householdId={householdId}
-          fallbackNetMinor={primaryNet.amountMinor}
-          fallbackCurrency={primaryNet.currency}
-          fallbackMultiCurrency={netTotals.length > 1}
-          fallbackAsOf={balances.asOf}
-          entityScoped={lensActive}
-          {...(lensActive && lensEntity ? { scopeLabel: `${lensEntity.name} only` } : {})}
-        />
-        <div className="flex justify-end px-1">
-          <SyncStatus householdId={householdId} connections={connections ?? []} />
+      {/* Top row: "this month" (the action number) beside a compact net-worth
+          hero (the slow number). Copilot/Monarch order — where do I stand now,
+          then the long view. */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+        <div className="min-w-0 lg:col-span-7">
+          {richTxns.error ? null : <MonthPaceCard pace={pace} />}
+        </div>
+        <div className="flex min-w-0 flex-col gap-2 lg:col-span-5">
+          {/* Fused net-worth hero (C11). Under an active entity lens it's
+              entity-scoped — the household-wide trend is suppressed. */}
+          <NetWorthHero
+            householdId={householdId}
+            fallbackNetMinor={primaryNet.amountMinor}
+            fallbackCurrency={primaryNet.currency}
+            fallbackMultiCurrency={netTotals.length > 1}
+            fallbackAsOf={balances.asOf}
+            entityScoped={lensActive}
+            chartHeight={120}
+            {...(lensActive && lensEntity ? { scopeLabel: `${lensEntity.name} only` } : {})}
+          />
+          <div className="flex justify-end px-1">
+            <SyncStatus householdId={householdId} connections={connections ?? []} />
+          </div>
         </div>
       </div>
 
-      {/* Unified actionable inbox (C16). It reads household-wide review/recurring
-          state that can't be split per entity client-side, so it's shown only
-          in the blended view — an entity lens would otherwise imply its counts
-          are scoped when they aren't. */}
+      {/* Unified actionable inbox (C16) — household-wide state, so blended
+          view only (an entity lens would imply scoped counts). */}
       {richTxns.error || recurringSeries.error ? (
         <QueryErrorState
           onRetry={() => {
@@ -907,20 +1060,31 @@ function HomeBody() {
         />
       )}
 
-      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
-        {/* Cash-flow cards read pre-aggregated household read models — hidden
-            under a lens rather than shown blended next to a scoped hero. */}
-        {lensActive ? null : (
-          <div className="flex min-w-0 flex-col gap-4 [&>*]:max-w-none">
-            <CashFlowCard householdId={householdId} />
-            {monthlyFlow.error ? (
-              <QueryErrorState
-                onRetry={() => {
-                  void monthlyFlow.refetch();
-                }}
-              />
-            ) : null}
-            {monthlyFlowGroups.map((group) => (
+      {/* Two independent columns (not a row grid) so cards of different
+          heights stack without leaving holes. Mobile order follows source:
+          spending → recent → upcoming → trend → projection → notes. */}
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
+        <div className="flex min-w-0 flex-col gap-4 lg:col-span-7">
+          {richTxns.error ? null : (
+            <>
+              <SpendingCard spending={spending} insights={insights} />
+              <RecentTransactionsCard rows={recentTransactions} />
+            </>
+          )}
+        </div>
+        <div className="flex min-w-0 flex-col gap-4 lg:col-span-5">
+          {lensActive || recurringSeries.error ? null : (
+            <UpcomingRecurringCard rows={upcomingRecurring} todayIso={todayIso} />
+          )}
+          {/* Pre-aggregated household read model — hidden under a lens. */}
+          {lensActive ? null : monthlyFlow.error ? (
+            <QueryErrorState
+              onRetry={() => {
+                void monthlyFlow.refetch();
+              }}
+            />
+          ) : (
+            monthlyFlowGroups.map((group) => (
               <Card key={group.currency} size="sm">
                 <CardHeader>
                   <CardTitle>
@@ -929,46 +1093,29 @@ function HomeBody() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <CashFlowMonthlyChart rows={group.rows} height={180} />
+                  <CashFlowMonthlyChart rows={group.rows.slice(-6)} height={160} />
                 </CardContent>
               </Card>
-            ))}
-          </div>
-        )}
-
-        {/* Transaction-derived cards ARE entity-decomposable — they run on the
-            lens-scoped transactions/accounts computed above. */}
-        {richTxns.error ? null : (
-          <>
-            <SpendingCard spending={spending} insights={insights} />
-            <RecentTransactionsCard rows={recentTransactions} />
-          </>
-        )}
-        {lensActive || recurringSeries.error ? null : (
-          <UpcomingRecurringCard rows={upcomingRecurring} todayIso={todayIso} />
-        )}
-        {/* The flat account list card was removed here (founder ask
-            2026-07-20): the entity-grouped account rail in the sidebar plus the
-            full Accounts page now cover "what accounts do I have and their
-            balances" better than a truncated top-5 card on the dashboard did.
-            The net-worth hero above already carries the headline figure. */}
-        <NotesTasksCard householdId={householdId} compact />
-        {!lensActive && forecastError ? (
-          <QueryErrorState
-            onRetry={() => {
-              setForecastAttempt((attempt) => attempt + 1);
-            }}
-          />
-        ) : !lensActive && forecast !== null ? (
-          <ProjectedCashCard forecast={forecast} varies={forecastVaries} todayIso={todayIso} />
-        ) : null}
-        {!lensActive && hasBudget && !richTxns.error && !recurringSeries.error ? (
-          <FreeToSpendCard
-            richTxns={richTxns.rows}
-            series={recurringSeries.rows}
-            schedules={schedules}
-          />
-        ) : null}
+            ))
+          )}
+          {!lensActive && hasBudget && !richTxns.error && !recurringSeries.error ? (
+            <FreeToSpendCard
+              richTxns={richTxns.rows}
+              series={recurringSeries.rows}
+              schedules={schedules}
+            />
+          ) : null}
+          {!lensActive && forecastError ? (
+            <QueryErrorState
+              onRetry={() => {
+                setForecastAttempt((attempt) => attempt + 1);
+              }}
+            />
+          ) : !lensActive && forecast !== null && forecastVaries ? (
+            <ProjectedCashCard forecast={forecast} varies={forecastVaries} todayIso={todayIso} />
+          ) : null}
+          <NotesTasksCard householdId={householdId} compact />
+        </div>
       </div>
     </>
   );

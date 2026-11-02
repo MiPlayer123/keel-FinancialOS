@@ -16,6 +16,8 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Line,
+  LineChart,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -185,6 +187,103 @@ export function BalanceTrendChart({ points, height = 200 }: { points: BalancePoi
             isAnimationActive={false}
           />
         </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+export type PaceChartPoint = { day: number; thisMinor: string | null; lastMinor: string | null };
+
+/** Month-to-date cumulative spend (solid) against last month's curve
+ *  (dashed, muted) — the "am I on pace" read. Spend is plotted as a positive
+ *  magnitude; no red (it isn't negative money, Law 8). */
+export function MonthPaceChart({
+  points,
+  currency,
+  thisLabel,
+  lastLabel,
+  height = 150,
+}: {
+  points: PaceChartPoint[];
+  currency: string;
+  thisLabel: string;
+  lastLabel: string;
+  height?: number;
+}) {
+  const data = points.map((p) => ({
+    day: p.day,
+    thisV: p.thisMinor === null ? null : toGeometry(p.thisMinor),
+    lastV: p.lastMinor === null ? null : toGeometry(p.lastMinor),
+    p,
+  }));
+  return (
+    <div
+      style={{ height }}
+      className="w-full"
+      role="img"
+      aria-label={`Cumulative spending this month vs last month.`}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 8 }}>
+          <CartesianGrid stroke={GRID} vertical={false} />
+          <XAxis
+            dataKey="day"
+            tickLine={false}
+            axisLine={false}
+            tick={{ fill: INK_MUTED, fontSize: 11 }}
+            ticks={[1, 8, 15, 22, 29]}
+          />
+          <YAxis
+            width={44}
+            tickLine={false}
+            axisLine={false}
+            tick={{ fill: INK_MUTED, fontSize: 11 }}
+            tickFormatter={(v: number) => compactAxis(v)}
+          />
+          <Tooltip
+            cursor={{ stroke: INK_MUTED, strokeWidth: 1, strokeDasharray: '3 3' }}
+            content={({ active, payload }) => {
+              const d = payload[0]?.payload as (typeof data)[number] | undefined;
+              if (!active || !d) return null;
+              return (
+                <TooltipShell>
+                  <p className="text-muted-foreground">Day {d.day}</p>
+                  {d.p.thisMinor !== null ? (
+                    <p className="font-mono tabular-nums">
+                      {thisLabel} {formatMoney(d.p.thisMinor, { currency })}
+                    </p>
+                  ) : null}
+                  {d.p.lastMinor !== null ? (
+                    <p className="font-mono tabular-nums text-muted-foreground">
+                      {lastLabel} {formatMoney(d.p.lastMinor, { currency })}
+                    </p>
+                  ) : null}
+                </TooltipShell>
+              );
+            }}
+          />
+          <Line
+            type="monotone"
+            dataKey="lastV"
+            stroke={INK_MUTED}
+            strokeOpacity={0.6}
+            strokeDasharray="4 4"
+            strokeWidth={1.5}
+            dot={false}
+            connectNulls={false}
+            isAnimationActive={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="thisV"
+            stroke="var(--chart-1)"
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 3 }}
+            connectNulls={false}
+            isAnimationActive={false}
+          />
+        </LineChart>
       </ResponsiveContainer>
     </div>
   );
