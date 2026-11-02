@@ -402,12 +402,46 @@ function MonthPaceCard({ pace }: { pace: MonthPace }) {
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {empty ? (
-          <p className="text-sm text-muted-foreground">
-            Nothing posted yet in {thisName}.
-            {pace.lastActivityDate && pace.lastActivityDate.slice(0, 7) < pace.prevMonth
-              ? ` Latest activity was ${pace.lastActivityDate}.`
-              : ''}
-          </p>
+          <div className="flex flex-col gap-2">
+            <p className="text-sm text-muted-foreground">
+              Nothing posted yet in {thisName}.
+              {pace.lastActivityDate && pace.lastActivityDate.slice(0, 7) < pace.prevMonth
+                ? ` Latest activity was ${pace.lastActivityDate}.`
+                : ''}
+            </p>
+            {prevHasData ? (
+              // Early-month fallback: last month's result, so the card still
+              // answers "how did I do" before anything posts.
+              <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
+                <span className="text-xs text-muted-foreground">{prevName} result</span>
+                <span className="flex items-baseline gap-1.5 text-sm">
+                  <span className="text-muted-foreground">Spent</span>
+                  <Money
+                    amountMinor={pace.prevSpentTotalMinor.toString()}
+                    currency={pace.currency}
+                    className="text-lg font-semibold"
+                  />
+                </span>
+                <span className="flex items-baseline gap-1.5 text-sm">
+                  <span className="text-muted-foreground">Earned</span>
+                  <Money
+                    amountMinor={pace.prevIncomeTotalMinor.toString()}
+                    currency={pace.currency}
+                    className="font-medium"
+                  />
+                </span>
+                <span className="flex items-baseline gap-1.5 text-sm">
+                  <span className="text-muted-foreground">Net</span>
+                  <Money
+                    amountMinor={(pace.prevIncomeTotalMinor - pace.prevSpentTotalMinor).toString()}
+                    currency={pace.currency}
+                    signed
+                    className="font-medium"
+                  />
+                </span>
+              </div>
+            ) : null}
+          </div>
         ) : (
           <div className="flex flex-wrap items-end gap-x-8 gap-y-2">
             <div>

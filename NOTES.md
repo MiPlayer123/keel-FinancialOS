@@ -761,3 +761,6 @@ a private forum thread and needs a call before publishing.
   scope bar, % in the monthly Δ tooltip, Upcoming card now merges active schedules (overdue labelled) with
   confirmed series occurrences. Finding: demo login's recurring.list returns no series (Recurring page empty)
   despite 5 confirmed series with candidates — data/access issue, not UI; flagged for follow-up.
+- This-month card: when nothing has posted yet this month, shows last month's result (spent/earned/net).
+  Audit doc status table updated; open items are demo-seed tax parent, recurring visibility for the demo
+  login, cash_flow_monthly inflation after the redate (separate session), and P2 chart polish.

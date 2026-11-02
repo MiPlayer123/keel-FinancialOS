@@ -29,6 +29,7 @@ export type MonthPace = {
   prevSpentToDateMinor: bigint;
   prevIncomeToDateMinor: bigint;
   prevSpentTotalMinor: bigint;
+  prevIncomeTotalMinor: bigint;
   series: PacePoint[];
   /** Newest effective date among countable rows (any month), for empty states. */
   lastActivityDate: string | null;
@@ -102,6 +103,7 @@ export function monthPace(rows: RichTransactionRow[], todayIso: string): MonthPa
   let prevSpentToDateMinor = 0n;
   let prevIncomeToDateMinor = 0n;
   let prevSpentTotalMinor = 0n;
+  let prevIncomeTotalMinor = 0n;
   let thisCum = 0n;
   let lastCum = 0n;
   const series: PacePoint[] = [];
@@ -117,6 +119,7 @@ export function monthPace(rows: RichTransactionRow[], todayIso: string): MonthPa
     if (day <= prevDays && pb) {
       lastCum += pb.spend;
       prevSpentTotalMinor += pb.spend;
+      prevIncomeTotalMinor += pb.income;
       if (day <= prevCutoff) {
         prevSpentToDateMinor += pb.spend;
         prevIncomeToDateMinor += pb.income;
@@ -139,6 +142,7 @@ export function monthPace(rows: RichTransactionRow[], todayIso: string): MonthPa
     prevSpentToDateMinor,
     prevIncomeToDateMinor,
     prevSpentTotalMinor,
+    prevIncomeTotalMinor,
     series,
     lastActivityDate,
   };

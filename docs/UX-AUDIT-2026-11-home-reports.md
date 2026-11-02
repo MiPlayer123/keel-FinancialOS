@@ -27,47 +27,31 @@ Monarch, Copilot, YNAB, Simplifi, Lunch Money, Empower and Origin. Severity: **P
 
 Entity suffixes appear only when same-named categories from different entities both have activity in scope.
 
-## Open findings
+## Status of the original findings (2026-11-02)
 
-### P0
-- **Demo data is stale (ends 2026-07-20).** Every "last 30 days" widget on Home is empty, net worth is a flat
-  line with Δ $0.00, and Reports defaults to an empty "This month". The demo currently sells nothing.
-  Fix: a re-date script that shifts the demo household forward (or a rolling seed), run monthly.
-- **Duplicate category names** — two "Shopping", two "Services", two "Income" at parent grain, and taxes
-  appear as "Government & Nonprofit" (top spend, 40%). Show `Parent › Child` when names collide, and give
-  tax withholding a real "Taxes" parent in the demo seed.
-
-### Home (P1)
-- Net worth chart: one y-tick ("174.3K"), no range context, no assets/liabilities split. Use a sparkline-sized
-  chart with start→end labels and an assets / liabilities / net breakdown; Copilot and Monarch keep it compact.
-- Layout has ragged two-column cards with dead space (Spending card stub next to a tall empty Cash-flow card).
-  Pair cards of equal height, or use a 12-col grid with fixed rows.
-- Missing the "where do I stand this month" number above the fold — month-to-date spend vs the **same point
-  last month** with a pace line (Copilot's best pattern). This would replace "Cash flow · last 30 days".
-- Empty windows: when the last 30 days are empty, fall back to the latest period with data and say so.
-- "Upcoming recurring" asks to confirm series even though the demo seeds 6 — check status mapping.
-- Notes & tasks takes a prime slot; move below the fold or make it collapsible.
-- Mobile: header spends a full row on Review + Search buttons; fold them into the top bar.
-
-### Reports (P1)
-- Default range "This month" is near-empty early in a month (today is the 2nd). Default to last month until
-  ~day 7, or remember the user's last range.
-- Month-in-review details use leaf categories (Rent, Federal withholding) while the donut uses parents —
-  pick one grain (parents with leaf hover) so the numbers reconcile.
-- "Biggest movers" compares the last two months of the range even if both are empty; compare the last two
-  months **with data**.
-- Matrix: totals row prints `$0.00` while cells print `—`; on mobile the visible columns are the oldest
-  (empty) months — scroll to/pin the newest months.
-- Sankey on mobile is a 560px horizontal scroller with labels cut off; on phones replace it with a ranked
-  bar list (YNAB pattern).
-- Investment allocation shows 100% "Unclassified" — hide until holdings have asset classes.
-- Transfer-nudge banner sits above the filters on every visit; move it inline under the summary.
-
-### Charts (P2)
-- Add a comparison baseline: dashed prior-period / 12-month-average tick on monthly bars.
-- Tooltips: add Δ vs prior month (and %) and transaction count.
-- Donut: cap at ~6 slices + "Everything else" (already done) but rank-list alternative on mobile.
-- Annotate one-off events (account linked, bonus) so jumps aren't misread.
+| Finding | Status |
+|---|---|
+| Demo data stale | Done — demo household re-dated +3 months on live (separate session; script on its branch) |
+| Duplicate category names | Done (R7, entity suffix only on active collisions) |
+| Taxes filed under "Government & Nonprofit" in the demo seed | **Open** — demo seed data, not UI |
+| Net worth: one y-tick, no assets/liabilities split | Done — compact hero + Assets · Liabilities line (matches sidebar subtotals) |
+| Ragged Home layout | Done (H2) |
+| "Where do I stand this month" | Done (H1); before anything posts it shows last month's result |
+| Empty windows | Done — This month falls back to last month; empty projection hidden |
+| Upcoming recurring empty | Done in UI — active schedules now listed (overdue labelled). **Open (data):** demo login's `recurring.list` returns no series; separate session investigating |
+| Notes & tasks in a prime slot | Done — bottom of the right column |
+| Mobile header row | Done — one row; Review shortcut lives in the tab bar on phones |
+| Reports default range | Done (R10) |
+| Month review grain | Done (R11) |
+| Biggest movers | Done (R6) |
+| Matrix `$0.00` / mobile oldest months | Done (R8) |
+| Sankey on mobile | Done — hidden below `sm`; the donut's ranked list covers it |
+| Allocation 100% Unclassified | Done (R9) |
+| Transfer banner above filters | Done — moved under the scope bar |
+| Chart baseline | Done — dashed average-spend line |
+| Tooltip Δ / % | Done; transaction count in tooltip **open (P2)** |
+| Event annotations on charts | **Open (P2)** — needs an events source (account linked, bonus) |
+| Home "Cash flow by month" inflated Apr–Jun after the redate | **Open (data)** — redate reversals counted as gross flow in `dashboard.cash_flow_monthly`; separate session investigating |
 
 ## Patterns worth stealing (research)
 Copilot: month-to-date vs same-point-last-month, pace line, review queue on Home, horizontal "Upcoming" strip.
