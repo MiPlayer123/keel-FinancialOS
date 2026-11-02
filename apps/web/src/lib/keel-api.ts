@@ -647,6 +647,30 @@ export async function createLinkToken(householdId: string): Promise<string> {
 }
 
 /**
+ * Fire-and-forget: tell the backend why a Plaid Link session ended without a
+ * connection (error code, institution, Link event trail) so failures like a
+ * broken Fidelity login are diagnosable from the function logs. Never throws.
+ */
+export async function reportLinkExit(input: {
+  householdId: string;
+  status?: string | null;
+  errorType?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  institutionId?: string | null;
+  institutionName?: string | null;
+  linkSessionId?: string | null;
+  requestId?: string | null;
+  events?: { eventName: string; errorCode?: string | null; viewName?: string | null }[];
+}): Promise<void> {
+  try {
+    await invoke('api/connections/link-exit', input);
+  } catch {
+    // diagnostics only
+  }
+}
+
+/**
  * Create a Plaid Link token in UPDATE MODE for an existing connection — Plaid
  * re-authorizes the SAME item in place (no new item, no duplicate accounts).
  * Fixes a reissued card whose account dropped out of an otherwise-active item.
