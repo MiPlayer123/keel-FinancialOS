@@ -48,7 +48,7 @@ jobs:
           cache: pnpm
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 3.0.0  # pinned: unpinned "latest" became 3.0.0, which rejected config.toml (first red run 2026-11-02)
       - run: pnpm install --frozen-lockfile
       # config.toml declares four edge functions, so `supabase start` bundles
       # them and hard-fails on the git-ignored generated vendor bundle
@@ -79,7 +79,7 @@ jobs:
           cache: pnpm
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 3.0.0  # pinned: unpinned "latest" became 3.0.0, which rejected config.toml (first red run 2026-11-02)
       - run: pnpm install --frozen-lockfile
       # Must precede `supabase start`: starting the stack bundles the edge
       # functions declared in config.toml, which import this generated
