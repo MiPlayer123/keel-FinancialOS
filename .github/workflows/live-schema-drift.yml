@@ -51,7 +51,7 @@ jobs:
           cache: pnpm
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 3.0.0  # pinned: unpinned "latest" became 3.0.0, which rejected config.toml (first red run 2026-11-02)
       - name: script unit tests
         run: node --test scripts/db/live-drift.test.mjs scripts/db/apply-migration.test.mjs
       - run: pnpm install --frozen-lockfile
