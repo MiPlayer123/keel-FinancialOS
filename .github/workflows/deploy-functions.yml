@@ -53,7 +53,7 @@ jobs:
           cache: pnpm
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 3.0.0  # pinned: unpinned "latest" became 3.0.0, which rejected config.toml (first red run 2026-11-02)
       - run: pnpm install --frozen-lockfile
       # The functions import a generated vendor bundle (git-ignored).
       - run: pnpm build:functions
@@ -65,8 +65,9 @@ jobs:
             echo "::error::SUPABASE_ACCESS_TOKEN secret is not set — add it in repo Settings → Secrets to enable function deploys."
             exit 1
           fi
+          # CLI 3.0 asks for confirmation and aborts when stdout is not a terminal.
           supabase functions deploy api worker webhook-provider scheduled \
-            --project-ref yrbteeownwjhcushwaga
+            --project-ref yrbteeownwjhcushwaga --yes
       - name: record what shipped
         run: |
           echo "Deployed api, worker, webhook-provider, scheduled to yrbteeownwjhcushwaga" >> "$GITHUB_STEP_SUMMARY"
