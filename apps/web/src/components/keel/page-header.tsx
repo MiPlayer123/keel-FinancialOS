@@ -88,7 +88,10 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-3 border-b border-border px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
+    // One row at every width: the title left, actions right (they wrap under
+    // only when a page passes wide actions). On phones the Review shortcut is
+    // dropped — the bottom tab bar already carries Review with its badge.
+    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3 sm:px-6 sm:py-5">
       <div className="space-y-1">
         <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
       </div>
@@ -96,7 +99,7 @@ export function PageHeader({
         {actions}
         <Link
           href="/dashboard/review"
-          className={buttonVariants({ variant: 'outline', size: 'sm' })}
+          className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'hidden sm:inline-flex')}
         >
           <BadgeCheck data-icon="inline-start" />
           Review

@@ -16,8 +16,11 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Line,
+  LineChart,
   Pie,
   PieChart,
+  ReferenceLine,
   ResponsiveContainer,
   Sankey,
   Tooltip,
@@ -190,6 +193,103 @@ export function BalanceTrendChart({ points, height = 200 }: { points: BalancePoi
   );
 }
 
+export type PaceChartPoint = { day: number; thisMinor: string | null; lastMinor: string | null };
+
+/** Month-to-date cumulative spend (solid) against last month's curve
+ *  (dashed, muted) — the "am I on pace" read. Spend is plotted as a positive
+ *  magnitude; no red (it isn't negative money, Law 8). */
+export function MonthPaceChart({
+  points,
+  currency,
+  thisLabel,
+  lastLabel,
+  height = 150,
+}: {
+  points: PaceChartPoint[];
+  currency: string;
+  thisLabel: string;
+  lastLabel: string;
+  height?: number;
+}) {
+  const data = points.map((p) => ({
+    day: p.day,
+    thisV: p.thisMinor === null ? null : toGeometry(p.thisMinor),
+    lastV: p.lastMinor === null ? null : toGeometry(p.lastMinor),
+    p,
+  }));
+  return (
+    <div
+      style={{ height }}
+      className="w-full"
+      role="img"
+      aria-label={`Cumulative spending this month vs last month.`}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 8 }}>
+          <CartesianGrid stroke={GRID} vertical={false} />
+          <XAxis
+            dataKey="day"
+            tickLine={false}
+            axisLine={false}
+            tick={{ fill: INK_MUTED, fontSize: 11 }}
+            ticks={[1, 8, 15, 22, 29]}
+          />
+          <YAxis
+            width={44}
+            tickLine={false}
+            axisLine={false}
+            tick={{ fill: INK_MUTED, fontSize: 11 }}
+            tickFormatter={(v: number) => compactAxis(v)}
+          />
+          <Tooltip
+            cursor={{ stroke: INK_MUTED, strokeWidth: 1, strokeDasharray: '3 3' }}
+            content={({ active, payload }) => {
+              const d = payload[0]?.payload as (typeof data)[number] | undefined;
+              if (!active || !d) return null;
+              return (
+                <TooltipShell>
+                  <p className="text-muted-foreground">Day {d.day}</p>
+                  {d.p.thisMinor !== null ? (
+                    <p className="font-mono tabular-nums">
+                      {thisLabel} {formatMoney(d.p.thisMinor, { currency })}
+                    </p>
+                  ) : null}
+                  {d.p.lastMinor !== null ? (
+                    <p className="font-mono tabular-nums text-muted-foreground">
+                      {lastLabel} {formatMoney(d.p.lastMinor, { currency })}
+                    </p>
+                  ) : null}
+                </TooltipShell>
+              );
+            }}
+          />
+          <Line
+            type="monotone"
+            dataKey="lastV"
+            stroke={INK_MUTED}
+            strokeOpacity={0.6}
+            strokeDasharray="4 4"
+            strokeWidth={1.5}
+            dot={false}
+            connectNulls={false}
+            isAnimationActive={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="thisV"
+            stroke="var(--chart-1)"
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 3 }}
+            connectNulls={false}
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 export type MonthlyFlow = {
   month: string;
   currency: string;
@@ -229,9 +329,20 @@ export function CashFlowMonthlyChart({
   onMonthClick?: (month: string) => void;
 }) {
   const thisMonth = currentMonthKey();
-  const data = rows.map((r) => {
+  // Average monthly spend over COMPLETE months with activity — the dashed
+  // baseline each bar is read against. BigInt sum, Number only for geometry.
+  const avgBase = rows.filter(
+    (r) => r.month !== thisMonth && (r.outflowMinor !== '0' || r.inflowMinor !== '0'),
+  );
+  const avgOutMinor =
+    avgBase.length >= 2
+      ? avgBase.reduce((acc, r) => acc + BigInt(r.outflowMinor || '0'), 0n) / BigInt(avgBase.length)
+      : null;
+  const data = rows.map((r, i) => {
     const inProgress = r.month === thisMonth;
+    const prevRow = i > 0 ? rows[i - 1] : undefined;
     return {
+      prevOutMinor: prevRow ? prevRow.outflowMinor : null,
       month: r.month,
       inflow: toGeometry(r.inflowMinor),
       outflow: toGeometry(r.outflowMinor),
@@ -310,10 +421,36 @@ export function CashFlowMonthlyChart({
                     <p className="font-mono font-medium tabular-nums">
                       Net {formatMoney(p.row.netMinor, { currency: p.row.currency, signed: true })}
                     </p>
+                    {p.prevOutMinor !== null && !p.inProgress ? (
+                      (() => {
+                        const d = BigInt(p.row.outflowMinor || '0') - BigInt(p.prevOutMinor || '0');
+                        if (d === 0n) return null;
+                        const magBig = d < 0n ? -d : d;
+                        const base = BigInt(p.prevOutMinor || '0');
+                        // Display-only percent (integer BigInt division).
+                        const pct = base > 0n ? `${String((magBig * 100n) / base)}%` : null;
+                        return (
+                          <p className="text-muted-foreground">
+                            Spending {d > 0n ? '↑' : '↓'}{' '}
+                            {formatMoney(magBig.toString(), { currency: p.row.currency })}
+                            {pct ? ` (${pct})` : ''} vs prior month
+                          </p>
+                        );
+                      })()
+                    ) : null}
                   </TooltipShell>
                 );
               }}
             />
+            {avgOutMinor !== null ? (
+              <ReferenceLine
+                y={toGeometry(avgOutMinor.toString())}
+                stroke={INK_MUTED}
+                strokeOpacity={0.7}
+                strokeDasharray="4 4"
+                ifOverflow="extendDomain"
+              />
+            ) : null}
             <Bar
               dataKey="inflow"
               fill="var(--keel-chart-inflow)"
@@ -334,7 +471,10 @@ export function CashFlowMonthlyChart({
       {onMonthClick ? (
         <div
           aria-label="Open transactions for a month"
-          className="flex flex-wrap items-center gap-1 px-2"
+          // Keyboard/screen-reader path to the same drill-down the bars give
+          // mouse users. Visually it duplicated the x-axis, so it stays
+          // hidden until a button inside it takes focus.
+          className="sr-only flex-wrap items-center gap-1 px-2 focus-within:not-sr-only focus-within:flex"
         >
           {drilldownMonths.map((month) => (
             <button
@@ -350,7 +490,7 @@ export function CashFlowMonthlyChart({
           ))}
         </div>
       ) : null}
-      <div className="flex items-center gap-4 px-2 text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-2 text-xs text-muted-foreground">
         <span className="flex items-center gap-1.5">
           <span className="size-2.5 rounded-[3px]" style={{ background: 'var(--keel-chart-inflow)' }} />
           Money in
@@ -359,6 +499,12 @@ export function CashFlowMonthlyChart({
           <span className="size-2.5 rounded-[3px]" style={{ background: 'var(--keel-chart-outflow)' }} />
           Money out
         </span>
+        {avgOutMinor !== null && rows[0] ? (
+          <span className="flex items-center gap-1.5">
+            <span className="h-0 w-4 border-t border-dashed border-muted-foreground" />
+            Avg out {formatMoney(avgOutMinor.toString(), { currency: rows[0].currency })}
+          </span>
+        ) : null}
         {data.some((d) => d.inProgress) ? (
           <span className="text-muted-foreground/80">* this month so far</span>
         ) : null}
@@ -729,8 +875,9 @@ export function CashFlowSankey({
       aria-label={`Cash flow diagram with ${String(nodes.length)} categories and ${String(links.length)} flows.`}
     >
       <ul className="sr-only">
-        {nodes.map((node) => (
-          <li key={`${node.column}-${node.name}`}>
+        {nodes.map((node, i) => (
+          // Index-qualified: two categories can share a display name.
+          <li key={`${node.column}-${node.name}-${String(i)}`}>
             {node.name}: {formatMoney(node.totalMinor, { currency })}
           </li>
         ))}

@@ -52,7 +52,13 @@ export function NetWorthHero({
   actions,
   entityScoped = false,
   scopeLabel,
+  chartHeight = 180,
+  breakdown,
 }: {
+  /** Optional line under the number (Home: assets · liabilities). */
+  breakdown?: React.ReactNode;
+  /** Trend chart height in px (Home uses a compact hero beside the month card). */
+  chartHeight?: number;
   householdId: string | null;
   /** Trial-balance net worth in the selected primary currency. */
   fallbackNetMinor: string;
@@ -148,6 +154,7 @@ export function NetWorthHero({
                 </span>
               ) : null}
             </div>
+            {breakdown}
             {asOf !== null ? (
               <p className="text-xs text-muted-foreground">
                 As of {asOfLabel(asOf)}
@@ -166,7 +173,7 @@ export function NetWorthHero({
         </div>
 
         {trend === null ? (
-          <Skeleton className="h-[180px] w-full" />
+          <Skeleton style={{ height: chartHeight }} className="w-full" />
         ) : hasTrend ? (
           <div className="space-y-2">
             <div className="flex flex-wrap gap-1">
@@ -200,7 +207,7 @@ export function NetWorthHero({
                 );
               })}
             </div>
-            <BalanceTrendChart points={windowPoints} height={180} />
+            <BalanceTrendChart points={windowPoints} height={chartHeight} />
           </div>
         ) : null}
       </CardContent>

@@ -784,3 +784,30 @@ landing page; CLAUDE.md still carries operator-specific directives; `design/refe
 (competitor screenshots, not redistributable) and full git history must be excluded from
 any public release; no seeded demo household yet; docs/research/NET-WORTH doc summarizes
 a private forum thread and needs a call before publishing.
+
+## 2026-11-02 — Reports UX pass (Stage 2, Addendum §D / Law 8)
+- Audit: `docs/UX-AUDIT-2026-11-home-reports.md` (Home + Reports, desktop + 390px, competitor research).
+- Reports scope bar collapsed to one row (range dropdown, custom dates only for "Custom range", Export inside).
+- Month in review: one-line summary + expandable details; chips limited to months with activity; defaults to
+  newest complete month and re-anchors on any scope change (previously could sit on an empty month).
+- Monthly chart's keyboard drill row is sr-only until focused (it read as a duplicate x-axis).
+- Sankey sr-only list keys index-qualified (duplicate category names collided).
+- No number/formula changes; all Law 9 footnotes kept.
+- Home redesign (same branch): This-month pace card (`lib/month-pace.ts`, tested; same-day-last-month comparison,
+  Reports' spend semantics), compact net-worth hero (`chartHeight`), 7/5 two-column layout, empty projection hidden.
+  Reports: movers use newest active months; cross-entity duplicate category names suffixed (display-only copy,
+  tax matching untouched); matrix zero totals as —; Sankey hidden < sm; all-unclassified allocation hidden.
+- Reports follow-ups: early-month default preset (days 1–7 → last_month; serializer takes `now`, tests pinned),
+  Month in review rolled to parent grain, monthly chart average-spend reference line + prior-month Δ tooltip,
+  entity suffix only for collisions active in scope. Demo-data redate was cancelled by the user (nothing written).
+- Home/Reports polish: net-worth assets · liabilities line (same kinds/balances as the sidebar subtotals),
+  one-row page header (Review shortcut hidden < sm; tab bar carries it), transfer nudge moved under the
+  scope bar, % in the monthly Δ tooltip, Upcoming card now merges active schedules (overdue labelled) with
+  confirmed series occurrences. Finding: demo login's recurring.list returns no series (Recurring page empty)
+  despite 5 confirmed series with candidates — data/access issue, not UI; flagged for follow-up.
+- This-month card: when nothing has posted yet this month, shows last month's result (spent/earned/net).
+  Audit doc status table updated; open items are demo-seed tax parent, recurring visibility for the demo
+  login, cash_flow_monthly inflation after the redate (separate session), and P2 chart polish.
+- Codex review on PR #193 (2 × P2) addressed: scope serializer always writes the preset (the default is
+  date-adaptive, so an omitted "Last month" would drift to "This month" after day 7); Month-in-review
+  full-month disclosure now visible while collapsed.

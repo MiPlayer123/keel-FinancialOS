@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   clampMonthToRange,
   DEFAULT_SCOPE_PRESET,
+  defaultScopePreset,
   dominantCurrency,
   ledgerDrillHref,
   parseReportScope,
@@ -35,6 +36,22 @@ describe('presetRange', () => {
   it('handles the January year rollover for last_month', () => {
     const jan = new Date('2026-01-05T00:00:00Z');
     expect(presetRange('last_month', jan)).toEqual({ from: '2025-12-01', to: '2025-12-31' });
+  });
+});
+
+describe('defaultScopePreset', () => {
+  it('opens on last month during the first week, this month after', () => {
+    expect(defaultScopePreset(new Date('2026-11-02T12:00:00Z'))).toBe('last_month');
+    expect(defaultScopePreset(new Date('2026-11-07T12:00:00Z'))).toBe('last_month');
+    expect(defaultScopePreset(new Date('2026-11-08T12:00:00Z'))).toBe('this_month');
+  });
+
+  it('a bare URL early in the month parses to last month; serializing pins the preset', () => {
+    const early = new Date('2026-11-02T12:00:00Z');
+    const s = parseReportScope(params({}), early);
+    expect(s).toMatchObject({ preset: 'last_month', from: '2026-10-01', to: '2026-10-31' });
+    expect(reportScopeToSearch(s)).toBe('range=last_month');
+    expect(reportScopeToSearch({ ...s, preset: 'this_month' })).toBe('range=this_month');
   });
 });
 
@@ -90,8 +107,8 @@ describe('parseReportScope', () => {
 });
 
 describe('reportScopeToSearch', () => {
-  it('serializes the all-defaults scope to an empty string', () => {
-    expect(reportScopeToSearch(parseReportScope(params({}), NOW))).toBe('');
+  it('always pins the preset (the default is date-adaptive)', () => {
+    expect(reportScopeToSearch(parseReportScope(params({}), NOW))).toBe('range=this_month');
   });
 
   it('round-trips presets, custom ranges, accounts, and entity', () => {
