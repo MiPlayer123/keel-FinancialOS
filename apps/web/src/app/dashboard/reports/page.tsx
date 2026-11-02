@@ -1716,6 +1716,10 @@ function ReportsBody() {
                   </p>
                 </div>
               </div>
+                </>
+              ) : null}
+              {/* Scope disclosure stays visible collapsed too: the review always
+                  sums the FULL month, even when the range covers part of it. */}
               <p className="text-xs text-muted-foreground">
                 {entityName ? `${entityName} · ` : ''}
                 {accountSet === null
@@ -1725,8 +1729,7 @@ function ReportsBody() {
                 debt payments excluded.
                 {scope.includeTaxes ? '' : ' Taxes excluded.'}
               </p>
-                </>
-              ) : null}
+
             </>
           ) : (
             <p className="text-sm text-muted-foreground">

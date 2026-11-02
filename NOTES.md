@@ -764,3 +764,6 @@ a private forum thread and needs a call before publishing.
 - This-month card: when nothing has posted yet this month, shows last month's result (spent/earned/net).
   Audit doc status table updated; open items are demo-seed tax parent, recurring visibility for the demo
   login, cash_flow_monthly inflation after the redate (separate session), and P2 chart polish.
+- Codex review on PR #193 (2 × P2) addressed: scope serializer always writes the preset (the default is
+  date-adaptive, so an omitted "Last month" would drift to "This month" after day 7); Month-in-review
+  full-month disclosure now visible while collapsed.

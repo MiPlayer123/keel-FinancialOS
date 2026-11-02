@@ -46,12 +46,12 @@ describe('defaultScopePreset', () => {
     expect(defaultScopePreset(new Date('2026-11-08T12:00:00Z'))).toBe('this_month');
   });
 
-  it('a bare URL early in the month parses to last month and round-trips to ""', () => {
+  it('a bare URL early in the month parses to last month; serializing pins the preset', () => {
     const early = new Date('2026-11-02T12:00:00Z');
     const s = parseReportScope(params({}), early);
     expect(s).toMatchObject({ preset: 'last_month', from: '2026-10-01', to: '2026-10-31' });
-    expect(reportScopeToSearch(s, early)).toBe('');
-    expect(reportScopeToSearch({ ...s, preset: 'this_month' }, early)).toBe('range=this_month');
+    expect(reportScopeToSearch(s)).toBe('range=last_month');
+    expect(reportScopeToSearch({ ...s, preset: 'this_month' })).toBe('range=this_month');
   });
 });
 
@@ -107,8 +107,8 @@ describe('parseReportScope', () => {
 });
 
 describe('reportScopeToSearch', () => {
-  it('serializes the all-defaults scope to an empty string', () => {
-    expect(reportScopeToSearch(parseReportScope(params({}), NOW), NOW)).toBe('');
+  it('always pins the preset (the default is date-adaptive)', () => {
+    expect(reportScopeToSearch(parseReportScope(params({}), NOW))).toBe('range=this_month');
   });
 
   it('round-trips presets, custom ranges, accounts, and entity', () => {
@@ -122,7 +122,7 @@ describe('reportScopeToSearch', () => {
     ];
     for (const c of cases) {
       const scope = parseReportScope(params(c), NOW);
-      const reparsed = parseReportScope(new URLSearchParams(reportScopeToSearch(scope, NOW)), NOW);
+      const reparsed = parseReportScope(new URLSearchParams(reportScopeToSearch(scope)), NOW);
       expect(reparsed).toEqual(scope);
     }
   });
@@ -136,7 +136,7 @@ describe('reportScopeToSearch', () => {
       entityId: null,
       includeTaxes: true,
     };
-    expect(reportScopeToSearch(scope, NOW)).toBe('range=last_month');
+    expect(reportScopeToSearch(scope)).toBe('range=last_month');
   });
 });
 

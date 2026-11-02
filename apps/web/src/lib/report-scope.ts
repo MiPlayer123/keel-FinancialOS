@@ -129,14 +129,18 @@ export function parseReportScope(params: ScopeParamsLike, now: Date = new Date()
 }
 
 /**
- * Serialize the scope for the URL. The all-defaults scope serializes to '' so
- * plain /dashboard/reports stays canonical; presets serialize as `range` (not
+ * Serialize the scope for the URL. A bare /dashboard/reports opens on the
+ * date-adaptive default; once serialized, the preset is always written so a
+ * saved link keeps its meaning. Presets serialize as `range` (not
  * frozen dates) so a bookmarked "This month" is always this month.
  */
-export function reportScopeToSearch(scope: ReportScope, now: Date = new Date()): string {
+export function reportScopeToSearch(scope: ReportScope): string {
   const p = new URLSearchParams();
   if (scope.preset !== null) {
-    if (scope.preset !== defaultScopePreset(now)) p.set('range', scope.preset);
+    // Always explicit once a scope is serialized: the default preset is
+    // date-adaptive, so omitting it would let a saved "Last month" link
+    // silently become "This month" after the first week (codex r193).
+    p.set('range', scope.preset);
   } else {
     p.set('from', scope.from);
     p.set('to', scope.to);
