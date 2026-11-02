@@ -1,7 +1,7 @@
 /**
  * Executable reference for the cash-flow GRAPH's inflow/outflow split
- * (formulaVersion cash-flow-monthly-v6-sign-classified /
- * cash-flow-v7-sign-classified). The authoritative implementation is the SQL
+ * (formulaVersion cash-flow-monthly-v7-net-reversals /
+ * cash-flow-v8-net-reversals). The authoritative implementation is the SQL
  * proc `public.keel_cash_flow_monthly` — this mirror exists so the sign→
  * direction rule is pinned by a fast, DB-free unit test (Stage-1 worked-example
  * discipline) and so the invariants the proc must uphold are stated once, in

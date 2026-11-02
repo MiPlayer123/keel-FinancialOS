@@ -114,7 +114,7 @@ select ok(
 
 select is(
   public.keel_cash_flow('00000000-0000-4000-8000-00000000a001','2026-06-01','2026-06-30')->>'formulaVersion',
-  'cash-flow-v7-sign-classified', 'cash_flow formula version reflects the transfer-out exclusion');
+  'cash-flow-v8-net-reversals', 'cash_flow formula version reflects the transfer-out exclusion');
 -- Outflow = 180000 (mortgage, kept) only; the 50000 Transfers-Out is excluded
 -- WITHOUT any paired transfer_link (the one-sided unconnected-card case).
 select is(
@@ -129,7 +129,7 @@ select is(
   '180000', 'monthly cash flow also excludes the Transfers-Out card payment');
 select is(
   public.keel_cash_flow_monthly('00000000-0000-4000-8000-00000000a001','2026-06-01','2026-06-30')->>'formulaVersion',
-  'cash-flow-monthly-v6-sign-classified', 'monthly formula version bumped');
+  'cash-flow-monthly-v7-net-reversals', 'monthly formula version bumped');
 reset role;
 
 -- ---------------------------------------------------------------------------
