@@ -189,6 +189,18 @@ export async function fetchAccounts(
 }
 
 /** Rename a real-world account (checking, card, …). Plain metadata edit. */
+/**
+ * Remove (archive) or restore a manual account. Soft delete: the account and
+ * its transactions stay in the ledger and can be restored.
+ */
+export async function setAccountArchived(input: {
+  householdId: string;
+  accountId: string;
+  archived: boolean;
+}): Promise<unknown> {
+  return invoke('api/accounts/archive', input);
+}
+
 export async function renameAccount(input: {
   householdId: string;
   accountId: string;

@@ -1240,6 +1240,30 @@ export default {
       return json(200, { ok: true });
     }
 
+    if (path === '/accounts/archive') {
+      // Remove (archive) or restore a MANUAL account. Soft delete only: sets
+      // accounts.archived_at, postings untouched, fully reversible. Linked
+      // accounts are refused by the proc (disconnect the bank instead).
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const accountId = AccountIdSchema.safeParse(input['accountId']);
+      const archived = input['archived'];
+      if (!householdId.success || !accountId.success || typeof archived !== 'boolean') {
+        return json(400, {
+          code: 'invalid_command',
+          message: 'Archive request failed validation.',
+          details: {},
+        });
+      }
+      const { error: archiveError } = await ctx.supabase.rpc('keel_set_account_archived', {
+        p_household_id: householdId.data,
+        p_account_id: accountId.data,
+        p_archived: archived,
+      });
+      if (archiveError) return mapDbError(archiveError);
+      return json(200, { ok: true });
+    }
+
     if (path === '/accounts/reassign-entity') {
       // Plain ownership correction (Law 9 explicit ownership), same shape
       // as /accounts/rename -- no economic-event key, no suggest/approve
