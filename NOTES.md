@@ -2,6 +2,50 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+## 2026-11-02 Demo household: inflated monthly cash flow and invisible recurring series
+
+Found while checking the Home/Reports redesign (PR #193) on the fictional demo household
+`c7f53fdb…` (login demo@mikul.com). Real household not touched.
+
+**Cash flow (read-model bug, affects any user who corrects a transaction).**
+`keel_cash_flow_monthly` / `keel_cash_flow` split category postings into money-in /
+money-out by posting sign (v7/v6, 20260722320000). A correction is a reversal batch plus a
+replacement, and the reversal of an expense is a credit, so it counted as money IN while
+the original it cancels still counted as money OUT. Net was right; both gross bars were
+inflated. The demo's +3-month re-date (one `keel_cmd_set_date` per transaction) left
+May-2026 with 47 reversed originals + 47 reversals and no live batch: ~$36K phantom in and
+out. Fix: migration `20261102180000_cash_flow_net_reversals.sql` drops reversal batches and
+the batches they reverse before the split (formula versions `cash-flow-v8-net-reversals`,
+`cash-flow-monthly-v7-net-reversals`; partial index on `journal_batches.reverses_batch_id`).
+Checked on live first: all 1,192 reversal pairs mirror their original exactly and share its
+date, so NET is unchanged everywhere; only gross drops. Test
+`supabase/tests/044_cash_flow_net_reversals.sql` (re-date via the command, assert old month
+0 out / no phantom in, new month counted once). Applied to live via the supabase-keel MCP
+(psql is unreachable from this machine). Demo now shows Aug $17.4K in / $9.0K out, matching
+the pre-re-date May profile. No journal history rewritten.
+
+**Recurring (demo data, not a product bug).** Two causes, see
+`scripts/backfills/demo_recurring_access.sql`:
+1. `keel_recurring_account_access` requires the caller to own the account (or hold a
+   `resource_permissions` grant). The seed ran as the real user, so `account_owners` named
+   only that user; the demo login was attached by membership alone and saw zero series.
+   Fixed by adding the demo user as owner of the 9 demo accounts (additive, audited).
+2. The 5 "confirmed" series were hand-seeded with a cadence anchor the projector rejects
+   (`{"days":[27]}` instead of `{day, intervalMonths, phase}`) and never went through the
+   confirm command, the only path that writes `recurring_occurrences`. A pause→resume
+   attempt failed on `invalid monthly cadence anchor` (rolled back). Candidate versions are
+   immutable, so instead: queued a worker re-detect, then as the demo user cancelled the 5
+   malformed seeds and confirmed the detector's own matching series (same account + sign),
+   which projects occurrences. No occurrence rows were hand-written.
+   Result (via `keel_list_recurring` as the demo user): 5 confirmed series, 18 expected
+   occurrences 2026-11-02 → 2027-01-30, `lastSeen` now Sep/Oct 2026. The 5 old seeds show
+   as cancelled. The fresh detection also withdrew the stale "arborstone brokerage
+   dividend" suggestion (no dividend after June in the re-dated data).
+
+Follow-up worth noting: the household owner role cannot see recurring series on accounts it
+does not own. That is the current authz design, but a household invite flow would need to
+grant account access too, or new members will hit the same empty Recurring page.
+
 ## 2026-11-02 Supabase CLI 3.0.0 broke CI, so function deploys stopped
 
 Every workflow installed the Supabase CLI as `version: latest`. Latest became 3.0.0, which
