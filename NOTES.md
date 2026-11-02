@@ -17,6 +17,12 @@ four `setup-cli` steps, so a new major cannot change CI overnight again. Verifie
 with CLI 3.0.0: config now loads. Remaining warnings, not errors: `auth.email.enable_signup`
 and `auth.sms.enable_signup` are deprecated in favour of `auth.*.enabled` and go away in v4.
 
+Second break, found once #190 turned CI green: `deploy-functions` failed with "Confirmation
+required: Deploy 4 Functions ... This run can't ask because stdout is not a terminal. Nothing
+was changed. Re-run with --yes". CLI 3.x requires `--yes` for any hosted change from a
+non-interactive shell. Added `--yes` and moved `--project-ref` (deprecated, removed in v4) to
+`--remote=<ref>`. The deploy workflow only runs from main, so this is first exercised on merge.
+
 ## 2026-10-30 What the first live-schema-drift runs found, and the repair
 
 Applied PR #178's other four migrations (`20260828011000`–`014000`) with the new
