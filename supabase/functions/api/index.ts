@@ -886,6 +886,42 @@ export default {
       }
     }
 
+    if (path === '/connections/link-exit') {
+      // Diagnostics only: record WHY a Plaid Link session ended without a
+      // connection (2026-10-30: a Fidelity attempt failed four times and there
+      // was no trace of the reason anywhere). Writes nothing but a log line —
+      // no tables. Fields are an allowlist of Plaid's onExit/onEvent metadata,
+      // clipped; none of them carry credentials or account numbers. Treated as
+      // data (Law 5): logged, never interpreted.
+      const input = body as Record<string, unknown>;
+      const clip = (v: unknown) => (typeof v === 'string' ? v.slice(0, 120) : null);
+      const events = Array.isArray(input['events'])
+        ? (input['events'] as unknown[]).slice(-30).map((e) => {
+            const r = (e && typeof e === 'object' ? e : {}) as Record<string, unknown>;
+            return [clip(r['eventName']), clip(r['errorCode']), clip(r['viewName'])]
+              .filter(Boolean)
+              .join(':');
+          })
+        : [];
+      console.log(
+        JSON.stringify({
+          kind: 'plaid_link_exit',
+          userId,
+          householdId: clip(input['householdId']),
+          status: clip(input['status']),
+          errorType: clip(input['errorType']),
+          errorCode: clip(input['errorCode']),
+          errorMessage: clip(input['errorMessage']),
+          institutionId: clip(input['institutionId']),
+          institutionName: clip(input['institutionName']),
+          linkSessionId: clip(input['linkSessionId']),
+          requestId: clip(input['requestId']),
+          events,
+        }),
+      );
+      return json(200, { ok: true });
+    }
+
     if (path === '/connections/link') {
       const input = body as Record<string, unknown>;
       const commandId = CommandIdSchema.safeParse(input['commandId']);

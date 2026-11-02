@@ -15,6 +15,29 @@ connection's disconnect flow so Plaid's `/item/remove` runs. Gap: once the Undo 
 there is no UI that lists archived accounts to restore them. Restore is the same proc with
 `p_archived=false`.
 
+## 2026-11-02 Holdings sync crashed on duplicate symbols; Plaid Link exits now logged
+
+**Empower holdings (fixed).** A new user's Empower 401(k) failed every holdings sync with
+`ON CONFLICT DO UPDATE command cannot affect row a second time`, so the account showed no
+positions. Plaid returns several holdings per account that map to one KEEL symbol: the same
+fund held in two contribution sources, or ticker-less plan funds whose names share their first
+20 characters (`symbolFor` truncates). One `INSERT ... ON CONFLICT` cannot touch a row twice.
+Migration `20261030120000_holdings_sync_merge_duplicate_symbols.sql` sums qty, value and cost
+basis per (account, symbol) before the upsert. Cost basis is summed only when every leg has one.
+Price is value / qty. Signature, grants and stale-row cleanup are unchanged. Both Supabase MCP
+write paths were declined or unauthorized, so the migration is applied with the
+`apply-migration` workflow after merge.
+
+**Fidelity (not root-caused yet).** The same user opened Plaid Link four times on desktop Chrome
+(link-token 200) and never finished. `/institutions/get_by_id` for Fidelity (`ins_12`, OAuth)
+shows no current incident, and the owner's own Fidelity item synced holdings successfully the
+same day. Plaid's OAuth guide says a desktop pop-up does not need a `redirect_uri`. KEEL
+recorded nothing about why Link exited. Added `POST /connections/link-exit`, which writes only
+a log line (`kind: plaid_link_exit`) with Plaid's error type/code, institution, link_session_id,
+request_id and the Link event trail. The next failed attempt shows the cause in the function
+logs. Follow-up once that is seen: if it is a mobile/webview case, add a `redirect_uri` OAuth
+return page (needs the URI allowlisted in the Plaid Dashboard, a ⚑).
+
 ## 2026-10-30 Plaid Link: investments moved to optional_products (new user could not find Bank of America)
 
 A new user signed up and tried to connect Bank of America four times; every link token was
