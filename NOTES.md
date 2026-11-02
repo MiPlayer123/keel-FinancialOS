@@ -2,6 +2,19 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+## 2026-11-02 Remove (archive) manual accounts
+
+There was no way to remove an account. A new user typed in five manual accounts and then
+linked the same banks through Plaid, which left duplicates they could not get rid of. Added
+`keel_set_account_archived` (migration `20261102100000_archive_manual_account.sql`), the
+`POST /accounts/archive` route and a "Remove account" item in the account page menu. It is a
+soft delete per the 2026-07-17 directive: it sets `archived_at`, leaves postings untouched,
+writes `account.archive`/`account.unarchive` to audit_log, and the toast offers Undo. It
+applies to manual accounts only. The proc refuses linked accounts, which go through the
+connection's disconnect flow so Plaid's `/item/remove` runs. Gap: once the Undo toast is gone,
+there is no UI that lists archived accounts to restore them. Restore is the same proc with
+`p_archived=false`.
+
 ## 2026-11-02 Holdings sync crashed on duplicate symbols; Plaid Link exits now logged
 
 **Empower holdings (fixed).** A new user's Empower 401(k) failed every holdings sync with

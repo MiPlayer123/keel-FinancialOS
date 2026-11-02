@@ -12,6 +12,7 @@ import {
   Plus,
   ReceiptText,
   Scale,
+  Trash2,
   Wand2,
 } from 'lucide-react';
 
@@ -56,6 +57,7 @@ import { looksLikeInvestmentAccount } from '@/lib/investment-subtype';
 import { ReauthLink } from '@/components/keel/reauth-link';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
 import { RenameAccountDialog } from '@/components/keel/rename-account-dialog';
+import { RemoveAccountDialog } from '@/components/keel/remove-account-dialog';
 import { ReassignEntityDialog } from '@/components/keel/reassign-entity-dialog';
 import { SetOpeningBalanceDialog } from '@/components/keel/set-opening-balance-dialog';
 import { HoldingsCard } from '@/components/keel/holdings-card';
@@ -235,6 +237,7 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
   // register (TxnDetailSheet). editorRef pre-flushes it when switching rows.
   const editorRef = useRef<TxnEditFormHandle>(null);
   const [renaming, setRenaming] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const [reassigning, setReassigning] = useState(false);
   const [accountReload, setAccountReload] = useState(0);
   const [settingBalance, setSettingBalance] = useState(false);
@@ -638,6 +641,24 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
                   </DropdownMenuItem>
                 ) : null}
               </DropdownMenuGroup>
+              {/* Manual accounts only: a linked account is removed by
+                  disconnecting its bank on the Connections page. */}
+              {account.connectionId ? null : (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuGroup>
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onClick={() => {
+                        setRemoving(true);
+                      }}
+                    >
+                      <Trash2 />
+                      Remove account
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -658,6 +679,20 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
           setSettingBalance(false);
           void balances.refetch();
           void txns.refetch();
+        }}
+      />
+
+      <RemoveAccountDialog
+        open={removing}
+        householdId={householdId}
+        accountId={accountId}
+        accountName={account.name}
+        onClose={() => {
+          setRemoving(false);
+        }}
+        onRemoved={() => {
+          setRemoving(false);
+          router.push('/dashboard/accounts');
         }}
       />
 
