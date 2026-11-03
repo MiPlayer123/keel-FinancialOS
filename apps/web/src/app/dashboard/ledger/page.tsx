@@ -13,6 +13,7 @@ import {
   Loader2,
   Plus,
   Tags as TagsIcon,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -41,6 +42,7 @@ import { entityLabel, hasMultipleEntities } from '@/lib/category-picker';
 import { resolveEditingAfterSave } from '@/lib/txn-edit-guard';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
 import { ImportCsvDialog } from '@/components/keel/import-csv-dialog';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ManageTagsDialog } from '@/components/keel/manage-tags-dialog';
 import {
   businessEntities,
@@ -630,10 +632,20 @@ function LedgerTable() {
       });
   };
 
+  const moreActive =
+    (businessFilter !== 'all' ? 1 : 0) +
+    (tagFilter !== 'all' ? 1 : 0) +
+    (reconciledFilter !== 'all' ? 1 : 0) +
+    (sort !== 'date_desc' ? 1 : 0) +
+    (grouping !== 'none' ? 1 : 0);
+
   return (
     <div className="space-y-4">
+      {/* One toolbar row: everyday filters visible; entity, tag, status,
+          sort and grouping behind "Filters" (badge = how many differ from
+          the default). Actions at the right end. */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative w-full sm:w-56">
+        <div className="relative w-full sm:w-56 lg:w-64">
           <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={query}
@@ -740,6 +752,163 @@ function LedgerTable() {
             ))}
           </SelectContent>
         </Select>
+        <Popover>
+          <PopoverTrigger render={<Button variant="outline" size="sm" className="h-9" />}>
+            <SlidersHorizontal className="size-4" />
+            Filters
+            {moreActive > 0 ? (
+              <span className="rounded bg-secondary px-1.5 text-xs tabular-nums">{moreActive}</span>
+            ) : null}
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-72 space-y-3 p-3">
+        {businesses.length > 0 ? (
+          <Select
+            value={businessFilter}
+            items={{
+              all: 'Personal + business',
+              personal: 'Personal only',
+              business: 'Any business',
+              ...Object.fromEntries(businesses.map((b) => [b.entityId, b.name])),
+            }}
+            onValueChange={(v) => {
+              if (v) setBusinessFilter(v);
+            }}
+          >
+            <SelectTrigger className="h-9 w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Personal + business</SelectItem>
+              <SelectItem value="personal">Personal only</SelectItem>
+              {businesses.length > 1 ? (
+                <SelectItem value="business">Any business</SelectItem>
+              ) : null}
+              {businesses.map((b) => (
+                <SelectItem key={b.entityId} value={b.entityId}>
+                  {b.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null}
+        {businesses.length > 0 && entityLens !== null && businessFilter === entityLens ? (
+          <p className="text-xs text-muted-foreground">
+            The entity switcher already limits this to that entity&apos;s accounts.
+          </p>
+        ) : null}
+            {plainTags.length > 0 || tags.length > 0 ? (
+            <div className="flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+        {plainTags.length > 0 ? (
+          <Select
+            value={tagFilter}
+            items={{
+              all: 'All tags',
+              ...Object.fromEntries(plainTags.map((t) => [t.tagId, `#${t.name}`])),
+            }}
+            onValueChange={(v) => {
+              if (v) setTagFilter(v);
+            }}
+          >
+            <SelectTrigger className="h-9 w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All tags</SelectItem>
+              {plainTags.map((t) => (
+                <SelectItem key={t.tagId} value={t.tagId}>
+                  #{t.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null}
+              </div>
+        {tags.length > 0 ? (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="h-9 w-9"
+            aria-label="Manage tags"
+            title="Manage tags"
+            onClick={() => {
+              setManagingTags(true);
+            }}
+          >
+            <TagsIcon className="size-4" />
+          </Button>
+        ) : null}
+            </div>
+            ) : null}
+        <Select
+          value={reconciledFilter}
+          items={{
+            all: 'All statuses',
+            reconciled: 'Reconciled',
+            unreconciled: 'Unreconciled',
+          }}
+          onValueChange={(v) => {
+            if (v === 'all' || v === 'reconciled' || v === 'unreconciled') setReconciledFilter(v);
+          }}
+        >
+          <SelectTrigger className="h-9 w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All statuses</SelectItem>
+            <SelectItem value="reconciled">Reconciled</SelectItem>
+            <SelectItem value="unreconciled">Unreconciled</SelectItem>
+          </SelectContent>
+        </Select>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="min-w-0 space-y-1">
+                <p className="text-xs text-muted-foreground">Sort</p>
+        <Select
+          value={sort}
+          items={{
+            date_desc: 'Newest first',
+            date_asc: 'Oldest first',
+            amount_desc: 'Largest amount',
+            amount_asc: 'Smallest amount',
+          }}
+          onValueChange={(v) => {
+            if (v) setSort(v);
+          }}
+        >
+          <SelectTrigger className="h-9 w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="date_desc">Newest first</SelectItem>
+            <SelectItem value="date_asc">Oldest first</SelectItem>
+            <SelectItem value="amount_desc">Largest amount</SelectItem>
+            <SelectItem value="amount_asc">Smallest amount</SelectItem>
+          </SelectContent>
+        </Select>
+              </div>
+              <div className="min-w-0 space-y-1">
+                <p className="text-xs text-muted-foreground">Group by</p>
+          <Select
+            value={grouping}
+            items={{ none: 'None', date: 'Date', account: 'Account', category: 'Category' }}
+            onValueChange={(v) => {
+              if (v) setGrouping(v);
+            }}
+          >
+            <SelectTrigger className="h-9 w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">None</SelectItem>
+              <SelectItem value="date">Date</SelectItem>
+              <SelectItem value="account">Account</SelectItem>
+              <SelectItem value="category">Category</SelectItem>
+            </SelectContent>
+          </Select>
+              </div>
+            </div>
+          </PopoverContent>
+        </Popover>
         {excludeTax ? (
           <Button
             variant="secondary"
@@ -761,143 +930,7 @@ function LedgerTable() {
             Taxes excluded ✕
           </Button>
         ) : null}
-        {businesses.length > 0 && entityLens !== null && businessFilter === entityLens ? (
-          <span className="text-xs text-muted-foreground">
-            The entity switcher already narrows to this entity&apos;s accounts, so this shows
-            only its own accounts&apos; transactions. Switch to All entities to see what it
-            paid for from personal accounts.
-          </span>
-        ) : null}
-        {businesses.length > 0 ? (
-          <Select
-            value={businessFilter}
-            items={{
-              all: 'Personal + business',
-              personal: 'Personal only',
-              business: 'Any business',
-              ...Object.fromEntries(businesses.map((b) => [b.entityId, b.name])),
-            }}
-            onValueChange={(v) => {
-              if (v) setBusinessFilter(v);
-            }}
-          >
-            <SelectTrigger className="h-9 w-44">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Personal + business</SelectItem>
-              <SelectItem value="personal">Personal only</SelectItem>
-              {businesses.length > 1 ? (
-                <SelectItem value="business">Any business</SelectItem>
-              ) : null}
-              {businesses.map((b) => (
-                <SelectItem key={b.entityId} value={b.entityId}>
-                  {b.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : null}
-        {plainTags.length > 0 ? (
-          <Select
-            value={tagFilter}
-            items={{
-              all: 'All tags',
-              ...Object.fromEntries(plainTags.map((t) => [t.tagId, `#${t.name}`])),
-            }}
-            onValueChange={(v) => {
-              if (v) setTagFilter(v);
-            }}
-          >
-            <SelectTrigger className="h-9 w-36">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All tags</SelectItem>
-              {plainTags.map((t) => (
-                <SelectItem key={t.tagId} value={t.tagId}>
-                  #{t.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : null}
-        {tags.length > 0 ? (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="h-9 w-9"
-            aria-label="Manage tags"
-            title="Manage tags"
-            onClick={() => {
-              setManagingTags(true);
-            }}
-          >
-            <TagsIcon className="size-4" />
-          </Button>
-        ) : null}
-        <Select
-          value={reconciledFilter}
-          items={{
-            all: 'All statuses',
-            reconciled: 'Reconciled',
-            unreconciled: 'Unreconciled',
-          }}
-          onValueChange={(v) => {
-            if (v === 'all' || v === 'reconciled' || v === 'unreconciled') setReconciledFilter(v);
-          }}
-        >
-          <SelectTrigger className="h-9 w-36">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All statuses</SelectItem>
-            <SelectItem value="reconciled">Reconciled</SelectItem>
-            <SelectItem value="unreconciled">Unreconciled</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select
-          value={sort}
-          items={{
-            date_desc: 'Newest first',
-            date_asc: 'Oldest first',
-            amount_desc: 'Largest amount',
-            amount_asc: 'Smallest amount',
-          }}
-          onValueChange={(v) => {
-            if (v) setSort(v);
-          }}
-        >
-          <SelectTrigger className="h-9 w-40">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="date_desc">Newest first</SelectItem>
-            <SelectItem value="date_asc">Oldest first</SelectItem>
-            <SelectItem value="amount_desc">Largest amount</SelectItem>
-            <SelectItem value="amount_asc">Smallest amount</SelectItem>
-          </SelectContent>
-        </Select>
-        <div className="flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground">Group by</span>
-          <Select
-            value={grouping}
-            items={{ none: 'None', date: 'Date', account: 'Account', category: 'Category' }}
-            onValueChange={(v) => {
-              if (v) setGrouping(v);
-            }}
-          >
-            <SelectTrigger className="h-9 w-32">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">None</SelectItem>
-              <SelectItem value="date">Date</SelectItem>
-              <SelectItem value="account">Account</SelectItem>
-              <SelectItem value="category">Category</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+        <div className="flex items-center gap-2 sm:ml-auto">
         <Button
           variant={selecting ? 'secondary' : 'outline'}
           size="sm"
@@ -930,6 +963,7 @@ function LedgerTable() {
         >
           Import
         </Button>
+        </div>
       </div>
 
       {selecting ? (

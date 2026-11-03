@@ -39,6 +39,25 @@ describe('presetRange', () => {
   });
 });
 
+describe('quarter presets', () => {
+  it('this quarter runs from the quarter start to today', () => {
+    expect(presetRange('this_quarter', new Date('2026-11-03T12:00:00Z'))).toEqual({
+      from: '2026-10-01',
+      to: '2026-11-03',
+    });
+  });
+  it('last quarter is the full previous quarter, across a year boundary', () => {
+    expect(presetRange('last_quarter', new Date('2026-11-03T12:00:00Z'))).toEqual({
+      from: '2026-07-01',
+      to: '2026-09-30',
+    });
+    expect(presetRange('last_quarter', new Date('2026-02-10T12:00:00Z'))).toEqual({
+      from: '2025-10-01',
+      to: '2025-12-31',
+    });
+  });
+});
+
 describe('defaultScopePreset', () => {
   it('opens on last month during the first week, this month after', () => {
     expect(defaultScopePreset(new Date('2026-11-02T12:00:00Z'))).toBe('last_month');

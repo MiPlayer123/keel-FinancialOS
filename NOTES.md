@@ -847,3 +847,11 @@ a private forum thread and needs a call before publishing.
   The stronger fix is to gate the anchor on Plaid's `historical_update_complete`, which needs the
   webhook/sync to persist that flag. Surface this at the next ⚑.
 - Not applied to production. Apply via the normal live-migration path after review.
+
+## 2026-11-03 — Ledger toolbar + plain-language notes (Stage 2, Addendum §D, Law 9/11)
+- Ledger toolbar is one row: search · date · accounts · categories · Filters (entity, tag, status, sort,
+  group-by; badge counts non-defaults) · actions at the right.
+- Long methodology footnotes on Reports + Home moved behind an ⓘ popover (`InfoNote`) and rewritten short;
+  scope and exclusions still disclosed (Law 9), just on demand (Law 11 "proof on demand").
+- Home: Sync status moved into the net-worth card's top-right.
+- Reports: This quarter / Last quarter presets; Card rewards vs fees always reads year to date (annual fees).
