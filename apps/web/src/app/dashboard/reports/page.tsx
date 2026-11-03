@@ -1594,7 +1594,7 @@ function ReportsBody() {
                   · full month of {monthLabel(reviewMonth)}
                   {scope.includeTaxes ? '' : ' · taxes excluded'}.
                 </p>
-                <p>Compared with the full previous month. Excludes transfers and card payments.</p>
+                <p>Compared with the full previous month. Excludes transfers and card payments. {reviewCurrency} only.</p>
               </InfoNote>
             </span>
             <span className="flex flex-wrap gap-1">
@@ -1745,7 +1745,7 @@ function ReportsBody() {
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
             <span>Spending by category</span>
-            <InfoNote><p>{scopeText}.</p><p>Net of refunds. Excludes transfers and card payments. Subcategories roll up into their parent; click a slice to drill in.</p></InfoNote>
+            <InfoNote><p>{scopeText}.</p><p>Net of refunds. Excludes transfers and card payments. Subcategories roll up into their parent; click a slice to drill in. {donutReport.currency} only.</p></InfoNote>
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -1837,7 +1837,7 @@ function ReportsBody() {
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
             <span>Where the money went</span>
-            <InfoNote><p>{scopeText}.</p><p>Income on the left, spending on the right. Excludes transfers and card payments.</p></InfoNote>
+            <InfoNote><p>{scopeText}.</p><p>Income on the left, spending on the right. Excludes transfers and card payments. {flow.currency} only.</p></InfoNote>
           </CardTitle>
           </CardHeader>
           <CardContent>
@@ -1879,7 +1879,7 @@ function ReportsBody() {
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
             <span>Income vs spending by month</span>
-            <InfoNote><p>{scopeText}.</p><p>Excludes transfers and card payments. The dashed line is average monthly spending. Click a month to see its transactions.{monthsTruncatedNote}</p></InfoNote>
+            <InfoNote><p>{scopeText}.</p><p>Excludes transfers and card payments. The dashed line is average monthly spending. Click a month to see its transactions. {monthlyFlow[0]?.currency ?? ''} only.{monthsTruncatedNote}</p></InfoNote>
           </CardTitle>
           </CardHeader>
           <CardContent>
@@ -2131,7 +2131,7 @@ function ReportsBody() {
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
             <span>Top payees</span>
-            <InfoNote><p>{baseScopeText}.</p><p>Ranked by money out. Refunds aren&apos;t netted. Excludes transfers and card payments.</p></InfoNote>
+            <InfoNote><p>{baseScopeText}.</p><p>Ranked by money out. Refunds aren&apos;t netted. Excludes transfers and card payments. {payeeReport.currency} only.</p></InfoNote>
           </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
@@ -2174,7 +2174,7 @@ function ReportsBody() {
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
             <span>By tag</span>
-            <InfoNote><p>{baseScopeText}.</p><p>Net cash for tagged transactions. Transfers excluded; card payments count.</p></InfoNote>
+            <InfoNote><p>{baseScopeText}.</p><p>Net cash for tagged transactions. Transfers excluded; card payments count. {tagReport.currency} only.</p></InfoNote>
           </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
@@ -2200,7 +2200,7 @@ function ReportsBody() {
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
             <span>Tax schedule</span>
-            <InfoNote><p>{baseScopeText}.</p><p>Cash per IRS line, from the tax lines set on your categories. Transfers excluded. Bookkeeping, not tax advice.</p></InfoNote>
+            <InfoNote><p>{baseScopeText}.</p><p>Cash per IRS line, from the tax lines set on your categories. Transfers excluded. {taxReport.currency} only. Bookkeeping, not tax advice.</p></InfoNote>
           </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
