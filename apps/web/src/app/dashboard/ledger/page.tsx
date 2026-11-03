@@ -14,6 +14,7 @@ import {
   Plus,
   Tags as TagsIcon,
   SlidersHorizontal,
+  Upload,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -644,18 +645,63 @@ function LedgerTable() {
       {/* One toolbar row: everyday filters visible; entity, tag, status,
           sort and grouping behind "Filters" (badge = how many differ from
           the default). Actions at the right end. */}
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative w-full sm:w-56 lg:w-64">
+      {/* Phones: search + icon actions on top, filters in one sideways-
+          scrolling strip. sm+: everything flows into a single row (the two
+          wrappers become display:contents) with actions pushed to the end. */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+        <div className="flex items-center gap-2 sm:contents">
+        <div className="relative min-w-0 flex-1 sm:w-56 sm:flex-none lg:w-64">
           <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={query}
-            placeholder="Search transactions"
+            placeholder="Search"
+            aria-label="Search transactions"
             className="pl-8"
             onChange={(e) => {
               setQuery(e.target.value);
             }}
           />
         </div>
+          <div className="flex shrink-0 items-center gap-1.5 sm:order-last sm:ml-auto sm:gap-2">
+        <Button
+          variant={selecting ? 'secondary' : 'outline'}
+          aria-label={selecting ? 'Done selecting' : 'Select transactions'}
+          size="sm"
+          className="h-9"
+          onClick={() => {
+            setSelecting((s) => !s);
+            setSelected(new Set());
+          }}
+        >
+          <ListChecks className="size-4" />
+          <span className="hidden sm:inline">{selecting ? 'Done' : 'Select'}</span>
+        </Button>
+        <Button
+          size="sm"
+          className="h-9"
+          aria-label="Add transaction"
+          onClick={() => {
+            setAdding(true);
+          }}
+        >
+          <Plus className="size-4" />
+          <span className="hidden sm:inline">Add</span>
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9"
+          aria-label="Import transactions"
+          onClick={() => {
+            setImporting(true);
+          }}
+        >
+          <Upload className="size-4 sm:hidden" />
+          <span className="hidden sm:inline">Import</span>
+        </Button>
+          </div>
+        </div>
+        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 [scrollbar-width:none] sm:contents [&::-webkit-scrollbar]:hidden [&>*]:shrink-0">
         <Select
           value={customRange ? 'custom' : datePreset}
           items={{
@@ -930,39 +976,6 @@ function LedgerTable() {
             Taxes excluded ✕
           </Button>
         ) : null}
-        <div className="flex items-center gap-2 sm:ml-auto">
-        <Button
-          variant={selecting ? 'secondary' : 'outline'}
-          size="sm"
-          className="h-9"
-          onClick={() => {
-            setSelecting((s) => !s);
-            setSelected(new Set());
-          }}
-        >
-          <ListChecks className="size-4" />
-          {selecting ? 'Done' : 'Select'}
-        </Button>
-        <Button
-          size="sm"
-          className="h-9"
-          onClick={() => {
-            setAdding(true);
-          }}
-        >
-          <Plus className="size-4" />
-          Add
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-9"
-          onClick={() => {
-            setImporting(true);
-          }}
-        >
-          Import
-        </Button>
         </div>
       </div>
 

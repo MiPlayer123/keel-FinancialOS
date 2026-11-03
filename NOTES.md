@@ -855,3 +855,4 @@ a private forum thread and needs a call before publishing.
   scope and exclusions still disclosed (Law 9), just on demand (Law 11 "proof on demand").
 - Home: Sync status moved into the net-worth card's top-right.
 - Reports: This quarter / Last quarter presets; Card rewards vs fees always reads year to date (annual fees).
+- Ledger on phones: date moves into the row's second line (names get the width); search + icon actions on top, filters in one sideways-scrolling strip; desktop unchanged.
