@@ -811,3 +811,39 @@ a private forum thread and needs a call before publishing.
 - Codex review on PR #193 (2 × P2) addressed: scope serializer always writes the preset (the default is
   date-adaptive, so an omitted "Last month" would drift to "This month" after day 7); Month-in-review
   full-month disclosure now visible while collapsed.
+
+## 2026-11-02 — Opening anchor drift from late Plaid history (Stage 2, gate 5; BC-v2.1 §9.1)
+- Symptom: a new user's headline balance (household 9ba6a349) did not match the bank. He used
+  "Fix balance" on 2026-11-03 01:19 UTC, and that reanchor is the evidence: on each depository
+  account, the correction equals the net of transactions first booked AFTER the 2026-10-30 link
+  anchor and dated before the first sync page's window. Adv Plus ·6253: −215.40, 955 txns.
+  Advantage Savings ·5059: +925.31, 13 txns. Venmo: −1,678.31, 148 txns. The card (·8678) had no
+  late history. The founder household shows the same pattern: 26 reanchor runs in July/August.
+- Root cause: `keel_apply_account_balance` books its one-time anchor as soon as
+  `connections.last_successful_sync_at` is set. Plaid's first `/transactions/sync` returns only
+  about 30 days. The multi-year history arrives minutes later in further generations; KEEL does
+  not track `historical_update_complete`. That history is already inside the anchored bank
+  balance, so it gets counted twice. This is not pending vs posted, not available vs current
+  (current is used everywhere), not a duplicate anchor, and not the archived manual duplicates
+  (zero postings).
+- Fix: migration `20261102190000_heal_late_history_anchor.sql` adds
+  `keel_heal_late_history_anchor`, called on every balance refresh once an anchor exists. It
+  books a balanced compensating "Opening balance adjustment (late history)" batch for
+  −Σ(late backdated history), net of earlier adjustments. It is idempotent, audited
+  (`accounts.opening_balance_late_history_adjusted`, formula `late-history-anchor-v1`), and
+  dated on the anchor date.
+  - Late-history rule: a transaction's first booking comes after the anchor, and its date is
+    before the earliest-dated transaction present at anchor time. Ordinary posting lag is never
+    absorbed.
+  - Scope: connected, non-investment accounts only. Investment accounts already show market
+    value, and core-sweep cash keeps its own backfill. A period lock on the anchor date skips the
+    heal (Law 2).
+  - Fix balance is unchanged: it reverses the adjustment along with the base anchor.
+- Read-only dry run against live (2026-11-02): the rule would book **0** on every active account
+  in every household today, so applying the migration changes no existing balance. It
+  reproduces the three historical corrections above to the cent.
+- Deviation, flagged: the floor fallback when nothing was booked at anchor time
+  (anchor date − 7 days) is a heuristic (doc 15 precedence: the smallest deterministic version).
+  The stronger fix is to gate the anchor on Plaid's `historical_update_complete`, which needs the
+  webhook/sync to persist that flag. Surface this at the next ⚑.
+- Not applied to production. Apply via the normal live-migration path after review.
