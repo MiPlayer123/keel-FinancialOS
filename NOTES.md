@@ -2,6 +2,60 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+## 2026-11-04 Per-user MCP connector: feasibility + dark prototype
+
+User asked whether a user could add one URL to Claude or Codex as a connector, sign in, and
+then read and change their own KEEL data. Full write-up: `docs/research/MCP-CONNECTOR-2026-11-04.md`.
+
+**Verdict.** It is feasible on the current stack with no new services:
+- One Edge Function, `mcp`.
+- Supabase Auth's OAuth 2.1 server (beta, free) issues the tokens.
+- KEEL hosts its own consent page.
+- The tools are the in-app agent's authorized catalog, so there is one catalog for both surfaces (Law 7).
+
+**Deviation.** INFRA.md and CLAUDE.md put the external MCP listener after Stage 0–2. docs/09 T3.1/M7 put it at M7. This prototype breaks that order on a user directive (2026-11-04). It is contained:
+- The function answers 404 unless `KEEL_MCP_ENABLED=on`.
+- No migration, deploy or dashboard change was made.
+- Enabling it is listed as ⚑ steps in §8 of the write-up: OAuth server, gateway guard migration, M7 security review of the write surface.
+
+**Findings that change the design.** The research was checked against live docs and the project's public discovery endpoints.
+
+1. **Tokens are not audience-bound.** Supabase OAuth tokens are ordinary user JWTs with `aud: "authenticated"`. Supabase accepts the RFC 8707 `resource` parameter but does not bind it.
+   - KEEL therefore tells an AI-client token apart only by its `client_id` claim.
+   - `/mcp` requires that claim.
+   - `api` now refuses tokens that carry it. This is a no-op until the OAuth server is enabled.
+   - Before enabling, a PostgREST `db_pre_request` gateway guard must stop client tokens from calling `keel_*` RPCs directly (slice 1 in the write-up).
+2. **No custom scopes.** The read vs organize split is a KEEL-side grant, not an OAuth scope.
+3. **No CIMD.** Every client will register through DCR. Client names are self-asserted, so the consent page shows the real redirect host and warns when the name and host don't match.
+4. **Discovery path.** The RFC 9728 metadata cannot sit at the domain root under `/functions/v1`. The 401 challenge points inside the function instead.
+5. **Live project state.** The OAuth server is disabled today. The JWKS already publishes an ES256 key.
+
+**Scope exposed.**
+- 35 read tools.
+- 7 class-A note/task writes behind `KEEL_MCP_ORGANIZE`. Each returns its undo, and every non-additive write is marked `destructiveHint`.
+- Class-B `propose_*` tools are not exposed. A client's "Allow" button is not a KEEL approval, so they wait for persisted proposals plus `approval_tokens` (Law 11).
+- No class C or D tools.
+
+**Refactor, no behavior change.**
+- `QUERY_TO_PROC` and `AGENT_WRITE_TO_PROC` moved to `_shared/proc-maps.ts`.
+- The authz-context loader moved to `_shared/authz-context.ts`.
+- `api` re-exports and wraps both.
+- `deno check` on `api/index.ts` went from 157 pre-existing errors to 155; the two removed were unused type imports. No new errors.
+
+**Tests.**
+- 39 new Deno tests (`_shared/mcp-*.test.ts`).
+- 17 new web tests (`lib/oauth-consent.test.ts`).
+- Full `pnpm test` green: 1432 vitest, 133 Deno.
+- `apps/web` `pnpm build` green, including lint. Root ESLint is clean on the changed files.
+
+**Smoke test.** Ran `deno serve` on `mcp/index.ts` with a locally minted ES256 JWKS and fictional claims. Results:
+- No token gets a 401 with `resource_metadata`.
+- The metadata document is served.
+- A web-session token gets a 401.
+- A tampered token gets a 401.
+- An OAuth-client token can `initialize`, and `tools/list` returns 42 tools with organize on.
+- Logs carry the client id, never the user id.
+
 ## 2026-11-02 Demo household: inflated monthly cash flow and invisible recurring series
 
 Found while checking the Home/Reports redesign (PR #193) on the fictional demo household

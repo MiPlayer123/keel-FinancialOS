@@ -21,6 +21,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { RulesCard } from '@/components/keel/rules-card';
 import { CategoriesCard } from '@/components/keel/categories-card';
+import { ConnectedAppsCard } from '@/components/keel/connected-apps-card';
 
 type Format = 'csv' | 'json' | 'qif' | 'beancount';
 
@@ -51,6 +52,7 @@ export default function SettingsPage() {
         <RulesCard />
         <PasswordCard />
         <ExportCard />
+        <ConnectedAppsCard />
         <ActivityCard />
       </div>
     </>
