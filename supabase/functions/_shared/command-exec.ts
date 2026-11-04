@@ -162,12 +162,20 @@ export const executeCommand = async (
     ...(contract.isEntityId(payload['entityId']) ? { entityId: payload['entityId'] } : {}),
     ...(contract.isAccountId(payload['accountId']) ? { accountId: payload['accountId'] } : {}),
   };
-  const decision = contract.authorize(await loadAuthz(), command, resource);
-  if (!decision.allowed) {
-    // Scope violations answer not_found — never confirm existence cross-tenant.
-    return decision.code === 'household_scope_violation'
-      ? fail(404, 'not_found', 'Not found.')
-      : fail(403, 'not_authorized', decision.reason);
+  const authz = await loadAuthz();
+  // A split leg that posts into another account (a paycheck's 401(k) leg)
+  // also needs the caller's rights on that account.
+  const legAccounts = command === 'transactions.set_splits' && Array.isArray(payload['splits'])
+    ? (payload['splits'] as Record<string, unknown>[]).map((leg) => leg['accountId']).filter(contract.isAccountId)
+    : [];
+  for (const target of [resource, ...legAccounts.map((accountId) => ({ householdId, accountId }))]) {
+    const decision = contract.authorize(authz, command, target);
+    if (!decision.allowed) {
+      // Scope violations answer not_found — never confirm existence cross-tenant.
+      return decision.code === 'household_scope_violation'
+        ? fail(404, 'not_found', 'Not found.')
+        : fail(403, 'not_authorized', decision.reason);
+    }
   }
 
   const { data, error } = await supabase.rpc(proc, {

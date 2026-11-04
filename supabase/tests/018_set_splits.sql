@@ -378,4 +378,78 @@ select lives_ok($$
 $$, 'a contra leg (income category on a money-out offset) is now accepted');
 reset role;
 
+-- ---------------------------------------------------------------------------
+-- Paycheck re-split with a leg INTO another account (the contract accepts
+-- {accountId} legs on set_splits since the MCP connector; the proc has booked
+-- them since 20260802140000). T4: a +266.19 deposit = 712.50 gross (Salary)
+-- − 90.06 withheld (an expense category) − 356.25 into a 401(k) account.
+-- ---------------------------------------------------------------------------
+insert into public.ledger_accounts (id, household_id, entity_id, name, kind, currency, is_category, created_at, archived_at)
+values ('c6000000-0000-4000-8000-0000000000f1', '00000000-0000-4000-8000-00000000a001',
+        '00000000-0000-4000-8000-00000000a101', 'Test 401(k)', 'asset', 'USD', false, now(), null);
+insert into public.accounts (id, household_id, entity_id, connection_id, ledger_account_id, name, subtype, currency, external_ref, created_at, archived_at)
+values ('c6000000-0000-4000-8000-0000000000f2', '00000000-0000-4000-8000-00000000a001',
+        '00000000-0000-4000-8000-00000000a101', null, 'c6000000-0000-4000-8000-0000000000f1',
+        'Test 401(k)', 'retirement', 'USD', null, now(), null);
+insert into public.canonical_transactions
+  (id, household_id, entity_id, account_id, status, source, description, effective_date, economic_event_key)
+values ('c6000000-0000-4000-8000-000000000004', '00000000-0000-4000-8000-00000000a001',
+        '00000000-0000-4000-8000-00000000a101', '00000000-0000-4000-8000-00000000a401',
+        'posted', 'sync', 'PAYROLL DEPOSIT', '2026-07-15', 'pgtap:splits:t4');
+insert into public.journal_batches (id, household_id, canonical_transaction_id, description, effective_date, command_id)
+values ('c6000000-0000-4000-8000-000000000024', '00000000-0000-4000-8000-00000000a001',
+        'c6000000-0000-4000-8000-000000000004', 'PAYROLL DEPOSIT', '2026-07-15',
+        'c6000000-0000-4000-8000-0000000000c4');
+insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency) values
+  ('c6000000-0000-4000-8000-000000000024', '00000000-0000-4000-8000-00000000a301',
+   '00000000-0000-4000-8000-00000000a101', 26619, 'USD'),
+  ('c6000000-0000-4000-8000-000000000024', '00000000-0000-4000-8000-00000000a318',
+   '00000000-0000-4000-8000-00000000a101', -26619, 'USD');
+
+set local role authenticated;
+set local request.jwt.claims to '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}';
+select lives_ok($$
+  select public.keel_cmd_set_splits(
+    'c6000000-0000-4000-8000-0000000000e1', 'pgtap:splits:paycheck', '{}'::jsonb,
+    '00000000-0000-4000-8000-00000000a001',
+    jsonb_build_object(
+      'transaction_id', 'c6000000-0000-4000-8000-000000000004',
+      'amount_minor', '26619',
+      'splits', jsonb_build_array(
+        jsonb_build_object('category_ledger_account_id', '00000000-0000-4000-8000-00000000a315', 'amount_minor', '-71250'),
+        jsonb_build_object('category_ledger_account_id', '00000000-0000-4000-8000-00000000a311', 'amount_minor', '9006'),
+        jsonb_build_object('account_id', 'c6000000-0000-4000-8000-0000000000f2', 'amount_minor', '35625'))))
+$$, 'a paycheck splits into gross, withholding and a leg into the 401(k) account');
+select throws_ok($$
+  select public.keel_cmd_set_splits(
+    'c6000000-0000-4000-8000-0000000000e2', 'pgtap:splits:paycheck:self', '{}'::jsonb,
+    '00000000-0000-4000-8000-00000000a001',
+    jsonb_build_object(
+      'transaction_id', 'c6000000-0000-4000-8000-000000000004',
+      'amount_minor', '26619',
+      'splits', jsonb_build_array(
+        jsonb_build_object('category_ledger_account_id', '00000000-0000-4000-8000-00000000a315', 'amount_minor', '-26619'),
+        jsonb_build_object('account_id', '00000000-0000-4000-8000-00000000a401', 'amount_minor', '1'),
+        jsonb_build_object('category_ledger_account_id', '00000000-0000-4000-8000-00000000a311', 'amount_minor', '-1'))))
+$$, 'P0009', null, 'an account leg cannot target the transaction''s own account');
+reset role;
+
+select is(
+  (select sum(p.amount_minor)::bigint from public.journal_postings p
+    join public.journal_batches jb on jb.id = p.batch_id
+    where jb.canonical_transaction_id = 'c6000000-0000-4000-8000-000000000004'
+      and p.ledger_account_id = 'c6000000-0000-4000-8000-0000000000f1'),
+  35625::bigint, 'the 401(k) account receives the contribution');
+select is(
+  (select sum(p.amount_minor)::bigint from public.journal_postings p
+    join public.journal_batches jb on jb.id = p.batch_id
+    where jb.canonical_transaction_id = 'c6000000-0000-4000-8000-000000000004'),
+  0::bigint, 'the paycheck history nets to zero (Law 3)');
+select is(
+  (select sum(p.amount_minor)::bigint from public.journal_postings p
+    join public.journal_batches jb on jb.id = p.batch_id
+    where jb.canonical_transaction_id = 'c6000000-0000-4000-8000-000000000004'
+      and p.ledger_account_id = '00000000-0000-4000-8000-00000000a301'),
+  26619::bigint, 'the deposit itself is untouched');
+
 select * from finish();rollback;

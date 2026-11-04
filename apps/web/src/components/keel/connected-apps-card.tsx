@@ -30,11 +30,9 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
-function connectorUrl(): string {
-  const override = process.env.NEXT_PUBLIC_KEEL_MCP_URL;
-  if (override) return override;
-  const base = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').replace(/\/+$/, '');
-  return `${base}/functions/v1/mcp`;
+/** The connector lives on this site (app/mcp forwards to the mcp function). */
+function connectorUrl(siteOrigin: string): string {
+  return process.env.NEXT_PUBLIC_KEEL_MCP_URL || `${siteOrigin}/mcp`;
 }
 
 interface AppRow {
@@ -104,7 +102,9 @@ export function ConnectedAppsCard() {
     }
   }
 
-  const url = connectorUrl();
+  // Rendered only once loaded (client side), so reading the origin here never
+  // differs from a server render.
+  const url = connectorUrl(typeof window === 'undefined' ? '' : window.location.origin);
 
   return (
     <Card>

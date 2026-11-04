@@ -7,22 +7,24 @@ One URL that lets a KEEL user connect their finances to an AI app: Claude (web, 
 - **Never.** It never moves money, connects banks, or exports data.
 
 ```
-https://<project-ref>.supabase.co/functions/v1/mcp
+https://keel.mikulsaravanan.com/mcp
 ```
+
+The web app serves that URL (`apps/web/src/app/mcp`) and forwards each request unchanged to this function. It only restates the sign-in metadata for its own domain, so an AI app sees one origin it can discover from. The function's own URL (`https://<project-ref>.supabase.co/functions/v1/mcp`) works too.
 
 ## How it works
 
 ```
-AI app ──POST /mcp (JSON-RPC)──▶ mcp function ──▶ same KEEL procs the app uses (RLS, audit)
+AI app ──POST <site>/mcp (JSON-RPC)──▶ web app proxy ──▶ mcp function ──▶ same KEEL procs the app uses (RLS, audit)
    ▲            │
-   │            └─ no/expired token → 401 + WWW-Authenticate: resource_metadata=…/mcp/.well-known/oauth-protected-resource
+   │            └─ no/expired token → 401 + WWW-Authenticate: resource_metadata=<site>/.well-known/oauth-protected-resource/mcp
    │
    └─ OAuth 2.1 (Supabase Auth): register (DCR) → authorize (PKCE) → KEEL /oauth/consent → token
 ```
 
 ### 1. Discovery
 
-The first call has no token. The function answers 401, and the challenge header points to this function's protected-resource metadata. That metadata names Supabase Auth (`<project>/auth/v1`) as the authorization server.
+The first call has no token. The function answers 401 to any unauthenticated request, whatever its method or `Origin`. The challenge header points to the protected-resource metadata, which names Supabase Auth (`<project>/auth/v1`) as the authorization server. On the site domain, the metadata is also at the RFC 9728 well-known paths, for apps that look there first.
 
 `verify_jwt` is off for this function so that clients receive this 401, not the platform's.
 
@@ -82,7 +84,7 @@ There are 42 tools: 18 read and 24 write. Read tools are always listed. Write to
 | Area | Tools |
 |---|---|
 | Accounts | `accounts_create` (manual or cash, with starting balance), `accounts_update` (rename, entity, starting balance, re-anchor, archive or restore) |
-| Transactions | `transactions_create`, `transactions_update` (category, name, note, date, tags), `transactions_split` (amounts, percent or equal; KEEL does the math), `transactions_categorize` (bulk), `transactions_void` |
+| Transactions | `transactions_create`, `transactions_update` (category, name, note, date, tags), `transactions_split` (amounts, percent or equal; KEEL does the math; signed shares and account legs, so a paycheck books as gross − withholding − a 401(k) leg into its account), `transactions_categorize` (bulk), `transactions_void` |
 | Setup | `categories_create`, `categories_update` (rename, move, tax line, archive), `tags_save`, `rules_save` (`active: false` switches a rule off), `rules_apply` (dry run first) |
 | Planning | `budgets_set`, `recurring_update`, `bills_save` (create, edit, pause or end), `bills_enter`, `goals_save`, `goals_contribute` |
 | Receipts and review | `receipts_attach` (attach an uploaded receipt to a transaction), `review_decide` (category suggestions, transfer matches, receipt matches) |
@@ -161,7 +163,7 @@ Nothing works until step 3: without the OAuth server, no app token can exist.
 **Kill switch:** set the function secret `KEEL_MCP_ENABLED=off`.
 
 **Optional secrets:**
-- `KEEL_MCP_PUBLIC_URL`: a custom-domain URL for the connector.
+- `KEEL_MCP_PUBLIC_URL`: the URL the function names when called directly (the site proxy restates its own).
 - `KEEL_MCP_ALLOWED_CLIENT_IDS`: restrict which apps may connect.
 - `KEEL_MCP_DOCS_URL`: a documentation link in the metadata.
 

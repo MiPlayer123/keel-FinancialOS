@@ -257,6 +257,14 @@ const splitPart = z.object({
   basis_points: z.number().int().min(1).max(10000).optional().describe('Share in basis points, 1% = 100 (mode "percent").'),
 }).strict();
 
+/** transactions_split legs: a category or an account, and signed shares in "amounts" mode. */
+const splitLeg = z.object({
+  category_id: uuid('Category').optional(),
+  account_id: uuid('Account to post into, e.g. the 401(k) a paycheck contribution goes to').optional(),
+  amount_minor: z.string().regex(/^-?[1-9][0-9]*$/).optional().describe('Share in minor units, in the transaction\'s direction; negative goes the other way (mode "amounts").'),
+  basis_points: z.number().int().min(1).max(10000).optional().describe('Share in basis points, 1% = 100 (mode "percent").'),
+}).strict();
+
 const splitArgs = (parts: readonly z.infer<typeof splitPart>[]) =>
   parts.map((p) => ({
     categoryId: p.category_id,
@@ -386,20 +394,25 @@ export const transactionsSplit = defineTool({
   name: 'transactions_split',
   title: 'Split a transaction',
   description:
-    'Splits one transaction across categories (or re-splits it). mode "amounts": positive shares that add up to the transaction; "percent": basis points adding to 10000; "equal": divide evenly. KEEL computes and validates the exact amounts. A single category un-splits it.',
+    'Splits one transaction across categories and accounts (or re-splits it). Shares are in the transaction\'s direction and add up to its size. mode "amounts": shares in minor units; a negative share goes the other way, so a paycheck deposit splits into gross pay (positive, an income category) minus taxes and deductions (negative, expense categories) minus a retirement contribution (negative, with account_id of the 401(k) or IRA it goes into). "percent": basis points adding to 10000; "equal": divide evenly. KEEL computes and validates the exact amounts. A single category un-splits it.',
   kind: 'write',
   destructive: true,
   input: z.object({
     transaction_id: uuid('Transaction'),
     mode: z.enum(['amounts', 'percent', 'equal']),
-    splits: z.array(splitPart).min(1).max(30),
+    splits: z.array(splitLeg).min(1).max(30),
     idempotency_key: idempotencyKey,
   }).strict(),
   run: async (ctx, args) => {
     const one = await loadOne(ctx, args.transaction_id);
     if (!one.ok) return one;
     const amount = String(one.row.amountMinor ?? '0');
-    const legs = computeSplitLegs(amount, args.mode, splitArgs(args.splits));
+    const legs = computeSplitLegs(amount, args.mode, args.splits.map((p) => ({
+      ...(p.category_id ? { categoryId: p.category_id } : {}),
+      ...(p.account_id ? { accountId: p.account_id } : {}),
+      ...(p.amount_minor ? { amountMinor: p.amount_minor } : {}),
+      ...(p.basis_points ? { basisPoints: p.basis_points } : {}),
+    })));
     if (!legs.ok) return err('invalid_split', legs.message, 'transactions_get shows the exact amount.');
     const res = await ctx.command('transactions.set_splits', {
       transactionId: args.transaction_id,
@@ -407,9 +420,13 @@ export const transactionsSplit = defineTool({
       splits: legs.legs,
     }, args.idempotency_key);
     if (!res.ok) return res;
-    return ok(`Split into ${legs.legs.length} categor${legs.legs.length === 1 ? 'y' : 'ies'}.`, {
+    return ok(`Split into ${legs.legs.length} part${legs.legs.length === 1 ? '' : 's'}.`, {
       transaction_id: args.transaction_id,
-      splits: legs.legs.map((l) => ({ category_id: l.categoryLedgerAccountId, amount: money(-BigInt(l.amountMinor), one.row.currency ?? 'USD') })),
+      // Shares as given: in the transaction's direction, adding up to it.
+      splits: legs.legs.map((l) => ({
+        ...('accountId' in l ? { account_id: l.accountId } : { category_id: l.categoryLedgerAccountId }),
+        share: money(BigInt(amount) < 0n ? BigInt(l.amountMinor) : -BigInt(l.amountMinor), one.row.currency ?? 'USD'),
+      })),
     });
   },
 });

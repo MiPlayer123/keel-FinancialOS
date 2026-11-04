@@ -2,6 +2,28 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+## 2026-11-04 MCP connector: paycheck splits and the site URL
+
+**Paycheck splits (contract amendment, BC-v2.1 contracts are "stabilized, not frozen").**
+- A real session showed `transactions_split` couldn't book a paycheck. That needs mixed signs (gross pay against withholding) and a leg into another account (a Roth 401(k) contribution).
+- `keel_cmd_set_splits` has booked both since 20260802140000; the paycheck-template path uses account legs. Only the command contract stood in the way: `ManualTransactionSplitSchema` is category-only.
+- `SetSplitsPayloadSchema` legs are now a category leg or a new `SplitAccountLegSchema` (`{accountId, amountMinor}`).
+- Manual create stays category-only.
+- `_shared/command-exec.ts` also authorizes the caller on each account a leg posts into. That applies to the app's `/commands` too (Law 7).
+- `transactions_split` takes signed shares, in the transaction's direction and adding up to its size, plus `account_id` per leg. KEEL turns them into debit-positive legs (Law 1).
+- Tests:
+  - contract: paycheck parses; unbalanced, both-or-neither and account legs on manual create are refused;
+  - executor: the target account is authorized, and a denial never reaches the database;
+  - MCP: paycheck legs and refusals;
+  - pgTAP `018_set_splits`: the 401(k) account receives 356.25, the history nets to zero, and a leg into the transaction's own account is refused.
+
+**Site URL.** The connector is now `https://keel.mikulsaravanan.com/mcp`.
+- `apps/web/src/app/mcp/route.ts` forwards to the function. It passes only the MCP request headers (no cookies) and rewrites the challenge's `resource_metadata` to the site.
+- `app/mcp/oauth-protected-resource` restates the function's metadata with the site's `resource`. `next.config.ts` rewrites both RFC 9728 well-known paths to it, so the fallback discovery that supabase.co can't serve also works.
+- It's free on the Vercel plan in use; each call adds one hop.
+- Settings → Connected apps shows the site URL.
+- The supabase.co URL keeps working for anyone already connected through it.
+
 ## 2026-11-04 MCP connector: first live connect failed at discovery
 
 **Symptom.** Adding the connector in Claude (after the ⚑ OAuth server step) failed twice with

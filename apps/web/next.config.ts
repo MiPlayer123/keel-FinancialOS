@@ -7,6 +7,14 @@ const nextConfig: NextConfig = {
   // Next.js's dev-mode build indicator, not KEEL chrome. It has no user
   // function, so we remove it rather than reposition it.
   devIndicators: false,
+  // The connector at <site>/mcp: AI apps look for its sign-in metadata at the
+  // RFC 9728 well-known paths (app/mcp/oauth-protected-resource answers).
+  rewrites() {
+    return Promise.resolve([
+      { source: '/.well-known/oauth-protected-resource/mcp', destination: '/mcp/oauth-protected-resource' },
+      { source: '/.well-known/oauth-protected-resource', destination: '/mcp/oauth-protected-resource' },
+    ]);
+  },
   // The AI-app consent screen must never be framed (clickjacking an "Allow").
   headers() {
     return Promise.resolve([
