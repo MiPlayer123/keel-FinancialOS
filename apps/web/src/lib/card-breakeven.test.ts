@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { cardBreakEven, isCardFeeRow, isCardRewardRow } from './card-breakeven';
+import { cardBreakEven, cardGroups, isCardFeeRow, isCardRewardRow, type CardAccount } from './card-breakeven';
 import type { RichTransactionRow } from '@/lib/keel-api';
 
 /** Minimal row factory — only the fields cardBreakEven reads. */
@@ -195,5 +195,81 @@ describe('cardBreakEven — sign, scope, and grouping', () => {
       row({ amountMinor: '100', categoryKind: 'expense', categoryPfcKey: 'fees' }),
     ];
     expect(cardBreakEven(rows, CARDS)).toHaveLength(0);
+  });
+});
+
+describe('cardGroups — a reissued card reads as one card', () => {
+  const acct = (p: Partial<CardAccount> & { id: string }): CardAccount => ({
+    name: 'Sapphire Reserve',
+    subtype: 'credit card',
+    entityId: 'personal',
+    currency: 'USD',
+    archivedAt: null,
+    ...p,
+  });
+  const rewards = { categoryKind: 'income' as const, categoryPfcKey: 'income_card_rewards' };
+  const fee = { categoryKind: 'expense' as const, categoryPfcKey: 'fees_bank' };
+
+  it('folds a closed card into the live same-named card: fee on the old number, credits on the new', () => {
+    const accounts = [acct({ id: 'old', archivedAt: '2026-08-13' }), acct({ id: 'new' })];
+    const out = cardBreakEven(
+      [
+        row({ accountId: 'old', amountMinor: '-79500', ...fee }),
+        row({ accountId: 'old', amountMinor: '48812', ...rewards }),
+        row({ accountId: 'new', amountMinor: '24484', ...rewards }),
+      ],
+      new Set(['old', 'new']),
+      cardGroups(accounts),
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({
+      accountId: 'new',
+      accountIds: ['new', 'old'],
+      rewardsMinor: 73296n,
+      feesMinor: 79500n,
+      netMinor: -6204n,
+      rewardCount: 2,
+      feeCount: 1,
+    });
+  });
+
+  it('keeps two LIVE same-named cards separate', () => {
+    const g = cardGroups([acct({ id: 'a' }), acct({ id: 'b' })]);
+    expect(g.get('a')?.groupId).toBe('a');
+    expect(g.get('b')?.groupId).toBe('b');
+  });
+
+  it('does not merge a closed card when the live match is ambiguous, or differs by entity/currency', () => {
+    const g = cardGroups([
+      acct({ id: 'old', archivedAt: '2026-01-01' }),
+      acct({ id: 'a' }),
+      acct({ id: 'b' }),
+      acct({ id: 'biz-old', entityId: 'llc', archivedAt: '2026-01-01' }),
+      acct({ id: 'eur-old', currency: 'EUR', archivedAt: '2026-01-01' }),
+    ]);
+    expect(g.get('old')?.groupId).toBe('old');
+    expect(g.get('biz-old')?.groupId).toBe('biz-old');
+    expect(g.get('eur-old')?.groupId).toBe('eur-old');
+  });
+
+  it('matches names case- and space-insensitively and ignores non-card accounts', () => {
+    const g = cardGroups([
+      acct({ id: 'old', name: 'sapphire  reserve ', archivedAt: '2026-08-13' }),
+      acct({ id: 'new' }),
+      acct({ id: 'chk', subtype: 'checking', name: 'Sapphire Reserve' }),
+    ]);
+    expect(g.get('old')).toEqual({ groupId: 'new', name: 'Sapphire Reserve' });
+    expect(g.has('chk')).toBe(false);
+  });
+
+  it('without groups, behaves exactly as before (one row per account)', () => {
+    const out = cardBreakEven(
+      [
+        row({ accountId: 'old', amountMinor: '-79500', ...fee }),
+        row({ accountId: 'new', amountMinor: '24484', ...rewards }),
+      ],
+      new Set(['old', 'new']),
+    );
+    expect(out.map((c) => c.accountIds)).toEqual([['old'], ['new']]);
   });
 });
