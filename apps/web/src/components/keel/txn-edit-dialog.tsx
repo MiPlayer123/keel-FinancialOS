@@ -256,7 +256,7 @@ export function TxnRow({
   const { businessName, plainTags } = splitRowTags(t, businessNames);
   return (
     <div
-      className={`flex items-center gap-3 px-4 py-2.5 ${topBorder ? 'border-t border-border' : ''}`}
+      className={`flex items-center gap-3 px-3 py-2.5 sm:px-4 ${topBorder ? 'border-t border-border' : ''}`}
     >
           {selecting ? (
             <button
@@ -276,7 +276,9 @@ export function TxnRow({
               {selected.has(t.transactionId) ? <Check className="size-3.5" /> : null}
             </button>
           ) : null}
-          <span className="w-16 shrink-0 font-mono text-xs text-muted-foreground">
+          {/* Phones: the date moves into the second line so the merchant name
+              gets the row's width. */}
+          <span className="hidden w-16 shrink-0 font-mono text-xs text-muted-foreground sm:block">
             {shortDateWithYear(t.effectiveDate)}
           </span>
           {/* min-w-0 + truncate: the description can never push into the
@@ -296,6 +298,9 @@ export function TxnRow({
               {merchantDisplayName(t.description)}
             </p>
             <p className="truncate text-xs text-muted-foreground">
+              <span className="font-mono sm:hidden">
+                {t.effectiveDate.slice(5).replace('-', '/')} ·{' '}
+              </span>
               {maskAccountLabel(t.accountName, t.accountMask)}
               {/* The picker is hidden below sm — keep the category (and its
                   reviewed state) visible without it. */}

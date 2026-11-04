@@ -15,6 +15,8 @@
 export const RANGE_PRESETS = [
   { key: 'this_month', label: 'This month' },
   { key: 'last_month', label: 'Last month' },
+  { key: 'this_quarter', label: 'This quarter' },
+  { key: 'last_quarter', label: 'Last quarter' },
   { key: 'last_3', label: 'Last 3 months' },
   { key: 'ytd', label: 'Year to date' },
   { key: 'last_12', label: 'Last 12 months' },
@@ -54,6 +56,17 @@ export function presetRange(key: RangePresetKey, now: Date = new Date()): { from
         from: isoDate(new Date(Date.UTC(y, m - 1, 1))),
         to: isoDate(new Date(Date.UTC(y, m, 0))),
       };
+    case 'this_quarter': {
+      const q = m - (m % 3);
+      return { from: isoDate(new Date(Date.UTC(y, q, 1))), to: today };
+    }
+    case 'last_quarter': {
+      const q = m - (m % 3);
+      return {
+        from: isoDate(new Date(Date.UTC(y, q - 3, 1))),
+        to: isoDate(new Date(Date.UTC(y, q, 0))),
+      };
+    }
     case 'last_3':
       return { from: isoDate(new Date(Date.UTC(y, m - 2, 1))), to: today };
     case 'ytd':

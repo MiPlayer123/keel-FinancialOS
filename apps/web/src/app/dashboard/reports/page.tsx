@@ -68,6 +68,7 @@ import {
 } from '@/lib/report-scope';
 import { buildScopedTransactionsCsv, scopedExportFilename } from '@/lib/report-export';
 import { TransferNudgeBanner } from '@/components/keel/transfer-nudge-banner';
+import { InfoNote } from '@/components/keel/info-note';
 import { CardBreakEvenCard } from '@/components/keel/card-breakeven-card';
 import { cardBreakEven, CREDIT_CARD_SUBTYPE } from '@/lib/card-breakeven';
 import { Button } from '@/components/ui/button';
@@ -915,14 +916,12 @@ function NetRefundsStrip({
 function DonutBreakdown({
   group,
   currency,
-  scopeText,
   onBack,
   onFilterTransactions,
   onLeafClick,
 }: {
   group: CategoryGroupEntry;
   currency: string;
-  scopeText: string;
   onBack: () => void;
   onFilterTransactions: () => void;
   onLeafClick: (categoryId: string | null) => void;
@@ -969,10 +968,6 @@ function DonutBreakdown({
         }))}
         currency={currency}
       />
-      <p className="text-xs text-muted-foreground">
-        {group.name} subcategories · {scopeText}, dominant currency only, transfers & debt
-        payments excluded, net of refunds. Click a slice to open it in the ledger.
-      </p>
     </>
   );
 }
@@ -1463,9 +1458,12 @@ function ReportsBody() {
     () => new Set(accounts.filter((a) => a.subtype === CREDIT_CARD_SUBTYPE).map((a) => a.id)),
     [accounts],
   );
+  // Annual fees only make sense over a year, so this card always reads
+  // year to date (still honoring the account/entity scope and tax toggle).
+  const ytdScope = useMemo(() => ({ ...scope, preset: 'ytd' as const, ...presetRange('ytd') }), [scope]);
   const cardBreakEvenRows = useMemo(
-    () => cardBreakEven(rangedRows, creditCardIds),
-    [rangedRows, creditCardIds],
+    () => cardBreakEven(scopeRows(spendScopedRows, ytdScope, null), creditCardIds),
+    [spendScopedRows, ytdScope, creditCardIds],
   );
 
   // The two newest months with any activity — comparing two empty trailing
@@ -1585,7 +1583,20 @@ function ReportsBody() {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex flex-wrap items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
-            <span>Month in review</span>
+            <span className="flex items-center gap-1">
+              Month in review
+              <InfoNote>
+                <p>
+                  {entityName ? `${entityName} · ` : ''}
+                  {accountSet === null
+                    ? 'All accounts'
+                    : `${String(accountSet.size)} of ${String(accounts.length)} accounts`}{' '}
+                  · full month of {monthLabel(reviewMonth)}
+                  {scope.includeTaxes ? '' : ' · taxes excluded'}.
+                </p>
+                <p>Compared with the full previous month. Excludes transfers and card payments. {reviewCurrency} only.</p>
+              </InfoNote>
+            </span>
             <span className="flex flex-wrap gap-1">
               {reviewMonths.map((m) => (
                 <Button
@@ -1720,15 +1731,6 @@ function ReportsBody() {
               ) : null}
               {/* Scope disclosure stays visible collapsed too: the review always
                   sums the FULL month, even when the range covers part of it. */}
-              <p className="text-xs text-muted-foreground">
-                {entityName ? `${entityName} · ` : ''}
-                {accountSet === null
-                  ? 'All accounts'
-                  : `${String(accountSet.size)} of ${String(accounts.length)} accounts`}{' '}
-                · full month {monthLabel(reviewMonth)}, dominant currency only, transfers &
-                debt payments excluded.
-                {scope.includeTaxes ? '' : ' Taxes excluded.'}
-              </p>
 
             </>
           ) : (
@@ -1741,8 +1743,9 @@ function ReportsBody() {
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium text-muted-foreground">
-            Spending by category
+          <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
+            <span>Spending by category</span>
+            <InfoNote><p>{scopeText}.</p><p>Net of refunds. Excludes transfers and card payments. Subcategories roll up into their parent; click a slice to drill in. {donutReport.currency} only.</p></InfoNote>
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -1750,7 +1753,6 @@ function ReportsBody() {
             <DonutBreakdown
               group={donutFocus}
               currency={donutReport.currency}
-              scopeText={scopeText}
               onBack={() => {
                 setDonutFocusKey(null);
               }}
@@ -1825,11 +1827,6 @@ function ReportsBody() {
                 }))}
                 currency={donutReport.currency}
               />
-              <p className="text-xs text-muted-foreground">
-                {scopeText}, dominant currency only, transfers & debt payments excluded, net
-                of refunds. Subcategories roll up into their parents — click a slice to break
-                it down (a category without subcategories opens straight in the ledger).
-              </p>
             </>
           )}
         </CardContent>
@@ -1838,9 +1835,10 @@ function ReportsBody() {
       {flow ? (
         <Card className="hidden sm:flex">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Where the money went
-            </CardTitle>
+            <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
+            <span>Where the money went</span>
+            <InfoNote><p>{scopeText}.</p><p>Income on the left, spending on the right. Excludes transfers and card payments. {flow.currency} only.</p></InfoNote>
+          </CardTitle>
           </CardHeader>
           <CardContent>
             <CashFlowSankey nodes={flow.nodes} links={flow.links} currency={flow.currency} />
@@ -1872,10 +1870,6 @@ function ReportsBody() {
                 />
               </span>
             </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              {scopeText}. Income on the left, spending on the right; subcategories roll up
-              into their parents. Dominant currency only, transfers & debt payments excluded.
-            </p>
           </CardContent>
         </Card>
       ) : null}
@@ -1883,9 +1877,10 @@ function ReportsBody() {
       {showFlow ? (
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Income vs spending by month
-            </CardTitle>
+            <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
+            <span>Income vs spending by month</span>
+            <InfoNote><p>{scopeText}.</p><p>Excludes transfers and card payments. The dashed line is average monthly spending. Click a month to see its transactions. {monthlyFlow[0]?.currency ?? ''} only.{monthsTruncatedNote}</p></InfoNote>
+          </CardTitle>
           </CardHeader>
           <CardContent>
             <CashFlowMonthlyChart
@@ -1902,22 +1897,27 @@ function ReportsBody() {
                 );
               }}
             />
-            <p className="mt-2 text-xs text-muted-foreground">
-              {scopeText}, dominant currency only, transfers & debt payments excluded. Click a
-              month to open it in the ledger.
-              {monthsTruncatedNote}
-            </p>
           </CardContent>
         </Card>
       ) : null}
 
-      <CardBreakEvenCard cards={cardBreakEvenRows} scopeText={scopeText} />
+      <CardBreakEvenCard
+        cards={cardBreakEvenRows}
+        scopeText={scopeLabel({ scope: ytdScope, accountSet, totalAccounts: accounts.length, entityName })}
+      />
 
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
-            <span>
+            <span className="flex items-center gap-1">
               {view === 'expense' ? 'Spending' : 'Income'} by category · {monthsLabel}
+              <InfoNote>
+                <p>{scopeText}.</p>
+                <p>
+                  {view === 'expense' ? 'Net spending per month (refunds reduce it).' : 'Net income per month.'}{' '}
+                  Excludes transfers and card payments. Click a category to see its transactions.{monthsTruncatedNote}
+                </p>
+              </InfoNote>
             </span>
             <span className="flex gap-1">
               {(['expense', 'income'] as const).map((k) => (
@@ -1937,15 +1937,6 @@ function ReportsBody() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="mb-3 text-xs text-muted-foreground">
-            {scopeText}.{' '}
-            {view === 'expense'
-              ? 'Net spending per month (refunds reduce it); transfers & debt payments excluded.'
-              : 'Net income per month; transfers & debt payments excluded.'}{' '}
-            Click a category to open it in the ledger; expand a parent to see its
-            subcategories.
-            {monthsTruncatedNote}
-          </p>
           <div
             className="overflow-x-auto"
             ref={(el) => {
@@ -2138,9 +2129,10 @@ function ReportsBody() {
       {payeeReport.payees.length > 0 ? (
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Top payees
-            </CardTitle>
+            <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
+            <span>Top payees</span>
+            <InfoNote><p>{baseScopeText}.</p><p>Ranked by money out. Refunds aren&apos;t netted. Excludes transfers and card payments. {payeeReport.currency} only.</p></InfoNote>
+          </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             {payeeReport.payees.map((p) => (
@@ -2156,12 +2148,6 @@ function ReportsBody() {
                 />
               </div>
             ))}
-            <p className="pt-1 text-xs text-muted-foreground">
-              {baseScopeText}. Top {String(payeeReport.payees.length)} payees by money out
-              (payee = transaction description), dominant currency only, transfers &
-              debt payments excluded. Refunds don&apos;t offset a payee — this ranks
-              where money goes.
-            </p>
           </CardContent>
         </Card>
       ) : null}
@@ -2186,9 +2172,10 @@ function ReportsBody() {
       {tags.length > 0 ? (
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              By tag
-            </CardTitle>
+            <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
+            <span>By tag</span>
+            <InfoNote><p>{baseScopeText}.</p><p>Net cash for tagged transactions. Transfers excluded; card payments count. {tagReport.currency} only.</p></InfoNote>
+          </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             {tags.map((t) => (
@@ -2205,20 +2192,16 @@ function ReportsBody() {
                 />
               </div>
             ))}
-            <p className="pt-1 text-xs text-muted-foreground">
-              {baseScopeText}. Net cash for tagged transactions — tag things like tax-deductible
-              or a trip, then read the total here. Confirmed transfers excluded; debt
-              payments count (net cash, not spending).
-            </p>
           </CardContent>
         </Card>
       ) : null}
       {taxReport.groups.length > 0 ? (
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Tax schedule
-            </CardTitle>
+            <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
+            <span>Tax schedule</span>
+            <InfoNote><p>{baseScopeText}.</p><p>Cash per IRS line, from the tax lines set on your categories. Transfers excluded. {taxReport.currency} only. Bookkeeping, not tax advice.</p></InfoNote>
+          </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             {taxReport.groups.map((g) => (
@@ -2242,20 +2225,16 @@ function ReportsBody() {
                 ))}
               </div>
             ))}
-            <p className="pt-1 text-xs text-muted-foreground">
-              {baseScopeText}. Actual cash per IRS line, from the tax lines you set on categories
-              (Home → Categories → Manage). Confirmed transfers excluded. Bookkeeping, not
-              tax advice.
-            </p>
           </CardContent>
         </Card>
       ) : null}
       {comparison.length > 0 ? (
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              {monthLabel(moverMonths[1] ?? '')} vs {monthLabel(moverMonths[0] ?? '')}
-            </CardTitle>
+            <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
+            <span>{monthLabel(moverMonths[1] ?? '')} vs {monthLabel(moverMonths[0] ?? '')}</span>
+            <InfoNote><p>{scopeText}.</p><p>Biggest changes first.</p></InfoNote>
+          </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             {comparison.map((r) => (
@@ -2290,10 +2269,6 @@ function ReportsBody() {
                 </span>
               </div>
             ))}
-            <p className="pt-1 text-xs text-muted-foreground">
-              {scopeText}. Sorted by biggest change; the newest month may still be in
-              progress.
-            </p>
           </CardContent>
         </Card>
       ) : null}

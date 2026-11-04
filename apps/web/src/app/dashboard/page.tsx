@@ -42,6 +42,7 @@ import {
 import { monthPace, type MonthPace } from '@/lib/month-pace';
 import { spendingMix } from '@/lib/spending';
 import { NetWorthHero } from '@/components/keel/net-worth-hero';
+import { InfoNote } from '@/components/keel/info-note';
 import { NotesTasksCard } from '@/components/keel/notes-tasks-card';
 import { NeedsAttention } from '@/components/keel/needs-attention';
 import { formatMoney } from '@/lib/money';
@@ -390,7 +391,13 @@ function MonthPaceCard({ pace }: { pace: MonthPace }) {
   return (
     <Card size="sm" className="h-full">
       <CardHeader>
-        <CardTitle>This month</CardTitle>
+        <CardTitle className="flex items-center gap-1">
+          This month
+          <InfoNote>
+            <p>Spending so far vs the same day last month.</p>
+            <p>Net of refunds. Excludes transfers and card payments. {pace.currency} only.</p>
+          </InfoNote>
+        </CardTitle>
         <CardAction>
           <Link
             href="/dashboard/reports?range=this_month"
@@ -521,9 +528,6 @@ function MonthPaceCard({ pace }: { pace: MonthPace }) {
             </div>
           </>
         ) : null}
-        <p className="text-xs text-muted-foreground">
-          Net of refunds; transfers & debt payments excluded; {pace.currency} only.
-        </p>
       </CardContent>
     </Card>
   );
@@ -1149,11 +1153,10 @@ function HomeBody() {
             entityScoped={lensActive}
             chartHeight={120}
             breakdown={netBreakdown}
+            actions={<SyncStatus householdId={householdId} connections={connections ?? []} />}
             {...(lensActive && lensEntity ? { scopeLabel: `${lensEntity.name} only` } : {})}
           />
-          <div className="flex justify-end px-1">
-            <SyncStatus householdId={householdId} connections={connections ?? []} />
-          </div>
+
         </div>
       </div>
 

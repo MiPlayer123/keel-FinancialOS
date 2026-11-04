@@ -2,6 +2,7 @@
 
 import { CreditCard } from 'lucide-react';
 
+import { InfoNote } from '@/components/keel/info-note';
 import { Money } from '@/components/keel/money';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import type { CardBreakEven } from '@/lib/card-breakeven';
@@ -30,9 +31,18 @@ export function CardBreakEvenCard({
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-          <CreditCard className="size-4" />
-          Card rewards vs fees
+        <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
+          <span className="flex items-center gap-2">
+            <CreditCard className="size-4" />
+            Card rewards vs fees · year to date
+          </span>
+          <InfoNote>
+            <p>{scopeText}.</p>
+            <p>
+              Rewards are cashback and statement credits; fees are annual and bank charges. If
+              rewards ≥ fees, the card paid for itself this year.
+            </p>
+          </InfoNote>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -90,11 +100,6 @@ export function CardBreakEvenCard({
             );
           })}
         </div>
-        <p className="text-xs text-muted-foreground">
-          {scopeText}. Rewards = statement credits / cashback earned on the card (income
-          categories); fees = annual &amp; bank charges (the Fees category family). Net = rewards −
-          fees; ≥ 0 means the card paid for itself in this range.
-        </p>
       </CardContent>
     </Card>
   );
