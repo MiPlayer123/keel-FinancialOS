@@ -17,6 +17,7 @@ import { Copy, Loader2, Plug, Unplug } from 'lucide-react';
 import { toast } from 'sonner';
 import type { OAuthGrant } from '@supabase/supabase-js';
 
+import { getSiteUrl } from '@/lib/site';
 import { getSupabaseBrowserClient } from '@/lib/supabase';
 import {
   fetchConnectedAppGrants,
@@ -30,9 +31,13 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
-/** The connector lives on this site (app/mcp forwards to the mcp function). */
-function connectorUrl(siteOrigin: string): string {
-  return process.env.NEXT_PUBLIC_KEEL_MCP_URL || `${siteOrigin}/mcp`;
+/**
+ * The connector URL people paste into an AI app: always the canonical site
+ * (app/mcp forwards to the mcp function), never whichever host this page was
+ * opened on (a vercel.app or preview address would give the wrong URL).
+ */
+function connectorUrl(): string {
+  return new URL('/mcp', getSiteUrl()).toString();
 }
 
 interface AppRow {
@@ -102,9 +107,7 @@ export function ConnectedAppsCard() {
     }
   }
 
-  // Rendered only once loaded (client side), so reading the origin here never
-  // differs from a server render.
-  const url = connectorUrl(typeof window === 'undefined' ? '' : window.location.origin);
+  const url = connectorUrl();
 
   return (
     <Card>
