@@ -97,6 +97,35 @@ Deno.test('recurring commands authorize against the series account', async () =>
   assertEquals((missing as { status: number }).status, 404);
 });
 
+Deno.test('a split leg into another account is authorized against that account too', async () => {
+  const seen: Record<string, unknown>[] = [];
+  const payload = {
+    transactionId: 't1',
+    amountMinor: '26619',
+    splits: [{ categoryLedgerAccountId: 'c1', amountMinor: '-62244' }, { accountId: ACCOUNT, amountMinor: '35625' }],
+  };
+  const supabase = client();
+  await executeCommand(
+    contract({ authorize: (_c, _a, r) => { seen.push(r); return { allowed: true }; } }),
+    supabase,
+    () => Promise.resolve({}),
+    envelope('transactions.set_splits', payload),
+  );
+  assertEquals(seen, [{ householdId: HOUSEHOLD }, { householdId: HOUSEHOLD, accountId: ACCOUNT }]);
+  assertEquals(supabase.calls.map((c) => c.proc), ['keel_cmd_set_splits']);
+
+  // No rights on the target account: refused before the database.
+  const denied = client();
+  const refused = await executeCommand(
+    contract({ authorize: (_c, _a, r) => (r['accountId'] ? { allowed: false, code: 'not_authorized', reason: 'no access' } : { allowed: true }) }),
+    denied,
+    () => Promise.resolve({}),
+    envelope('transactions.set_splits', payload),
+  );
+  assertEquals((refused as { status: number }).status, 403);
+  assertEquals(denied.calls.length, 0);
+});
+
 Deno.test('connected-app tokens are told apart by client_id alone', () => {
   assertEquals(isThirdPartyClientToken({ sub: 'u', client_id: 'c' }), true);
   assertEquals(isThirdPartyClientToken({ sub: 'u' }), false);

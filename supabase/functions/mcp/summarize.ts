@@ -169,30 +169,41 @@ export const summarize = (
   };
 };
 
+export type SplitLeg =
+  | { categoryLedgerAccountId: string; amountMinor: string }
+  | { accountId: string; amountMinor: string };
+
 /**
- * Turn "split this into these shares" into the contract's debit-positive
- * category legs (Law 1: KEEL does the division, never the model).
- *   amounts: positive shares that must add up to |amount|
+ * Turn "split this into these shares" into the contract's debit-positive legs
+ * (Law 1: KEEL does the division, never the model). A share is in the
+ * transaction's direction; the shares add up to |amount|.
+ *   amounts: shares in minor units. A negative share goes the other way: the
+ *            tax and deductions withheld from a paycheck, a refund inside a
+ *            purchase. Gross $712.50, tax −$90.06, 401(k) −$356.25 = a $266.19 deposit.
  *   percent: basis points (1% = 100) adding up to 10000; largest-remainder rounding
  *   equal:   |amount| divided evenly; the first legs absorb the remainder
+ * A part names a category, or an account to post into (a 401(k) contribution).
  * Returns legs whose amounts sum to exactly -amountMinor, or an error message.
  */
 export const computeSplitLegs = (
   amountMinor: string,
   mode: 'amounts' | 'percent' | 'equal',
-  parts: readonly { categoryId: string; amountMinor?: string; basisPoints?: number }[],
-): { ok: true; legs: { categoryLedgerAccountId: string; amountMinor: string }[] } | { ok: false; message: string } => {
+  parts: readonly { categoryId?: string; accountId?: string; amountMinor?: string; basisPoints?: number }[],
+): { ok: true; legs: SplitLeg[] } | { ok: false; message: string } => {
   const total = BigInt(amountMinor);
   if (total === 0n) return { ok: false, message: 'The transaction amount is zero.' };
-  if (parts.length < 1 || parts.length > 30) return { ok: false, message: 'Give between 1 and 30 categories.' };
+  if (parts.length < 1 || parts.length > 30) return { ok: false, message: 'Give between 1 and 30 splits.' };
+  if (parts.some((p) => !p.categoryId === !p.accountId)) {
+    return { ok: false, message: 'Each split names either a category_id or an account_id.' };
+  }
   const magnitude = total < 0n ? -total : total;
-  // Category legs carry the opposite sign of the cash amount (debit-positive).
+  // Legs carry the opposite sign of the cash amount (debit-positive).
   const legSign = total < 0n ? 1n : -1n;
 
   let shares: bigint[];
   if (mode === 'amounts') {
-    if (parts.some((p) => !/^[1-9][0-9]*$/.test(p.amountMinor ?? ''))) {
-      return { ok: false, message: 'Each split needs a positive amount_minor (minor units).' };
+    if (parts.some((p) => !/^-?[1-9][0-9]*$/.test(p.amountMinor ?? ''))) {
+      return { ok: false, message: 'Each split needs a non-zero amount_minor (minor units).' };
     }
     shares = parts.map((p) => BigInt(p.amountMinor!));
     const sum = shares.reduce((a, b) => a + b, 0n);
@@ -231,6 +242,9 @@ export const computeSplitLegs = (
   if (shares.some((s) => s === 0n)) return { ok: false, message: 'A split would be zero; use fewer categories.' };
   return {
     ok: true,
-    legs: parts.map((p, i) => ({ categoryLedgerAccountId: p.categoryId, amountMinor: (legSign * shares[i]!).toString() })),
+    legs: parts.map((p, i): SplitLeg => {
+      const amount = (legSign * shares[i]!).toString();
+      return p.accountId ? { accountId: p.accountId, amountMinor: amount } : { categoryLedgerAccountId: p.categoryId!, amountMinor: amount };
+    }),
   };
 };

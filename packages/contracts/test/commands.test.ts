@@ -344,6 +344,54 @@ describe('command payloads', () => {
     expect(income.amountMinor).toBe('4300');
   });
 
+  it('transactions.set_splits takes a paycheck: mixed signs plus a leg into another account', () => {
+    // $266.19 deposit = $712.50 gross − $90.06 tax − $356.25 to the 401(k).
+    const paycheck = parseCommandPayload('transactions.set_splits', {
+      transactionId: uuid,
+      amountMinor: '26619',
+      splits: [
+        { categoryLedgerAccountId: uuid, amountMinor: '-71250' },
+        { categoryLedgerAccountId: uuid, amountMinor: '9006' },
+        { accountId: uuid, amountMinor: '35625' },
+      ],
+    });
+    expect(paycheck.splits).toHaveLength(3);
+
+    // Still balanced to the cent.
+    expect(() =>
+      parseCommandPayload('transactions.set_splits', {
+        transactionId: uuid,
+        amountMinor: '26619',
+        splits: [
+          { categoryLedgerAccountId: uuid, amountMinor: '-71250' },
+          { accountId: uuid, amountMinor: '35625' },
+        ],
+      }),
+    ).toThrow();
+
+    // A leg names a category or an account, never both or neither.
+    for (const leg of [
+      { categoryLedgerAccountId: uuid, accountId: uuid, amountMinor: '-26619' },
+      { amountMinor: '-26619' },
+    ]) {
+      expect(() =>
+        parseCommandPayload('transactions.set_splits', { transactionId: uuid, amountMinor: '26619', splits: [leg] }),
+      ).toThrow();
+    }
+
+    // Manual create stays category-only.
+    expect(() =>
+      parseCommandPayload('transactions.manual_create', {
+        accountId: uuid,
+        description: 'x',
+        effectiveDate: '2026-11-01',
+        amountMinor: '-100',
+        status: 'posted',
+        splits: [{ accountId: uuid, amountMinor: '100' }],
+      }),
+    ).toThrow();
+  });
+
   it('transactions.manual_void requires a reason', () => {
     expect(
       parseCommandPayload('transactions.manual_void', {

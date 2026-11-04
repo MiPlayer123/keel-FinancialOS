@@ -496,10 +496,21 @@ export const ManualVoidPayloadSchema = z.object({
  * against the live batch before rebalancing anything. Splits must sum to its
  * exact negation; arithmetic is BigInt on integer strings, never floats.
  */
+/**
+ * A re-split leg that posts into another account of the household instead of
+ * a category (a paycheck's 401(k) contribution, a transfer inside a split).
+ * keel_cmd_set_splits already books these (20260802140000): same household and
+ * entity, postable, not the transaction's own account, either sign.
+ */
+export const SplitAccountLegSchema = z.object({
+  accountId: AccountIdSchema,
+  amountMinor: MinorUnitsStringSchema,
+}).strict();
+
 export const SetSplitsPayloadSchema = z.object({
   transactionId: CanonicalTransactionIdSchema,
   amountMinor: MinorUnitsStringSchema,
-  splits: z.array(ManualTransactionSplitSchema).min(1).max(30),
+  splits: z.array(z.union([ManualTransactionSplitSchema, SplitAccountLegSchema])).min(1).max(30),
 }).strict().superRefine((value, ctx) => {
   if (BigInt(value.amountMinor) === 0n) {
     ctx.addIssue({ code: 'custom', path: ['amountMinor'], message: 'amount cannot be zero' });

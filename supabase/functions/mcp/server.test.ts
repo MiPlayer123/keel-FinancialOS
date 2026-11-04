@@ -154,6 +154,50 @@ Deno.test('transactions_split uses the live amount as the stale-view guard', asy
   });
 });
 
+Deno.test('transactions_split books a paycheck: gross, withholding and a 401(k) leg into another account', async () => {
+  const INCOME = '44444444-4444-4444-8444-444444444444';
+  const TAX = '55555555-5555-4555-8555-555555555555';
+  const K401 = '66666666-6666-4666-8666-666666666666';
+  const { ctx, commands } = stubContext('write', {
+    keel_query_transactions: { rows: [{ transactionId: TXN, amountMinor: '26619', currency: 'USD' }], nextCursor: null },
+  });
+  const res = await runTool(tool('transactions_split'), ctx, {
+    transaction_id: TXN,
+    mode: 'amounts',
+    splits: [
+      { category_id: INCOME, amount_minor: '71250' },
+      { category_id: TAX, amount_minor: '-9006' },
+      { account_id: K401, amount_minor: '-35625' },
+    ],
+  });
+  // Debit-positive legs summing to −26619: income credited, tax debited, the 401(k) receives 356.25.
+  assertEquals(commands[0]!.payload['splits'], [
+    { categoryLedgerAccountId: INCOME, amountMinor: '-71250' },
+    { categoryLedgerAccountId: TAX, amountMinor: '9006' },
+    { accountId: K401, amountMinor: '35625' },
+  ]);
+  const body = JSON.parse(res.content[0]!.text);
+  assertEquals(body.splits.map((s: { share: { amount_minor: string } }) => s.share.amount_minor), ['71250', '-9006', '-35625']);
+  assertEquals(body.splits[2].account_id, K401);
+
+  // Shares that do not add up to the deposit never reach KEEL.
+  const before = commands.length;
+  const bad = await runTool(tool('transactions_split'), ctx, {
+    transaction_id: TXN,
+    mode: 'amounts',
+    splits: [{ category_id: INCOME, amount_minor: '71250' }, { account_id: K401, amount_minor: '-35625' }],
+  });
+  assertEquals(JSON.parse(bad.content[0]!.text).error.code, 'invalid_split');
+  // A leg names a category or an account, not both.
+  const both = await runTool(tool('transactions_split'), ctx, {
+    transaction_id: TXN,
+    mode: 'amounts',
+    splits: [{ category_id: INCOME, account_id: K401, amount_minor: '26619' }],
+  });
+  assertEquals(JSON.parse(both.content[0]!.text).error.code, 'invalid_split');
+  assertEquals(commands.length, before);
+});
+
 Deno.test('catalog size stays in the 35–45 band (18 read, 24 write)', () => {
   assertEquals(toolsFor('read').length, 18);
   assertEquals(ALL_TOOLS.length, 42);
