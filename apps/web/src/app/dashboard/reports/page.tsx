@@ -1839,6 +1839,9 @@ function ReportsBody() {
           months={months}
           scoped={scopeRestricted}
           todayIso={new Date().toISOString().slice(0, 10)}
+          from={scope.from}
+          to={scope.to}
+          includeTaxes={scope.includeTaxes}
         />
       ) : null}
 

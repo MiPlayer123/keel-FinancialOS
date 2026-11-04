@@ -375,6 +375,9 @@ export function ReportsBudgetCard({
   months,
   scoped,
   todayIso,
+  from,
+  to,
+  includeTaxes,
 }: {
   householdId: string;
   /** YYYY-MM keys the report range covers (oldest first). */
@@ -382,6 +385,11 @@ export function ReportsBudgetCard({
   /** True when an account or entity filter is active. */
   scoped: boolean;
   todayIso: string;
+  /** The report's inclusive day range, to disclose full-month comparisons. */
+  from: string;
+  to: string;
+  /** The report's tax toggle; budgets always count every expense. */
+  includeTaxes: boolean;
 }) {
   const wanted = useMemo(() => months.slice(-12), [months]);
   const key = wanted.join(',');
@@ -407,6 +415,24 @@ export function ReportsBudgetCard({
   const single = wanted.length === 1;
   const title = single ? `Budget vs actual · ${monthName(`${wanted[0] ?? ''}-01`, true)}` : 'Budget vs actual';
 
+  // Budgets are whole calendar months. Disclose when the report's range cuts
+  // a month short (a range ending today in the current month is fine: that
+  // month's budget is month-to-date too), and when taxes are off (Law 9).
+  const firstMonth = wanted[0] ?? '';
+  const lastMonth = wanted[wanted.length - 1] ?? '';
+  const [ly, lm] = lastMonth.split('-').map(Number);
+  const lastDay = `${lastMonth}-${String(new Date(Date.UTC(ly ?? 1970, lm ?? 1, 0)).getUTCDate()).padStart(2, '0')}`;
+  const partial =
+    from !== `${firstMonth}-01` || (to !== lastDay && !(lastMonth === todayIso.slice(0, 7) && to >= todayIso));
+  const notes: string[] = [];
+  const endDay = lastMonth === todayIso.slice(0, 7) ? todayIso.slice(8) : lastDay.slice(8);
+  if (partial) {
+    notes.push(
+      `Compares full months (${monthName(`${firstMonth}-01`)} 1 – ${monthName(`${lastMonth}-01`)} ${String(Number(endDay))}), not just the selected days.`,
+    );
+  }
+  if (!includeTaxes) notes.push('Includes taxes: budgets count every expense.');
+
   if (!scoped && plans !== null && plans.length === 0) return null; // no budget in range
   if (failed) return null;
 
@@ -422,6 +448,9 @@ export function ReportsBudgetCard({
         </CardTitle>
       </CardHeader>
       <CardContent>
+        {!scoped && notes.length > 0 ? (
+          <p className="mb-2 text-xs text-muted-foreground">{notes.join(' ')}</p>
+        ) : null}
         {scoped ? (
           <p className="flex items-center gap-1 text-sm text-muted-foreground">
             Budgets cover all accounts. Clear the account and entity filters to compare.
