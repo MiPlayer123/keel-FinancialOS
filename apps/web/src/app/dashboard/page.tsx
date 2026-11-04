@@ -11,14 +11,14 @@ import { useEntityLens, lensAccountIdSet } from '@/components/keel/entity-lens-c
 import { useKeelInvalidate, useKeelQuery } from '@/lib/use-keel-query';
 import {
   fetchAccounts,
-  fetchBudgets,
+  fetchBudgetMonth,
   fetchCashFlowForecast,
   fetchConnections,
   fetchLedgerKinds,
   fetchSchedules,
   syncConnection,
   type AccountRow,
-  type BudgetRow,
+  type BudgetMonth,
   type ConnectionRow,
   type DailyBalanceRow,
   type ForecastBill,
@@ -30,7 +30,6 @@ import {
 } from '@/lib/keel-api';
 import { merchantDisplayName } from '@/lib/merchant-name';
 import { buildInsights, type Insight } from '@/lib/dashboard-insights';
-import { stepScheduleDue } from '@/lib/recurring';
 import { relativeDueLabel } from '@/lib/relative-date';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -43,6 +42,7 @@ import { monthPace, type MonthPace } from '@/lib/month-pace';
 import { spendingMix } from '@/lib/spending';
 import { NetWorthHero } from '@/components/keel/net-worth-hero';
 import { InfoNote } from '@/components/keel/info-note';
+import { HomeBudgetCard } from '@/components/keel/budget-cards';
 import { NotesTasksCard } from '@/components/keel/notes-tasks-card';
 import { NeedsAttention } from '@/components/keel/needs-attention';
 import { formatMoney } from '@/lib/money';
@@ -60,7 +60,6 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Separator } from '@/components/ui/separator';
-import { cn } from '@/lib/utils';
 
 export default function HomePage() {
   return (
@@ -165,210 +164,6 @@ function agoLabel(iso: string): string {
   return `${String(Math.trunc(hours / 24))}d ago`;
 }
 
-type FreeToSpend = {
-  currency: string;
-  freeMinor: bigint;
-  receivedMinor: bigint;
-  expectedMinor: bigint;
-  spentMinor: bigint;
-  billsDueMinor: bigint;
-  /** Whole days strictly after today through month end (may be 0 on the last day). */
-  daysLeft: number;
-  /** Floor(free / daysLeft) minor units, only meaningful when free > 0 and days remain. */
-  perDayMinor: bigint | null;
-  hasRecurringData: boolean;
-};
-
-/**
- * "Free to spend" this month (Simplifi/Copilot-style headline), computed
- * entirely from data already on the page — Law 1, no model in the loop.
- * free = received so far + expected income still to come
- *       − spent so far − bills still due.
- * CASH scope: only confirmed transfer pairs are excluded (they net to zero in
- * the household); an unpaired debt/CC payment is real cash out and counts as
- * spent — excluding it would overstate "free" (review finding). This differs
- * deliberately from the SPENDING scope used by the mix/insight cards.
- * Only confirmed recurring series and active schedules count as "still to
- * come" — mirrors Recurring's Projected Cash card, including its documented
- * double-count risk when a schedule duplicates a detected series (the user
- * is expected to pause one; no fuzzy dedupe here either).
- */
-function computeFreeToSpend(
-  richTxns: RichTransactionRow[],
-  series: RecurringSeriesRow[],
-  schedules: ScheduleRow[],
-): FreeToSpend | null {
-  const todayIso = new Date().toISOString().slice(0, 10);
-  const [yearStr, monthStr] = todayIso.split('-');
-  const year = Number(yearStr);
-  const monthNum = Number(monthStr);
-  const month = todayIso.slice(0, 7);
-  const dayOfMonth = Number(todayIso.slice(8, 10));
-  const daysInMonth = new Date(Date.UTC(year, monthNum, 0)).getUTCDate();
-  const monthEndIso = `${month}-${String(daysInMonth).padStart(2, '0')}`;
-  const daysLeft = Math.max(0, daysInMonth - dayOfMonth);
-
-  const currencyCounts = new Map<string, number>();
-  for (const t of richTxns) {
-    currencyCounts.set(t.currency, (currencyCounts.get(t.currency) ?? 0) + 1);
-  }
-  const currency = [...currencyCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'USD';
-
-  let receivedMinor = 0n;
-  let spentMinor = 0n;
-  for (const t of richTxns) {
-    // CASH semantics, not spending semantics: only confirmed transfer PAIRS
-    // net to zero inside the household. An unpaired debt/CC payment is real
-    // cash that left this month — excluding it would overstate "free to
-    // spend" in the dangerous direction (review finding; cf. ledger "Out").
-    if (t.transferStatus === 'confirmed') continue;
-    if (t.currency !== currency) continue;
-    if (!t.effectiveDate.startsWith(month)) continue;
-    const amt = BigInt(t.amountMinor || '0');
-    if (amt > 0n) receivedMinor += amt;
-    else if (amt < 0n) spentMinor += -amt;
-  }
-
-  let expectedMinor = 0n;
-  let billsDueMinor = 0n;
-  for (const s of series) {
-    if (s.status !== 'confirmed') continue;
-    for (const o of s.occurrences) {
-      if (o.status !== 'expected') continue;
-      if (o.currency !== currency) continue;
-      if (!o.expectedDate.startsWith(month)) continue;
-      // Today counts as STILL DUE: an occurrence dated today with status
-      // 'expected' hasn't matched a posted transaction yet, so it's in
-      // neither received nor spent — dropping it would overstate "free"
-      // right before the money leaves. Once it posts and matches, its
-      // status leaves 'expected' and it exits this sum.
-      if (o.expectedDate < todayIso) continue;
-      const amt = BigInt(o.expectedAmountMinor || '0');
-      if (s.sign === 'inflow') expectedMinor += amt;
-      else billsDueMinor += amt;
-    }
-  }
-
-  for (const sc of schedules) {
-    if (sc.status !== 'active') continue;
-    if (sc.currency !== currency) continue;
-    let due = sc.nextDueDate;
-    let guard = 0;
-    while (due <= monthEndIso && guard < 60) {
-      // Same today-counts-as-due rule: an un-entered schedule due today is
-      // still ahead of you (Enter advances the date, removing it here).
-      if (due >= todayIso) {
-        const amt = BigInt(sc.amountMinor || '0');
-        if (amt > 0n) expectedMinor += amt;
-        else billsDueMinor += -amt;
-      }
-      if (sc.frequency === 'once') break;
-      due = stepScheduleDue(due, sc.frequency, sc.anchorDay, sc.anchorDay2);
-      guard += 1;
-    }
-  }
-
-  const freeMinor = receivedMinor + expectedMinor - spentMinor - billsDueMinor;
-  const perDayMinor = freeMinor > 0n && daysLeft > 0 ? freeMinor / BigInt(daysLeft) : null;
-
-  return {
-    currency,
-    freeMinor,
-    receivedMinor,
-    expectedMinor,
-    spentMinor,
-    billsDueMinor,
-    daysLeft,
-    perDayMinor,
-    hasRecurringData: series.length > 0 || schedules.length > 0,
-  };
-}
-
-function FreeToSpendCard({
-  richTxns,
-  series,
-  schedules,
-}: {
-  richTxns: RichTransactionRow[];
-  series: RecurringSeriesRow[];
-  schedules: ScheduleRow[];
-}) {
-  const fts = computeFreeToSpend(richTxns, series, schedules);
-  if (!fts) return null;
-
-  return (
-    <Card size="sm">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground">
-          Free to spend · this month
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <div>
-          <Money
-            amountMinor={fts.freeMinor.toString()}
-            currency={fts.currency}
-            className="text-3xl font-semibold"
-            muteZero={false}
-          />
-          {fts.perDayMinor !== null ? (
-            <p className="mt-1 text-xs text-muted-foreground">
-              {formatMoney(fts.perDayMinor.toString(), { currency: fts.currency })} / day for the{' '}
-              {fts.daysLeft} day{fts.daysLeft === 1 ? '' : 's'} left this month
-            </p>
-          ) : null}
-        </div>
-        <div className={cn('grid grid-cols-2 gap-3', fts.hasRecurringData && 'sm:grid-cols-4')}>
-          <div>
-            <p className="text-xs text-muted-foreground">In so far</p>
-            <Money
-              amountMinor={fts.receivedMinor.toString()}
-              currency={fts.currency}
-              className="text-sm"
-            />
-          </div>
-          {fts.hasRecurringData ? (
-            <div>
-              <p className="text-xs text-muted-foreground">Still expected</p>
-              <Money
-                amountMinor={fts.expectedMinor.toString()}
-                currency={fts.currency}
-                className="text-sm"
-              />
-            </div>
-          ) : null}
-          <div>
-            <p className="text-xs text-muted-foreground">Spent so far</p>
-            <Money
-              amountMinor={`-${fts.spentMinor.toString()}`}
-              currency={fts.currency}
-              signed
-              className="text-sm"
-            />
-          </div>
-          {fts.hasRecurringData ? (
-            <div>
-              <p className="text-xs text-muted-foreground">Bills still due</p>
-              <Money
-                amountMinor={`-${fts.billsDueMinor.toString()}`}
-                currency={fts.currency}
-                signed
-                className="text-sm"
-              />
-            </div>
-          ) : null}
-        </div>
-        {fts.hasRecurringData ? (
-          <p className="text-xs text-muted-foreground">
-            Income received and spending so far, plus confirmed recurring bills/income and schedules
-            still due this month (if a schedule duplicates a detected series, it counts twice —
-            pause one on the Recurring page).
-          </p>
-        ) : null}
-      </CardContent>
-    </Card>
-  );
-}
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 function shortMonth(key: string): string {
@@ -820,7 +615,7 @@ function HomeBody() {
   const [connections, setConnections] = useState<ConnectionRow[] | null>(null);
   const [schedules, setSchedules] = useState<ScheduleRow[]>([]);
   const [ledgerKinds, setLedgerKinds] = useState<Map<string, string> | null>(null);
-  const [budgets, setBudgets] = useState<BudgetRow[] | null>(null);
+  const [budgetPlan, setBudgetPlan] = useState<BudgetMonth | null>(null);
   const [forecast, setForecast] = useState<{
     rows: DailyBalanceRow[];
     bills: ForecastBill[];
@@ -848,9 +643,7 @@ function HomeBody() {
     };
   }, [householdId, forecastAttempt]);
 
-  // Match the Budgets page's current-month read. budgets.list includes every
-  // category, so a real budget exists only when at least one row has a
-  // non-null budgetMinor (F-006).
+  // This month's plan (same read as the Budgets page) for the Budget card.
   useEffect(() => {
     if (!householdId) return;
     let active = true;
@@ -858,12 +651,12 @@ function HomeBody() {
     const monthIso = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
       .toISOString()
       .slice(0, 10);
-    void fetchBudgets(householdId, monthIso)
-      .then((rows) => {
-        if (active) setBudgets(rows);
+    void fetchBudgetMonth(householdId, monthIso)
+      .then((plan) => {
+        if (active) setBudgetPlan(plan);
       })
       .catch(() => {
-        if (active) setBudgets([]);
+        if (active) setBudgetPlan(null);
       });
     return () => {
       active = false;
@@ -1130,7 +923,6 @@ function HomeBody() {
     forecast !== null &&
     forecast.rows.length > 1 &&
     new Set(forecast.rows.map((r) => r.balanceMinor)).size > 1;
-  const hasBudget = budgets?.some((row) => row.budgetMinor !== null) ?? false;
 
   return (
     <>
@@ -1186,6 +978,11 @@ function HomeBody() {
           {richTxns.error ? null : (
             <>
               <SpendingCard spending={spending} insights={insights} />
+              {/* Budget is household-wide: hidden under an entity lens, and
+                  when this month has no budget. */}
+              {!lensActive && budgetPlan && budgetPlan.rows.length > 0 ? (
+                <HomeBudgetCard plan={budgetPlan} todayIso={todayIso} />
+              ) : null}
               <RecentTransactionsCard rows={recentTransactions} />
             </>
           )}
@@ -1220,13 +1017,6 @@ function HomeBody() {
               </Card>
             ))
           )}
-          {!lensActive && hasBudget && !richTxns.error && !recurringSeries.error ? (
-            <FreeToSpendCard
-              richTxns={richTxns.rows}
-              series={recurringSeries.rows}
-              schedules={schedules}
-            />
-          ) : null}
           {!lensActive && forecastError ? (
             <QueryErrorState
               onRetry={() => {
