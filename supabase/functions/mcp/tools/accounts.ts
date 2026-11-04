@@ -3,11 +3,14 @@
  * same manual-account actions the app offers (add, rename, move entity, set
  * starting balance, re-anchor to the bank, archive).
  *
- * Balances match the app: the ledger balance per account (assets positive,
- * debts negative — they add up to net worth), with market value for
- * investment accounts and the bank-reported balance alongside when synced.
+ * Balances match the app's Accounts page and add up to net worth: the ledger
+ * balance (assets positive, debts negative), except a bank-synced investment
+ * account, which shows the bank-reported value (cash plus securities), the
+ * figure net worth uses. Holdings value and the bank-reported balance sit
+ * alongside.
  */
 import * as z from 'npm:zod@4.4.3';
+import { looksLikeInvestmentAccount } from '../../_shared/investment-subtype.ts';
 import {
   defineTool,
   idempotencyKey,
@@ -73,6 +76,11 @@ const loadAccounts = async (ctx: ToolContext, includeArchived: boolean) => {
   const shaped = ((accounts.data ?? []) as AccountRow[]).map((a) => {
     const conn = a.connection_id ? connOf.get(a.connection_id) : undefined;
     const reported = bank.get(a.id) as Record<string, unknown> | undefined;
+    // Same rule as the app's Accounts page and net worth: a synced investment
+    // account is worth what the bank reports; everything else is its ledger.
+    const marketMinor = looksLikeInvestmentAccount(a.subtype ?? '') && reported?.['currentMinor']
+      ? (reported['currentMinor'] as string)
+      : null;
     return {
       id: a.id,
       name: a.name,
@@ -81,10 +89,12 @@ const loadAccounts = async (ctx: ToolContext, includeArchived: boolean) => {
       mask: a.mask,
       entity: a.entity_id ? { id: a.entity_id, name: entityOf.get(a.entity_id) ?? null } : null,
       // Archived accounts leave KEEL's trial balance: report no balance rather than an invented $0.
-      balance: ledgerBalance.has(a.ledger_account_id)
+      balance: marketMinor !== null && !a.archived_at
+        ? money(marketMinor, a.currency)
+        : ledgerBalance.has(a.ledger_account_id)
         ? money(ledgerBalance.get(a.ledger_account_id)!, a.currency)
         : a.archived_at ? null : money('0', a.currency),
-      ...(marketValue.has(a.id) ? { market_value: money(marketValue.get(a.id)!, a.currency) } : {}),
+      ...(marketValue.has(a.id) ? { holdings_value: money(marketValue.get(a.id)!, a.currency) } : {}),
       ...(reported
         ? {
             bank_reported: {
@@ -108,7 +118,7 @@ export const accountsList = defineTool({
   name: 'accounts_list',
   title: 'List accounts',
   description:
-    'Every account in the household: type, institution or manual, sync status, ledger balance (assets positive, debts negative; they add up to net worth), market value for investment accounts, bank-reported balance when synced, and entity. Also lists the household\'s entities.',
+    'Every account in the household: type, institution or manual, sync status, balance (assets positive, debts negative; they add up to net worth; a bank-synced investment account uses the bank-reported value, cash plus securities), holdings value for investment accounts, bank-reported balance when synced, and entity. Also lists the household\'s entities.',
   kind: 'read',
   input: z.object({ include_archived: z.boolean().default(false) }).strict(),
   run: async (ctx, args) => {

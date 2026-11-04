@@ -24,6 +24,18 @@ Record every decision, deviation, failed approach, command run, test result, mig
 - Drop the Origin allowlist. Every MCP call needs a bearer token and never a cookie, so the Origin adds nothing that the token doesn't already prove. Supabase's gateway also routes by project host, so a rebound host never reaches the function.
 - Send the 401 challenge for any unauthenticated method; only authenticated requests can get a 405.
 
+**Live test through the connector (after the fix; access: read and write).**
+- Every read tool answered.
+- The numbers agree across tools:
+  - `transactions_summarize` for November matches `overview_get` cash flow exactly.
+  - `history_get` net worth matches the overview.
+- Paging works, and an unknown id returns `not_found`.
+- Write round trip: `notes_save` created and then archived a note. Both changes show in `activity_list` as `connected_app`.
+- Three presentation fixes, all matching the app (Laws 1 and 11):
+  - **`accounts_list`:** it showed the ledger value for bank-synced investment accounts, while net worth and the app's Accounts page use the bank-reported value. Both Fidelity accounts were off by $16,797.74 in total. It now uses the app's rule via `_shared/investment-subtype.ts`. `market_value` is renamed `holdings_value`.
+  - **`budgets_get`:** KEEL's `available` is target plus carry-in, not what's left. A server-computed `remaining` (available − spent) is added.
+  - **`recurring_list`:** it returned all 87 series, mostly rejected or withdrawn. It now defaults to suggested, confirmed and paused; `status` widens it, including `all`.
+
 **Deviation.** The MCP transport's Origin rule targets DNS rebinding against servers that trust
 network position. That doesn't apply to a public bearer-token server; every Origin is treated as
 valid. `mcp/index.test.ts` now pins the handshake: `claude.ai` and `chatgpt.com` Origins and a GET
