@@ -2,23 +2,28 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
-## 2026-11-04 MCP connector (connected AI apps) — built, dark, not applied to live
+## 2026-11-04 MCP connector (connected AI apps)
 
 **What.** A remote MCP server (`supabase/functions/mcp`; see its README) lets a user connect
 KEEL to Claude, Codex or ChatGPT with one URL.
 - Sign-in uses Supabase Auth's OAuth 2.1 server, with KEEL's own consent page
   (`apps/web/src/app/oauth/consent`).
-- There are 47 tools, 19 read and 28 write. They cover full history reads (filters, cursor,
+- There are 42 tools, 18 read and 24 write (consolidated from 47 after a tool audit; see below). They cover full history reads (filters, cursor,
   KEEL-computed summaries) and the app's manual edits: accounts, transactions, splits,
   recategorize, categories, tags, rules, budgets, recurring items, bills, goals, review,
   transfers, notes and tasks.
 - Each tool calls the same procs or shared command path the app uses (Law 7).
 
-**Deviation (⚑ ruling needed before enabling).** INFRA and CLAUDE.md defer the external MCP
-listener past Stage 0–2, and docs/09 puts it at M7. It was built now on the user's directive
-(2026-11-04). It is contained:
-- The function answers 404 unless `KEEL_MCP_ENABLED=on` and a gateway key are set.
-- Nothing is deployed, and migration `20261104100000_mcp_connector.sql` is not applied to live.
+**Deviation, ruled by the user.** INFRA and CLAUDE.md defer the external MCP listener past
+Stage 0–2, and docs/09 puts it at M7. The user directed building and shipping it now
+(2026-11-04). It stays inert until a human enables Supabase Auth's OAuth server in the
+dashboard (⚑): without it no app token can exist. `KEEL_MCP_ENABLED=off` is the kill switch.
+
+**Gateway key, no human secret handling.** The migration generates `keel_mcp_gateway_key`
+inside the vault. The function reads it once through service-role-only
+`keel_mcp_gateway_key()`, using the platform's built-in key; tools still run on the user's own
+token. Rejected alternative: a human-copied shared secret in two places. It is extra steps,
+and the secret would pass through terminals and dashboards.
 
 **Supabase limits and KEEL's controls (verified against docs + supabase/auth source + a local stack):**
 - **No audience binding.** OAuth tokens are ordinary user JWTs: `aud: "authenticated"` plus a
@@ -80,8 +85,25 @@ ownership against rows loaded before the account existed. Commands now load auth
   `isUncategorized` inherits it. Changing it here would change the existing
   `rich_page` / `rich` DTO contract (pgTAP 028 parity).
 
+**Tool audit (user ask: right coverage, not over-coverage).** 47 tools sat at the top of the
+recommended range (roughly 35–45 when all are loaded at once). Changes:
+- Folded archive and status into the update and save tools: accounts, categories, notes,
+  tasks and bills.
+- Folded rules into `categories_list`.
+- Save and update tools now keep the fields an edit doesn't pass. Previously, editing a
+  task's title wiped its description and due date, and editing a note unpinned it.
+- Search also matches the user's notes. This applies to `keel_query_transactions` only; the
+  app's rich-page search is unchanged (pgTAP).
+- Receipts: `review_list` shows the receipt inbox with KEEL's extraction and suggested match,
+  `review_decide` accepts or rejects receipt matches, and the new `receipts_attach` attaches an
+  uploaded receipt to a transaction.
+- File upload from a chat isn't possible over MCP (tool calls can't carry the user's photo);
+  documented, and noted as a follow-up for CLI agents.
+
+Result: 42 tools (18 read, 24 write).
+
 **Tests.**
-- New: 28 Deno (`mcp/*.test.ts`), 5 Deno (`_shared/command-exec.test.ts`), 53 pgTAP
+- New: 32 Deno (`mcp/*.test.ts`), 5 Deno (`_shared/command-exec.test.ts`), 57 pgTAP
   (`045_mcp_connector.sql`), 17 vitest (`oauth-consent.test.ts`).
 - Full `pnpm test` green: 1432 vitest + Deno suites.
 - `supabase test db` green: 1178 tests.

@@ -9,17 +9,30 @@ import * as z from 'npm:zod@4.4.3';
 import { defineTool, readProc, rowsOf, uuid, writeProc } from '../context.ts';
 import { err, money, ok } from '../lib.ts';
 
+const shapeRule = (x: Record<string, unknown>) => ({
+  id: x['ruleId'] ?? x['id'],
+  pattern: x['pattern'],
+  category_id: x['categoryLedgerAccountId'] ?? null,
+  category: x['categoryName'] ?? null,
+  rename_to: x['renameTo'] ?? null,
+  min_amount: money(x['amountMinMinor'] as string | null, 'USD'),
+  max_amount: money(x['amountMaxMinor'] as string | null, 'USD'),
+  priority: x['priority'],
+  active: x['active'],
+});
+
 export const categoriesList = defineTool({
   name: 'categories_list',
   title: 'List categories and tags',
   description:
-    'The household\'s category tree (id, name, income or expense, parent, entity, tax line) and its tags. Use these ids to categorize, split, budget or filter.',
+    'Everything needed to categorize: the category tree (id, name, income or expense, parent, entity, tax line), tags, and categorization rules (pattern, amount range, category, rename, priority, active). Use these ids to categorize, split, budget, tag or filter.',
   kind: 'read',
   input: z.object({}).strict(),
   run: async (ctx) => {
-    const [cats, tags] = await Promise.all([
+    const [cats, tags, rules] = await Promise.all([
       readProc(ctx, 'categories.list', 'keel_list_categories'),
       readProc(ctx, 'tags.list', 'keel_list_tags'),
+      readProc(ctx, 'rules.list', 'keel_list_rules'),
     ]);
     if (!cats.ok) return cats;
     const categories = rowsOf(cats.data).map((c) => ({
@@ -33,6 +46,7 @@ export const categoriesList = defineTool({
     }));
     return ok(`${categories.length} categories.`, {
       categories,
+      rules: rules.ok ? rowsOf(rules.data).map(shapeRule) : [],
       tags: tags.ok
         ? rowsOf(tags.data).map((t) => ({ id: t['tagId'], name: t['name'], entity_id: t['entityId'] ?? null, transactions: t['usageCount'] ?? 0 }))
         : [],
@@ -67,7 +81,8 @@ export const categoriesCreate = defineTool({
 export const categoriesUpdate = defineTool({
   name: 'categories_update',
   title: 'Edit a category',
-  description: 'Renames a category, moves it under another parent (or to the top level), or sets its tax line.',
+  description:
+    'Renames a category, moves it under another parent (or to the top level), sets its tax line, or archives it (archived true; it stays in history). When archiving, reassign_to_id first moves its transactions, rules and budgets to another category.',
   kind: 'write',
   destructive: true,
   input: z.object({
@@ -75,6 +90,8 @@ export const categoriesUpdate = defineTool({
     name: z.string().min(1).max(100).optional(),
     parent_id: uuid('New parent category').nullable().optional().describe('null = move to top level.'),
     tax_line: z.string().max(100).nullable().optional().describe('null clears it.'),
+    archived: z.literal(true).optional(),
+    reassign_to_id: uuid('Replacement category when archiving').optional(),
   }).strict(),
   run: async (ctx, args) => {
     const done: string[] = [];
@@ -99,28 +116,15 @@ export const categoriesUpdate = defineTool({
       if (!r.ok) return err(r.code, `${done.length ? `Changed ${done.join(', ')}; then ` : ''}tax line failed: ${r.message}`, r.hint);
       done.push('tax line');
     }
+    if (args.archived) {
+      const r = await writeProc(ctx, 'categories.rename', 'keel_archive_category', {
+        p_category_ledger_account_id: args.category_id, p_reassign_to: args.reassign_to_id ?? null,
+      });
+      if (!r.ok) return err(r.code, `${done.length ? `Changed ${done.join(', ')}; then ` : ''}archive failed: ${r.message}`, r.hint);
+      done.push('archived');
+    }
     if (done.length === 0) return err('invalid_request', 'Nothing to change.');
     return ok(`Updated ${done.join(', ')}.`, { category_id: args.category_id, changed: done });
-  },
-});
-
-export const categoriesArchive = defineTool({
-  name: 'categories_archive',
-  title: 'Archive a category',
-  description:
-    'Archives a category (it stays in history). Pass reassign_to_id to move its transactions, rules and budgets to another category first.',
-  kind: 'write',
-  destructive: true,
-  input: z.object({
-    category_id: uuid('Category'),
-    reassign_to_id: uuid('Replacement category').optional(),
-  }).strict(),
-  run: async (ctx, args) => {
-    const r = await writeProc(ctx, 'categories.rename', 'keel_archive_category', {
-      p_category_ledger_account_id: args.category_id, p_reassign_to: args.reassign_to_id ?? null,
-    });
-    if (!r.ok) return r;
-    return ok('Archived the category.', { category_id: args.category_id });
   },
 });
 
@@ -137,30 +141,6 @@ export const tagsSave = defineTool({
     return ok(args.tag_id ? `Renamed the tag to ${args.name}.` : `Created tag ${args.name}.`, {
       tag_id: args.tag_id ?? (typeof r.data === 'string' ? r.data : null),
     });
-  },
-});
-
-export const rulesList = defineTool({
-  name: 'rules_list',
-  title: 'List rules',
-  description: 'Categorization rules: what text they match, amount range, the category they set, any rename, priority, and whether active.',
-  kind: 'read',
-  input: z.object({}).strict(),
-  run: async (ctx) => {
-    const r = await readProc(ctx, 'rules.list', 'keel_list_rules');
-    if (!r.ok) return r;
-    const rules = rowsOf(r.data).map((x) => ({
-      id: x['ruleId'] ?? x['id'],
-      pattern: x['pattern'],
-      category_id: x['categoryLedgerAccountId'] ?? null,
-      category: x['categoryName'] ?? null,
-      rename_to: x['renameTo'] ?? null,
-      min_amount: money(x['amountMinMinor'] as string | null, 'USD'),
-      max_amount: money(x['amountMaxMinor'] as string | null, 'USD'),
-      priority: x['priority'],
-      active: x['active'],
-    }));
-    return ok(`${rules.length} rules.`, { rules });
   },
 });
 
@@ -222,9 +202,7 @@ export const setupTools = [
   categoriesList,
   categoriesCreate,
   categoriesUpdate,
-  categoriesArchive,
   tagsSave,
-  rulesList,
   rulesSave,
   rulesApply,
 ];

@@ -154,6 +154,75 @@ Deno.test('transactions_split uses the live amount as the stale-view guard', asy
   });
 });
 
+Deno.test('catalog size stays in the 35–45 band (18 read, 24 write)', () => {
+  assertEquals(toolsFor('read').length, 18);
+  assertEquals(ALL_TOOLS.length, 42);
+});
+
+const tool = (name: string) => ALL_TOOLS.find((t) => t.name === name)!;
+const callsTo = (calls: { proc: string; args: Record<string, unknown> }[], proc: string) => calls.filter((c) => c.proc === proc);
+
+Deno.test('receipts: inbox items carry what KEEL read and the suggested match; attach and decide use the app commands', async () => {
+  const { ctx, commands } = stubContext('write', {
+    keel_receipts_inbox: [
+      {
+        documentId: 'doc-1', originalFilename: 'market.jpg', createdAt: '2026-11-02T10:00:00Z',
+        extraction: { status: 'succeeded', merchant: 'Harbor Market', amountMinor: '4500', currency: 'USD', txnDate: '2026-11-02', confidence: 0.92 },
+        match: { matchId: 'match-1', status: 'suggested', transactionId: TXN, txnDescription: 'HARBOR MARKET', txnAmountMinor: '-4500', txnDate: '2026-11-02', txnAccountName: 'Card', score: 0.9 },
+      },
+      { documentId: 'doc-2', originalFilename: 'done.jpg', createdAt: '2026-11-01T10:00:00Z', extraction: null, match: { matchId: 'm2', status: 'confirmed' } },
+    ],
+  });
+  const review = await runTool(tool('review_list'), ctx, { limit: 50 });
+  const body = JSON.parse(review.content[0]!.text);
+  assertEquals(body.receipts.rows.length, 1, 'confirmed (attached) receipts are not pending');
+  assertEquals(body.receipts.rows[0].read_from_receipt.total.display, '$45.00');
+  assertEquals(body.receipts.rows[0].suggested_match.item_id, 'match-1');
+
+  await runTool(tool('review_decide'), ctx, { item_type: 'receipt_match', item_id: '66666666-6666-4666-8666-666666666666', accept: true });
+  await runTool(tool('receipts_attach'), ctx, { document_id: '77777777-7777-4777-8777-777777777777', transaction_id: TXN });
+  assertEquals(commands.map((c) => c.command), ['receipts.decide_match', 'documents.attach']);
+  assertEquals(commands[0]!.payload, { matchId: '66666666-6666-4666-8666-666666666666', confirm: true });
+  assertEquals(commands[1]!.payload, { documentId: '77777777-7777-4777-8777-777777777777', targetType: 'transaction', targetId: TXN });
+});
+
+Deno.test('edits keep the fields they do not change (tasks, notes, bills)', async () => {
+  const TASK = '88888888-8888-4888-8888-888888888888';
+  const NOTE = '99999999-9999-4999-8999-999999999999';
+  const BILL = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const { ctx, calls } = stubContext('write', {
+    keel_list_notes_tasks: { rows: [
+      { type: 'task', id: TASK, title: 'Call the bank', description: 'About the fee', dueOn: '2026-11-10', priority: 'high' },
+      { type: 'note', id: NOTE, body: 'Pinned note', pinned: true },
+    ] },
+    keel_list_schedules: { rows: [{ scheduleId: BILL }] },
+  });
+  await runTool(tool('tasks_save'), ctx, { task_id: TASK, title: 'Call the bank today' });
+  assertEquals(callsTo(calls, 'keel_task_save')[0]!.args, {
+    p_household_id: HOUSEHOLD, p_task_id: TASK, p_title: 'Call the bank today', p_description: 'About the fee', p_due_on: '2026-11-10', p_priority: 'high',
+  });
+  await runTool(tool('tasks_save'), ctx, { task_id: TASK, status: 'done' });
+  assertEquals(callsTo(calls, 'keel_task_save').length, 1, 'a status-only change does not rewrite the task');
+  assertEquals(callsTo(calls, 'keel_task_set_status')[0]!.args['p_status'], 'done');
+
+  await runTool(tool('notes_save'), ctx, { note_id: NOTE, body: 'Edited' });
+  assertEquals(callsTo(calls, 'keel_note_save')[0]!.args['p_pinned'], true, 'editing the text keeps the pin');
+  await runTool(tool('notes_save'), ctx, { note_id: NOTE, archived: true });
+  assertEquals(callsTo(calls, 'keel_note_archive').length, 1);
+
+  await runTool(tool('bills_save'), ctx, { bill_id: BILL, status: 'paused' });
+  assertEquals(callsTo(calls, 'keel_schedule_save').length, 0, 'pausing does not rewrite the bill');
+  assertEquals(callsTo(calls, 'keel_schedule_set_status')[0]!.args['p_status'], 'paused');
+});
+
+Deno.test('archive lives on the update tools', async () => {
+  const { ctx, calls } = stubContext('write');
+  await runTool(tool('accounts_update'), ctx, { account_id: '33333333-3333-4333-8333-333333333333', archived: true });
+  assertEquals(callsTo(calls, 'keel_set_account_archived')[0]!.args['p_archived'], true);
+  await runTool(tool('categories_update'), ctx, { category_id: '44444444-4444-4444-8444-444444444444', archived: true });
+  assertEquals(callsTo(calls, 'keel_archive_category').length, 1);
+});
+
 // ---------------------------------------------------------------------------
 // Real MCP round trip through the SDK (2025-era client, what Claude/Codex speak)
 // ---------------------------------------------------------------------------

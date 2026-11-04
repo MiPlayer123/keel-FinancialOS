@@ -17,7 +17,7 @@ select ok(not has_table_privilege('authenticated', 'public.mcp_client_grants', '
 select ok(not has_function_privilege('anon', 'public.keel_mcp_grant_set(text,uuid,public.mcp_access_level)', 'execute'),
   'anon cannot set grants');
 select ok(not has_function_privilege('authenticated',
-  'public.keel_transactions_page(uuid,integer,date,uuid,uuid,uuid,text,date,date,uuid[],text,bigint,bigint,text,uuid,uuid,boolean)',
+  'public.keel_transactions_page(uuid,integer,date,uuid,uuid,uuid,text,date,date,uuid[],text,bigint,bigint,text,uuid,uuid,boolean,boolean)',
   'execute'), 'the internal page builder is not client-callable');
 select ok(has_function_privilege('authenticated', 'public.keel_query_transactions(uuid,jsonb,integer,date,uuid)', 'execute'),
   'authenticated may run the filtered query');
@@ -29,6 +29,13 @@ select is((select r.rolname::text from pg_proc p join pg_roles r on r.oid = p.pr
 select ok((select 'pgrst.db_pre_request=public.keel_pre_request' = any (rolconfig)
              from pg_roles where rolname = 'authenticator'),
   'PostgREST runs the gateway guard before every request');
+
+select ok(exists (select 1 from vault.secrets where name = 'keel_mcp_gateway_key'),
+  'the migration provisions a gateway key inside the database');
+select ok(not has_function_privilege('authenticated', 'public.keel_mcp_gateway_key()', 'execute')
+          and not has_function_privilege('anon', 'public.keel_mcp_gateway_key()', 'execute')
+          and has_function_privilege('service_role', 'public.keel_mcp_gateway_key()', 'execute'),
+  'only service_role (the mcp function) can read the gateway key');
 
 -- Gateway key in vault (test-only value; replaces any configured key inside
 -- this transaction and is rolled back with it).
@@ -84,6 +91,8 @@ insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amo
   ('d9000000-0000-4000-8000-000000000026','d9000000-0000-4000-8000-0000000000e1','00000000-0000-4000-8000-00000000a101',70000,'USD');
 insert into public.transaction_categories (canonical_transaction_id, household_id, category_ledger_account_id, source)
 values ('d9000000-0000-4000-8000-000000000005','00000000-0000-4000-8000-00000000a001','00000000-0000-4000-8000-00000000a311','user');
+insert into public.transaction_overrides (canonical_transaction_id, household_id, display_description, note)
+values ('d9000000-0000-4000-8000-000000000003','00000000-0000-4000-8000-00000000a001',null,'Reimbursable — work trip');
 insert into public.tags (id, household_id, name) values
   ('d9000000-0000-4000-8000-0000000000f1','00000000-0000-4000-8000-00000000a001','Vacation');
 insert into public.transaction_tags (canonical_transaction_id, tag_id, household_id) values
@@ -173,6 +182,11 @@ select is(pg_temp.ids('{"uncategorized":true}'), '1',
 select is(pg_temp.ids('{"accountId":"00000000-0000-4000-8000-00000000a402"}'), '3', 'account');
 select is(pg_temp.ids('{"categoryId":"00000000-0000-4000-8000-00000000a311"}'), '4,3,5', 'category');
 select is(pg_temp.ids('{"search":"harbor"}'), '3', 'search');
+select is(pg_temp.ids('{"search":"reimbursable"}'), '3', 'search also matches the user''s notes');
+select is((select count(*)::int from jsonb_array_elements(public.keel_list_transactions_rich_page(
+            '00000000-0000-4000-8000-00000000a001', 200, null, null, null, null, 'reimbursable')->'rows') e
+          where e->>'transactionId' like 'd9000000-%'), 0,
+  'the app''s rich page search is unchanged (descriptions and account names only)');
 reset role;
 update public.accounts set entity_id = '00000000-0000-4000-8000-00000000a102'
  where id = '00000000-0000-4000-8000-00000000a402';

@@ -222,7 +222,7 @@ export const accountsUpdate = defineTool({
   name: 'accounts_update',
   title: 'Edit an account',
   description:
-    'Renames an account, moves it to another entity, sets its starting balance ("as of this date the balance was X"; real-world amount, owed for debts), or re-anchors a bank-synced account\'s balance to what the bank reports.',
+    'Renames an account, moves it to another entity, sets its starting balance ("as of this date the balance was X"; real-world amount, owed for debts), re-anchors a bank-synced account\'s balance to what the bank reports, or archives / restores a manual account (archived hides it from lists and net worth; nothing is deleted; bank-synced accounts are removed by disconnecting the bank in the app).',
   kind: 'write',
   destructive: true,
   input: z.object({
@@ -232,6 +232,7 @@ export const accountsUpdate = defineTool({
     starting_balance_minor: minorString('Real-world starting balance').optional(),
     starting_balance_date: isoDate('Date of the starting balance').optional(),
     reanchor_to_bank: z.boolean().optional().describe('true = match the latest bank-reported balance.'),
+    archived: z.boolean().optional().describe('true archives a manual account, false restores it.'),
     idempotency_key: idempotencyKey,
   }).strict(),
   run: async (ctx, args) => {
@@ -263,27 +264,18 @@ export const accountsUpdate = defineTool({
       if (!r.ok) return fail('re-anchor', r);
       done.push('balance re-anchored');
     }
+    if (args.archived !== undefined) {
+      const r = await writeProc(ctx, null, 'keel_set_account_archived', { p_account_id: args.account_id, p_archived: args.archived });
+      if (!r.ok) return fail(args.archived ? 'archive' : 'restore', r);
+      done.push(args.archived ? 'archived' : 'restored');
+    }
     if (done.length === 0) return err('invalid_request', 'Nothing to change.', 'Pass at least one field to change.');
-    return ok(`Updated ${done.join(', ')}.`, { account_id: args.account_id, changed: done });
-  },
-});
-
-export const accountsArchive = defineTool({
-  name: 'accounts_archive',
-  title: 'Archive or restore an account',
-  description:
-    'Hides a manual account from lists and net worth (archived = true) or brings it back (false). Nothing is deleted. Bank-synced accounts are removed by disconnecting the bank in the KEEL app.',
-  kind: 'write',
-  destructive: true,
-  input: z.object({ account_id: uuid('Account'), archived: z.boolean() }).strict(),
-  run: async (ctx, args) => {
-    const r = await writeProc(ctx, null, 'keel_set_account_archived', { p_account_id: args.account_id, p_archived: args.archived });
-    if (!r.ok) return r;
-    return ok(args.archived ? 'Archived the account.' : 'Restored the account.', {
+    return ok(`Updated ${done.join(', ')}.`, {
       account_id: args.account_id,
-      undo: { tool: 'accounts_archive', args: { account_id: args.account_id, archived: !args.archived } },
+      changed: done,
+      ...(args.archived !== undefined ? { undo: { tool: 'accounts_update', args: { account_id: args.account_id, archived: !args.archived } } } : {}),
     });
   },
 });
 
-export const accountTools = [accountsList, accountsGet, accountsCreate, accountsUpdate, accountsArchive];
+export const accountTools = [accountsList, accountsGet, accountsCreate, accountsUpdate];

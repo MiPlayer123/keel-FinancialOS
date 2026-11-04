@@ -78,7 +78,7 @@ supabase functions deploy api --no-verify-jwt
 supabase functions deploy worker --no-verify-jwt
 supabase functions deploy webhook-provider --no-verify-jwt
 supabase functions deploy scheduled --no-verify-jwt
-supabase functions deploy mcp --no-verify-jwt   # dark until KEEL_MCP_ENABLED=on — see supabase/functions/mcp/README.md
+supabase functions deploy mcp --no-verify-jwt   # inert until the Supabase OAuth server is enabled — see supabase/functions/mcp/README.md
 ```
 
 `--no-verify-jwt` is deliberate for Supabase's publishable/secret-key model. Each function must use `@supabase/server` and declare its own auth mode:

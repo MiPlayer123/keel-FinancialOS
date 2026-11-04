@@ -15,11 +15,14 @@
  *      write), read with the app's own token through the gateway header.
  *   5. MCP: the official SDK serves the tools that grant allows.
  *
- * Dark unless KEEL_MCP_ENABLED=on (⚑ human checkpoint: OAuth server, vault
- * gateway key, function secrets). No service key is used anywhere here.
+ * Nothing works until Supabase Auth's OAuth server is enabled (⚑ dashboard
+ * step): without it no app token can exist. KEEL_MCP_ENABLED=off is the
+ * emergency kill switch. The service key is used for exactly one thing:
+ * reading the gateway key from the vault (keel_mcp_gateway_key()); every
+ * tool runs through the caller's own token.
  */
 import { createMcpHandler } from 'npm:@modelcontextprotocol/server@2.4.0';
-import { createContextClient, verifyAuth } from 'npm:@supabase/server@1.3.0/core';
+import { createAdminClient, createContextClient, verifyAuth } from 'npm:@supabase/server@1.3.0/core';
 import {
   authorize,
   CommandEnvelopeSchema,
@@ -46,8 +49,26 @@ const env = (name: string): string => Deno.env.get(name) ?? '';
 const list = (name: string): string[] => env(name).split(',').map((s) => s.trim()).filter(Boolean);
 
 const SUPABASE_URL = env('SUPABASE_URL');
-const GATEWAY_KEY = env('KEEL_MCP_GATEWAY_KEY');
-const ENABLED = env('KEEL_MCP_ENABLED') === 'on' && SUPABASE_URL !== '' && GATEWAY_KEY !== '';
+const ENABLED = env('KEEL_MCP_ENABLED') !== 'off' && SUPABASE_URL !== '';
+
+/**
+ * The gateway key that lets this function's requests past keel_pre_request.
+ * Generated inside the database by the migration and read once per isolate
+ * with the platform's secret key; KEEL_MCP_GATEWAY_KEY overrides (local runs).
+ */
+let gatewayKey: Promise<string | null> | null = null;
+const loadGatewayKey = (): Promise<string | null> =>
+  (gatewayKey ??= (async () => {
+    if (env('KEEL_MCP_GATEWAY_KEY')) return env('KEEL_MCP_GATEWAY_KEY');
+    const admin: UserClient = createAdminClient();
+    const { data, error } = await admin.rpc('keel_mcp_gateway_key');
+    if (error || typeof data !== 'string' || data.length === 0) {
+      console.error('mcp_gateway_key_unavailable', error?.code ?? 'missing');
+      gatewayKey = null; // retry on the next request
+      return null;
+    }
+    return data;
+  })());
 const URLS = resolveMcpUrls(SUPABASE_URL, env('KEEL_MCP_PUBLIC_URL') || null);
 const TOKEN_POLICY = {
   expectedIssuer: URLS.authorizationServer,
@@ -171,9 +192,11 @@ export const handle = async (req: Request): Promise<Response> => {
   if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return json(413, { error: 'payload_too_large' }, cors(origin));
 
   // --- Grant: what the user allowed this app (KEEL's consent page) ---
+  const key = await loadGatewayKey();
+  if (!key) return json(503, { error: 'temporarily_unavailable' }, cors(origin));
   const db: UserClient = createContextClient({
     auth: { token: auth.token },
-    supabaseOptions: { global: { headers: { 'x-keel-mcp-gateway': GATEWAY_KEY } } },
+    supabaseOptions: { global: { headers: { 'x-keel-mcp-gateway': key } } },
   });
   const { data: grant, error: grantError } = await db.rpc('keel_mcp_grant_current');
   if (grantError) {

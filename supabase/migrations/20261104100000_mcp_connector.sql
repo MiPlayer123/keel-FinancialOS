@@ -227,10 +227,12 @@ create trigger audit_log_stamp_connected_app
 
 -- ---------------------------------------------------------------------------
 -- 3. Gateway guard. A connected-app token reaches PostgREST only through the
---    `mcp` function, which proves itself with the x-keel-mcp-gateway header
---    (vault secret `keel_mcp_gateway_key`, also set as the function secret
---    KEEL_MCP_GATEWAY_KEY). Missing secret = fail closed. Requests without a
---    client_id claim (every KEEL web session, anon, service) pass untouched.
+--    `mcp` function, which proves itself with the x-keel-mcp-gateway header:
+--    vault secret `keel_mcp_gateway_key`, generated here inside the database
+--    (never in git or a terminal) and read by the function once through
+--    service_role-only keel_mcp_gateway_key(). Missing secret = fail closed.
+--    Requests without a client_id claim (every KEEL web session, anon,
+--    service) pass untouched.
 -- ---------------------------------------------------------------------------
 create or replace function public.keel_pre_request() returns void
 language plpgsql
@@ -265,6 +267,33 @@ begin
 end;
 $$;
 
+-- Provision the key once (re-runs keep it; rotate by updating the vault secret).
+do $$ begin
+  if not exists (select 1 from vault.secrets where name = 'keel_mcp_gateway_key') then
+    perform vault.create_secret(
+      encode(extensions.gen_random_bytes(32), 'base64'),
+      'keel_mcp_gateway_key',
+      'KEEL MCP gateway proof (supabase/functions/mcp/README.md)');
+  end if;
+end $$;
+
+create or replace function public.keel_mcp_gateway_key() returns text
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_key text;
+begin
+  select decrypted_secret into v_key from vault.decrypted_secrets
+   where name = 'keel_mcp_gateway_key' limit 1;
+  return v_key;
+end;
+$$;
+revoke all on function public.keel_mcp_gateway_key() from public, anon, authenticated;
+grant execute on function public.keel_mcp_gateway_key() to service_role;
+
 revoke all on function public.keel_pre_request() from public;
 grant execute on function public.keel_pre_request() to anon, authenticated, service_role;
 
@@ -296,7 +325,8 @@ create or replace function public.keel_transactions_page(
   p_status text,
   p_entity_id uuid,
   p_tag_id uuid,
-  p_uncategorized boolean
+  p_uncategorized boolean,
+  p_search_notes boolean
 )
 returns jsonb
 language plpgsql
@@ -492,6 +522,7 @@ begin
           or coalesce(tov.display_description, rr.display_name, ct.description) ilike v_pattern
           or ct.description ilike v_pattern
           or acc.name ilike v_pattern
+          or (p_search_notes and tov.note ilike v_pattern)
         )
         and (
           p_cursor_date is null
@@ -531,10 +562,10 @@ $$;
 
 -- Internal: no membership check of its own. Never callable by clients.
 revoke all on function public.keel_transactions_page(
-  uuid, integer, date, uuid, uuid, uuid, text, date, date, uuid[], text, bigint, bigint, text, uuid, uuid, boolean
+  uuid, integer, date, uuid, uuid, uuid, text, date, date, uuid[], text, bigint, bigint, text, uuid, uuid, boolean, boolean
 ) from public, anon, authenticated;
 grant execute on function public.keel_transactions_page(
-  uuid, integer, date, uuid, uuid, uuid, text, date, date, uuid[], text, bigint, bigint, text, uuid, uuid, boolean
+  uuid, integer, date, uuid, uuid, uuid, text, date, date, uuid[], text, bigint, bigint, text, uuid, uuid, boolean, boolean
 ) to keel_api;
 
 create or replace function public.keel_list_transactions_rich_page(
@@ -569,12 +600,12 @@ begin
   end if;
   return public.keel_transactions_page(
     p_household_id, p_limit, p_cursor_date, p_cursor_id, p_account_id, p_category_id, p_search,
-    null, null, null, null, null, null, null, null, null, null);
+    null, null, null, null, null, null, null, null, null, null, false);
 end;
 $$;
 
 -- Filtered rich read. p_filters keys (all optional): accountId, categoryId,
--- search, from (inclusive), to (exclusive), transactionIds (≤ 200), direction
+-- search (also matches the user's notes), from (inclusive), to (exclusive), transactionIds (≤ 200), direction
 -- ('in' | 'out', from the account's side), minAmountMinor / maxAmountMinor
 -- (absolute, integer minor units), status ('pending' | 'posted'), entityId,
 -- tagId, uncategorized (boolean). Unknown keys are rejected.
@@ -648,7 +679,7 @@ begin
       p_household_id, p_limit, p_cursor_date, p_cursor_id,
       (v_f ->> 'accountId')::uuid, (v_f ->> 'categoryId')::uuid, v_f ->> 'search',
       (v_f ->> 'from')::date, (v_f ->> 'to')::date, v_ids, v_direction, v_min, v_max, v_status,
-      (v_f ->> 'entityId')::uuid, (v_f ->> 'tagId')::uuid, (v_f ->> 'uncategorized')::boolean);
+      (v_f ->> 'entityId')::uuid, (v_f ->> 'tagId')::uuid, (v_f ->> 'uncategorized')::boolean, true);
   exception
     when invalid_text_representation or invalid_datetime_format or datetime_field_overflow
       or numeric_value_out_of_range or raise_exception or invalid_parameter_value then

@@ -3,7 +3,7 @@
  * remaining read-only ledgers (paychecks, reimbursements, statements).
  */
 import * as z from 'npm:zod@4.4.3';
-import { capped, defineTool, readProc, rowsOf, uuid, writeProc } from '../context.ts';
+import { capped, defineTool, readProc, rowsOf, uuid, writeProc, type ToolContext } from '../context.ts';
 import { err, money, ok } from '../lib.ts';
 
 /** Internal bookkeeping keys a model never needs (detector fingerprints, raw evidence). */
@@ -70,16 +70,18 @@ export const reviewList = defineTool({
   name: 'review_list',
   title: 'List the review queue',
   description:
-    'What KEEL is waiting on the user to decide: suggested categories for transactions and suggested transfer matches between accounts. Decide them with review_decide.',
+    'What KEEL is waiting on the user to decide: suggested categories for transactions, suggested transfer matches between accounts, and receipts in the receipt inbox (with the merchant, total and date KEEL read from each, and the transaction it suggests). Decide suggestions with review_decide; attach a receipt to any transaction with receipts_attach. Receipts get into KEEL when the user uploads them in the KEEL app.',
   kind: 'read',
   input: z.object({ limit: z.number().int().min(1).max(200).default(50) }).strict(),
   run: async (ctx, args) => {
-    const [suggestions, transfers] = await Promise.all([
+    const [suggestions, transfers, receipts] = await Promise.all([
       readProc(ctx, null, 'keel_list_category_suggestions'),
       readProc(ctx, 'transfers.list', 'keel_list_transfers'),
+      readProc(ctx, 'receipts.inbox', 'keel_receipts_inbox'),
     ]);
     if (!suggestions.ok) return suggestions;
     if (!transfers.ok) return transfers;
+    if (!receipts.ok) return receipts;
     const cats = rowsOf(suggestions.data)
       .filter((s) => (s['status'] ?? 'suggested') === 'suggested')
       .map((s) => ({
@@ -103,9 +105,37 @@ export const reviewList = defineTool({
         to: { account: t['inAccountName'], description: t['inDescription'], transaction_id: t['inTxnId'] },
         days_apart: t['dayGap'],
       }));
-    return ok(`${cats.length} category suggestions, ${pairs.length} transfer matches.`, {
+    const inbox = rowsOf(receipts.data)
+      .filter((r) => (r['match'] as Record<string, unknown> | null)?.['status'] !== 'confirmed')
+      .map((r) => {
+        const ex = (r['extraction'] ?? null) as Record<string, unknown> | null;
+        const m = (r['match'] ?? null) as Record<string, unknown> | null;
+        const currency = (ex?.['currency'] as string) ?? 'USD';
+        return {
+          document_id: r['documentId'],
+          file: r['originalFilename'],
+          uploaded_at: r['createdAt'],
+          read_from_receipt: ex
+            ? { status: ex['status'], merchant: ex['merchant'] ?? null, total: money(ex['amountMinor'] as string | null, currency), date: ex['txnDate'] ?? null, confidence: ex['confidence'] ?? null }
+            : null,
+          suggested_match: m && m['status'] === 'suggested'
+            ? {
+                item_type: 'receipt_match',
+                item_id: m['matchId'],
+                transaction_id: m['transactionId'],
+                transaction: m['txnDescription'],
+                amount: money(m['txnAmountMinor'] as string | null, currency),
+                date: m['txnDate'],
+                account: m['txnAccountName'],
+                score: m['score'],
+              }
+            : null,
+        };
+      });
+    return ok(`${cats.length} category suggestions, ${pairs.length} transfer matches, ${inbox.length} unattached receipts.`, {
       category_suggestions: capped(cats, args.limit),
       transfer_matches: capped(pairs, args.limit),
+      receipts: capped(inbox, args.limit),
     });
   },
 });
@@ -114,20 +144,41 @@ export const reviewDecide = defineTool({
   name: 'review_decide',
   title: 'Accept or reject a review item',
   description:
-    'Accepts or rejects one item from review_list: a category suggestion (accepting applies the category) or a transfer match (accepting pairs the two transactions as a transfer).',
+    'Accepts or rejects one item from review_list: a category suggestion (accepting applies the category), a transfer match (accepting pairs the two transactions as a transfer), or a receipt match (accepting attaches the receipt to the suggested transaction).',
   kind: 'write',
   destructive: true,
   input: z.object({
-    item_type: z.enum(['category_suggestion', 'transfer_match']),
+    item_type: z.enum(['category_suggestion', 'transfer_match', 'receipt_match']),
     item_id: uuid('Review item'),
     accept: z.boolean(),
   }).strict(),
   run: async (ctx, args) => {
     const r = args.item_type === 'category_suggestion'
       ? await ctx.command('categorization.decide_suggestion', { suggestionId: args.item_id, accept: args.accept }, undefined)
-      : await writeProc(ctx, null, 'keel_decide_transfer', { p_link_id: args.item_id, p_confirm: args.accept });
+      : args.item_type === 'receipt_match'
+        ? await ctx.command('receipts.decide_match', { matchId: args.item_id, confirm: args.accept }, undefined)
+        : await writeProc(ctx, null, 'keel_decide_transfer', { p_link_id: args.item_id, p_confirm: args.accept });
     if (!r.ok) return r;
     return ok(args.accept ? 'Accepted.' : 'Rejected.', { item_type: args.item_type, item_id: args.item_id });
+  },
+});
+
+export const receiptsAttach = defineTool({
+  name: 'receipts_attach',
+  title: 'Attach a receipt to a transaction',
+  description:
+    'Attaches a receipt (or any document already uploaded to KEEL) to a transaction. document_id comes from review_list receipts; the transaction from transactions_list. The receipt file is not changed and can be detached in the app.',
+  kind: 'write',
+  destructive: false,
+  input: z.object({ document_id: uuid('Receipt document'), transaction_id: uuid('Transaction') }).strict(),
+  run: async (ctx, args) => {
+    const r = await ctx.command('documents.attach', {
+      documentId: args.document_id,
+      targetType: 'transaction',
+      targetId: args.transaction_id,
+    }, undefined);
+    if (!r.ok) return r;
+    return ok('Attached the receipt.', { document_id: args.document_id, transaction_id: args.transaction_id });
   },
 });
 
@@ -198,82 +249,101 @@ export const notesList = defineTool({
   },
 });
 
+/** Current note/task row (edits keep the fields they don't change). */
+const loadNoteOrTask = async (ctx: ToolContext, type: 'note' | 'task', id: string) => {
+  const r = await readProc(ctx, 'notes_tasks.list', 'keel_list_notes_tasks');
+  if (!r.ok) return r;
+  const row = rowsOf(r.data).find((x) => x['type'] === type && x['id'] === id);
+  return row ? { ok: true as const, row } : err('not_found', `No such ${type} (or it is archived).`, 'notes_list has the ids.');
+};
+
 export const notesSave = defineTool({
   name: 'notes_save',
-  title: 'Write a note',
-  description: 'Creates a household note (omit note_id) or replaces an existing note\'s text.',
+  title: 'Write, edit or archive a note',
+  description:
+    'Creates a household note (omit note_id), edits one (only the fields you pass change), or archives / restores one (archived). Nothing is deleted.',
   kind: 'write',
-  destructive: false,
+  destructive: true,
   input: z.object({
     note_id: uuid('Note').optional(),
-    body: z.string().min(1).max(1000),
-    pinned: z.boolean().default(false),
+    body: z.string().min(1).max(1000).optional(),
+    pinned: z.boolean().optional(),
+    archived: z.boolean().optional().describe('true archives the note, false restores it.'),
   }).strict(),
   run: async (ctx, args) => {
-    const r = await writeProc(ctx, 'notes.save', 'keel_note_save', { p_note_id: args.note_id ?? null, p_body: args.body, p_pinned: args.pinned });
+    if (!args.note_id && !args.body) return err('invalid_request', 'A new note needs body.');
+    if (args.note_id && args.archived !== undefined) {
+      const r = args.archived
+        ? await writeProc(ctx, 'notes.archive', 'keel_note_archive', { p_note_id: args.note_id })
+        : await writeProc(ctx, 'notes.unarchive', 'keel_note_unarchive', { p_note_id: args.note_id });
+      if (!r.ok) return r;
+      if (args.body === undefined && args.pinned === undefined) {
+        return ok(args.archived ? 'Archived the note.' : 'Restored the note.', {
+          note_id: args.note_id,
+          undo: { tool: 'notes_save', args: { note_id: args.note_id, archived: !args.archived } },
+        });
+      }
+    }
+    let body = args.body;
+    let pinned = args.pinned ?? false;
+    if (args.note_id && (body === undefined || args.pinned === undefined)) {
+      const current = await loadNoteOrTask(ctx, 'note', args.note_id);
+      if (!current.ok) return current;
+      body ??= current.row['body'] as string;
+      pinned = args.pinned ?? (current.row['pinned'] === true);
+    }
+    const r = await writeProc(ctx, 'notes.save', 'keel_note_save', { p_note_id: args.note_id ?? null, p_body: body, p_pinned: pinned });
     if (!r.ok) return r;
     const id = args.note_id ?? (typeof r.data === 'string' ? r.data : null);
     return ok(args.note_id ? 'Updated the note.' : 'Saved the note.', {
       note_id: id,
-      undo: !args.note_id && id ? { tool: 'notes_archive', args: { note_id: id, archived: true } } : null,
+      undo: !args.note_id && id ? { tool: 'notes_save', args: { note_id: id, archived: true } } : null,
     });
-  },
-});
-
-export const notesArchive = defineTool({
-  name: 'notes_archive',
-  title: 'Archive or restore a note',
-  description: 'Archives a note (archived true) or restores it (false). Nothing is deleted.',
-  kind: 'write',
-  destructive: true,
-  input: z.object({ note_id: uuid('Note'), archived: z.boolean() }).strict(),
-  run: async (ctx, args) => {
-    const r = args.archived
-      ? await writeProc(ctx, 'notes.archive', 'keel_note_archive', { p_note_id: args.note_id })
-      : await writeProc(ctx, 'notes.unarchive', 'keel_note_unarchive', { p_note_id: args.note_id });
-    if (!r.ok) return r;
-    return ok(args.archived ? 'Archived the note.' : 'Restored the note.', { note_id: args.note_id });
   },
 });
 
 export const tasksSave = defineTool({
   name: 'tasks_save',
-  title: 'Create or edit a task',
-  description: 'Creates a to-do (omit task_id) or edits one: title, details, due date and priority.',
-  kind: 'write',
-  destructive: false,
-  input: z.object({
-    task_id: uuid('Task').optional(),
-    title: z.string().min(1).max(160),
-    description: z.string().max(1000).optional(),
-    due_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    priority: z.enum(['low', 'normal', 'high']).default('normal'),
-  }).strict(),
-  run: async (ctx, args) => {
-    const r = await writeProc(ctx, 'tasks.save', 'keel_task_save', {
-      p_task_id: args.task_id ?? null,
-      p_title: args.title,
-      p_description: args.description ?? null,
-      p_due_on: args.due_on ?? null,
-      p_priority: args.priority,
-    });
-    if (!r.ok) return r;
-    const id = args.task_id ?? (typeof r.data === 'string' ? r.data : null);
-    return ok(args.task_id ? 'Updated the task.' : 'Added the task.', { task_id: id });
-  },
-});
-
-export const tasksSetStatus = defineTool({
-  name: 'tasks_set_status',
-  title: 'Complete, reopen or dismiss a task',
-  description: 'Sets a task to done, open or dismissed.',
+  title: 'Create, edit or complete a task',
+  description:
+    'Creates a to-do (omit task_id) or edits one: title, details, due date, priority, and status (open, done or dismissed). When editing, only the fields you pass change.',
   kind: 'write',
   destructive: true,
-  input: z.object({ task_id: uuid('Task'), status: z.enum(['open', 'done', 'dismissed']) }).strict(),
+  input: z.object({
+    task_id: uuid('Task').optional(),
+    title: z.string().min(1).max(160).optional(),
+    description: z.string().max(1000).nullable().optional().describe('null clears it.'),
+    due_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional().describe('null clears it.'),
+    priority: z.enum(['low', 'normal', 'high']).optional(),
+    status: z.enum(['open', 'done', 'dismissed']).optional(),
+  }).strict(),
   run: async (ctx, args) => {
-    const r = await writeProc(ctx, 'tasks.set_status', 'keel_task_set_status', { p_task_id: args.task_id, p_status: args.status });
-    if (!r.ok) return r;
-    return ok(`Task is now ${args.status}.`, { task_id: args.task_id });
+    if (!args.task_id && !args.title) return err('invalid_request', 'A new task needs a title.');
+    const editsFields = args.title !== undefined || args.description !== undefined || args.due_on !== undefined || args.priority !== undefined;
+    let id = args.task_id ?? null;
+    if (!args.task_id || editsFields) {
+      let current: Record<string, unknown> = {};
+      if (args.task_id) {
+        const loaded = await loadNoteOrTask(ctx, 'task', args.task_id);
+        if (!loaded.ok) return loaded;
+        current = loaded.row;
+      }
+      const r = await writeProc(ctx, 'tasks.save', 'keel_task_save', {
+        p_task_id: args.task_id ?? null,
+        p_title: args.title ?? current['title'],
+        p_description: args.description !== undefined ? args.description : (current['description'] ?? null),
+        p_due_on: args.due_on !== undefined ? args.due_on : (current['dueOn'] ?? null),
+        p_priority: args.priority ?? (current['priority'] as string | undefined) ?? 'normal',
+      });
+      if (!r.ok) return r;
+      id ??= typeof r.data === 'string' ? r.data : null;
+    }
+    if (args.status && id) {
+      const r = await writeProc(ctx, 'tasks.set_status', 'keel_task_set_status', { p_task_id: id, p_status: args.status });
+      if (!r.ok) return err(r.code, `${editsFields || !args.task_id ? 'Saved the task; then ' : ''}setting status failed: ${r.message}`, r.hint);
+    }
+    if (args.task_id && !editsFields && !args.status) return err('invalid_request', 'Nothing to change.');
+    return ok(args.task_id ? 'Updated the task.' : 'Added the task.', { task_id: id });
   },
 });
 
@@ -319,13 +389,12 @@ export const activityList = defineTool({
 export const recordTools = [
   reviewList,
   reviewDecide,
+  receiptsAttach,
   transfersLink,
   transfersUnlink,
   notesList,
   notesSave,
-  notesArchive,
   tasksSave,
-  tasksSetStatus,
   paychecksList,
   reimbursementsList,
   statementsList,

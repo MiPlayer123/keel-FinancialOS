@@ -142,6 +142,9 @@ if (ACCESS === 'read') {
   check(t?.splits?.length === 2 && t.splits.reduce((a, s) => a + BigInt(s.amount.amount_minor), 0n) === -4500n, 'splits add back to the amount');
   check((got.data?.history ?? []).some((h) => h.by === 'connected app'), 'history attributes changes to the connected app');
 
+  const byNote = await call('transactions_list', { search: 'split with a friend' });
+  check((byNote.data?.transactions ?? []).some((x) => x.id === txn), 'search finds a transaction by its note');
+
   const list = await call('transactions_list', { account_id: wallet, page_size: 1, detail: 'full' });
   check(!list.isError && list.data?.transactions?.length >= 1, 'transactions_list (account filter)', list.text.slice(0, 300));
   const page2 = await call('transactions_list', { account_id: wallet, page_size: 1, cursor: list.data?.next_cursor ?? undefined });
@@ -167,8 +170,13 @@ if (ACCESS === 'read') {
   check(!preview.isError, 'rules_apply dry run', preview.text.slice(0, 200));
   const note = await call('notes_save', { body: 'Check the insurance renewal' });
   check(!note.isError && note.data?.note_id, 'notes_save', note.text.slice(0, 200));
-  const task = await call('tasks_save', { title: 'Call the bank', priority: 'high' });
+  const task = await call('tasks_save', { title: 'Call the bank', description: 'About the fee', priority: 'high' });
   check(!task.isError, 'tasks_save', task.text.slice(0, 200));
+  const done = await call('tasks_save', { task_id: task.data?.task_id, status: 'done' });
+  check(!done.isError, 'tasks_save marks the task done (status lives on save)', done.text.slice(0, 200));
+  const archived = await call('accounts_update', { account_id: wallet, archived: true });
+  check(!archived.isError && archived.data?.undo?.args?.archived === false, 'accounts_update archives (with undo)', archived.text.slice(0, 200));
+  await call('accounts_update', { account_id: wallet, archived: false });
   const voided = await call('transactions_void', { transaction_id: txn, reason: 'e2e cleanup' });
   check(!voided.isError, 'transactions_void (soft, reversed)', voided.text.slice(0, 200));
   const activity = await call('activity_list', { limit: 10 });
@@ -178,7 +186,7 @@ if (ACCESS === 'read') {
 }
 
 // Every read tool answers without error on the seeded household.
-for (const name of ['overview_get', 'accounts_list', 'transactions_list', 'transactions_summarize', 'categories_list', 'rules_list', 'budgets_get', 'recurring_list', 'goals_list', 'history_get', 'investments_get', 'paychecks_list', 'reimbursements_list', 'statements_list', 'notes_list', 'review_list', 'activity_list']) {
+for (const name of ['overview_get', 'accounts_list', 'transactions_list', 'transactions_summarize', 'categories_list', 'budgets_get', 'recurring_list', 'goals_list', 'history_get', 'investments_get', 'paychecks_list', 'reimbursements_list', 'statements_list', 'notes_list', 'review_list', 'activity_list']) {
   const args = name === 'transactions_summarize' ? { group_by: 'month' } : name === 'history_get' ? { metric: 'net_worth' } : {};
   const r = await call(name, args);
   check(!r.isError, `read ${name}`, r.text.slice(0, 200));

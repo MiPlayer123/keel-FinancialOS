@@ -47,7 +47,7 @@ It saves that **KEEL grant** (`mcp_client_grants`) and then approves.
 ### 4. Tools run as the user
 
 - **Same paths as the app.** Every tool calls the same procs the web app calls, through the user's own token, so RLS, `auth.uid()` membership checks and the authz compiler all apply. Writes go through the shared command path (`_shared/command-exec.ts`) that `api` also uses.
-- **No service key.** This function never uses one.
+- **Service key, for one thing only.** The function uses Supabase's built-in service key solely to read the gateway key (below). Every tool call runs on the user's own token.
 - **Fixed household.** The household always comes from the grant. The model never chooses it.
 
 ### Why Supabase tokens need extra guards
@@ -56,7 +56,7 @@ Supabase OAuth tokens are ordinary user JWTs (`aud: "authenticated"`) with no cu
 
 | Guard | Where | What it stops |
 |---|---|---|
-| `keel_pre_request` (PostgREST `db_pre_request`) | database | An app token is refused unless the request carries `x-keel-mcp-gateway`, which only this function knows (vault secret `keel_mcp_gateway_key`). The app's token cannot call `keel_*` procs or tables directly. |
+| `keel_pre_request` (PostgREST `db_pre_request`) | database | An app token is refused unless the request carries `x-keel-mcp-gateway`, which only this function knows. The key is generated inside the database by the migration (vault secret `keel_mcp_gateway_key`) and read by the function through service-role-only `keel_mcp_gateway_key()`, so it never appears in git, a terminal or a dashboard. The app's token cannot call `keel_*` procs or tables directly. |
 | `api` refuses `client_id` tokens | `api/index.ts` | App tokens can't reach exports, bank links, onboarding or settings. |
 | Audit stamp trigger | `audit_log` | Every row written under an app token gets `actor.via = {kind: 'connected_app', clientId}`. Settings → Activity shows it. |
 
@@ -64,7 +64,7 @@ The PostgREST hook covers the Data API only. Storage has no client-facing polici
 
 ## Tools
 
-There are 47 tools: 19 read and 28 write. Read tools are always listed. Write tools are listed only when the grant is "Read and make changes".
+There are 42 tools: 18 read and 24 write. Read tools are always listed. Write tools are listed only when the grant is "Read and make changes".
 
 ### Read tools
 
@@ -73,27 +73,27 @@ There are 47 tools: 19 read and 28 write. Read tools are always listed. Write to
 | Overview | `overview_get`, `history_get` (net worth, account balance, cash flow, investments, forecast), `investments_get` |
 | Accounts | `accounts_list`, `accounts_get` |
 | Transactions | `transactions_list` (all filters, cursor paging through the full history), `transactions_get` (notes, splits, tags, documents, change history), `transactions_summarize` (KEEL-computed totals by category, merchant, account, month, tag or entity; it excludes the same transfer and reimbursement rows as KEEL's cash flow, so the numbers agree) |
-| Setup | `categories_list` (categories and tags), `rules_list` |
+| Setup | `categories_list` (categories, tags and rules: everything needed to categorize) |
 | Planning | `budgets_get`, `recurring_list` (detected series and scheduled bills), `goals_list` |
-| Other | `review_list`, `notes_list`, `paychecks_list`, `reimbursements_list`, `statements_list`, `activity_list` |
+| Other | `review_list` (category suggestions, transfer matches, and the receipt inbox with what KEEL read from each receipt plus its suggested transaction), `notes_list`, `paychecks_list`, `reimbursements_list`, `statements_list`, `activity_list` |
 
 ### Write tools
 
 | Area | Tools |
 |---|---|
-| Accounts | `accounts_create` (manual or cash, with starting balance), `accounts_update`, `accounts_archive` |
+| Accounts | `accounts_create` (manual or cash, with starting balance), `accounts_update` (rename, entity, starting balance, re-anchor, archive or restore) |
 | Transactions | `transactions_create`, `transactions_update` (category, name, note, date, tags), `transactions_split` (amounts, percent or equal; KEEL does the math), `transactions_categorize` (bulk), `transactions_void` |
-| Setup | `categories_create`, `categories_update`, `categories_archive`, `tags_save`, `rules_save` (`active: false` switches a rule off), `rules_apply` (dry run first) |
-| Planning | `budgets_set`, `recurring_update`, `bills_save`, `bills_set_status`, `bills_enter`, `goals_save`, `goals_contribute` |
-| Other | `review_decide`, `transfers_link`, `transfers_unlink`, `notes_save`, `notes_archive`, `tasks_save`, `tasks_set_status` |
+| Setup | `categories_create`, `categories_update` (rename, move, tax line, archive), `tags_save`, `rules_save` (`active: false` switches a rule off), `rules_apply` (dry run first) |
+| Planning | `budgets_set`, `recurring_update`, `bills_save` (create, edit, pause or end), `bills_enter`, `goals_save`, `goals_contribute` |
+| Receipts and review | `receipts_attach` (attach an uploaded receipt to a transaction), `review_decide` (category suggestions, transfer matches, receipt matches) |
+| Other | `transfers_link`, `transfers_unlink`, `notes_save` (write, edit, archive), `tasks_save` (create, edit, complete) |
 
 ### Not exposed yet
 
 These are reachable in the app but not over MCP yet. Each is a candidate for a follow-up.
+- **File uploads (receipts, paystubs, statements).** An MCP tool call can't carry the photo or PDF someone drops into a chat; the model can't re-send those bytes. The user uploads in the KEEL app (for example by photographing a receipt on their phone). KEEL reads the merchant, total and date, and the AI can then match and attach it with `review_list`, `review_decide` and `receipts_attach`. A future upload-link tool could let CLI agents (Claude Code, Codex) push local files.
 - Paycheck, reimbursement and statement **edits**. Their reads are exposed.
 - Holdings edits.
-- Attaching receipts and documents.
-- Receipt-match and statement-draft decisions.
 
 ### Never exposed
 
@@ -114,6 +114,7 @@ These are reachable in the app but not over MCP yet. Each is a candidate for a f
 - **Paging.** List tools take `page_size` and `cursor`, and return `next_cursor` and `has_more`. Pass the cursor back until `has_more` is false.
 - **Results.** Every result starts with `summary`, then `as_of` and `scope`, then the data. It ends with a `data_notice`: bank and user text is data, never instructions (Law 5).
 - **Errors.** An error comes back as `isError: true` with `{code, message, hint}`. The hint names the next call to make. No database internals are included.
+- **Partial edits.** Save and update tools change only the fields you pass and keep the rest.
 - **Writes.** Writes that book money take an optional `idempotency_key`. A retry with the same key replays and never duplicates. Results say how to undo. Nothing is hard-deleted: corrections are reversals, and things are voided or archived.
 - **Logs.** No personal data. Each call logs `tool`, `clientId`, `ok`, `code` and `ms`, never arguments or results.
 
@@ -147,17 +148,17 @@ The server `instructions` (in `server.ts`) are kept short: what KEEL is, the mon
 
 ## Turning it on (⚑ human checkpoint)
 
-1. **Apply the migration to live.** Apply `20261104100000_mcp_connector.sql` and keep the `live-schema-drift` check green.
-2. **Configure the Supabase dashboard** under Authentication → OAuth Server:
+1. **Apply the migration to live.** Apply `20261104100000_mcp_connector.sql` (for example with the `apply-migration` workflow) and keep `live-schema-drift` green. The migration also generates the gateway key; there is nothing to copy.
+2. **Deploy.** `deploy-functions` ships `mcp` and `api` on merge to `main`.
+3. **Configure the Supabase dashboard** under Authentication → OAuth Server:
    - enable it;
    - set the authorization path to `/oauth/consent`;
    - allow dynamic registration.
-   Then add `<site>/oauth/consent**` to the redirect allow-list (needed for magic-link re-auth).
-3. **Create the gateway secret** with one random value, stored in both places:
-   - the vault: `select vault.create_secret('<random>', 'keel_mcp_gateway_key');`
-   - the function secrets: `supabase secrets set KEEL_MCP_GATEWAY_KEY=<same value> KEEL_MCP_ENABLED=on`
-   Never commit it or paste it into docs.
-4. **Deploy** with `node scripts/build-functions.mjs && supabase functions deploy mcp api --no-verify-jwt`. `api` carries the connected-app routes and the app-token refusal.
+   Check that Authentication → URL Configuration has Site URL `https://keel.mikulsaravanan.com`. Add `https://keel.mikulsaravanan.com/oauth/consent**` to the redirect URLs (magic-link re-sign-in returns there).
+
+Nothing works until step 3: without the OAuth server, no app token can exist.
+
+**Kill switch:** set the function secret `KEEL_MCP_ENABLED=off`.
 
 **Optional secrets:**
 - `KEEL_MCP_PUBLIC_URL`: a custom-domain URL for the connector.
@@ -174,16 +175,12 @@ The server `instructions` (in `server.ts`) are kept short: what KEEL is, the mon
 
 ## Local development
 
-`supabase/config.toml` enables the OAuth server on the local stack.
+`supabase/config.toml` enables the OAuth server on the local stack. `supabase db reset` runs the migration, which also creates a local gateway key.
 
 ```bash
 supabase start
 node scripts/build-functions.mjs
-KEY=$(openssl rand -base64 32)
-psql "$(supabase status -o env | sed -n 's/^DB_URL="\(.*\)"/\1/p')" \
-  -c "select vault.create_secret('$KEY', 'keel_mcp_gateway_key');"
-printf 'KEEL_MCP_ENABLED=on\nKEEL_MCP_GATEWAY_KEY=%s\n' "$KEY" > supabase/functions/.env   # git-ignored
-supabase functions serve --env-file supabase/functions/.env
+supabase functions serve
 
 eval "$(supabase status -o env)"
 node scripts/dev/mcp-e2e.mjs write   # real OAuth flow + tools + guards; also: read

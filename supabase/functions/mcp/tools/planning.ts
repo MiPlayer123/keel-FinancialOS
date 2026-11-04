@@ -202,57 +202,67 @@ export const recurringUpdate = defineTool({
   },
 });
 
+const FREQUENCIES = ['once', 'weekly', 'biweekly', 'semimonthly', 'monthly', 'quarterly', 'semiannual', 'annual'] as const;
+
 export const billsSave = defineTool({
   name: 'bills_save',
-  title: 'Create or edit a scheduled bill',
+  title: 'Create, edit, pause or end a scheduled bill',
   description:
-    'Creates (omit bill_id) or edits a scheduled bill or recurring manual entry on an account: amount (signed, negative = money out), category, frequency and next due date. auto_enter_days > 0 records it automatically that many days before it is due.',
+    'Creates (omit bill_id) or edits a scheduled bill or recurring manual entry on an account: amount (signed, negative = money out), category, frequency, next due date, and status (active, paused or ended; nothing is deleted). When editing, only the fields you pass change. auto_enter_days > 0 records it automatically that many days before it is due.',
   kind: 'write',
-  destructive: false,
+  destructive: true,
   input: z.object({
     bill_id: uuid('Bill').optional(),
-    account_id: uuid('Account'),
-    description: z.string().min(1).max(140),
-    amount_minor: minorString('Amount (negative = money out)'),
-    category_id: uuid('Category').optional(),
-    frequency: z.enum(['once', 'weekly', 'biweekly', 'semimonthly', 'monthly', 'quarterly', 'semiannual', 'annual']),
-    next_due: isoDate('Next due date'),
-    auto_enter_days: z.number().int().min(0).max(30).optional(),
-    day_of_month: z.number().int().min(1).max(31).optional(),
-    second_day_of_month: z.number().int().min(1).max(31).optional().describe('Semimonthly only.'),
+    account_id: uuid('Account').optional(),
+    description: z.string().min(1).max(140).optional(),
+    amount_minor: minorString('Amount (negative = money out)').optional(),
+    category_id: uuid('Category').nullable().optional(),
+    frequency: z.enum(FREQUENCIES).optional(),
+    next_due: isoDate('Next due date').optional(),
+    auto_enter_days: z.number().int().min(0).max(30).nullable().optional(),
+    day_of_month: z.number().int().min(1).max(31).nullable().optional(),
+    second_day_of_month: z.number().int().min(1).max(31).nullable().optional().describe('Semimonthly only.'),
+    status: z.enum(['active', 'paused', 'ended']).optional(),
   }).strict(),
   run: async (ctx, args) => {
     if (args.amount_minor === '0') return err('invalid_money', 'Amount cannot be zero.');
-    const r = await writeProc(ctx, null, 'keel_schedule_save', {
-      p_schedule_id: args.bill_id ?? null,
-      p_account_id: args.account_id,
-      p_description: args.description,
-      p_amount_minor: args.amount_minor,
-      p_category_ledger_account_id: args.category_id ?? null,
-      p_frequency: args.frequency,
-      p_next_due_date: args.next_due,
-      p_auto_enter_days: args.auto_enter_days ?? null,
-      p_anchor_day: args.day_of_month ?? null,
-      p_anchor_day_2: args.second_day_of_month ?? null,
-    });
-    if (!r.ok) return r;
-    return ok(args.bill_id ? 'Updated the bill.' : 'Scheduled the bill.', {
-      bill_id: args.bill_id ?? (typeof r.data === 'string' ? r.data : null),
-    });
-  },
-});
-
-export const billsSetStatus = defineTool({
-  name: 'bills_set_status',
-  title: 'Pause, resume or end a bill',
-  description: 'Sets a scheduled bill to active, paused or ended. Nothing is deleted.',
-  kind: 'write',
-  destructive: true,
-  input: z.object({ bill_id: uuid('Bill'), status: z.enum(['active', 'paused', 'ended']) }).strict(),
-  run: async (ctx, args) => {
-    const r = await writeProc(ctx, null, 'keel_schedule_set_status', { p_schedule_id: args.bill_id, p_status: args.status });
-    if (!r.ok) return r;
-    return ok(`Bill is now ${args.status}.`, { bill_id: args.bill_id });
+    const fieldKeys = ['account_id', 'description', 'amount_minor', 'category_id', 'frequency', 'next_due', 'auto_enter_days', 'day_of_month', 'second_day_of_month'] as const;
+    const editsFields = fieldKeys.some((k) => args[k] !== undefined);
+    let current: Record<string, unknown> = {};
+    if (args.bill_id && editsFields) {
+      const list = await readProc(ctx, null, 'keel_list_schedules');
+      if (!list.ok) return list;
+      const row = rowsOf(list.data).find((b) => b['scheduleId'] === args.bill_id);
+      if (!row) return err('not_found', 'No such bill in this household.', 'recurring_list has the bill ids.');
+      current = row;
+    } else if (!args.bill_id) {
+      const missing = (['account_id', 'description', 'amount_minor', 'frequency', 'next_due'] as const).filter((k) => args[k] === undefined);
+      if (missing.length) return err('invalid_request', `A new bill needs ${missing.join(', ')}.`);
+    }
+    let billId = args.bill_id ?? null;
+    if (!args.bill_id || editsFields) {
+      const pickArg = <T>(v: T | undefined, fallback: unknown) => (v !== undefined ? v : (fallback ?? null));
+      const r = await writeProc(ctx, null, 'keel_schedule_save', {
+        p_schedule_id: args.bill_id ?? null,
+        p_account_id: pickArg(args.account_id, current['accountId']),
+        p_description: pickArg(args.description, current['description']),
+        p_amount_minor: pickArg(args.amount_minor, current['amountMinor']),
+        p_category_ledger_account_id: pickArg(args.category_id, current['categoryLedgerAccountId']),
+        p_frequency: pickArg(args.frequency, current['frequency']),
+        p_next_due_date: pickArg(args.next_due, current['nextDueDate']),
+        p_auto_enter_days: pickArg(args.auto_enter_days, current['autoEnterDays']),
+        p_anchor_day: pickArg(args.day_of_month, current['anchorDay']),
+        p_anchor_day_2: pickArg(args.second_day_of_month, current['anchorDay2']),
+      });
+      if (!r.ok) return r;
+      billId ??= typeof r.data === 'string' ? r.data : null;
+    }
+    if (args.status && billId) {
+      const r = await writeProc(ctx, null, 'keel_schedule_set_status', { p_schedule_id: billId, p_status: args.status });
+      if (!r.ok) return err(r.code, `${editsFields || !args.bill_id ? 'Saved the bill; then ' : ''}setting status failed: ${r.message}`, r.hint);
+    }
+    if (args.bill_id && !editsFields && !args.status) return err('invalid_request', 'Nothing to change.');
+    return ok(args.bill_id ? 'Updated the bill.' : 'Scheduled the bill.', { bill_id: billId });
   },
 });
 
@@ -314,35 +324,50 @@ export const goalsSave = defineTool({
   name: 'goals_save',
   title: 'Create or edit a goal',
   description:
-    'Creates (omit goal_id) or edits a savings or debt goal. tracking "account_balance" follows a linked account; "manual" counts contributions. status sets active, reached or archived.',
+    'Creates (omit goal_id) or edits a savings or debt goal. tracking "account_balance" follows a linked account; "manual" counts contributions. status sets active, reached or archived. When editing, only the fields you pass change.',
   kind: 'write',
-  destructive: false,
+  destructive: true,
   input: z.object({
     goal_id: uuid('Goal').optional(),
-    name: z.string().min(1).max(120),
-    kind: z.enum(['savings', 'debt']),
-    target_minor: z.string().regex(/^[1-9][0-9]*$/),
-    target_date: isoDate('Target date').optional(),
-    tracking: z.enum(['manual', 'account_balance']).default('manual'),
-    account_id: uuid('Linked account').optional(),
+    name: z.string().min(1).max(120).optional(),
+    kind: z.enum(['savings', 'debt']).optional(),
+    target_minor: z.string().regex(/^[1-9][0-9]*$/).optional(),
+    target_date: isoDate('Target date').nullable().optional(),
+    tracking: z.enum(['manual', 'account_balance']).optional(),
+    account_id: uuid('Linked account').nullable().optional(),
     status: z.enum(['active', 'reached', 'archived']).optional(),
   }).strict(),
   run: async (ctx, args) => {
-    const r = await writeProc(ctx, null, 'keel_goal_save', {
-      p_goal_id: args.goal_id ?? null,
-      p_name: args.name,
-      p_target_minor: args.target_minor,
-      p_target_date: args.target_date ?? null,
-      p_account_id: args.account_id ?? null,
-      p_kind: args.kind,
-      p_tracking: args.tracking,
-    });
-    if (!r.ok) return r;
-    const goalId = args.goal_id ?? (typeof r.data === 'string' ? r.data : (r.data as { goalId?: string } | null)?.goalId ?? null);
+    const editsFields = (['name', 'kind', 'target_minor', 'target_date', 'tracking', 'account_id'] as const).some((k) => args[k] !== undefined);
+    let current: Record<string, unknown> = {};
+    if (args.goal_id && editsFields) {
+      const list = await readProc(ctx, 'goals.list', 'keel_list_goals');
+      if (!list.ok) return list;
+      const row = rowsOf(list.data).find((g) => g['goalId'] === args.goal_id);
+      if (!row) return err('not_found', 'No such goal in this household.', 'goals_list has the ids.');
+      current = row;
+    } else if (!args.goal_id && (!args.name || !args.kind || !args.target_minor)) {
+      return err('invalid_request', 'A new goal needs name, kind and target_minor.');
+    }
+    let goalId = args.goal_id ?? null;
+    if (!args.goal_id || editsFields) {
+      const r = await writeProc(ctx, null, 'keel_goal_save', {
+        p_goal_id: args.goal_id ?? null,
+        p_name: args.name ?? current['name'],
+        p_target_minor: args.target_minor ?? current['targetMinor'],
+        p_target_date: args.target_date !== undefined ? args.target_date : (current['targetDate'] ?? null),
+        p_account_id: args.account_id !== undefined ? args.account_id : (current['accountId'] ?? null),
+        p_kind: args.kind ?? current['kind'],
+        p_tracking: args.tracking ?? current['tracking'] ?? 'manual',
+      });
+      if (!r.ok) return r;
+      goalId ??= typeof r.data === 'string' ? r.data : (r.data as { goalId?: string } | null)?.goalId ?? null;
+    }
     if (args.status && goalId) {
       const s = await writeProc(ctx, null, 'keel_goal_set_status', { p_goal_id: goalId, p_status: args.status });
-      if (!s.ok) return err(s.code, `Saved the goal, but setting status failed: ${s.message}`, s.hint);
+      if (!s.ok) return err(s.code, `${editsFields || !args.goal_id ? 'Saved the goal, but s' : 'S'}etting status failed: ${s.message}`, s.hint);
     }
+    if (args.goal_id && !editsFields && !args.status) return err('invalid_request', 'Nothing to change.');
     return ok(args.goal_id ? 'Updated the goal.' : 'Created the goal.', { goal_id: goalId });
   },
 });
@@ -373,7 +398,6 @@ export const planningTools = [
   recurringList,
   recurringUpdate,
   billsSave,
-  billsSetStatus,
   billsEnter,
   goalsList,
   goalsSave,
