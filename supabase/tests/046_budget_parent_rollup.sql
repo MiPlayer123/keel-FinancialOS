@@ -58,25 +58,25 @@ insert into pg_spend values
 insert into public.canonical_transactions
   (id, household_id, entity_id, account_id, status, source, description, effective_date, economic_event_key)
 select ('ce000000-0000-4000-8000-0000000001' || lpad(n::text, 2, '0'))::uuid,
-       '00000000-0000-4000-8000-00000000a001', '00000000-0000-4000-8000-00000000a101',
-       '00000000-0000-4000-8000-00000000a401', 'posted', 'manual', 'PG SPEND ' || n, d,
+       '00000000-0000-4000-8000-00000000a001'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid,
+       '00000000-0000-4000-8000-00000000a401'::uuid, 'posted', 'manual', 'PG SPEND ' || n, d,
        'pgtap:budroll:' || n
   from pg_spend;
 insert into public.journal_batches
   (id, household_id, canonical_transaction_id, description, effective_date, command_id)
 select ('ce000000-0000-4000-8000-0000000002' || lpad(n::text, 2, '0'))::uuid,
-       '00000000-0000-4000-8000-00000000a001',
+       '00000000-0000-4000-8000-00000000a001'::uuid,
        ('ce000000-0000-4000-8000-0000000001' || lpad(n::text, 2, '0'))::uuid,
        'PG SPEND ' || n, d,
        ('ce000000-0000-4000-8000-0000000003' || lpad(n::text, 2, '0'))::uuid
   from pg_spend;
 insert into public.journal_postings (batch_id, ledger_account_id, entity_id, amount_minor, currency)
 select ('ce000000-0000-4000-8000-0000000002' || lpad(n::text, 2, '0'))::uuid,
-       '00000000-0000-4000-8000-00000000a301', '00000000-0000-4000-8000-00000000a101', -amt, 'USD'
+       '00000000-0000-4000-8000-00000000a301'::uuid, '00000000-0000-4000-8000-00000000a101'::uuid, -amt, 'USD'
   from pg_spend
 union all
 select ('ce000000-0000-4000-8000-0000000002' || lpad(n::text, 2, '0'))::uuid,
-       cat, '00000000-0000-4000-8000-00000000a101', amt, 'USD'
+       cat, '00000000-0000-4000-8000-00000000a101'::uuid, amt, 'USD'
   from pg_spend;
 
 set local role authenticated;

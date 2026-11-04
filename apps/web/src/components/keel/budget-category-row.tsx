@@ -369,11 +369,14 @@ function GroupNote({
   budgetedChildNames: string[];
 }) {
   const rolled = row.rolledUpCategoryNames ?? [];
+  // Show whenever budgeted children exist and the group differs from this row
+  // in target OR spend (a $0 child target still carries spend the parent
+  // excludes — codex review on #200).
   const showGroup =
     budgetedChildNames.length > 0 &&
     row.groupResolvedMinor != null &&
     row.groupSpentMinor != null &&
-    row.groupResolvedMinor !== row.resolvedMinor;
+    (row.groupResolvedMinor !== row.resolvedMinor || row.groupSpentMinor !== row.spentMinor);
   if (rolled.length === 0 && !showGroup) return null;
   return (
     <div className="mt-1.5 space-y-0.5 text-xs text-muted-foreground">
