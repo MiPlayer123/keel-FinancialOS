@@ -22,7 +22,7 @@ export const budgetsGet = defineTool({
   name: 'budgets_get',
   title: 'Get a month\'s budget',
   description:
-    'A month\'s plan: total, expected income, left to budget, and per category the target, spent, rollover carry, available (target plus carry-in) and remaining (available minus spent; negative = over budget). Defaults to the current month.',
+    'A month\'s plan: total, expected income, left to budget, and per category the target, spent, rollover carry, available (target plus carry-in) and remaining (available minus spent; negative = over budget). A parent category\'s spent includes its subcategories that have no target of their own (listed in rolled_up); a parent also gets group_target / group_spent covering its budgeted subcategories too. Defaults to the current month.',
   kind: 'read',
   input: z.object({ month: isoDate('Any date in the month').optional() }).strict(),
   run: async (ctx, args) => {
@@ -42,6 +42,10 @@ export const budgetsGet = defineTool({
       carried_in: money(c['carryMinor'] as string | null, (c['currency'] as string) ?? currency),
       available: money(c['availableMinor'] as string | null, (c['currency'] as string) ?? currency),
       remaining: money(minus(c['availableMinor'], c['spentMinor']), (c['currency'] as string) ?? currency),
+      // budget-v5 parent rollup (parents only; null elsewhere).
+      rolled_up: Array.isArray(c['rolledUpCategoryNames']) ? c['rolledUpCategoryNames'] : null,
+      group_target: money(c['groupResolvedMinor'] as string | null, (c['currency'] as string) ?? currency),
+      group_spent: money(c['groupSpentMinor'] as string | null, (c['currency'] as string) ?? currency),
     }));
     return ok(`Budget for ${month.slice(0, 7)}: ${categories.length} category targets.`, {
       month,

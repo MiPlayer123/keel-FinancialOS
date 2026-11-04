@@ -47,6 +47,7 @@ export function BudgetCategoryRow({
   userId,
   monthIso,
   onSaved,
+  budgetedChildNames = [],
 }: {
   row: BudgetMonthRow;
   totalMinor: string;
@@ -55,6 +56,8 @@ export function BudgetCategoryRow({
   userId: string;
   monthIso: string;
   onSaved: () => void;
+  /** Children of this row that have their own budget (for the group line). */
+  budgetedChildNames?: string[];
 }) {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -345,8 +348,44 @@ export function BudgetCategoryRow({
               </button>
             </div>
           </div>
+          <GroupNote row={row} budgetedChildNames={budgetedChildNames} />
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * Parent rollup (budget-v5, Copilot model). This row's spent already counts
+ * subcategories that have no budget of their own; this note names them. When
+ * some subcategories DO have their own budget, it also shows the whole group
+ * (this budget + theirs, all spend underneath). Neutral text only (Law 8).
+ */
+function GroupNote({
+  row,
+  budgetedChildNames,
+}: {
+  row: BudgetMonthRow;
+  budgetedChildNames: string[];
+}) {
+  const rolled = row.rolledUpCategoryNames ?? [];
+  const showGroup =
+    budgetedChildNames.length > 0 &&
+    row.groupResolvedMinor != null &&
+    row.groupSpentMinor != null &&
+    row.groupResolvedMinor !== row.resolvedMinor;
+  if (rolled.length === 0 && !showGroup) return null;
+  return (
+    <div className="mt-1.5 space-y-0.5 text-xs text-muted-foreground">
+      {rolled.length > 0 ? <p>Includes {rolled.join(', ')}</p> : null}
+      {showGroup && row.groupSpentMinor != null && row.groupResolvedMinor != null ? (
+        <p>
+          {row.categoryName} overall:{' '}
+          <Money amountMinor={row.groupSpentMinor} className="text-xs text-foreground" /> of{' '}
+          <Money amountMinor={row.groupResolvedMinor} className="text-xs text-foreground" />{' '}
+          (with {budgetedChildNames.join(', ')})
+        </p>
+      ) : null}
     </div>
   );
 }
