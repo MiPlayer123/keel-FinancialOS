@@ -2,6 +2,17 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+## 2026-11-04 Transfer suggestions expire when a transaction is voided
+
+- **Cleanup.** Rejected the household's 31 orphaned suggestions through the connector (`review_decide`, accept false), as the owner asked. Two were spot-checked first: one side existed, the other was voided.
+- **Root fix (migration `20261104200000_transfer_suggestion_expiry.sql`).**
+  - A trigger on `canonical_transactions` fires when a transaction's status becomes `voided`, whatever the path (sync removal, manual void, dedupe, transfer undo).
+  - It rejects that transaction's open (`suggested`) transfer links and writes a `transfers.suggestion_expired` audit row (actor system, reason `transaction_voided`).
+  - Confirmed pairings are untouched.
+  - The check constraint is now named `transfer_links_decision_shape`. A `rejected` row may have no `decided_by` when KEEL dismissed it; `confirmed` still requires the person.
+  - A one-time backfill rejects suggestions already orphaned by earlier voids, also audited.
+- pgTAP `047_transfer_suggestion_expiry`.
+
 ## 2026-11-04 MCP connector: stale transfer suggestions, retirement accounts
 
 - **Stale transfer suggestions.** Eight `suggested` transfer links point at transactions that were later voided (pending card entries removed during cleanup).
