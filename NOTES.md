@@ -1061,3 +1061,14 @@ a private forum thread and needs a call before publishing.
   everything else; Food & Drink $798.83, Entertainment $966.40, Transportation $82.23, else $1,325.22.
 - UI: parent rows show "Includes …" and "<Parent> overall: $X of $Y (with …)"; MCP budgets_get exposes
   rolled_up / group_target / group_spent.
+
+## 2026-11-04 — Budget vs spending cards (Stage 2, Addendum §D, Laws 8/9)
+- Home: simple Budget card under "Spending · last 30 days" (spent of budgeted, one bar with today's pace tick,
+  only over-budget lines). Hidden under an entity lens / with no budget. Free to spend card removed (user).
+- Reports: "Budget vs actual" after Spending by category. One month = every category grouped under parents,
+  bars (+ pace tick for the current month); several months = over/under per month vs each month's own target
+  (no rollover carry, which would double count). Only for All accounts; otherwise a one-line note.
+- Over budget is not negative money: only the over line changes (full bar in ink + "$X over"), no red.
+- Both read keel_budget_month (budget-v5). Helper lib/budget-progress.ts (pace, status, sort, totals), tested.
+- Found, not fixed here: the budget read counts the "Transfers Out" category as spending (demo Oct $2,240 in
+  "everything else"), while Reports excludes money-movement categories. Follow-up.

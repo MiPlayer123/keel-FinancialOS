@@ -69,6 +69,7 @@ import {
 import { buildScopedTransactionsCsv, scopedExportFilename } from '@/lib/report-export';
 import { TransferNudgeBanner } from '@/components/keel/transfer-nudge-banner';
 import { InfoNote } from '@/components/keel/info-note';
+import { ReportsBudgetCard } from '@/components/keel/budget-cards';
 import { CardBreakEvenCard } from '@/components/keel/card-breakeven-card';
 import { cardBreakEven, CREDIT_CARD_SUBTYPE } from '@/lib/card-breakeven';
 import { Button } from '@/components/ui/button';
@@ -1831,6 +1832,15 @@ function ReportsBody() {
           )}
         </CardContent>
       </Card>
+
+      {householdId ? (
+        <ReportsBudgetCard
+          householdId={householdId}
+          months={months}
+          scoped={scopeRestricted}
+          todayIso={new Date().toISOString().slice(0, 10)}
+        />
+      ) : null}
 
       {flow ? (
         <Card className="hidden sm:flex">
