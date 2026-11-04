@@ -2,21 +2,74 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
-## 2026-11-04 MCP connector: research + scope (plan only, nothing built)
+## 2026-11-04 MCP connector (connected AI apps) — built, dark, not applied to live
 
-The user asked how a per-user MCP connector would work, so that Claude, Codex or ChatGPT can read everything and make app-equivalent changes. The plan is `docs/research/MCP-CONNECTOR-2026-11-04.md`. The developer quick reference is `supabase/functions/mcp/README.md`, marked "planned".
+**What.** A remote MCP server (`supabase/functions/mcp`; see its README) lets a user connect
+KEEL to Claude, Codex or ChatGPT with one URL.
+- Sign-in uses Supabase Auth's OAuth 2.1 server, with KEEL's own consent page
+  (`apps/web/src/app/oauth/consent`).
+- There are 49 tools, 19 read and 30 write. They cover full history reads (filters, cursor,
+  KEEL-computed summaries) and the app's manual edits: accounts, transactions, splits,
+  recategorize, categories, tags, rules, budgets, recurring items, bills, goals, review,
+  transfers, notes and tasks.
+- Each tool calls the same procs or shared command path the app uses (Law 7).
 
-**Prototype parked, not merged.** An earlier pass on this branch built a dark auth/transport prototype: 39 Deno tests, plus a smoke test under `deno serve` with an ES256 token. At the user's direction ("plan, don't build") it moved to branch `claude/mcp-prototype-reference`, and this branch was reset to `main`. Slice 1 starts from it.
+**Deviation (⚑ ruling needed before enabling).** INFRA and CLAUDE.md defer the external MCP
+listener past Stage 0–2, and docs/09 puts it at M7. It was built now on the user's directive
+(2026-11-04). It is contained:
+- The function answers 404 unless `KEEL_MCP_ENABLED=on` and a gateway key are set.
+- Nothing is deployed, and migration `20261104100000_mcp_connector.sql` is not applied to live.
 
-**Findings that shape the plan:**
-- **Supabase OAuth 2.1 server.** It is beta, free, and currently disabled on live. It has no audience binding: every token carries `aud: "authenticated"`.
-  - That means three KEEL-side guards are needed: the `api` function refuses tokens that carry `client_id`; a `db_pre_request` gateway check; and Storage RLS.
-- **No custom scopes.** Permission levels must live in KEEL. They map onto the existing `approval_policies` / `autonomy_level` (A–D × off/suggest/auto_with_log, T3.5).
-- **No CIMD.** All clients will register via DCR, so the consent page must show the real redirect host.
-- **Read gaps.** There is no list-accounts proc: the web reads raw tables, and the agent's unjoined balance tool was deliberately disabled. There is no single-transaction detail proc and no group-by summary proc. The transaction page proc lacks date, amount and status filters. All four are planned for slice 2.
-- **Write parity needs refactoring first.** The validation for each app action lives inline in `api/index.ts`. Write parity therefore requires extracting a shared command registry first (slice 3), so `api` and `mcp` share one implementation (Law 7).
+**Supabase limits and KEEL's controls (verified against docs + supabase/auth source + a local stack):**
+- **No audience binding.** OAuth tokens are ordinary user JWTs: `aud: "authenticated"` plus a
+  `client_id` claim. KEEL adds:
+  - a PostgREST `db_pre_request` gateway: app tokens need `x-keel-mcp-gateway` (vault
+    `keel_mcp_gateway_key`);
+  - `api` refusing `client_id` tokens;
+  - `/mcp` refusing tokens without `client_id`.
+- **No custom scopes.** The read vs write split and household pinning live in
+  `mcp_client_grants`, set on the consent page and checked on every call. Revoking a grant is a
+  soft delete (`revoked_at`). Rejected alternative: OAuth scopes, which Supabase does not support.
+- **Revocation.** A Supabase revoke kills refresh tokens, but issued access JWTs live up to 1 h.
+  The per-call grant check makes a KEEL revoke immediate.
+- **Approval model.** "Read and make changes" on the consent screen is the explicit per-app
+  autonomy grant that Law 2 and T3.5 allow. Every write is audited, and an `audit_log` trigger
+  stamps `actor.via = {kind:'connected_app', clientId}`. Corrections are reversals and never
+  deletes. Hosts confirm destructive tools. Class-D tools (money movement, bank
+  link/disconnect, export) do not exist.
 
-**Deviation to rule on (⚑).** INFRA and CLAUDE.md say there is no external MCP listener in Stage 0–2, and docs/09 places it at M7. The plan asks to pull it forward behind the `KEEL_MCP_ENABLED` kill switch. Nothing is built or enabled until that ruling.
+**Refactors (no behavior change):**
+- `api` now dispatches `/commands` through `_shared/command-exec.ts`, shared with `mcp`.
+- `QUERY_TO_PROC` / `AGENT_WRITE_TO_PROC` moved to `_shared/proc-maps.ts`.
+- The authz loader moved to `_shared/authz-context.ts`.
+- `keel_list_transactions_rich_page` delegates to one internal page builder
+  (`keel_transactions_page`), which the new `keel_query_transactions` also uses. pgTAP 028 still
+  proves the signature and DTO are unchanged.
+- The export manifest EXCLUDEs `mcp_client_grants` (access configuration; its events are in the
+  audit log).
+
+**Found during e2e.** The MCP tool context first cached authz rows per request. As a result,
+`accounts_create` with a starting balance failed: the opening-balance command checked
+ownership against rows loaded before the account existed. Commands now load authz fresh, as
+`/commands` does.
+
+**Tests.**
+- New: 26 Deno (`mcp/*.test.ts`), 5 Deno (`_shared/command-exec.test.ts`), 49 pgTAP
+  (`045_mcp_connector.sql`), 17 vitest (`oauth-consent.test.ts`).
+- Full `pnpm test` green: 1432 vitest + Deno suites.
+- `supabase test db` green: 1178 tests.
+- Schema replay after `db reset` is identical.
+- `pnpm lint`, `pnpm typecheck` and the three harness gates are green.
+- `apps/web` build is green, with no secrets in the bundle.
+- The end-to-end run (`scripts/dev/mcp-e2e.mjs`) used the real local OAuth server and passed in
+  both read and write modes. It covered:
+  - discovery, DCR, PKCE, consent, token and refresh;
+  - all reads, plus the core writes (with idempotent replay);
+  - PostgREST and `api` refusing app tokens;
+  - instant revoke.
+
+  Local note: the CLI's edge-runtime container could not reach npm through this sandbox's
+  proxy, so the e2e served `mcp`/`api` with host `deno serve` against the same local stack.
 
 ## 2026-11-02 Demo household: inflated monthly cash flow and invisible recurring series
 

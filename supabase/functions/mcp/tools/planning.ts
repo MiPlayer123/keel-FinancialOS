@@ -1,0 +1,366 @@
+/**
+ * Planning: budgets, recurring income/bills (detected series + scheduled
+ * bills), and goals — reads plus the same edits the app's planning pages make.
+ */
+import * as z from 'npm:zod@4.4.3';
+import { defineTool, isoDate, minorString, pick, readProc, rowsOf, uuid, writeProc } from '../context.ts';
+import { err, money, monthStart, ok, type ToolErr } from '../lib.ts';
+
+const RECURRING_HORIZON_DAYS = 90; // same horizon the app's Review page uses
+
+// ---------------------------------------------------------------------------
+// Budgets
+// ---------------------------------------------------------------------------
+export const budgetsGet = defineTool({
+  name: 'budgets_get',
+  title: 'Get a month\'s budget',
+  description:
+    'A month\'s plan: total, expected income, left to budget, and per category the target, spent, rollover carry and what is available. Defaults to the current month.',
+  kind: 'read',
+  input: z.object({ month: isoDate('Any date in the month').optional() }).strict(),
+  run: async (ctx, args) => {
+    const month = monthStart(args.month ?? ctx.todayIso);
+    const r = await readProc(ctx, 'budgets.month', 'keel_budget_month', { p_month: month });
+    if (!r.ok) return r;
+    const data = r.data as Record<string, unknown>;
+    const total = (data['total'] ?? {}) as Record<string, unknown>;
+    const currency = (total['currency'] as string) ?? 'USD';
+    const categories = rowsOf(data).map((c) => ({
+      category_id: c['categoryLedgerAccountId'],
+      category: c['categoryName'],
+      parent_id: c['parentLedgerAccountId'] ?? null,
+      target: money(c['resolvedMinor'] as string | null, (c['currency'] as string) ?? currency),
+      spent: money(c['spentMinor'] as string | null, (c['currency'] as string) ?? currency),
+      rollover: c['rollover'] === true,
+      carried_in: money(c['carryMinor'] as string | null, (c['currency'] as string) ?? currency),
+      available: money(c['availableMinor'] as string | null, (c['currency'] as string) ?? currency),
+    }));
+    return ok(`Budget for ${month.slice(0, 7)}: ${categories.length} category targets.`, {
+      month,
+      total: money(total['resolvedMinor'] as string | null, currency),
+      expected_income: money(data['expectedIncomeMinor'] as string | null, currency),
+      left_to_budget: money(data['leftToBudgetMinor'] as string | null, currency),
+      everything_else_spent: money(data['everythingElseSpentMinor'] as string | null, currency),
+      categories,
+    });
+  },
+});
+
+export const budgetsSet = defineTool({
+  name: 'budgets_set',
+  title: 'Set budget amounts',
+  description:
+    'Sets a month\'s budget: a category target (target_minor, optional rollover), removes a category target (remove_target true), and/or sets the overall total or expected income. Amounts are non-negative minor units. Applies from that month on.',
+  kind: 'write',
+  destructive: true,
+  input: z.object({
+    month: isoDate('Any date in the month'),
+    category_id: uuid('Category').optional(),
+    target_minor: z.string().regex(/^(0|[1-9][0-9]*)$/).optional(),
+    rollover: z.boolean().optional(),
+    remove_target: z.boolean().optional(),
+    total_minor: z.string().regex(/^(0|[1-9][0-9]*)$/).optional(),
+    expected_income_minor: z.string().regex(/^(0|[1-9][0-9]*)$/).optional(),
+  }).strict(),
+  run: async (ctx, args) => {
+    const month = monthStart(args.month);
+    const done: string[] = [];
+    const fail = (what: string, e: ToolErr) =>
+      err(e.code, `${done.length ? `Set ${done.join(', ')}; then ` : ''}${what} failed: ${e.message}`, e.hint);
+    if ((args.target_minor !== undefined || args.remove_target) && !args.category_id) {
+      return err('invalid_request', 'A category target needs category_id.', 'categories_list has the ids.');
+    }
+    if (args.category_id && args.remove_target) {
+      const r = await ctx.command('budgets.remove_target', { month, categoryLedgerAccountId: args.category_id }, undefined);
+      if (!r.ok) return fail('removing the target', r);
+      done.push('target removed');
+    } else if (args.category_id && args.target_minor !== undefined) {
+      const r = await ctx.command('budgets.set_target', {
+        month,
+        categoryLedgerAccountId: args.category_id,
+        kind: 'amount',
+        amountMinor: args.target_minor,
+        ...(args.rollover !== undefined ? { rollover: args.rollover } : {}),
+      }, undefined);
+      if (!r.ok) return fail('target', r);
+      done.push('category target');
+    }
+    if (args.total_minor !== undefined) {
+      const r = await ctx.command('budgets.set_total', { month, basis: 'amount', amountMinor: args.total_minor }, undefined);
+      if (!r.ok) return fail('total', r);
+      done.push('total');
+    }
+    if (args.expected_income_minor !== undefined) {
+      const r = await ctx.command('budgets.set_expected_income', { month, amountMinor: args.expected_income_minor }, undefined);
+      if (!r.ok) return fail('expected income', r);
+      done.push('expected income');
+    }
+    if (done.length === 0) return err('invalid_request', 'Nothing to set.');
+    return ok(`Set ${done.join(', ')} for ${month.slice(0, 7)}.`, { month, changed: done });
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Recurring series + scheduled bills
+// ---------------------------------------------------------------------------
+export const recurringList = defineTool({
+  name: 'recurring_list',
+  title: 'List recurring items and bills',
+  description:
+    'Recurring income and charges KEEL detected (subscriptions, rent, paychecks…) with cadence, typical amount, status and next expected date, plus scheduled bills the user set up.',
+  kind: 'read',
+  input: z.object({
+    status: z.enum(['suggested', 'confirmed', 'paused', 'cancelled', 'rejected']).optional(),
+  }).strict(),
+  run: async (ctx, args) => {
+    const [series, bills] = await Promise.all([
+      readProc(ctx, 'recurring.list', 'keel_list_recurring'),
+      readProc(ctx, null, 'keel_list_schedules'),
+    ]);
+    if (!series.ok) return series;
+    const recurring = rowsOf(series.data)
+      .filter((s) => !args.status || s['status'] === args.status)
+      .map((s) => {
+        const currency = (s['currency'] as string) ?? 'USD';
+        const next = ((s['occurrences'] ?? []) as Record<string, unknown>[])
+          .filter((o) => o['status'] === 'expected' && String(o['expectedDate'] ?? '') >= ctx.todayIso)
+          .sort((a, b) => String(a['expectedDate']).localeCompare(String(b['expectedDate'])))[0];
+        return {
+          series_id: s['seriesId'],
+          name: s['counterpartyKey'],
+          account_id: s['accountId'],
+          direction: s['sign'] === 'inflow' ? 'in' : 'out',
+          cadence: s['cadence'],
+          typical_amount: money(s['representativeAmountMinor'] as string | null, currency),
+          amount_kind: s['amountKind'],
+          status: s['status'],
+          last_seen: s['lastSeen'] ?? null,
+          next_expected: next ? { date: next['expectedDate'], amount: money(next['expectedAmountMinor'] as string | null, currency) } : null,
+          occurrences: s['occurrenceCount'] ?? null,
+        };
+      });
+    const scheduled = bills.ok
+      ? rowsOf(bills.data).map((b) => ({
+          bill_id: b['scheduleId'],
+          description: b['description'],
+          account_id: b['accountId'],
+          amount: money(b['amountMinor'] as string | null, (b['currency'] as string) ?? 'USD'),
+          category: b['categoryName'] ?? null,
+          frequency: b['frequency'],
+          next_due: b['nextDueDate'],
+          status: b['status'],
+        }))
+      : [];
+    return ok(`${recurring.length} recurring series, ${scheduled.length} scheduled bills.`, { recurring, bills: scheduled });
+  },
+});
+
+const TRANSITION: Record<string, string> = {
+  confirmed: 'recurring.confirm',
+  paused: 'recurring.pause',
+  resumed: 'recurring.resume',
+  cancelled: 'recurring.cancel',
+  rejected: 'recurring.reject',
+};
+
+export const recurringUpdate = defineTool({
+  name: 'recurring_update',
+  title: 'Update a recurring item',
+  description:
+    'Confirms, pauses, resumes, cancels or rejects a detected recurring series, and/or sets its expected amount (signed, negative = money out) from today on.',
+  kind: 'write',
+  destructive: true,
+  input: z.object({
+    series_id: uuid('Recurring series'),
+    status: z.enum(['confirmed', 'paused', 'resumed', 'cancelled', 'rejected']).optional(),
+    amount_minor: minorString('Expected amount (negative = money out)').optional(),
+  }).strict(),
+  run: async (ctx, args) => {
+    const done: string[] = [];
+    if (args.status) {
+      const command = TRANSITION[args.status]!;
+      const r = await ctx.command(command, {
+        seriesId: args.series_id,
+        effectiveDate: ctx.todayIso,
+        ...(command === 'recurring.confirm' || command === 'recurring.resume' ? { horizonDays: RECURRING_HORIZON_DAYS } : {}),
+      }, undefined);
+      if (!r.ok) return r;
+      done.push(args.status);
+    }
+    if (args.amount_minor) {
+      const r = await ctx.command('recurring.set_amount', {
+        seriesId: args.series_id,
+        amountMinor: args.amount_minor,
+        effectiveDate: ctx.todayIso,
+        horizonDays: RECURRING_HORIZON_DAYS,
+      }, undefined);
+      if (!r.ok) return err(r.code, `${done.length ? `Marked ${done[0]}; then ` : ''}setting the amount failed: ${r.message}`, r.hint);
+      done.push('amount');
+    }
+    if (done.length === 0) return err('invalid_request', 'Nothing to change.');
+    return ok(`Updated the series: ${done.join(', ')}.`, { series_id: args.series_id, changed: done });
+  },
+});
+
+export const billsSave = defineTool({
+  name: 'bills_save',
+  title: 'Create or edit a scheduled bill',
+  description:
+    'Creates (omit bill_id) or edits a scheduled bill or recurring manual entry on an account: amount (signed, negative = money out), category, frequency and next due date. auto_enter_days > 0 records it automatically that many days before it is due.',
+  kind: 'write',
+  destructive: false,
+  input: z.object({
+    bill_id: uuid('Bill').optional(),
+    account_id: uuid('Account'),
+    description: z.string().min(1).max(140),
+    amount_minor: minorString('Amount (negative = money out)'),
+    category_id: uuid('Category').optional(),
+    frequency: z.enum(['once', 'weekly', 'biweekly', 'semimonthly', 'monthly', 'quarterly', 'semiannual', 'annual']),
+    next_due: isoDate('Next due date'),
+    auto_enter_days: z.number().int().min(0).max(30).optional(),
+    day_of_month: z.number().int().min(1).max(31).optional(),
+    second_day_of_month: z.number().int().min(1).max(31).optional().describe('Semimonthly only.'),
+  }).strict(),
+  run: async (ctx, args) => {
+    if (args.amount_minor === '0') return err('invalid_money', 'Amount cannot be zero.');
+    const r = await writeProc(ctx, null, 'keel_schedule_save', {
+      p_schedule_id: args.bill_id ?? null,
+      p_account_id: args.account_id,
+      p_description: args.description,
+      p_amount_minor: args.amount_minor,
+      p_category_ledger_account_id: args.category_id ?? null,
+      p_frequency: args.frequency,
+      p_next_due_date: args.next_due,
+      p_auto_enter_days: args.auto_enter_days ?? null,
+      p_anchor_day: args.day_of_month ?? null,
+      p_anchor_day_2: args.second_day_of_month ?? null,
+    });
+    if (!r.ok) return r;
+    return ok(args.bill_id ? 'Updated the bill.' : 'Scheduled the bill.', {
+      bill_id: args.bill_id ?? (typeof r.data === 'string' ? r.data : null),
+    });
+  },
+});
+
+export const billsSetStatus = defineTool({
+  name: 'bills_set_status',
+  title: 'Pause, resume or end a bill',
+  description: 'Sets a scheduled bill to active, paused or ended. Nothing is deleted.',
+  kind: 'write',
+  destructive: true,
+  input: z.object({ bill_id: uuid('Bill'), status: z.enum(['active', 'paused', 'ended']) }).strict(),
+  run: async (ctx, args) => {
+    const r = await writeProc(ctx, null, 'keel_schedule_set_status', { p_schedule_id: args.bill_id, p_status: args.status });
+    if (!r.ok) return r;
+    return ok(`Bill is now ${args.status}.`, { bill_id: args.bill_id });
+  },
+});
+
+export const billsEnter = defineTool({
+  name: 'bills_enter',
+  title: 'Record a bill now',
+  description:
+    'Records the next occurrence of a scheduled bill as a transaction today (or skips it with skip true) and advances the bill to its following due date.',
+  kind: 'write',
+  destructive: false,
+  input: z.object({
+    bill_id: uuid('Bill'),
+    due_date: isoDate('The due date being recorded (from recurring_list next_due)'),
+    skip: z.boolean().default(false),
+  }).strict(),
+  run: async (ctx, args) => {
+    const r = args.skip
+      ? await writeProc(ctx, null, 'keel_schedule_advance', { p_schedule_id: args.bill_id, p_from_due: args.due_date, p_reason: 'skipped' })
+      : await writeProc(ctx, null, 'keel_schedule_enter', { p_schedule_id: args.bill_id, p_from_due: args.due_date });
+    if (!r.ok) return r;
+    return ok(args.skip ? 'Skipped this occurrence.' : 'Recorded the bill.', { bill_id: args.bill_id, result: r.data });
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Goals
+// ---------------------------------------------------------------------------
+export const goalsList = defineTool({
+  name: 'goals_list',
+  title: 'List goals',
+  description: 'Savings and debt-payoff goals with target, progress, target date and status.',
+  kind: 'read',
+  input: z.object({}).strict(),
+  run: async (ctx) => {
+    const r = await readProc(ctx, 'goals.list', 'keel_list_goals');
+    if (!r.ok) return r;
+    const goals = rowsOf(r.data).map((g) =>
+      pick(g, ['goalId', 'name', 'kind', 'tracking', 'status', 'targetMinor', 'currentMinor', 'progressBps', 'targetDate', 'accountId', 'accountName', 'currency']));
+    return ok(`${goals.length} goals.`, { goals });
+  },
+});
+
+export const goalsSave = defineTool({
+  name: 'goals_save',
+  title: 'Create or edit a goal',
+  description:
+    'Creates (omit goal_id) or edits a savings or debt goal. tracking "account_balance" follows a linked account; "manual" counts contributions. status sets active, reached or archived.',
+  kind: 'write',
+  destructive: false,
+  input: z.object({
+    goal_id: uuid('Goal').optional(),
+    name: z.string().min(1).max(120),
+    kind: z.enum(['savings', 'debt']),
+    target_minor: z.string().regex(/^[1-9][0-9]*$/),
+    target_date: isoDate('Target date').optional(),
+    tracking: z.enum(['manual', 'account_balance']).default('manual'),
+    account_id: uuid('Linked account').optional(),
+    status: z.enum(['active', 'reached', 'archived']).optional(),
+  }).strict(),
+  run: async (ctx, args) => {
+    const r = await writeProc(ctx, null, 'keel_goal_save', {
+      p_goal_id: args.goal_id ?? null,
+      p_name: args.name,
+      p_target_minor: args.target_minor,
+      p_target_date: args.target_date ?? null,
+      p_account_id: args.account_id ?? null,
+      p_kind: args.kind,
+      p_tracking: args.tracking,
+    });
+    if (!r.ok) return r;
+    const goalId = args.goal_id ?? (typeof r.data === 'string' ? r.data : (r.data as { goalId?: string } | null)?.goalId ?? null);
+    if (args.status && goalId) {
+      const s = await writeProc(ctx, null, 'keel_goal_set_status', { p_goal_id: goalId, p_status: args.status });
+      if (!s.ok) return err(s.code, `Saved the goal, but setting status failed: ${s.message}`, s.hint);
+    }
+    return ok(args.goal_id ? 'Updated the goal.' : 'Created the goal.', { goal_id: goalId });
+  },
+});
+
+export const goalsContribute = defineTool({
+  name: 'goals_contribute',
+  title: 'Log a goal contribution',
+  description: 'Records a contribution toward a manually tracked goal (positive minor units).',
+  kind: 'write',
+  destructive: false,
+  input: z.object({
+    goal_id: uuid('Goal'),
+    amount_minor: z.string().regex(/^[1-9][0-9]*$/),
+    date: isoDate('Contribution date').optional(),
+  }).strict(),
+  run: async (ctx, args) => {
+    const r = await writeProc(ctx, null, 'keel_goal_contribute', {
+      p_goal_id: args.goal_id, p_amount_minor: args.amount_minor, p_contributed_on: args.date ?? ctx.todayIso,
+    });
+    if (!r.ok) return r;
+    return ok('Logged the contribution.', { goal_id: args.goal_id });
+  },
+});
+
+export const planningTools = [
+  budgetsGet,
+  budgetsSet,
+  recurringList,
+  recurringUpdate,
+  billsSave,
+  billsSetStatus,
+  billsEnter,
+  goalsList,
+  goalsSave,
+  goalsContribute,
+];

@@ -172,6 +172,7 @@ export const EXCLUDE = [
   { schema: 'public', table: 'regular_core_sweep_suppressions', reason: 'Internal detector suppression state, not household financial history.' },
   { schema: 'public', table: 'plaid_recurring_allowlist', reason: 'Provider polling control state; exported transactions and recurring series are the portable record.' },
   { schema: 'public', table: 'plaid_recurring_streams', reason: 'Refetchable provider detector output; exported transactions and recurring series are the portable record.' },
+  { schema: 'public', table: 'mcp_client_grants', reason: 'Connected-app access configuration (revocable); grant and revoke events are in the exported audit log.' },
   { schema: 'auth', table: 'users', reason: 'Auth identities and secrets are excluded; household membership user_id mappings remain portable.' },
 ] as const satisfies readonly ExcludedTableDefinition[];
 

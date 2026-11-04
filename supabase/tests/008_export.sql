@@ -172,6 +172,10 @@ insert into excluded_export_tables(table_name) values
 -- 2 makes a stream the user-visible provenance for a series.
 insert into excluded_export_tables(table_name) values
   ('plaid_recurring_allowlist'), ('plaid_recurring_streams');
+-- mcp_client_grants (20261104100000): which AI app a user connected and with
+-- what access — revocable access configuration, not financial history; the
+-- grant/revoke events themselves are in the exported audit_log.
+insert into excluded_export_tables(table_name) values ('mcp_client_grants');
 
 select has_role('keel_export', 'dedicated export role exists');
 select ok(

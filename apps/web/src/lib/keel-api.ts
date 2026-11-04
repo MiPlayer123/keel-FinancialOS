@@ -127,6 +127,43 @@ export async function fetchHouseholds(): Promise<HouseholdMembership[]> {
   });
 }
 
+/** What a connected AI app (MCP connector) may do — KEEL's own grant. */
+export type ConnectedAppAccess = 'read' | 'write';
+export type ConnectedAppGrant = {
+  clientId: string;
+  householdId: string;
+  access: ConnectedAppAccess;
+  grantedAt: string;
+};
+
+/** The signed-in user's live connected-app grants (RLS-scoped direct read). */
+export async function fetchConnectedAppGrants(): Promise<ConnectedAppGrant[]> {
+  const { data, error } = await getSupabaseBrowserClient()
+    .from('mcp_client_grants')
+    .select('client_id, household_id, access, created_at')
+    .is('revoked_at', null);
+  if (error) throw error;
+  type Row = { client_id: string; household_id: string; access: ConnectedAppAccess; created_at: string };
+  return ((data as Row[] | null) ?? []).map((r) => ({
+    clientId: r.client_id,
+    householdId: r.household_id,
+    access: r.access,
+    grantedAt: r.created_at,
+  }));
+}
+
+export function setConnectedAppAccess(input: {
+  clientId: string;
+  householdId: string;
+  access: ConnectedAppAccess;
+}): Promise<{ grantId: string }> {
+  return invoke('api/connected-apps/set', input);
+}
+
+export function revokeConnectedAppAccess(clientId: string): Promise<{ ok: true }> {
+  return invoke('api/connected-apps/revoke', { clientId });
+}
+
 export async function bootstrapHousehold(): Promise<{
   householdId: string;
   entityId?: string;
@@ -2657,7 +2694,13 @@ export type AuditLogRow = {
   action: string;
   objectType: string;
   objectId: string | null;
-  actor: { kind?: string; userId?: string; source?: string } | null;
+  actor: {
+    kind?: string;
+    userId?: string;
+    source?: string;
+    /** Set when a connected AI app (MCP) made the change on the user's behalf. */
+    via?: { kind?: string; clientId?: string };
+  } | null;
   at: string;
 };
 
