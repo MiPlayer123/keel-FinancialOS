@@ -118,6 +118,9 @@ const DB_ERRORS: Record<string, { code: string; message: string; hint?: string }
 };
 
 export const dbError = (error: { code?: string; message?: string } | null | undefined): ToolErr => {
+  if (error?.message?.startsWith('KEEL_INVALID_RANGE')) {
+    return err('invalid_range', 'That date range is too long or out of order.', 'Use a shorter range (daily series cover at most 366 days).');
+  }
   const known = error?.code ? DB_ERRORS[error.code] : undefined;
   if (known) {
     // KEEL_INVALID_COMMAND messages are written for people ("KEEL_X: reason");

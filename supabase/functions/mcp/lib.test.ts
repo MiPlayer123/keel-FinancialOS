@@ -93,6 +93,32 @@ Deno.test('summarize by category splits split transactions and skips transfers b
   assertEquals(summarize(rows, 'category', { includeTransfers: true }).transactionCount, 4);
 });
 
+Deno.test('summarize agrees with KEEL cash flow: server-flagged rows are left out', () => {
+  const rows = [row({ amountMinor: '-2000' }), row({ amountMinor: '-70000', cashFlowExcluded: true, categoryName: 'Transfers' })];
+  const s = summarize(rows, 'category', { includeTransfers: false });
+  assertEquals(s.transactionCount, 1);
+  assertEquals(s.transfersExcluded, 1);
+  assertEquals(s.totals[0]!.outflowMinor, 2000n);
+});
+
+Deno.test('summarize: a paycheck with a 401k leg books gross pay, and the 401k share is a transfer', () => {
+  // Net 300000 deposited; gross 350000 salary; 50000 to the 401k account.
+  const paycheck = row({
+    amountMinor: '300000',
+    categoryLedgerAccountId: null,
+    categoryName: 'Split',
+    splits: [
+      { categoryLedgerAccountId: 'c-pay', name: 'Salary', kind: 'income', amountMinor: '-350000', legType: 'category' },
+      { categoryLedgerAccountId: null, name: '401k', kind: 'transfer', amountMinor: '50000', legType: 'account', accountId: 'acct-401k' },
+    ],
+  });
+  const without = summarize([paycheck], 'category', { includeTransfers: false });
+  assertEquals(without.groups.map((g) => [g.label, g.inflowMinor, g.outflowMinor]), [['Salary', 350000n, 0n]]);
+  const withTransfers = summarize([paycheck], 'category', { includeTransfers: true });
+  assertEquals(withTransfers.totals[0]!.netMinor, 300000n, 'with the transfer leg the total is the cash that landed');
+  assert(withTransfers.groups.some((g) => g.label === 'Transfer: 401k' && g.outflowMinor === 50000n));
+});
+
 Deno.test('summarize by month is chronological; currencies never mix', () => {
   const rows = [
     row({ effectiveDate: '2026-07-02' }),

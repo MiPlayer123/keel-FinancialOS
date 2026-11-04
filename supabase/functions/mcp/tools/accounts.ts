@@ -80,7 +80,10 @@ const loadAccounts = async (ctx: ToolContext, includeArchived: boolean) => {
       kind: kindOf.get(a.ledger_account_id) ?? null,
       mask: a.mask,
       entity: a.entity_id ? { id: a.entity_id, name: entityOf.get(a.entity_id) ?? null } : null,
-      balance: money(ledgerBalance.get(a.ledger_account_id) ?? '0', a.currency),
+      // Archived accounts leave KEEL's trial balance: report no balance rather than an invented $0.
+      balance: ledgerBalance.has(a.ledger_account_id)
+        ? money(ledgerBalance.get(a.ledger_account_id)!, a.currency)
+        : a.archived_at ? null : money('0', a.currency),
       ...(marketValue.has(a.id) ? { market_value: money(marketValue.get(a.id)!, a.currency) } : {}),
       ...(reported
         ? {

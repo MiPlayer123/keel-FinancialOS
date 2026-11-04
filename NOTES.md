@@ -8,7 +8,7 @@ Record every decision, deviation, failed approach, command run, test result, mig
 KEEL to Claude, Codex or ChatGPT with one URL.
 - Sign-in uses Supabase Auth's OAuth 2.1 server, with KEEL's own consent page
   (`apps/web/src/app/oauth/consent`).
-- There are 49 tools, 19 read and 30 write. They cover full history reads (filters, cursor,
+- There are 47 tools, 19 read and 28 write. They cover full history reads (filters, cursor,
   KEEL-computed summaries) and the app's manual edits: accounts, transactions, splits,
   recategorize, categories, tags, rules, budgets, recurring items, bills, goals, review,
   transfers, notes and tasks.
@@ -53,8 +53,35 @@ listener past Stage 0–2, and docs/09 puts it at M7. It was built now on the us
 ownership against rows loaded before the account existed. Commands now load authz fresh, as
 `/commands` does.
 
+**Independent review (fresh agent) → fixed before the PR:**
+- `transactions_summarize` now excludes exactly what `keel_cash_flow` excludes. It uses a
+  `cashFlowExcluded` flag that `keel_query_transactions` computes with the same
+  `keel_txn_is_transfer_category` / `keel_is_non_income_settlement` helpers.
+- The entity filter now uses the account's entity, matching the app's entity reports.
+- The `uncategorized` filter now lets the user's category win over the posting's.
+- Paycheck-style rows (a category leg plus an account leg) now summarize as gross plus a
+  transfer.
+- `goals_list` reads the keys the proc actually emits.
+- Archived accounts no longer show an invented $0 balance.
+- Disconnect revokes KEEL's grant first and lists orphaned grants.
+- Removed `tags_delete` and `rules_delete`: the underlying procs hard-DELETE (soft-delete
+  directive).
+- `history_get` validates ranges, and `KEEL_INVALID_RANGE` maps to a clear error.
+- The override read-modify-write refuses to proceed when the read fails.
+- `mcp` was added to `deploy-functions.yml`.
+- The migration is re-runnable (guarded type/table/index/policy/trigger; create-or-replace).
+  The grant procs and the query proc are owned by `keel_api` (house pattern) with a
+  definer policy.
+- An empty `transactionIds` list now returns nothing.
+- `/oauth/*` sends `frame-ancestors 'none'`.
+- Pre-existing bug left for a separate fix: the row DTO's `categoryPfcKey` uses
+  `coalesce(catov.pfc_key, offs.one_pfc_key)`, so a bank-uncategorized transaction the user
+  moved to a custom category still reports the posting's `uncategorized_*` key. The web
+  `isUncategorized` inherits it. Changing it here would change the existing
+  `rich_page` / `rich` DTO contract (pgTAP 028 parity).
+
 **Tests.**
-- New: 26 Deno (`mcp/*.test.ts`), 5 Deno (`_shared/command-exec.test.ts`), 49 pgTAP
+- New: 28 Deno (`mcp/*.test.ts`), 5 Deno (`_shared/command-exec.test.ts`), 53 pgTAP
   (`045_mcp_connector.sql`), 17 vitest (`oauth-consent.test.ts`).
 - Full `pnpm test` green: 1432 vitest + Deno suites.
 - `supabase test db` green: 1178 tests.

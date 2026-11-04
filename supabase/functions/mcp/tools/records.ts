@@ -187,13 +187,13 @@ export const transfersUnlink = defineTool({
 export const notesList = defineTool({
   name: 'notes_list',
   title: 'List notes and tasks',
-  description: 'The household\'s notes and tasks (open, done or dismissed), newest first.',
+  description: 'The household\'s current notes and open or done tasks, newest first. Archived notes and dismissed tasks are not included.',
   kind: 'read',
-  input: z.object({ include_archived: z.boolean().default(false), limit: z.number().int().min(1).max(200).default(100) }).strict(),
+  input: z.object({ limit: z.number().int().min(1).max(200).default(100) }).strict(),
   run: async (ctx, args) => {
     const r = await readProc(ctx, 'notes_tasks.list', 'keel_list_notes_tasks');
     if (!r.ok) return r;
-    const rows = rowsOf(r.data).filter((x) => args.include_archived || !x['archivedAt']);
+    const rows = rowsOf(r.data);
     return ok(`${rows.length} notes and tasks.`, capped(rows, args.limit));
   },
 });

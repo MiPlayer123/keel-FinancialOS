@@ -2,9 +2,9 @@
  * Action -> SECURITY DEFINER proc maps shared by every user-facing surface.
  *
  * The `api` function dispatches /queries and the bespoke /notes/* + /tasks/*
- * routes through these; the in-app agent and the `mcp` function hand the SAME
- * maps to the tool executor (_shared/agent.ts). One table, many surfaces
- * (Law 7) — a proc name is written exactly once.
+ * routes through these, and the in-app agent hands the SAME maps to its tool
+ * executor (_shared/agent.ts). The `mcp` tools name procs directly but call
+ * the same procs (and commands go through _shared/command-exec.ts).
  */
 export const QUERY_TO_PROC: Record<string, string> = {
   'ledger.trial_balance': 'keel_trial_balance',

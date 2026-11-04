@@ -1,10 +1,12 @@
 /**
  * Categorization setup: the category tree and tags (everything needed to
  * categorize or tag something), rules, and the same edits the app's settings
- * offer.
+ * offer. Deleting a tag or a rule is a hard DELETE in KEEL, so connected apps
+ * can't do it (Law 2 / soft-delete directive): rules are switched off with
+ * rules_save active=false; tag deletion stays in the app.
  */
 import * as z from 'npm:zod@4.4.3';
-import { defineTool, pick, readProc, rowsOf, uuid, writeProc } from '../context.ts';
+import { defineTool, readProc, rowsOf, uuid, writeProc } from '../context.ts';
 import { err, money, ok } from '../lib.ts';
 
 export const categoriesList = defineTool({
@@ -31,7 +33,9 @@ export const categoriesList = defineTool({
     }));
     return ok(`${categories.length} categories.`, {
       categories,
-      tags: tags.ok ? rowsOf(tags.data).map((t) => pick(t, ['tagId', 'id', 'name', 'entityId', 'transactionCount'])) : [],
+      tags: tags.ok
+        ? rowsOf(tags.data).map((t) => ({ id: t['tagId'], name: t['name'], entity_id: t['entityId'] ?? null, transactions: t['usageCount'] ?? 0 }))
+        : [],
     });
   },
 });
@@ -136,20 +140,6 @@ export const tagsSave = defineTool({
   },
 });
 
-export const tagsDelete = defineTool({
-  name: 'tags_delete',
-  title: 'Delete a tag',
-  description: 'Deletes a tag and removes it from every transaction. Transactions themselves are untouched.',
-  kind: 'write',
-  destructive: true,
-  input: z.object({ tag_id: uuid('Tag') }).strict(),
-  run: async (ctx, args) => {
-    const r = await writeProc(ctx, null, 'keel_tag_delete', { p_tag_id: args.tag_id });
-    if (!r.ok) return r;
-    return ok('Deleted the tag.', { tag_id: args.tag_id });
-  },
-});
-
 export const rulesList = defineTool({
   name: 'rules_list',
   title: 'List rules',
@@ -178,7 +168,7 @@ export const rulesSave = defineTool({
   name: 'rules_save',
   title: 'Create or edit a rule',
   description:
-    'Creates a categorization rule (omit rule_id) or edits one: transactions whose description contains pattern (and fall in the optional amount range, minor units, absolute) get category_id and/or are renamed. New transactions use it automatically; run rules_apply to apply it to history.',
+    'Creates a categorization rule (omit rule_id) or edits one: transactions whose description contains pattern (and fall in the optional amount range, minor units, absolute) get category_id and/or are renamed. New transactions use it automatically; run rules_apply to apply it to history. active false switches a rule off.',
   kind: 'write',
   destructive: false,
   input: z.object({
@@ -213,20 +203,6 @@ export const rulesSave = defineTool({
   },
 });
 
-export const rulesDelete = defineTool({
-  name: 'rules_delete',
-  title: 'Delete a rule',
-  description: 'Deletes a rule. Categories it already set stay as they are.',
-  kind: 'write',
-  destructive: true,
-  input: z.object({ rule_id: uuid('Rule') }).strict(),
-  run: async (ctx, args) => {
-    const r = await writeProc(ctx, null, 'keel_rule_delete', { p_rule_id: args.rule_id });
-    if (!r.ok) return r;
-    return ok('Deleted the rule.', { rule_id: args.rule_id });
-  },
-});
-
 export const rulesApply = defineTool({
   name: 'rules_apply',
   title: 'Apply rules to history',
@@ -248,9 +224,7 @@ export const setupTools = [
   categoriesUpdate,
   categoriesArchive,
   tagsSave,
-  tagsDelete,
   rulesList,
   rulesSave,
-  rulesDelete,
   rulesApply,
 ];

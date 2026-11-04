@@ -4,8 +4,10 @@
  * Settings → Connected apps: the connector URL to paste into Claude / Codex /
  * ChatGPT, and every AI app the user connected — with its household and
  * access (read only or read + changes), a switch between the two, and
- * Disconnect. Disconnect revokes both halves: Supabase's OAuth grant (its
- * sessions and refresh tokens) and KEEL's grant (soft-revoked, audited).
+ * Disconnect. Disconnect revokes KEEL's grant first (it takes effect on the
+ * very next request), then Supabase's OAuth grant (its sessions and refresh
+ * tokens). KEEL grants whose OAuth sign-in is already gone are listed too, so
+ * live access can never hide.
  *
  * When the deployment has not enabled the OAuth server, listGrants fails and
  * the card says so instead of showing a URL that would not work.
@@ -36,7 +38,10 @@ function connectorUrl(): string {
 }
 
 interface AppRow {
-  readonly oauth: OAuthGrant;
+  readonly clientId: string;
+  readonly name: string;
+  readonly since: string;
+  readonly oauth: OAuthGrant | null;
   readonly keel: ConnectedAppGrant | null;
 }
 
@@ -63,11 +68,20 @@ export function ConnectedAppsCard() {
       }
       const [grants, households] = await Promise.all([fetchConnectedAppGrants(), fetchHouseholds()]);
       const byClient = new Map(grants.map((g) => [g.clientId, g]));
-      setState({
-        kind: 'ready',
-        apps: data.map((oauth) => ({ oauth, keel: byClient.get(oauth.client.id) ?? null })),
-        households,
-      });
+      const signedIn = new Set(data.map((o) => o.client.id));
+      const apps: AppRow[] = [
+        ...data.map((oauth) => ({
+          clientId: oauth.client.id,
+          name: oauth.client.name || 'Unnamed app',
+          since: oauth.granted_at,
+          oauth,
+          keel: byClient.get(oauth.client.id) ?? null,
+        })),
+        ...grants
+          .filter((g) => !signedIn.has(g.clientId))
+          .map((keel) => ({ clientId: keel.clientId, name: 'App (signed out)', since: keel.grantedAt, oauth: null, keel })),
+      ];
+      setState({ kind: 'ready', apps, households });
     } catch {
       setState({ kind: 'unavailable' });
     }
@@ -148,9 +162,7 @@ export function ConnectedAppsCard() {
               <p className="text-muted-foreground">No apps connected.</p>
             ) : (
               <ul className="divide-y rounded-lg border">
-                {state.apps.map(({ oauth, keel }) => {
-                  const clientId = oauth.client.id;
-                  const name = oauth.client.name || 'Unnamed app';
+                {state.apps.map(({ clientId, name, since, oauth, keel }) => {
                   const household = state.households.find((h) => h.householdId === keel?.householdId);
                   const nextAccess: ConnectedAppAccess = keel?.access === 'write' ? 'read' : 'write';
                   return (
@@ -160,10 +172,11 @@ export function ConnectedAppsCard() {
                         <div className="text-xs text-muted-foreground">
                           {keel ? ACCESS_LABEL[keel.access] : 'No KEEL access chosen'}
                           {keel && state.households.length > 1 ? ` · ${household?.name ?? 'Household'}` : ''}
-                          {' · '}since {new Date(oauth.granted_at).toLocaleDateString()}
+                          {' · '}since {new Date(since).toLocaleDateString()}
                         </div>
                       </div>
                       <div className="flex shrink-0 gap-2">
+                        {oauth ? (
                         <Button
                           variant="outline"
                           size="sm"
@@ -183,6 +196,7 @@ export function ConnectedAppsCard() {
                         >
                           {keel ? (nextAccess === 'write' ? 'Allow changes' : 'Make read only') : 'Allow read only'}
                         </Button>
+                        ) : null}
                         <Button
                           variant="outline"
                           size="sm"
@@ -191,9 +205,12 @@ export function ConnectedAppsCard() {
                             void run(
                               clientId,
                               async () => {
-                                const { error } = await getSupabaseBrowserClient().auth.oauth.revokeGrant({ clientId });
-                                if (error) throw new Error('Could not disconnect that app.');
-                                await revokeConnectedAppAccess(clientId);
+                                // KEEL first: it cuts access on the next request.
+                                if (keel) await revokeConnectedAppAccess(clientId);
+                                if (oauth) {
+                                  const { error } = await getSupabaseBrowserClient().auth.oauth.revokeGrant({ clientId });
+                                  if (error) throw new Error('Access is removed, but signing the app out failed. Try again.');
+                                }
                               },
                               `Disconnected ${name}.`,
                             );

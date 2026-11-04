@@ -23,10 +23,12 @@ export interface TxnRow {
   readonly categoryLedgerAccountId?: string | null;
   readonly categoryName?: string | null;
   readonly categoryKind?: string | null;
-  readonly splits?: readonly { categoryLedgerAccountId?: string | null; name?: string; kind?: string; amountMinor?: string; legType?: string }[] | null;
+  readonly splits?: readonly { categoryLedgerAccountId?: string | null; name?: string; kind?: string; amountMinor?: string; legType?: string; accountId?: string | null }[] | null;
   readonly tags?: readonly { tagId?: string; name?: string }[] | null;
   readonly transferStatus?: string | null;
   readonly distributionTransfer?: boolean | null;
+  /** Set by keel_query_transactions: KEEL's cash flow leaves this row out. */
+  readonly cashFlowExcluded?: boolean | null;
 }
 
 export interface GroupTotal {
@@ -39,24 +41,34 @@ export interface GroupTotal {
   readonly count: number;
 }
 
-/** A transfer between the user's own accounts is not income or spending. */
+/**
+ * Rows that are not income or spending: transfers between the user's own
+ * accounts, plus everything KEEL's cash flow excludes (Transfers-category and
+ * reimbursement-settlement rows, flagged server-side) — so a summary agrees
+ * with overview_get / history_get cash flow.
+ */
 export const isTransfer = (row: TxnRow): boolean =>
+  row.cashFlowExcluded === true ||
   row.distributionTransfer === true ||
   row.transferStatus === 'confirmed' ||
   row.categoryKind === 'transfer';
 
 /** (key, label, signed cash amount) contributions of one row to the groups. */
-const contributions = (row: TxnRow, groupBy: GroupBy): { key: string; label: string; amount: bigint }[] => {
+const contributions = (
+  row: TxnRow,
+  groupBy: GroupBy,
+): { key: string; label: string; amount: bigint; transfer?: boolean }[] => {
   const amount = BigInt(row.amountMinor ?? '0');
   switch (groupBy) {
     case 'category': {
-      const legs = (row.splits ?? []).filter((s) => s.legType !== 'account');
-      if (legs.length > 1) {
-        return legs.map((s) => ({
-          key: s.categoryLedgerAccountId ?? 'uncategorized',
-          label: s.name ?? 'Uncategorized',
-          amount: -BigInt(s.amountMinor ?? '0'),
-        }));
+      // A split row (several categories, or a category plus a leg to another
+      // of the user's accounts, e.g. a paycheck's 401k share) contributes each
+      // leg from the cash side. Legs into own accounts are transfers.
+      if (row.splits && row.splits.length > 0) {
+        return row.splits.map((s) =>
+          s.legType === 'account'
+            ? { key: `account:${s.accountId ?? s.name ?? ''}`, label: `Transfer: ${s.name ?? 'account'}`, amount: -BigInt(s.amountMinor ?? '0'), transfer: true }
+            : { key: s.categoryLedgerAccountId ?? 'uncategorized', label: s.name ?? 'Uncategorized', amount: -BigInt(s.amountMinor ?? '0') });
       }
       return [{
         key: row.categoryLedgerAccountId ?? 'uncategorized',
@@ -110,6 +122,7 @@ export const summarize = (
     const currency = row.currency ?? 'USD';
     const id = row.transactionId ?? String(counted);
     for (const c of contributions(row, groupBy)) {
+      if (c.transfer && !opts.includeTransfers) continue;
       const gk = `${c.key}\u0000${currency}`;
       const g = groups.get(gk) ?? { key: c.key, label: c.label, currency, inflow: 0n, outflow: 0n, ids: new Set<string>() };
       if (c.amount >= 0n) g.inflow += c.amount;

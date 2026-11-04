@@ -12,16 +12,21 @@
 --      an app's token cannot call keel_* procs or tables directly.
 --   3. audit_log rows written under a connected-app token are stamped
 --      actor.via = {kind:'connected_app', clientId} (Law 2: who did what).
--- Plus keel_query_transactions: the paginated rich read with date / id /
+-- Re-runnable (guarded type/table/index/policy/trigger; create-or-replace
+-- functions). Plus keel_query_transactions: the paginated rich read with date / id /
 -- direction / amount / status / entity / tag / uncategorized filters, sharing
 -- ONE page builder with keel_list_transactions_rich_page (unchanged contract).
 
 -- ---------------------------------------------------------------------------
 -- 1. Connected-app grants
 -- ---------------------------------------------------------------------------
-create type public.mcp_access_level as enum ('read', 'write');
+do $$ begin
+  if to_regtype('public.mcp_access_level') is null then
+    create type public.mcp_access_level as enum ('read', 'write');
+  end if;
+end $$;
 
-create table public.mcp_client_grants (
+create table if not exists public.mcp_client_grants (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id),
   client_id text not null check (length(client_id) between 1 and 200),
@@ -33,17 +38,23 @@ create table public.mcp_client_grants (
 );
 
 -- At most one live grant per (user, app); revoked rows are kept (soft delete).
-create unique index mcp_client_grants_live
+create unique index if not exists mcp_client_grants_live
   on public.mcp_client_grants (user_id, client_id) where revoked_at is null;
 
 alter table public.mcp_client_grants enable row level security;
+drop policy if exists mcp_client_grants_own_read on public.mcp_client_grants;
 create policy mcp_client_grants_own_read on public.mcp_client_grants
   for select to authenticated using (user_id = (select auth.uid()));
+-- The grant procs are owned by keel_api (house pattern for write procs).
+drop policy if exists mcp_client_grants_definer_all on public.mcp_client_grants;
+create policy mcp_client_grants_definer_all on public.mcp_client_grants
+  for all to keel_api using (true) with check (true);
 grant select on public.mcp_client_grants to authenticated;
+grant select, insert, update on public.mcp_client_grants to keel_api;
 
 -- Caller identity for the grant procs. A connected app may never grant or
 -- revoke access itself: only the user's own KEEL session can.
-create function public.keel_mcp_first_party_uid() returns uuid
+create or replace function public.keel_mcp_first_party_uid() returns uuid
 language plpgsql
 stable
 set search_path = public
@@ -67,7 +78,7 @@ end;
 $$;
 revoke all on function public.keel_mcp_first_party_uid() from public, anon;
 
-create function public.keel_mcp_grant_set(
+create or replace function public.keel_mcp_grant_set(
   p_client_id text,
   p_household_id uuid,
   p_access public.mcp_access_level
@@ -117,7 +128,7 @@ begin
 end;
 $$;
 
-create function public.keel_mcp_grant_revoke(p_client_id text) returns void
+create or replace function public.keel_mcp_grant_revoke(p_client_id text) returns void
 language plpgsql
 security definer
 set search_path = public
@@ -144,7 +155,7 @@ $$;
 -- The live grant for the calling connected app, or null. Called by the `mcp`
 -- function on every request with the app's own token. A grant whose household
 -- membership has since ended is not live.
-create function public.keel_mcp_grant_current() returns jsonb
+create or replace function public.keel_mcp_grant_current() returns jsonb
 language plpgsql
 stable
 security definer
@@ -178,16 +189,22 @@ $$;
 revoke all on function public.keel_mcp_grant_set(text, uuid, public.mcp_access_level) from public, anon;
 revoke all on function public.keel_mcp_grant_revoke(text) from public, anon;
 revoke all on function public.keel_mcp_grant_current() from public, anon;
-grant execute on function public.keel_mcp_first_party_uid() to authenticated;
+grant execute on function public.keel_mcp_first_party_uid() to authenticated, keel_api;
 grant execute on function public.keel_mcp_grant_set(text, uuid, public.mcp_access_level) to authenticated;
 grant execute on function public.keel_mcp_grant_revoke(text) to authenticated;
 grant execute on function public.keel_mcp_grant_current() to authenticated;
+
+grant create on schema public to keel_api;
+alter function public.keel_mcp_grant_set(text, uuid, public.mcp_access_level) owner to keel_api;
+alter function public.keel_mcp_grant_revoke(text) owner to keel_api;
+alter function public.keel_mcp_grant_current() owner to keel_api;
+revoke create on schema public from keel_api;
 
 -- ---------------------------------------------------------------------------
 -- 2. Audit attribution: stamp the connected app on every audit row written
 --    under its token. One trigger covers every proc, however it builds actor.
 -- ---------------------------------------------------------------------------
-create function public.keel_audit_stamp_connected_app() returns trigger
+create or replace function public.keel_audit_stamp_connected_app() returns trigger
 language plpgsql
 set search_path = public
 as $$
@@ -203,6 +220,7 @@ begin
 end;
 $$;
 
+drop trigger if exists audit_log_stamp_connected_app on public.audit_log;
 create trigger audit_log_stamp_connected_app
   before insert on public.audit_log
   for each row execute function public.keel_audit_stamp_connected_app();
@@ -214,7 +232,7 @@ create trigger audit_log_stamp_connected_app
 --    KEEL_MCP_GATEWAY_KEY). Missing secret = fail closed. Requests without a
 --    client_id claim (every KEEL web session, anon, service) pass untouched.
 -- ---------------------------------------------------------------------------
-create function public.keel_pre_request() returns void
+create or replace function public.keel_pre_request() returns void
 language plpgsql
 stable
 security definer
@@ -261,7 +279,7 @@ notify pgrst, 'reload config';
 --    20260721070000 page query verbatim plus optional filters; both public
 --    reads below delegate to it after their own membership check.
 -- ---------------------------------------------------------------------------
-create function public.keel_transactions_page(
+create or replace function public.keel_transactions_page(
   p_household_id uuid,
   p_limit integer,
   p_cursor_date date,
@@ -448,7 +466,7 @@ begin
         and (p_to is null or ct.effective_date < p_to)
         and (p_transaction_ids is null or ct.id = any (p_transaction_ids))
         and (p_status is null or ct.status::text = p_status)
-        and (p_entity_id is null or ct.entity_id = p_entity_id)
+        and (p_entity_id is null or acc.entity_id = p_entity_id)
         and (p_direction is null
              or (p_direction = 'in' and cashp.amount_minor > 0)
              or (p_direction = 'out' and cashp.amount_minor < 0))
@@ -457,10 +475,12 @@ begin
         and (p_tag_id is null or exists (
               select 1 from public.transaction_tags ftt
                where ftt.canonical_transaction_id = ct.id and ftt.tag_id = p_tag_id))
+        -- The user's category wins over the posting's (same precedence as
+        -- keel_txn_is_transfer_category): a custom category has no pfc_key.
         and (p_uncategorized is null or p_uncategorized = (
               acc.id = ct.account_id and offs.n = 1 and offs.account_legs = 0
               and (coalesce(catov.id, offs.one_id) is null
-                   or coalesce(catov.pfc_key, offs.one_pfc_key)
+                   or (case when catov.id is not null then catov.pfc_key else offs.one_pfc_key end)
                         in ('uncategorized_expense', 'uncategorized_income'))))
         and (
           p_category_id is null
@@ -513,6 +533,9 @@ $$;
 revoke all on function public.keel_transactions_page(
   uuid, integer, date, uuid, uuid, uuid, text, date, date, uuid[], text, bigint, bigint, text, uuid, uuid, boolean
 ) from public, anon, authenticated;
+grant execute on function public.keel_transactions_page(
+  uuid, integer, date, uuid, uuid, uuid, text, date, date, uuid[], text, bigint, bigint, text, uuid, uuid, boolean
+) to keel_api;
 
 create or replace function public.keel_list_transactions_rich_page(
   p_household_id uuid,
@@ -555,7 +578,7 @@ $$;
 -- ('in' | 'out', from the account's side), minAmountMinor / maxAmountMinor
 -- (absolute, integer minor units), status ('pending' | 'posted'), entityId,
 -- tagId, uncategorized (boolean). Unknown keys are rejected.
-create function public.keel_query_transactions(
+create or replace function public.keel_query_transactions(
   p_household_id uuid,
   p_filters jsonb default '{}'::jsonb,
   p_limit integer default 50,
@@ -579,6 +602,7 @@ declare
   v_status text;
   v_min bigint;
   v_max bigint;
+  v_page jsonb;
 begin
   if v_uid is null then
     raise exception 'KEEL_NOT_AUTHENTICATED' using errcode = 'P0004';
@@ -609,7 +633,7 @@ begin
 
   begin
     if v_f ? 'transactionIds' then
-      select array_agg(e::uuid) into v_ids from jsonb_array_elements_text(v_f -> 'transactionIds') e;
+      select coalesce(array_agg(e::uuid), '{}') into v_ids from jsonb_array_elements_text(v_f -> 'transactionIds') e;
       if coalesce(array_length(v_ids, 1), 0) > 200 then
         raise exception 'too many ids';
       end if;
@@ -620,7 +644,7 @@ begin
        or (v_min is not null and v_max is not null and v_min > v_max) then
       raise exception 'bad amount range';
     end if;
-    return public.keel_transactions_page(
+    v_page := public.keel_transactions_page(
       p_household_id, p_limit, p_cursor_date, p_cursor_id,
       (v_f ->> 'accountId')::uuid, (v_f ->> 'categoryId')::uuid, v_f ->> 'search',
       (v_f ->> 'from')::date, (v_f ->> 'to')::date, v_ids, v_direction, v_min, v_max, v_status,
@@ -630,9 +654,31 @@ begin
       or numeric_value_out_of_range or raise_exception or invalid_parameter_value then
       raise exception 'KEEL_INVALID_COMMAND: filters failed validation' using errcode = 'P0009';
   end;
+
+  -- cashFlowExcluded: the rows KEEL's cash flow leaves out (Transfers-category
+  -- and reimbursement-settlement transactions — the same helpers keel_cash_flow
+  -- uses), so totals computed from these rows agree with KEEL's numbers.
+  return jsonb_set(v_page, '{rows}', coalesce((
+    select jsonb_agg(r || jsonb_build_object('cashFlowExcluded',
+             public.keel_txn_is_transfer_category(p_household_id, (r ->> 'transactionId')::uuid)
+             or public.keel_is_non_income_settlement(p_household_id, (r ->> 'transactionId')::uuid))
+           order by ord)
+      from jsonb_array_elements(v_page -> 'rows') with ordinality as t(r, ord)
+  ), '[]'::jsonb));
 end;
 $$;
 
 revoke all on function public.keel_query_transactions(uuid, jsonb, integer, date, uuid) from public, anon;
 grant execute on function public.keel_query_transactions(uuid, jsonb, integer, date, uuid)
   to authenticated, service_role;
+-- Owned by keel_api like keel_cash_flow, whose exclusion helpers it calls.
+grant create on schema public to keel_api;
+alter function public.keel_query_transactions(uuid, jsonb, integer, date, uuid) owner to keel_api;
+revoke create on schema public from keel_api;
+
+-- Ownership guard (house pattern): the runtime role stays unprivileged.
+do $$ begin
+  if exists (select 1 from pg_roles where rolname = 'keel_api' and (rolcanlogin or rolbypassrls or rolsuper)) then
+    raise exception 'KEEL_OWNERSHIP: keel_api must stay unprivileged';
+  end if;
+end $$;

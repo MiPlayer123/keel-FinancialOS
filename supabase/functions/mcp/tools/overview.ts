@@ -106,18 +106,24 @@ export const historyGet = defineTool({
   name: 'history_get',
   title: 'Get a time series',
   description:
-    'Daily or monthly history: net_worth (daily), account_balance (daily, needs account_id), cash_flow (monthly money in/out/net, transfers excluded), investments_value (daily), or cash_flow_forecast (projected daily balance for the next forecast_days; a projection, not a fact).',
+    'Daily or monthly history: net_worth (daily), account_balance (daily, needs account_id), cash_flow (monthly money in/out/net, transfers excluded), investments_value (daily), or cash_flow_forecast (projected daily balance for the next forecast_days; a projection, not a fact). from and to are both inclusive; daily series cover at most 366 days, monthly cash flow at most 24 months.',
   kind: 'read',
   input: z.object({
     metric: z.enum(['net_worth', 'account_balance', 'cash_flow', 'investments_value', 'cash_flow_forecast']),
-    from: isoDate('Start').optional(),
-    to: isoDate('End').optional(),
+    from: isoDate('Start, inclusive').optional(),
+    to: isoDate('End, inclusive').optional(),
     account_id: z.string().uuid().optional(),
     forecast_days: z.number().int().min(1).max(365).default(30),
   }).strict(),
   run: async (ctx, args) => {
     const to = args.to ?? ctx.todayIso;
     const from = args.from ?? addDays(to, args.metric === 'cash_flow' ? -365 : -90);
+    const days = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000;
+    const maxDays = args.metric === 'cash_flow' ? 730 : 366;
+    if (!(days >= 0)) return err('invalid_range', 'from must be on or before to.');
+    if (days > maxDays && args.metric !== 'cash_flow_forecast') {
+      return err('invalid_range', `That range is ${days} days; ${args.metric} covers at most ${maxDays}.`, 'Split it into smaller ranges.');
+    }
     let res;
     switch (args.metric) {
       case 'net_worth':

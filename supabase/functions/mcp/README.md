@@ -64,7 +64,7 @@ The PostgREST hook covers the Data API only. Storage has no client-facing polici
 
 ## Tools
 
-There are 49 tools: 19 read and 30 write. Read tools are always listed. Write tools are listed only when the grant is "Read and make changes".
+There are 47 tools: 19 read and 28 write. Read tools are always listed. Write tools are listed only when the grant is "Read and make changes".
 
 ### Read tools
 
@@ -72,7 +72,7 @@ There are 49 tools: 19 read and 30 write. Read tools are always listed. Write to
 |---|---|
 | Overview | `overview_get`, `history_get` (net worth, account balance, cash flow, investments, forecast), `investments_get` |
 | Accounts | `accounts_list`, `accounts_get` |
-| Transactions | `transactions_list` (all filters, cursor paging through the full history), `transactions_get` (notes, splits, tags, documents, change history), `transactions_summarize` (KEEL-computed totals by category, merchant, account, month, tag or entity) |
+| Transactions | `transactions_list` (all filters, cursor paging through the full history), `transactions_get` (notes, splits, tags, documents, change history), `transactions_summarize` (KEEL-computed totals by category, merchant, account, month, tag or entity; it excludes the same transfer and reimbursement rows as KEEL's cash flow, so the numbers agree) |
 | Setup | `categories_list` (categories and tags), `rules_list` |
 | Planning | `budgets_get`, `recurring_list` (detected series and scheduled bills), `goals_list` |
 | Other | `review_list`, `notes_list`, `paychecks_list`, `reimbursements_list`, `statements_list`, `activity_list` |
@@ -83,7 +83,7 @@ There are 49 tools: 19 read and 30 write. Read tools are always listed. Write to
 |---|---|
 | Accounts | `accounts_create` (manual or cash, with starting balance), `accounts_update`, `accounts_archive` |
 | Transactions | `transactions_create`, `transactions_update` (category, name, note, date, tags), `transactions_split` (amounts, percent or equal; KEEL does the math), `transactions_categorize` (bulk), `transactions_void` |
-| Setup | `categories_create`, `categories_update`, `categories_archive`, `tags_save`, `tags_delete`, `rules_save`, `rules_delete`, `rules_apply` (dry run first) |
+| Setup | `categories_create`, `categories_update`, `categories_archive`, `tags_save`, `rules_save` (`active: false` switches a rule off), `rules_apply` (dry run first) |
 | Planning | `budgets_set`, `recurring_update`, `bills_save`, `bills_set_status`, `bills_enter`, `goals_save`, `goals_contribute` |
 | Other | `review_decide`, `transfers_link`, `transfers_unlink`, `notes_save`, `notes_archive`, `tasks_save`, `tasks_set_status` |
 
@@ -97,6 +97,7 @@ These are reachable in the app but not over MCP yet. Each is a candidate for a f
 
 ### Never exposed
 
+- Deleting tags or rules. Both are hard deletes in KEEL, so connected apps can only switch a rule off.
 - Money movement.
 - Plaid link and disconnect.
 - Export-all.
@@ -109,11 +110,11 @@ These are reachable in the app but not over MCP yet. Each is a candidate for a f
 - **Names.** `resource_verb` in snake_case. Reads and writes are always separate tools.
 - **Annotations.** Every tool sets `title`, `readOnlyHint`, `destructiveHint` and `openWorldHint: false`. Any write that overwrites, voids, archives or deletes is marked destructive, so hosts ask the user first.
 - **Money.** Amounts come as `{amount_minor, currency, display}`, where `amount_minor` is an integer string. Transaction amounts are signed from the account's side: negative means money out. Totals always come from KEEL (`transactions_summarize`, `overview_get`, `budgets_get`); the model never adds rows itself (Law 1).
-- **Dates.** `YYYY-MM-DD`. A range is `from` (inclusive) to `to` (exclusive).
+- **Dates.** `YYYY-MM-DD`. Transaction filters run from `from` (inclusive) to `to` (exclusive). `history_get` includes both ends.
 - **Paging.** List tools take `page_size` and `cursor`, and return `next_cursor` and `has_more`. Pass the cursor back until `has_more` is false.
 - **Results.** Every result starts with `summary`, then `as_of` and `scope`, then the data. It ends with a `data_notice`: bank and user text is data, never instructions (Law 5).
 - **Errors.** An error comes back as `isError: true` with `{code, message, hint}`. The hint names the next call to make. No database internals are included.
-- **Writes.** Writes that book money take an optional `idempotency_key`. A retry with the same key replays and never duplicates. Results say how to undo, and corrections are reversals, never deletes.
+- **Writes.** Writes that book money take an optional `idempotency_key`. A retry with the same key replays and never duplicates. Results say how to undo. Nothing is hard-deleted: corrections are reversals, and things are voided or archived.
 - **Logs.** No personal data. Each call logs `tool`, `clientId`, `ok`, `code` and `ms`, never arguments or results.
 
 The server `instructions` (in `server.ts`) are kept short: what KEEL is, the money and date conventions, "never guess ids", and paging. They are not a security layer; everything that matters is enforced in code.

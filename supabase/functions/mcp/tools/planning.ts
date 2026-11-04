@@ -3,7 +3,7 @@
  * bills), and goals — reads plus the same edits the app's planning pages make.
  */
 import * as z from 'npm:zod@4.4.3';
-import { defineTool, isoDate, minorString, pick, readProc, rowsOf, uuid, writeProc } from '../context.ts';
+import { defineTool, isoDate, minorString, readProc, rowsOf, uuid, writeProc } from '../context.ts';
 import { err, money, monthStart, ok, type ToolErr } from '../lib.ts';
 
 const RECURRING_HORIZON_DAYS = 90; // same horizon the app's Review page uses
@@ -289,8 +289,23 @@ export const goalsList = defineTool({
   run: async (ctx) => {
     const r = await readProc(ctx, 'goals.list', 'keel_list_goals');
     if (!r.ok) return r;
-    const goals = rowsOf(r.data).map((g) =>
-      pick(g, ['goalId', 'name', 'kind', 'tracking', 'status', 'targetMinor', 'currentMinor', 'progressBps', 'targetDate', 'accountId', 'accountName', 'currency']));
+    const goals = rowsOf(r.data).map((g) => {
+      const c = (g['currency'] as string) ?? 'USD';
+      return {
+        goal_id: g['goalId'],
+        name: g['name'],
+        kind: g['kind'],
+        tracking: g['tracking'],
+        status: g['status'],
+        target: money(g['targetMinor'] as string | null, c),
+        target_date: g['targetDate'] ?? null,
+        account_id: g['accountId'] ?? null,
+        // Progress as KEEL computes it: saved (savings, manual), paid (debt), or the tracked account balance.
+        saved: money(g['savedMinor'] as string | null, c),
+        paid: money(g['paidMinor'] as string | null, c),
+        tracked_balance: money((g['trackedBalanceMinor'] ?? g['currentBalanceMinor']) as string | null, c),
+      };
+    });
     return ok(`${goals.length} goals.`, { goals });
   },
 });

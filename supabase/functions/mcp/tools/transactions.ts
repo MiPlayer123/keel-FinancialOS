@@ -348,11 +348,14 @@ export const transactionsUpdate = defineTool({
       done.push('category');
     }
     if (args.display_name !== undefined || args.note !== undefined) {
-      const { data: current } = await ctx.db
+      const { data: current, error: readError } = await ctx.db
         .from('transaction_overrides')
         .select('display_description, note')
         .eq('canonical_transaction_id', id)
         .maybeSingle();
+      // The proc sets both fields at once: without the current values a
+      // note-only edit would wipe the name (and vice versa), so stop instead.
+      if (readError) return fail('name/note', err('failed', 'Could not read the current name and note.'));
       const r = await writeProc(ctx, null, 'keel_set_transaction_override', {
         p_txn_id: id,
         p_display_description: args.display_name ?? current?.display_description ?? null,
