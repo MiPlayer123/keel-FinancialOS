@@ -74,14 +74,21 @@ export const reviewList = defineTool({
   kind: 'read',
   input: z.object({ limit: z.number().int().min(1).max(200).default(50) }).strict(),
   run: async (ctx, args) => {
-    const [suggestions, transfers, receipts] = await Promise.all([
+    const [suggestions, transfers, receipts, documents] = await Promise.all([
       readProc(ctx, null, 'keel_list_category_suggestions'),
       readProc(ctx, 'transfers.list', 'keel_list_transfers'),
       readProc(ctx, 'receipts.inbox', 'keel_receipts_inbox'),
+      readProc(ctx, 'documents.list_household', 'keel_documents_list_household'),
     ]);
     if (!suggestions.ok) return suggestions;
     if (!transfers.ok) return transfers;
     if (!receipts.ok) return receipts;
+    if (!documents.ok) return documents;
+    // A receipt counts as handled once it is attached to anything — by a
+    // confirmed match or by receipts_attach / the app (attachment count).
+    const attached = new Set(
+      rowsOf(documents.data).filter((d) => Number(d['attachmentCount'] ?? 0) > 0).map((d) => d['documentId']),
+    );
     const cats = rowsOf(suggestions.data)
       .filter((s) => (s['status'] ?? 'suggested') === 'suggested')
       .map((s) => ({
@@ -106,7 +113,7 @@ export const reviewList = defineTool({
         days_apart: t['dayGap'],
       }));
     const inbox = rowsOf(receipts.data)
-      .filter((r) => (r['match'] as Record<string, unknown> | null)?.['status'] !== 'confirmed')
+      .filter((r) => (r['match'] as Record<string, unknown> | null)?.['status'] !== 'confirmed' && !attached.has(r['documentId']))
       .map((r) => {
         const ex = (r['extraction'] ?? null) as Record<string, unknown> | null;
         const m = (r['match'] ?? null) as Record<string, unknown> | null;
@@ -272,32 +279,44 @@ export const notesSave = defineTool({
   }).strict(),
   run: async (ctx, args) => {
     if (!args.note_id && !args.body) return err('invalid_request', 'A new note needs body.');
-    if (args.note_id && args.archived !== undefined) {
-      const r = args.archived
-        ? await writeProc(ctx, 'notes.archive', 'keel_note_archive', { p_note_id: args.note_id })
-        : await writeProc(ctx, 'notes.unarchive', 'keel_note_unarchive', { p_note_id: args.note_id });
-      if (!r.ok) return r;
-      if (args.body === undefined && args.pinned === undefined) {
-        return ok(args.archived ? 'Archived the note.' : 'Restored the note.', {
-          note_id: args.note_id,
-          undo: { tool: 'notes_save', args: { note_id: args.note_id, archived: !args.archived } },
-        });
+    const edits = args.body !== undefined || args.pinned !== undefined;
+    if (args.note_id && !edits && args.archived === undefined) return err('invalid_request', 'Nothing to change.');
+
+    // Only active notes are listed (and editable): restore before editing,
+    // edit before archiving, and skip a restore of a note that is active.
+    let active: Record<string, unknown> | null = null;
+    if (args.note_id) {
+      const current = await loadNoteOrTask(ctx, 'note', args.note_id);
+      active = current.ok ? current.row : null;
+      if (!active && args.archived !== false) return current.ok ? err('not_found', 'No such note.') : current;
+      if (!active && args.archived === false) {
+        const r = await writeProc(ctx, 'notes.unarchive', 'keel_note_unarchive', { p_note_id: args.note_id });
+        if (!r.ok) return r;
+        const reloaded = await loadNoteOrTask(ctx, 'note', args.note_id);
+        if (!reloaded.ok) return reloaded;
+        active = reloaded.row;
       }
     }
-    let body = args.body;
-    let pinned = args.pinned ?? false;
-    if (args.note_id && (body === undefined || args.pinned === undefined)) {
-      const current = await loadNoteOrTask(ctx, 'note', args.note_id);
-      if (!current.ok) return current;
-      body ??= current.row['body'] as string;
-      pinned = args.pinned ?? (current.row['pinned'] === true);
+    let id = args.note_id ?? null;
+    if (!args.note_id || edits) {
+      const r = await writeProc(ctx, 'notes.save', 'keel_note_save', {
+        p_note_id: args.note_id ?? null,
+        p_body: args.body ?? (active?.['body'] as string),
+        p_pinned: args.pinned ?? (active?.['pinned'] === true),
+      });
+      if (!r.ok) return r;
+      id ??= typeof r.data === 'string' ? r.data : null;
     }
-    const r = await writeProc(ctx, 'notes.save', 'keel_note_save', { p_note_id: args.note_id ?? null, p_body: body, p_pinned: pinned });
-    if (!r.ok) return r;
-    const id = args.note_id ?? (typeof r.data === 'string' ? r.data : null);
-    return ok(args.note_id ? 'Updated the note.' : 'Saved the note.', {
+    if (args.note_id && args.archived === true) {
+      const r = await writeProc(ctx, 'notes.archive', 'keel_note_archive', { p_note_id: args.note_id });
+      if (!r.ok) return err(r.code, `${edits ? 'Saved the note; then ' : ''}archiving failed: ${r.message}`, r.hint);
+    }
+    const summary = !args.note_id ? 'Saved the note.' : args.archived === true ? 'Archived the note.' : args.archived === false && !edits ? 'Restored the note.' : 'Updated the note.';
+    return ok(summary, {
       note_id: id,
-      undo: !args.note_id && id ? { tool: 'notes_save', args: { note_id: id, archived: true } } : null,
+      undo: !args.note_id && id
+        ? { tool: 'notes_save', args: { note_id: id, archived: true } }
+        : args.archived !== undefined ? { tool: 'notes_save', args: { note_id: args.note_id, archived: !args.archived } } : null,
     });
   },
 });

@@ -308,6 +308,11 @@ notify pgrst, 'reload config';
 --    20260721070000 page query verbatim plus optional filters; both public
 --    reads below delegate to it after their own membership check.
 -- ---------------------------------------------------------------------------
+-- An earlier draft of this file defined a 17-argument builder; drop it so a
+-- re-run leaves exactly one (no overload still granted to keel_api).
+drop function if exists public.keel_transactions_page(
+  uuid, integer, date, uuid, uuid, uuid, text, date, date, uuid[], text, bigint, bigint, text, uuid, uuid, boolean);
+
 create or replace function public.keel_transactions_page(
   p_household_id uuid,
   p_limit integer,

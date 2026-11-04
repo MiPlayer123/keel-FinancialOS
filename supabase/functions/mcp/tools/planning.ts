@@ -229,6 +229,13 @@ export const billsSave = defineTool({
     const fieldKeys = ['account_id', 'description', 'amount_minor', 'category_id', 'frequency', 'next_due', 'auto_enter_days', 'day_of_month', 'second_day_of_month'] as const;
     const editsFields = fieldKeys.some((k) => args[k] !== undefined);
     let current: Record<string, unknown> = {};
+    // Reactivate first: keel_list_schedules hides ended bills, so an edit that
+    // also brings an ended bill back could not find it otherwise.
+    const reactivateFirst = args.bill_id !== undefined && args.status === 'active' && editsFields;
+    if (reactivateFirst) {
+      const r = await writeProc(ctx, null, 'keel_schedule_set_status', { p_schedule_id: args.bill_id, p_status: 'active' });
+      if (!r.ok) return r;
+    }
     if (args.bill_id && editsFields) {
       const list = await readProc(ctx, null, 'keel_list_schedules');
       if (!list.ok) return list;
@@ -242,22 +249,27 @@ export const billsSave = defineTool({
     let billId = args.bill_id ?? null;
     if (!args.bill_id || editsFields) {
       const pickArg = <T>(v: T | undefined, fallback: unknown) => (v !== undefined ? v : (fallback ?? null));
+      // Days of month are anchors only for semimonthly bills; for every other
+      // frequency keel_schedule_save re-anchors on the new due date when the
+      // anchor is null (as the app sends), so never echo a stored one back.
+      const frequency = pickArg(args.frequency, current['frequency']);
+      const semimonthly = frequency === 'semimonthly';
       const r = await writeProc(ctx, null, 'keel_schedule_save', {
         p_schedule_id: args.bill_id ?? null,
         p_account_id: pickArg(args.account_id, current['accountId']),
         p_description: pickArg(args.description, current['description']),
         p_amount_minor: pickArg(args.amount_minor, current['amountMinor']),
         p_category_ledger_account_id: pickArg(args.category_id, current['categoryLedgerAccountId']),
-        p_frequency: pickArg(args.frequency, current['frequency']),
+        p_frequency: frequency,
         p_next_due_date: pickArg(args.next_due, current['nextDueDate']),
         p_auto_enter_days: pickArg(args.auto_enter_days, current['autoEnterDays']),
-        p_anchor_day: pickArg(args.day_of_month, current['anchorDay']),
-        p_anchor_day_2: pickArg(args.second_day_of_month, current['anchorDay2']),
+        p_anchor_day: semimonthly ? pickArg(args.day_of_month, current['anchorDay']) : (args.day_of_month ?? null),
+        p_anchor_day_2: semimonthly ? pickArg(args.second_day_of_month, current['anchorDay2']) : null,
       });
       if (!r.ok) return r;
       billId ??= typeof r.data === 'string' ? r.data : null;
     }
-    if (args.status && billId) {
+    if (args.status && billId && !reactivateFirst) {
       const r = await writeProc(ctx, null, 'keel_schedule_set_status', { p_schedule_id: billId, p_status: args.status });
       if (!r.ok) return err(r.code, `${editsFields || !args.bill_id ? 'Saved the bill; then ' : ''}setting status failed: ${r.message}`, r.hint);
     }
@@ -324,7 +336,7 @@ export const goalsSave = defineTool({
   name: 'goals_save',
   title: 'Create or edit a goal',
   description:
-    'Creates (omit goal_id) or edits a savings or debt goal. tracking "account_balance" follows a linked account; "manual" counts contributions. status sets active, reached or archived. When editing, only the fields you pass change.',
+    'Creates (omit goal_id) or edits a savings or debt goal. tracking "account_balance" follows a linked account; "manual" counts contributions. status sets active or archived (KEEL marks a goal reached on its own). When editing, only the fields you pass change.',
   kind: 'write',
   destructive: true,
   input: z.object({
@@ -335,7 +347,7 @@ export const goalsSave = defineTool({
     target_date: isoDate('Target date').nullable().optional(),
     tracking: z.enum(['manual', 'account_balance']).optional(),
     account_id: uuid('Linked account').nullable().optional(),
-    status: z.enum(['active', 'reached', 'archived']).optional(),
+    status: z.enum(['active', 'archived']).optional(),
   }).strict(),
   run: async (ctx, args) => {
     const editsFields = (['name', 'kind', 'target_minor', 'target_date', 'tracking', 'account_id'] as const).some((k) => args[k] !== undefined);

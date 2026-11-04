@@ -1,8 +1,8 @@
 /**
  * What a tool gets to work with, built once per request from the caller's
- * verified token and live KEEL grant. Every database call goes through the
- * caller's own client (RLS + auth.uid() in every proc) — there is no service
- * key anywhere in this function.
+ * verified token and live KEEL grant. Every database call a tool makes goes
+ * through the caller's own client (RLS + auth.uid() in every proc); the
+ * service key is used only by index.ts to read the gateway key.
  */
 import * as z from 'npm:zod@4.4.3';
 import { dbError, err, type ToolErr, type ToolOutcome } from './lib.ts';

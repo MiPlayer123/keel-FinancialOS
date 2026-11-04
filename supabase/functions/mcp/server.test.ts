@@ -215,6 +215,44 @@ Deno.test('edits keep the fields they do not change (tasks, notes, bills)', asyn
   assertEquals(callsTo(calls, 'keel_schedule_set_status')[0]!.args['p_status'], 'paused');
 });
 
+Deno.test('bills: moving the due date re-anchors (stored anchors are echoed only for semimonthly)', async () => {
+  const BILL = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const { ctx, calls } = stubContext('write', {
+    keel_list_schedules: { rows: [{
+      scheduleId: BILL, accountId: '33333333-3333-4333-8333-333333333333', description: 'Rent', amountMinor: '-150000',
+      categoryLedgerAccountId: null, frequency: 'monthly', nextDueDate: '2026-11-15', autoEnterDays: null, anchorDay: 15, anchorDay2: null,
+    }] },
+  });
+  await runTool(tool('bills_save'), ctx, { bill_id: BILL, next_due: '2026-11-20' });
+  const saved = callsTo(calls, 'keel_schedule_save')[0]!.args;
+  assertEquals([saved['p_next_due_date'], saved['p_anchor_day'], saved['p_description'], saved['p_amount_minor']], ['2026-11-20', null, 'Rent', '-150000']);
+});
+
+Deno.test('notes: edit before archive; restoring an active note is a no-op restore', async () => {
+  const NOTE = '99999999-9999-4999-8999-999999999999';
+  const { ctx, calls } = stubContext('write', { keel_list_notes_tasks: { rows: [{ type: 'note', id: NOTE, body: 'Old', pinned: true }] } });
+  await runTool(tool('notes_save'), ctx, { note_id: NOTE, body: 'New', archived: true });
+  assertEquals(calls.map((c) => c.proc).filter((p) => p !== 'keel_list_notes_tasks'), ['keel_note_save', 'keel_note_archive']);
+  const before = calls.length;
+  const res = await runTool(tool('notes_save'), ctx, { note_id: NOTE, archived: false });
+  assert(res.isError !== true);
+  assertEquals(calls.slice(before).filter((c) => c.proc === 'keel_note_unarchive').length, 0, 'an active note is not "restored"');
+  const nothing = await runTool(tool('notes_save'), ctx, { note_id: NOTE });
+  assertEquals(nothing.isError, true);
+});
+
+Deno.test('review_list leaves out receipts already attached (by a match or receipts_attach)', async () => {
+  const { ctx } = stubContext('read', {
+    keel_receipts_inbox: [
+      { documentId: 'doc-a', originalFilename: 'a.jpg', extraction: null, match: { matchId: 'm-a', status: 'suggested' } },
+      { documentId: 'doc-b', originalFilename: 'b.jpg', extraction: null, match: null },
+    ],
+    keel_documents_list_household: { rows: [{ documentId: 'doc-a', attachmentCount: 1 }, { documentId: 'doc-b', attachmentCount: 0 }] },
+  });
+  const body = JSON.parse((await runTool(tool('review_list'), ctx, { limit: 50 })).content[0]!.text);
+  assertEquals(body.receipts.rows.map((r: { document_id: string }) => r.document_id), ['doc-b']);
+});
+
 Deno.test('archive lives on the update tools', async () => {
   const { ctx, calls } = stubContext('write');
   await runTool(tool('accounts_update'), ctx, { account_id: '33333333-3333-4333-8333-333333333333', archived: true });

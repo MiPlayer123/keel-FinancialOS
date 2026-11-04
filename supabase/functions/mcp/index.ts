@@ -59,15 +59,17 @@ const ENABLED = env('KEEL_MCP_ENABLED') !== 'off' && SUPABASE_URL !== '';
 let gatewayKey: Promise<string | null> | null = null;
 const loadGatewayKey = (): Promise<string | null> =>
   (gatewayKey ??= (async () => {
-    if (env('KEEL_MCP_GATEWAY_KEY')) return env('KEEL_MCP_GATEWAY_KEY');
-    const admin: UserClient = createAdminClient();
-    const { data, error } = await admin.rpc('keel_mcp_gateway_key');
-    if (error || typeof data !== 'string' || data.length === 0) {
+    try {
+      if (env('KEEL_MCP_GATEWAY_KEY')) return env('KEEL_MCP_GATEWAY_KEY');
+      const admin: UserClient = createAdminClient();
+      const { data, error } = await admin.rpc('keel_mcp_gateway_key');
+      if (!error && typeof data === 'string' && data.length > 0) return data;
       console.error('mcp_gateway_key_unavailable', error?.code ?? 'missing');
-      gatewayKey = null; // retry on the next request
-      return null;
+    } catch (e) {
+      console.error('mcp_gateway_key_unavailable', e instanceof Error ? e.name : 'unknown');
     }
-    return data;
+    gatewayKey = null; // never cache a failure; retry on the next request
+    return null;
   })());
 const URLS = resolveMcpUrls(SUPABASE_URL, env('KEEL_MCP_PUBLIC_URL') || null);
 const TOKEN_POLICY = {
@@ -192,13 +194,23 @@ export const handle = async (req: Request): Promise<Response> => {
   if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return json(413, { error: 'payload_too_large' }, cors(origin));
 
   // --- Grant: what the user allowed this app (KEEL's consent page) ---
-  const key = await loadGatewayKey();
+  const clientFor = (key: string): UserClient =>
+    createContextClient({
+      auth: { token: auth.token },
+      supabaseOptions: { global: { headers: { 'x-keel-mcp-gateway': key } } },
+    });
+  let key = await loadGatewayKey();
   if (!key) return json(503, { error: 'temporarily_unavailable' }, cors(origin));
-  const db: UserClient = createContextClient({
-    auth: { token: auth.token },
-    supabaseOptions: { global: { headers: { 'x-keel-mcp-gateway': key } } },
-  });
-  const { data: grant, error: grantError } = await db.rpc('keel_mcp_grant_current');
+  let db = clientFor(key);
+  let { data: grant, error: grantError } = await db.rpc('keel_mcp_grant_current');
+  if (grantError?.code === '42501') {
+    // The vault key was rotated under this isolate: reload it once.
+    gatewayKey = null;
+    key = await loadGatewayKey();
+    if (!key) return json(503, { error: 'temporarily_unavailable' }, cors(origin));
+    db = clientFor(key);
+    ({ data: grant, error: grantError } = await db.rpc('keel_mcp_grant_current'));
+  }
   if (grantError) {
     console.error('mcp_grant_lookup_failed', grantError.code);
     return json(503, { error: 'temporarily_unavailable' }, cors(origin));

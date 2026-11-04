@@ -103,10 +103,22 @@ recommended range (roughly 35–45 when all are loaded at once). Changes:
 Result: 42 tools (18 read, 24 write).
 
 **Tests.**
-- New: 32 Deno (`mcp/*.test.ts`), 5 Deno (`_shared/command-exec.test.ts`), 57 pgTAP
+**Second review (fresh agent) on the audit → fixed:**
+- `bills_save` echoed the stored day-of-month back, so moving a due date snapped back to the
+  old day. Anchors are now echoed only for semimonthly bills.
+- `notes_save` edits before archiving, never "restores" an active note, and refuses empty
+  calls.
+- `review_list` hides receipts already attached via `receipts_attach` (uses the attachment
+  count).
+- Ended bills can be reactivated and edited in one call.
+- Goal status `reached` was removed; KEEL sets it, the proc does not accept it.
+- The gateway-key loader never caches a failure and reloads once on a rotated key.
+- The migration drops the earlier 17-argument page builder so a re-run leaves one function.
+
+- New: 35 Deno (`mcp/*.test.ts`), 5 Deno (`_shared/command-exec.test.ts`), 57 pgTAP
   (`045_mcp_connector.sql`), 17 vitest (`oauth-consent.test.ts`).
 - Full `pnpm test` green: 1432 vitest + Deno suites.
-- `supabase test db` green: 1178 tests.
+- `supabase test db` green: 1186 tests.
 - Schema replay after `db reset` is identical.
 - `pnpm lint`, `pnpm typecheck` and the three harness gates are green.
 - `apps/web` build is green, with no secrets in the bundle.
