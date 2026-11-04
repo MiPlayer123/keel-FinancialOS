@@ -422,6 +422,18 @@ Deno.test('accounts_create takes a retirement account (401(k), IRA) as an asset'
   assertEquals([commands[0]!.command, commands[0]!.payload['kind'], commands[0]!.payload['subtype']], ['accounts.create', 'asset', 'retirement']);
 });
 
+Deno.test('accounts_update links a closed account to its replacement, and null unlinks it', async () => {
+  const OLD = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const NEW = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const { ctx, calls } = stubContext('write');
+  await runTool(tool('accounts_update'), ctx, { account_id: OLD, replaced_by_account_id: NEW });
+  await runTool(tool('accounts_update'), ctx, { account_id: OLD, replaced_by_account_id: null });
+  assertEquals(
+    callsTo(calls, 'keel_set_account_replacement').map((c) => [c.args['p_account_id'], c.args['p_replaced_by_account_id']]),
+    [[OLD, NEW], [OLD, null]],
+  );
+});
+
 Deno.test('archive lives on the update tools', async () => {
   const { ctx, calls } = stubContext('write');
   await runTool(tool('accounts_update'), ctx, { account_id: '33333333-3333-4333-8333-333333333333', archived: true });

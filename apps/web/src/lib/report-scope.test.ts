@@ -186,6 +186,20 @@ describe('scopedAccountIdSet', () => {
   });
 });
 
+describe('scopedAccountIdSet — account continuity', () => {
+  it('picking a card brings the old number it replaced', () => {
+    const accounts = [
+      { id: 'card-old', entityId: 'personal', replacedByAccountId: 'card-new' },
+      { id: 'card-new', entityId: 'personal' },
+      { id: 'chk', entityId: 'personal' },
+    ];
+    expect(scopedAccountIdSet({ accountIds: ['card-new'], entityId: null }, accounts)).toEqual(
+      new Set(['card-new', 'card-old']),
+    );
+    expect(scopedAccountIdSet({ accountIds: ['chk'], entityId: null }, accounts)).toEqual(new Set(['chk']));
+  });
+});
+
 describe('scopeRows', () => {
   const rows = [
     { accountId: 'chk', effectiveDate: '2026-07-01' },

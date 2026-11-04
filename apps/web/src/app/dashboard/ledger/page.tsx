@@ -2,6 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { withPredecessors } from '@/lib/account-family';
 import {
   ReceiptText,
   ChevronRight,
@@ -175,6 +176,8 @@ function LedgerTable() {
   );
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
+  // Every account incl. closed ones: a picked account also covers the numbers it replaced.
+  const [allAccounts, setAllAccounts] = useState<AccountRow[]>([]);
   const [tags, setTags] = useState<TagRow[]>([]);
   const [query, setQuery] = useState('');
   const [grouping, setGrouping] = useState<Grouping>('none');
@@ -272,8 +275,11 @@ function LedgerTable() {
       .catch(() => {
         setCategories([]);
       });
-    void fetchAccounts(householdId)
-      .then(setAccounts)
+    void fetchAccounts(householdId, { includeArchived: true })
+      .then((all) => {
+        setAllAccounts(all);
+        setAccounts(all.filter((a) => !a.archivedAt));
+      })
       .catch(() => {
         setAccounts([]);
       });
@@ -307,9 +313,13 @@ function LedgerTable() {
   // RichTransactionRow has no entity_id, so we resolve it through the account
   // list this page already loads — the same account→entity mapping the Accounts
   // page and Reports scope use. Rows on accounts outside the lens drop out.
-  const lensAccountIds = useMemo(
-    () => lensAccountIdSet(entityLens, accounts),
-    [entityLens, accounts],
+  const lensAccountIds = useMemo(() => {
+    const lens = lensAccountIdSet(entityLens, accounts);
+    return lens === null ? null : withPredecessors(lens, allAccounts);
+  }, [entityLens, accounts, allAccounts]);
+  const accountFamily = useMemo(
+    () => (accountFilter === 'all' ? null : withPredecessors([accountFilter], allAccounts)),
+    [accountFilter, allAccounts],
   );
 
   const taxIds = useMemo(() => taxCategoryIdSet(categories), [categories]);
@@ -346,7 +356,7 @@ function LedgerTable() {
       if (excludeTax && isWhollyTaxRow(t, taxIds)) return false;
       if (from && t.effectiveDate < from) return false;
       if (to && t.effectiveDate > to) return false;
-      if (accountFilter !== 'all' && t.accountId !== accountFilter) return false;
+      if (accountFamily !== null && !accountFamily.has(t.accountId)) return false;
       if (categoryFilter === 'uncategorized') {
         if (!isUncategorized(t)) return false;
       } else if (categoryFilter === 'transfers') {
@@ -414,7 +424,7 @@ function LedgerTable() {
     query,
     datePreset,
     customRange,
-    accountFilter,
+    accountFamily,
     categoryFilter,
     categoryChildIds,
     excludeTax,

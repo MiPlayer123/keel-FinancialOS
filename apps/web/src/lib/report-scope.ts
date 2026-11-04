@@ -1,3 +1,5 @@
+import { withPredecessors } from './account-family';
+
 /**
  * Reports scope bar — pure helpers (teardown C14: ONE scope bar drives every
  * report widget; charts drill into the register).
@@ -164,7 +166,7 @@ export function reportScopeToSearch(scope: ReportScope): string {
   return p.toString();
 }
 
-export type ScopeAccount = { id: string; entityId: string };
+export type ScopeAccount = { id: string; entityId: string; replacedByAccountId?: string | null };
 
 /**
  * Resolve the scope to a concrete set of account ids, or null when the scope
@@ -184,7 +186,9 @@ export function scopedAccountIdSet(
     return new Set(entityAccounts.map((a) => a.id));
   }
   const chosen = new Set(scope.accountIds);
-  return new Set(entityAccounts.filter((a) => chosen.has(a.id)).map((a) => a.id));
+  // A picked account brings the accounts it replaced (a reissued card's old
+  // number): one card, its full history.
+  return withPredecessors(entityAccounts.filter((a) => chosen.has(a.id)).map((a) => a.id), entityAccounts);
 }
 
 /** True when the row's account is inside the scope (null set = unrestricted). */

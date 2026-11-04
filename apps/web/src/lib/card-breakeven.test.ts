@@ -233,6 +233,14 @@ describe('cardGroups — a reissued card reads as one card', () => {
     });
   });
 
+  it('an explicit replaced-by link folds cards even when the names differ', () => {
+    const g = cardGroups([
+      acct({ id: 'old', name: 'Chase Sapphire', archivedAt: '2026-08-13', replacedByAccountId: 'new' }),
+      acct({ id: 'new', name: 'Sapphire Reserve' }),
+    ]);
+    expect(g.get('old')).toEqual({ groupId: 'new', name: 'Sapphire Reserve' });
+  });
+
   it('keeps two LIVE same-named cards separate', () => {
     const g = cardGroups([acct({ id: 'a' }), acct({ id: 'b' })]);
     expect(g.get('a')?.groupId).toBe('a');

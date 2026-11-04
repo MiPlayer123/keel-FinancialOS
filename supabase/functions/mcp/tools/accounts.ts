@@ -34,6 +34,7 @@ interface AccountRow {
   mask: string | null;
   archived_at: string | null;
   ledger_account_id: string;
+  replaced_by_account_id?: string | null;
 }
 
 const loadAccounts = async (ctx: ToolContext, includeArchived: boolean) => {
@@ -42,7 +43,7 @@ const loadAccounts = async (ctx: ToolContext, includeArchived: boolean) => {
   }
   let q = ctx.db
     .from('accounts')
-    .select('id, name, subtype, currency, entity_id, connection_id, mask, archived_at, ledger_account_id')
+    .select('id, name, subtype, currency, entity_id, connection_id, mask, archived_at, ledger_account_id, replaced_by_account_id')
     .eq('household_id', ctx.householdId)
     .order('name');
   if (!includeArchived) q = q.is('archived_at', null);
@@ -109,6 +110,7 @@ const loadAccounts = async (ctx: ToolContext, includeArchived: boolean) => {
         ? { kind: 'bank_sync', institution: conn['display_name'] ?? null, status: conn['status'], last_synced: conn['last_successful_sync_at'] ?? null }
         : { kind: 'manual' },
       archived: a.archived_at !== null,
+      ...(a.replaced_by_account_id ? { replaced_by_account_id: a.replaced_by_account_id } : {}),
     };
   });
   return { ok: true as const, accounts: shaped, entities: [...entityOf].map(([id, name]) => ({ id, name })) };
@@ -233,7 +235,7 @@ export const accountsUpdate = defineTool({
   name: 'accounts_update',
   title: 'Edit an account',
   description:
-    'Renames an account, moves it to another entity, sets its starting balance ("as of this date the balance was X"; real-world amount, owed for debts), re-anchors a bank-synced account\'s balance to what the bank reports, or archives / restores a manual account (archived hides it from lists and net worth; nothing is deleted; bank-synced accounts are removed by disconnecting the bank in the app).',
+    'Renames an account, moves it to another entity, sets its starting balance ("as of this date the balance was X"; real-world amount, owed for debts), re-anchors a bank-synced account\'s balance to what the bank reports, archives / restores a manual account (archived hides it from lists and net worth; nothing is deleted; bank-synced accounts are removed by disconnecting the bank in the app), or links a closed account to the live account that replaced it (replaced_by_account_id: a reissued card\'s old number to the new one, so its history shows under the new account; null unlinks).',
   kind: 'write',
   destructive: true,
   input: z.object({
@@ -244,6 +246,8 @@ export const accountsUpdate = defineTool({
     starting_balance_date: isoDate('Date of the starting balance').optional(),
     reanchor_to_bank: z.boolean().optional().describe('true = match the latest bank-reported balance.'),
     archived: z.boolean().optional().describe('true archives a manual account, false restores it.'),
+    replaced_by_account_id: uuid('Live account that replaced this closed one').nullable().optional()
+      .describe('Links a closed (archived) account to its successor, e.g. a reissued card; null removes the link.'),
     idempotency_key: idempotencyKey,
   }).strict(),
   run: async (ctx, args) => {
@@ -279,6 +283,14 @@ export const accountsUpdate = defineTool({
       const r = await writeProc(ctx, null, 'keel_set_account_archived', { p_account_id: args.account_id, p_archived: args.archived });
       if (!r.ok) return fail(args.archived ? 'archive' : 'restore', r);
       done.push(args.archived ? 'archived' : 'restored');
+    }
+    if (args.replaced_by_account_id !== undefined) {
+      const r = await writeProc(ctx, null, 'keel_set_account_replacement', {
+        p_account_id: args.account_id,
+        p_replaced_by_account_id: args.replaced_by_account_id,
+      });
+      if (!r.ok) return fail('link to its replacement', r);
+      done.push(args.replaced_by_account_id ? 'linked to its replacement' : 'replacement link removed');
     }
     if (done.length === 0) return err('invalid_request', 'Nothing to change.', 'Pass at least one field to change.');
     return ok(`Updated ${done.join(', ')}.`, {

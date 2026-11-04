@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 
 import { EmptyState } from '@/components/keel/page-header';
+import { successorOf } from '@/lib/account-family';
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
 import {
@@ -220,6 +221,8 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
     to: balanceRange.to,
   });
   const [accounts, setAccounts] = useState<AccountRow[] | null>(null);
+  // Closed accounts too: the numbers this account replaced (account continuity).
+  const [allAccounts, setAllAccounts] = useState<AccountRow[]>([]);
   const [kinds, setKinds] = useState<Map<string, string> | null>(null);
   const [provider, setProvider] = useState<LatestBalanceRow | null>(null);
   const [connections, setConnections] = useState<ConnectionRow[]>([]);
@@ -269,10 +272,11 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
       return;
     }
     let active = true;
-    void Promise.all([fetchAccounts(householdId), fetchLedgerKinds(householdId)])
+    void Promise.all([fetchAccounts(householdId, { includeArchived: true }), fetchLedgerKinds(householdId)])
       .then(([a, k]) => {
         if (!active) return;
-        setAccounts(a);
+        setAllAccounts(a);
+        setAccounts(a.filter((x) => !x.archivedAt));
         setKinds(k);
       })
       .catch(() => {
@@ -372,7 +376,9 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
     const ledgerId = accounts?.find((a) => a.id === accountId)?.ledgerAccountId;
     if (!ledgerId) return map;
     let running = BigInt(balanceByLedgerMap.get(ledgerId) ?? '0');
-    const sorted = [...accountTxns].sort(
+    // Only this account's own rows carry a running balance: rows from a number
+    // it replaced (a reissued card) sit on another ledger and show none.
+    const sorted = accountTxns.filter((t) => t.accountId === accountId).sort(
       (a, b) =>
         b.effectiveDate.localeCompare(a.effectiveDate) ||
         a.transactionId.localeCompare(b.transactionId),
@@ -397,13 +403,31 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
 
   const account = accounts.find((a) => a.id === accountId);
   if (!account) {
+    // A replaced account (a reissued card's old number) lives on in its successor.
+    const successorId = successorOf(accountId, allAccounts);
+    const successor = successorId !== accountId ? accounts.find((a) => a.id === successorId) : undefined;
     return (
       <div className="p-6">
         <BackLink />
-        <EmptyState title="Account not found" description="This account isn't in your household." />
+        {successor ? (
+          <EmptyState
+            title="This account was replaced"
+            description={`Its history now shows under ${successor.name}.`}
+            action={
+              <Button render={<Link href={`/dashboard/accounts/${successor.id}`} />} variant="outline">
+                Open {successor.name}
+              </Button>
+            }
+          />
+        ) : (
+          <EmptyState title="Account not found" description="This account isn't in your household." />
+        )}
       </div>
     );
   }
+  const earlierNumbers = allAccounts.filter(
+    (a) => a.id !== account.id && successorOf(a.id, allAccounts) === account.id,
+  );
 
   const balanceByLedger = new Map(balances.rows.map((r) => [r.ledgerAccountId, r.balanceMinor]));
   const balanceMinor = balanceByLedger.get(account.ledgerAccountId) ?? '0';
@@ -509,6 +533,15 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
             </span>
             {entityName ? <> · {entityName}</> : null}
           </p>
+          {earlierNumbers.length > 0 ? (
+            <p className="text-xs text-muted-foreground">
+              Includes history from{' '}
+              {earlierNumbers
+                .map((a) => (a.mask ? `${a.name} ••${a.mask}` : a.name))
+                .join(', ')}{' '}
+              (closed)
+            </p>
+          ) : null}
           {connection?.status === 'reauth_required' ? <ReauthLink className="mt-1.5" /> : null}
         </div>
         <div className="flex items-start justify-between gap-2 sm:justify-end">

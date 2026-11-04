@@ -2,6 +2,23 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+## 2026-11-04 Account continuity: a closed account replaced by a live one
+
+- **Why.** The owner's Sapphire Reserve was reissued on 2026-08-13 (old ••8311, new ••4550). The old number keeps its history on an archived account, so the site showed one card as two. CHASE COLLEGE has the same split from its reconnect. The owner chose an explicit link over moving ledger rows.
+  - The reconnect-dedupe ruling (`20260718061000`) stands: ledgers never merge, and postings never move (Law 9).
+- **Migration `20261104210000_account_replaced_by.sql`.**
+  - New column `accounts.replaced_by_account_id` (not self, indexed).
+  - `keel_set_account_replacement(household, account, replaced_by | null)`, owned by `keel_api` and audited as `account.set_replacement`.
+  - Its rules: the old account must be archived and the successor live, with the same entity, currency and ledger kind, and no loop. Repeating the same link is a no-op.
+  - The page builder `keel_transactions_page` widens its viewed-account join to the account's family. The successor's register (app account page, connector `transactions_list account_id`) includes the replaced numbers' transactions, each on its own cash row.
+  - Export manifest and pgTAP 008 include the column (Law 6).
+- **Web.** `lib/account-family.ts` resolves the chain.
+  - **Reports:** picking an account brings its predecessors; the picker hides replaced accounts; counts are of accounts as shown. `cardGroups` prefers the explicit link, with #205's name rule as the fallback.
+  - **Ledger:** the account filter and the entity lens include predecessors.
+  - **Account page:** a header note names the earlier numbers. The running balance covers only the account's own rows; old-number rows show none rather than a wrong figure. The old account's URL points to its successor.
+- **Connector.** `accounts_update replaced_by_account_id` sets the link and `null` clears it; `accounts_list` shows the link.
+- **Not changed.** Balance history and the headline balance stay the live account's own; the old ledger is frozen and excluded from net worth as before.
+
 ## 2026-11-04 Transfer suggestions expire when a transaction is voided
 
 - **Cleanup.** Rejected the household's 31 orphaned suggestions through the connector (`review_decide`, accept false), as the owner asked. Two were spot-checked first: one side existed, the other was voided.
