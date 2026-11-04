@@ -2,6 +2,16 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+## 2026-11-04 MCP connector: stale transfer suggestions, retirement accounts
+
+- **Stale transfer suggestions.** Eight `suggested` transfer links point at transactions that were later voided (pending card entries removed during cleanup).
+  - `keel_list_transfers` inner-joins both live sides, so they vanish from review in the app and the connector. They change no balances.
+  - `review_list` now also reads open suggestions from `transfer_links` (member-read RLS) and lists the unlisted ones as `stale_transfer_suggestions`.
+  - `review_decide` refuses to accept a pairing that isn't live (`stale_suggestion`); rejecting works as before.
+  - `transfers_unlink` is documented as also dismissing a suggestion (`keel_undo_transfer` already handled `suggested`).
+  - Follow-up, not done: reject a suggestion automatically when either side is voided. That touches the void and sync paths and needs its own pgTAP.
+- **Retirement accounts.** `accounts_create` and the app's add-account dialog take `retirement` (asset). It was already an investment subtype everywhere else (`keel_is_investment_subtype`, net worth, the Accounts page).
+
 ## 2026-11-04 MCP connector: paycheck splits and the site URL
 
 **Paycheck splits (contract amendment, BC-v2.1 contracts are "stabilized, not frozen").**

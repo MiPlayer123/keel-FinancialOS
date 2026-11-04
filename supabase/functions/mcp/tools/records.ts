@@ -70,15 +70,23 @@ export const reviewList = defineTool({
   name: 'review_list',
   title: 'List the review queue',
   description:
-    'What KEEL is waiting on the user to decide: suggested categories for transactions, suggested transfer matches between accounts, and receipts in the receipt inbox (with the merchant, total and date KEEL read from each, and the transaction it suggests). Decide suggestions with review_decide; attach a receipt to any transaction with receipts_attach. Receipts get into KEEL when the user uploads them in the KEEL app.',
+    'What KEEL is waiting on the user to decide: suggested categories for transactions, suggested transfer matches between accounts, and receipts in the receipt inbox (with the merchant, total and date KEEL read from each, and the transaction it suggests). Also lists stale transfer suggestions: pairings whose other side was later voided or replaced; they change no balances and are best rejected. Decide any of these with review_decide; attach a receipt to any transaction with receipts_attach. Receipts get into KEEL when the user uploads them in the KEEL app.',
   kind: 'read',
   input: z.object({ limit: z.number().int().min(1).max(200).default(50) }).strict(),
   run: async (ctx, args) => {
-    const [suggestions, transfers, receipts, documents] = await Promise.all([
+    const [suggestions, transfers, receipts, documents, suggestedLinks] = await Promise.all([
       readProc(ctx, null, 'keel_list_category_suggestions'),
       readProc(ctx, 'transfers.list', 'keel_list_transfers'),
       readProc(ctx, 'receipts.inbox', 'keel_receipts_inbox'),
       readProc(ctx, 'documents.list_household', 'keel_documents_list_household'),
+      // Every open suggestion (RLS: member read). keel_list_transfers shows a
+      // pair only while both transactions are live, so one whose other side
+      // was voided or replaced drops out of review and lingers; list those too.
+      ctx.db
+        .from('transfer_links')
+        .select('id, txn_out, txn_in, created_at')
+        .eq('household_id', ctx.householdId)
+        .eq('status', 'suggested') as Promise<{ data: Record<string, unknown>[] | null; error: unknown }>,
     ]);
     if (!suggestions.ok) return suggestions;
     if (!transfers.ok) return transfers;
@@ -112,6 +120,16 @@ export const reviewList = defineTool({
         to: { account: t['inAccountName'], description: t['inDescription'], transaction_id: t['inTxnId'] },
         days_apart: t['dayGap'],
       }));
+    const listed = new Set(pairs.map((p) => p.item_id));
+    const stale = (suggestedLinks.error ? [] : suggestedLinks.data ?? [])
+      .filter((l) => !listed.has(l['id']))
+      .map((l) => ({
+        item_type: 'transfer_match',
+        item_id: l['id'],
+        transaction_ids: [l['txn_out'], l['txn_in']],
+        suggested_at: l['created_at'],
+        why: 'One side was voided or replaced after KEEL suggested the pair. Reject it (review_decide, accept false); it changes no balances.',
+      }));
     const inbox = rowsOf(receipts.data)
       .filter((r) => (r['match'] as Record<string, unknown> | null)?.['status'] !== 'confirmed' && !attached.has(r['documentId']))
       .map((r) => {
@@ -139,9 +157,10 @@ export const reviewList = defineTool({
             : null,
         };
       });
-    return ok(`${cats.length} category suggestions, ${pairs.length} transfer matches, ${inbox.length} unattached receipts.`, {
+    return ok(`${cats.length} category suggestions, ${pairs.length} transfer matches${stale.length ? ` (+${stale.length} stale)` : ''}, ${inbox.length} unattached receipts.`, {
       category_suggestions: capped(cats, args.limit),
       transfer_matches: capped(pairs, args.limit),
+      ...(stale.length ? { stale_transfer_suggestions: capped(stale, args.limit) } : {}),
       receipts: capped(inbox, args.limit),
     });
   },
@@ -151,7 +170,7 @@ export const reviewDecide = defineTool({
   name: 'review_decide',
   title: 'Accept or reject a review item',
   description:
-    'Accepts or rejects one item from review_list: a category suggestion (accepting applies the category), a transfer match (accepting pairs the two transactions as a transfer), or a receipt match (accepting attaches the receipt to the suggested transaction).',
+    'Accepts or rejects one item from review_list: a category suggestion (accepting applies the category), a transfer match (accepting pairs the two transactions as a transfer; a suggested transfer\'s link_id from transactions_get works too), or a receipt match (accepting attaches the receipt to the suggested transaction).',
   kind: 'write',
   destructive: true,
   input: z.object({
@@ -160,6 +179,15 @@ export const reviewDecide = defineTool({
     accept: z.boolean(),
   }).strict(),
   run: async (ctx, args) => {
+    if (args.item_type === 'transfer_match' && args.accept) {
+      // Confirm only a pair whose two transactions are both still live (what
+      // the app's review shows); a stale suggestion can only be rejected.
+      const live = await readProc(ctx, 'transfers.list', 'keel_list_transfers');
+      if (!live.ok) return live;
+      if (!rowsOf(live.data).some((t) => t['linkId'] === args.item_id && t['status'] === 'suggested')) {
+        return err('stale_suggestion', 'This pairing is not open, or one of its transactions no longer exists, so it can only be rejected.', 'Call review_decide with accept false, or pair the transaction with transfers_link.');
+      }
+    }
     const r = args.item_type === 'category_suggestion'
       ? await ctx.command('categorization.decide_suggestion', { suggestionId: args.item_id, accept: args.accept }, undefined)
       : args.item_type === 'receipt_match'
@@ -228,7 +256,7 @@ export const transfersLink = defineTool({
 export const transfersUnlink = defineTool({
   name: 'transfers_unlink',
   title: 'Undo a transfer',
-  description: 'Undoes a transfer pairing (and reverses a booked other side, if KEEL booked one). link_id comes from transactions_get.',
+  description: 'Undoes a confirmed transfer pairing (and reverses a booked other side, if KEEL booked one), or dismisses a still-suggested one. link_id comes from transactions_get or review_list.',
   kind: 'write',
   destructive: true,
   input: z.object({ link_id: uuid('Transfer link') }).strict(),

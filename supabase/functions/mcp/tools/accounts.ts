@@ -173,6 +173,7 @@ const MANUAL_TYPES = {
   checking: 'asset',
   savings: 'asset',
   investment: 'asset',
+  retirement: 'asset',
   property: 'asset',
   vehicle: 'asset',
   other_asset: 'asset',
@@ -185,7 +186,7 @@ export const accountsCreate = defineTool({
   name: 'accounts_create',
   title: 'Add a manual account',
   description:
-    'Adds an account KEEL tracks by hand (cash, property, a car, a loan, an unlinked card…), optionally with a starting balance. starting_balance_minor is the real-world amount: money held for assets, amount owed for debts.',
+    'Adds an account KEEL tracks by hand (cash, property, a car, a loan, a 401(k) or IRA as type retirement, an unlinked card…), optionally with a starting balance. starting_balance_minor is the real-world amount: money held for assets, amount owed for debts.',
   kind: 'write',
   destructive: false,
   input: z.object({
