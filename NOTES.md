@@ -2,6 +2,33 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+## 2026-11-04 MCP connector: first live connect failed at discovery
+
+**Symptom.** Adding the connector in Claude (after the ⚑ OAuth server step) failed twice with
+"Automatic client registration isn't supported… add an OAuth Client ID" (`ofid_baf7ae455756a2f9`,
+`ofid_f470efc2ebb581d7`).
+
+**What was checked on live.**
+- The sign-in server is fine:
+  - The metadata at `/.well-known/oauth-authorization-server/auth/v1` lists `registration_endpoint`.
+  - A Claude-shaped registration returns 201, as a public client with the `claude.ai` callback.
+  - `/oauth/authorize`, called with Claude's exact parameters (S256, `scope`, `resource`), redirects to `/oauth/consent`.
+  - One test client was left from this, named "KEEL connector check (safe to delete)".
+- The break was earlier, in the `mcp` function:
+  - It answered any request carrying an `Origin` outside `KEEL_MCP_ALLOWED_ORIGINS` with a 403, before the 401 challenge. The metadata path got the same 403.
+  - It answered an unauthenticated GET with 405 and no challenge.
+  - If the app's first request does either, it never learns where the sign-in server is. It then falls back to the supabase.co root, which has no registration endpoint, and that matches this message.
+  - Not confirmed, because function logs aren't readable from this session.
+
+**Fix.**
+- Drop the Origin allowlist. Every MCP call needs a bearer token and never a cookie, so the Origin adds nothing that the token doesn't already prove. Supabase's gateway also routes by project host, so a rebound host never reaches the function.
+- Send the 401 challenge for any unauthenticated method; only authenticated requests can get a 405.
+
+**Deviation.** The MCP transport's Origin rule targets DNS rebinding against servers that trust
+network position. That doesn't apply to a public bearer-token server; every Origin is treated as
+valid. `mcp/index.test.ts` now pins the handshake: `claude.ai` and `chatgpt.com` Origins and a GET
+probe all get the 401 with `resource_metadata`.
+
 ## 2026-11-04 MCP connector (connected AI apps)
 
 **What.** A remote MCP server (`supabase/functions/mcp`; see its README) lets a user connect

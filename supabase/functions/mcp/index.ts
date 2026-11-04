@@ -37,7 +37,6 @@ import {
   buildProtectedResourceMetadata,
   buildWwwAuthenticate,
   checkMcpTokenClaims,
-  isAllowedOrigin,
   PRM_PATH,
   resolveMcpUrls,
 } from './auth.ts';
@@ -76,7 +75,6 @@ const TOKEN_POLICY = {
   expectedIssuer: URLS.authorizationServer,
   allowedClientIds: list('KEEL_MCP_ALLOWED_CLIENT_IDS'),
 };
-const ALLOWED_ORIGINS = list('KEEL_MCP_ALLOWED_ORIGINS');
 const MAX_BODY_BYTES = 256 * 1024;
 
 const COMMAND_CONTRACT: CommandContract = {
@@ -164,8 +162,12 @@ const makeContext = (
 
 export const handle = async (req: Request): Promise<Response> => {
   if (!ENABLED) return json(404, { error: 'not_found' });
+  // No Origin allowlist: hosted clients (Claude's connector service, ChatGPT)
+  // may send their own Origin, and a 403 here hides the 401 below, so the app
+  // never finds the sign-in server ("automatic client registration isn't
+  // supported"). Every MCP call needs a bearer token, never a cookie, so the
+  // Origin adds nothing a token doesn't already prove.
   const origin = req.headers.get('origin');
-  if (!isAllowedOrigin(origin, ALLOWED_ORIGINS)) return json(403, { error: 'origin_not_allowed' });
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors(origin) });
 
   const path = new URL(req.url).pathname.replace(/^\/(?:functions\/v1\/)?mcp/, '') || '/';
@@ -178,10 +180,11 @@ export const handle = async (req: Request): Promise<Response> => {
       : json(405, { error: 'method_not_allowed' }, { allow: 'GET', ...cors(origin) });
   }
   if (path !== '/') return json(404, { error: 'not_found' }, cors(origin));
-  if (req.method !== 'POST') return json(405, { error: 'method_not_allowed' }, { allow: 'POST', ...cors(origin) });
 
-  // --- Authentication: a 401 is what starts sign-in in MCP clients ---
+  // --- Authentication: a 401 is what starts sign-in in MCP clients, so any
+  // unauthenticated method gets it (some clients probe with GET first) ---
   if (!/^Bearer\s+\S+$/i.test(req.headers.get('authorization') ?? '')) return challenge(origin);
+  if (req.method !== 'POST') return json(405, { error: 'method_not_allowed' }, { allow: 'POST', ...cors(origin) });
   const { data: auth, error: authError } = await verifyAuth(req, { auth: 'user' });
   if (authError || !auth?.jwtClaims || !auth.token) return challenge(origin, 'invalid_token', 'The access token is invalid or expired.');
   const decision = checkMcpTokenClaims(auth.jwtClaims as Record<string, unknown>, TOKEN_POLICY);

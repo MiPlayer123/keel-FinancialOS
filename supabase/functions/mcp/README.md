@@ -125,7 +125,7 @@ The server `instructions` (in `server.ts`) are kept short: what KEEL is, the mon
 | File | Role |
 |---|---|
 | `index.ts` | HTTP entry: discovery, 401 challenge, token rules, grant lookup, SDK handler |
-| `auth.ts` | Protected-resource metadata, `WWW-Authenticate`, token rules, Origin guard (pure) |
+| `auth.ts` | Protected-resource metadata, `WWW-Authenticate`, token rules (pure) |
 | `server.ts` | Instructions, tool registry, filtering by access level, the call wrapper |
 | `context.ts` | `ToolContext`, `defineTool`, shared input schemas, read/write proc helpers |
 | `lib.ts` | Money, result envelope, error mapping, cursor (pure) |
@@ -163,7 +163,6 @@ Nothing works until step 3: without the OAuth server, no app token can exist.
 **Optional secrets:**
 - `KEEL_MCP_PUBLIC_URL`: a custom-domain URL for the connector.
 - `KEEL_MCP_ALLOWED_CLIENT_IDS`: restrict which apps may connect.
-- `KEEL_MCP_ALLOWED_ORIGINS`: browser origins such as the MCP Inspector.
 - `KEEL_MCP_DOCS_URL`: a documentation link in the metadata.
 
 ### Adding it in each app

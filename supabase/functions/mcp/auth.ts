@@ -152,10 +152,3 @@ export const checkMcpTokenClaims = (
   }
   return { ok: true, userId: sub, clientId };
 };
-
-/**
- * DNS-rebinding guard (Streamable HTTP transport): browsers send `Origin`;
- * server-to-server MCP clients (Claude's connector backend, Codex) do not.
- */
-export const isAllowedOrigin = (origin: string | null, allowed: readonly string[]): boolean =>
-  origin === null || origin.length === 0 || allowed.includes(origin);
