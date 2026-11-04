@@ -95,6 +95,9 @@ export function CardBreakEvenCard({
                 <p className="mt-2 text-xs text-muted-foreground">
                   {c.rewardCount} reward{c.rewardCount === 1 ? '' : 's'} · {c.feeCount} fee
                   {c.feeCount === 1 ? '' : 's'}
+                  {c.accountIds.length > 1
+                    ? ` · includes ${String(c.accountIds.length - 1)} previous card number${c.accountIds.length > 2 ? 's' : ''}`
+                    : ''}
                 </p>
               </div>
             );

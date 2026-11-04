@@ -71,7 +71,7 @@ import { TransferNudgeBanner } from '@/components/keel/transfer-nudge-banner';
 import { InfoNote } from '@/components/keel/info-note';
 import { ReportsBudgetCard } from '@/components/keel/budget-cards';
 import { CardBreakEvenCard } from '@/components/keel/card-breakeven-card';
-import { cardBreakEven, CREDIT_CARD_SUBTYPE } from '@/lib/card-breakeven';
+import { cardBreakEven, cardGroups, CREDIT_CARD_SUBTYPE } from '@/lib/card-breakeven';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -1462,9 +1462,11 @@ function ReportsBody() {
   // Annual fees only make sense over a year, so this card always reads
   // year to date (still honoring the account/entity scope and tax toggle).
   const ytdScope = useMemo(() => ({ ...scope, preset: 'ytd' as const, ...presetRange('ytd') }), [scope]);
+  // A reissued card (closed old number + live new number) reads as ONE card.
+  const creditCardGroups = useMemo(() => cardGroups(accounts), [accounts]);
   const cardBreakEvenRows = useMemo(
-    () => cardBreakEven(scopeRows(spendScopedRows, ytdScope, null), creditCardIds),
-    [spendScopedRows, ytdScope, creditCardIds],
+    () => cardBreakEven(scopeRows(spendScopedRows, ytdScope, null), creditCardIds, creditCardGroups),
+    [spendScopedRows, ytdScope, creditCardIds, creditCardGroups],
   );
 
   // The two newest months with any activity — comparing two empty trailing

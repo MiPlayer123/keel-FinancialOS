@@ -107,7 +107,11 @@ export function isCardRewardRow(txn: RichTransactionRow): boolean {
 }
 
 export type CardBreakEven = {
+  /** The card's representative account (the active one when a reissued card merged). */
   accountId: string;
+  /** Every account folded into this card — more than one when a reissued card's
+   *  closed predecessor merged in (Law 9: the evidence set is stated). */
+  accountIds: string[];
   accountName: string;
   currency: string;
   /** Total rewards / statement credits received on the card, minor units (≥ 0). */
@@ -120,6 +124,51 @@ export type CardBreakEven = {
   rewardCount: number;
   feeCount: number;
 };
+
+/** The account fields cardGroups reads. */
+export type CardAccount = {
+  id: string;
+  name: string;
+  subtype: string;
+  entityId: string;
+  currency: string;
+  archivedAt?: string | null;
+};
+
+export type CardGroup = { groupId: string; name: string };
+
+/**
+ * Folds a reissued card's closed predecessor into the live card. A bank relink
+ * or card reissue (new number, same product) archives the old account and opens
+ * a new one, which would otherwise split one card's year — an annual fee on the
+ * old number, the credits on the new — into two misleading rows.
+ *
+ * Deterministic rule (never memo-derived, Law 5): a CLOSED credit card joins the
+ * ACTIVE credit card with the same name (case/space-insensitive), entity and
+ * currency — but only when exactly one such active card exists. Two live
+ * same-named cards stay separate, and a closed card with no live successor
+ * stands alone. Every credit card maps to its group; non-cards are absent.
+ */
+export function cardGroups(accounts: readonly CardAccount[]): Map<string, CardGroup> {
+  const cards = accounts.filter((a) => a.subtype === CREDIT_CARD_SUBTYPE);
+  const keyOf = (a: CardAccount) =>
+    `${a.entityId}|${a.currency}|${a.name.trim().replace(/\s+/g, ' ').toLowerCase()}`;
+  const activeByKey = new Map<string, CardAccount[]>();
+  for (const a of cards) {
+    if (a.archivedAt) continue;
+    const list = activeByKey.get(keyOf(a)) ?? [];
+    list.push(a);
+    activeByKey.set(keyOf(a), list);
+  }
+  const out = new Map<string, CardGroup>();
+  for (const a of cards) {
+    const live = activeByKey.get(keyOf(a));
+    const successor = a.archivedAt && live?.length === 1 ? live[0] : undefined;
+    const target = successor ?? a;
+    out.set(a.id, { groupId: target.id, name: target.name });
+  }
+  return out;
+}
 
 /**
  * Per-credit-card rewards-vs-fees break-even over the rows the caller passes
@@ -134,11 +183,14 @@ export type CardBreakEven = {
 export function cardBreakEven(
   rows: RichTransactionRow[],
   creditCardAccountIds: ReadonlySet<string>,
+  /** Optional reissue folding from cardGroups; without it every account is its own card. */
+  groups?: ReadonlyMap<string, CardGroup>,
 ): CardBreakEven[] {
   const byCard = new Map<
     string,
     {
       accountName: string;
+      accountIds: Set<string>;
       currency: string;
       rewardsMinor: bigint;
       feesMinor: bigint;
@@ -149,10 +201,13 @@ export function cardBreakEven(
 
   for (const t of rows) {
     if (!creditCardAccountIds.has(t.accountId)) continue;
+    const group = groups?.get(t.accountId);
+    const cardId = group?.groupId ?? t.accountId;
     const entry =
-      byCard.get(t.accountId) ??
+      byCard.get(cardId) ??
       ({
-        accountName: t.accountName,
+        accountName: group?.name ?? t.accountName,
+        accountIds: new Set<string>(),
         currency: t.currency,
         rewardsMinor: 0n,
         feesMinor: 0n,
@@ -160,12 +215,15 @@ export function cardBreakEven(
         feeCount: 0,
       } satisfies {
         accountName: string;
+        accountIds: Set<string>;
         currency: string;
         rewardsMinor: bigint;
         feesMinor: bigint;
         rewardCount: number;
         feeCount: number;
       });
+
+    entry.accountIds.add(t.accountId);
 
     // Split-aware: attribute reward/fee shares individually. `amountMinor` on a
     // split share is the POSTING amount (debit-positive): expense shares are
@@ -192,7 +250,7 @@ export function cardBreakEven(
           }
         }
       }
-      byCard.set(t.accountId, entry);
+      byCard.set(cardId, entry);
       continue;
     }
 
@@ -210,7 +268,7 @@ export function cardBreakEven(
         entry.feeCount += 1;
       }
     }
-    byCard.set(t.accountId, entry);
+    byCard.set(cardId, entry);
   }
 
   const out: CardBreakEven[] = [];
@@ -218,6 +276,7 @@ export function cardBreakEven(
     if (e.rewardsMinor === 0n && e.feesMinor === 0n) continue;
     out.push({
       accountId,
+      accountIds: [...e.accountIds].sort(),
       accountName: e.accountName,
       currency: e.currency,
       rewardsMinor: e.rewardsMinor,
