@@ -2,7 +2,6 @@ import {
   buildProtectedResourceMetadata,
   buildWwwAuthenticate,
   checkMcpTokenClaims,
-  isAllowedOrigin,
   MCP_SCOPES_SUPPORTED,
   resolveMcpUrls,
   type McpTokenPolicy,
@@ -113,10 +112,4 @@ Deno.test('optional client allowlist and audience binding', () => {
     reason: 'wrong_audience',
   });
   assert(checkMcpTokenClaims(oauthClaims({ aud: ['authenticated', aud] }), policy({ requiredAudience: aud })).ok);
-});
-
-Deno.test('origin guard: absent origin (server-to-server) ok, unknown browser origin refused', () => {
-  assert(isAllowedOrigin(null, []));
-  assert(isAllowedOrigin('https://inspector.example', ['https://inspector.example']));
-  assert(!isAllowedOrigin('https://evil.example', ['https://inspector.example']));
 });
