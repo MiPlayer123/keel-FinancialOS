@@ -83,7 +83,7 @@ There are 42 tools: 18 read and 24 write. Read tools are always listed. Write to
 
 | Area | Tools |
 |---|---|
-| Accounts | `accounts_create` (manual or cash, including retirement for a 401(k) or IRA, with starting balance), `accounts_update` (rename, entity, starting balance, re-anchor, archive or restore) |
+| Accounts | `accounts_create` (manual or cash, including retirement for a 401(k) or IRA, with starting balance), `accounts_update` (rename, entity, starting balance, re-anchor, archive or restore, link a closed account to the account that replaced it) |
 | Transactions | `transactions_create`, `transactions_update` (category, name, note, date, tags), `transactions_split` (amounts, percent or equal; KEEL does the math; signed shares and account legs, so a paycheck books as gross − withholding − a 401(k) leg into its account), `transactions_categorize` (bulk), `transactions_void` |
 | Setup | `categories_create`, `categories_update` (rename, move, tax line, archive), `tags_save`, `rules_save` (`active: false` switches a rule off), `rules_apply` (dry run first) |
 | Planning | `budgets_set`, `recurring_update`, `bills_save` (create, edit, pause or end), `bills_enter`, `goals_save`, `goals_contribute` |

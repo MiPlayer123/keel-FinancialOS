@@ -1,3 +1,4 @@
+import { successorOf } from './account-family';
 import type { RichTransactionRow } from '@/lib/keel-api';
 
 /**
@@ -133,6 +134,7 @@ export type CardAccount = {
   entityId: string;
   currency: string;
   archivedAt?: string | null;
+  replacedByAccountId?: string | null;
 };
 
 export type CardGroup = { groupId: string; name: string };
@@ -160,10 +162,13 @@ export function cardGroups(accounts: readonly CardAccount[]): Map<string, CardGr
     list.push(a);
     activeByKey.set(keyOf(a), list);
   }
+  const byId = new Map(cards.map((a) => [a.id, a]));
   const out = new Map<string, CardGroup>();
   for (const a of cards) {
+    // An explicit "replaced by" link (account continuity) wins over the name rule.
+    const linked = a.replacedByAccountId ? byId.get(successorOf(a.id, accounts)) : undefined;
     const live = activeByKey.get(keyOf(a));
-    const successor = a.archivedAt && live?.length === 1 ? live[0] : undefined;
+    const successor = linked ?? (a.archivedAt && live?.length === 1 ? live[0] : undefined);
     const target = successor ?? a;
     out.set(a.id, { groupId: target.id, name: target.name });
   }

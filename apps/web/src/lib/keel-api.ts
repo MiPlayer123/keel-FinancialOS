@@ -186,6 +186,11 @@ export type AccountRow = {
   /** Set when the account is closed/archived (present so historical scope
    *  resolution can include closed accounts and pickers can label them). */
   archivedAt?: string | null;
+  /** The account this one was replaced by (a reissued card's new number);
+   *  its history reads as part of that account (lib/account-family.ts). */
+  replacedByAccountId?: string | null;
+  /** Last digits the bank reports, when known. */
+  mask?: string | null;
 };
 
 export async function fetchAccounts(
@@ -194,7 +199,7 @@ export async function fetchAccounts(
 ): Promise<AccountRow[]> {
   let query = getSupabaseBrowserClient()
     .from('accounts')
-    .select('id, name, subtype, ledger_account_id, currency, entity_id, connection_id, archived_at')
+    .select('id, name, subtype, ledger_account_id, currency, entity_id, connection_id, archived_at, replaced_by_account_id, mask')
     .eq('household_id', householdId);
   // Scope resolution over HISTORY must see closed accounts too (review
   // r3603410820) — pickers default to active only.
@@ -211,6 +216,8 @@ export async function fetchAccounts(
     entity_id: string;
     connection_id: string | null;
     archived_at: string | null;
+    replaced_by_account_id: string | null;
+    mask: string | null;
   };
 
   return ((data as Row[] | null) ?? []).map((r) => ({
@@ -222,6 +229,8 @@ export async function fetchAccounts(
     entityId: r.entity_id,
     connectionId: r.connection_id,
     archivedAt: r.archived_at,
+    replacedByAccountId: r.replaced_by_account_id,
+    mask: r.mask,
   }));
 }
 

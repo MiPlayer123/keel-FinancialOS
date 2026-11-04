@@ -82,6 +82,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
+import { isReplaced } from '@/lib/account-family';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Select,
@@ -992,8 +993,10 @@ function ScopeBar({
   onScopeChange: (next: ReportScope) => void;
   onExport: () => void;
 }) {
-  const entityAccounts =
-    scope.entityId === null ? accounts : accounts.filter((a) => a.entityId === scope.entityId);
+  // A replaced account (a reissued card's old number) is part of its successor, not a choice of its own.
+  const entityAccounts = (
+    scope.entityId === null ? accounts : accounts.filter((a) => a.entityId === scope.entityId)
+  ).filter((a) => !isReplaced(a, accounts));
   const selectedIds =
     scope.accountIds.length === 0
       ? entityAccounts.map((a) => a.id)
@@ -1214,6 +1217,12 @@ function ReportsBody() {
     [router],
   );
   const accountSet = useMemo(() => scopedAccountIdSet(scope, accounts), [scope, accounts]);
+  // Counts in labels are of accounts as the user sees them: a reissued card is one.
+  const shownAccounts = useMemo(() => accounts.filter((a) => !isReplaced(a, accounts)), [accounts]);
+  const shownSet = useMemo(
+    () => (accountSet === null ? null : new Set(shownAccounts.filter((a) => accountSet.has(a.id)).map((a) => a.id))),
+    [accountSet, shownAccounts],
+  );
   /** Account/entity-scoped rows (all dates) — for month-granular widgets. */
   const scopedRows = useMemo(
     () => (accountSet === null ? txns.rows : txns.rows.filter((r) => accountSet.has(r.accountId))),
@@ -1272,8 +1281,8 @@ function ReportsBody() {
     : null;
   const baseScopeText = scopeLabel({
     scope,
-    accountSet,
-    totalAccounts: accounts.length,
+    accountSet: shownSet,
+    totalAccounts: shownAccounts.length,
     entityName,
   });
   /** "3 of 5 accounts · 2026-05-01 – 2026-07-17[ · taxes excluded]" — every
@@ -1591,9 +1600,9 @@ function ReportsBody() {
               <InfoNote>
                 <p>
                   {entityName ? `${entityName} · ` : ''}
-                  {accountSet === null
+                  {shownSet === null
                     ? 'All accounts'
-                    : `${String(accountSet.size)} of ${String(accounts.length)} accounts`}{' '}
+                    : `${String(shownSet.size)} of ${String(shownAccounts.length)} accounts`}{' '}
                   · full month of {monthLabel(reviewMonth)}
                   {scope.includeTaxes ? '' : ' · taxes excluded'}.
                 </p>
@@ -1918,7 +1927,7 @@ function ReportsBody() {
 
       <CardBreakEvenCard
         cards={cardBreakEvenRows}
-        scopeText={scopeLabel({ scope: ytdScope, accountSet, totalAccounts: accounts.length, entityName })}
+        scopeText={scopeLabel({ scope: ytdScope, accountSet: shownSet, totalAccounts: shownAccounts.length, entityName })}
       />
 
       <Card>
