@@ -1025,3 +1025,17 @@ a private forum thread and needs a call before publishing.
 - Home: Sync status moved into the net-worth card's top-right.
 - Reports: This quarter / Last quarter presets; Card rewards vs fees always reads year to date (annual fees).
 - Ledger on phones: date moves into the row's second line (names get the width); search + icon actions on top, filters in one sideways-scrolling strip; desktop unchanged.
+
+## 2026-11-04 — Budget parent rollup, Copilot model (Stage 2, BC-v2.1 §Budgets, Laws 1/9)
+- Bug: keel_budget_month matched spend to targets by exact category; subcategory spend never reached a
+  parent's target (Oct: Food & Drink $185.05 shown vs ~$799 real; Entertainment missed Events $524).
+- Decision (user, 2026-11-04, after researching Monarch/Copilot/Quicken/Simplifi/Lunch Money/YNAB): Copilot
+  "camp 1". Each target owns its slice; a parent's spent = own + children WITHOUT their own target; a child
+  with a target keeps its spend. Plan total / leftToBudget stay additive (no double count).
+- Migration 20261104120000: internal helper keel_budget_spent_attributed (v4 predicate + attribution) feeds
+  rows, carry and everything-else; parent rows add groupResolvedMinor / groupSpentMinor /
+  rolledUpCategoryNames. formulaVersion budget-v5-parent-rollup. pgTAP 046.
+- Dry-run on live Oct data (temp functions, read-only): total spend conserved ($3,287.24) across rows +
+  everything else; Food & Drink $798.83, Entertainment $966.40, Transportation $82.23, else $1,325.22.
+- UI: parent rows show "Includes …" and "<Parent> overall: $X of $Y (with …)"; MCP budgets_get exposes
+  rolled_up / group_target / group_spent.

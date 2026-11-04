@@ -1311,7 +1311,7 @@ export async function copyBudgets(householdId: string, monthIso: string): Promis
 
 // ---------------------------------------------------------------------------
 // Budgeting v2 (SLICE B2) — planned total + opt-in category targets, resolved
-// by keel_budget_month (formulaVersion budget-v4-plan). Money is minor-unit
+// by keel_budget_month (formulaVersion budget-v5-parent-rollup). Money is minor-unit
 // STRINGS; percents are integer basis points (0..10000). See migration
 // 20260720170000_budgeting_v2_plan.sql.
 // ---------------------------------------------------------------------------
@@ -1335,6 +1335,15 @@ export type BudgetMonthRow = {
   carryMinor: string | null;
   /** resolvedMinor + carry when rollover is on, else resolvedMinor. */
   availableMinor: string;
+  /**
+   * budget-v5 parent rollup (parents only; absent/null on other rows and on
+   * older servers). spentMinor already includes untargeted children; these
+   * are the display-only group view: own target + budgeted children's
+   * targets, all spend underneath, and which untargeted children rolled in.
+   */
+  groupResolvedMinor?: string | null;
+  groupSpentMinor?: string | null;
+  rolledUpCategoryNames?: string[] | null;
 };
 
 export type BudgetMonth = {

@@ -314,6 +314,26 @@ Deno.test('budgets_get says what is left: remaining = available − spent (negat
   assertEquals(body.categories.map((c: { remaining: { amount_minor: string } }) => c.remaining.amount_minor), ['12003', '-2550']);
 });
 
+Deno.test('budgets_get passes through the parent rollup (rolled_up, group totals)', async () => {
+  const { ctx } = stubContext('read', {
+    keel_budget_month: {
+      total: { resolvedMinor: '50000', currency: 'USD' },
+      rows: [
+        { categoryLedgerAccountId: 'p', categoryName: 'Food', resolvedMinor: '35000', spentMinor: '79883', availableMinor: '35000', rollover: false, currency: 'USD',
+          groupResolvedMinor: '50000', groupSpentMinor: '91339', rolledUpCategoryNames: ['Bars', 'Restaurants'] },
+        { categoryLedgerAccountId: 'c', categoryName: 'Groceries', parentLedgerAccountId: 'p', resolvedMinor: '15000', spentMinor: '11456', availableMinor: '15000', rollover: false, currency: 'USD' },
+      ],
+    },
+  });
+  const body = JSON.parse((await runTool(tool('budgets_get'), ctx, {})).content[0]!.text);
+  const [food, groceries] = body.categories;
+  assertEquals(food.rolled_up, ['Bars', 'Restaurants']);
+  assertEquals(food.group_target.amount_minor, '50000');
+  assertEquals(food.group_spent.amount_minor, '91339');
+  assertEquals(groceries.rolled_up, null);
+  assertEquals(groceries.group_target, null);
+});
+
 Deno.test('recurring_list shows live items by default; status widens it', async () => {
   const series = (status: string) => ({ seriesId: status, counterpartyKey: status, status, sign: 'outflow', occurrences: [] });
   const { ctx } = stubContext('read', {

@@ -248,6 +248,9 @@ function BudgetsBody() {
                 householdId={householdId}
                 userId={userId}
                 monthIso={monthIso}
+                budgetedChildNames={sorted
+                  .filter((c) => c.parentLedgerAccountId === r.categoryLedgerAccountId)
+                  .map((c) => c.categoryName)}
                 onSaved={() => {
                   void load();
                 }}
@@ -294,8 +297,8 @@ function EverythingElseLine({ spentMinor }: { spentMinor: bigint }) {
         </button>
         {open ? (
           <p className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
-            Spend in categories you haven&apos;t budgeted. Add one above to start tracking it — or
-            open Transactions to see the detail.
+            Spend in categories you haven&apos;t budgeted (and whose parent has no budget).
+            Add one above to start tracking it, or open Transactions to see the detail.
           </p>
         ) : null}
       </div>
