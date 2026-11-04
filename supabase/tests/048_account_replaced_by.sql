@@ -84,7 +84,7 @@ $$, 'P0009', null, 'a card cannot be replaced by a checking account');
 select throws_ok($$
   select public.keel_set_account_replacement('00000000-0000-4000-8000-00000000b001',
     'c8000000-0000-4000-8000-0000000000b2', null)
-$$, 'P0006', null, 'not a member of that household');
+$$, 'P0005', null, 'a viewer of another household cannot change its accounts');
 reset role;
 
 select is(
