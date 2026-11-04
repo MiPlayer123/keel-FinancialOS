@@ -7,7 +7,6 @@ import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
 
 import { getSupabaseBrowserClient } from '@/lib/supabase';
-import { safeNextPath } from '@/lib/oauth-consent';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -22,16 +21,9 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  // Where to land after sign-in. Same-origin paths only (open-redirect guard);
-  // the AI-connector consent screen sends users here with ?next=/oauth/consent….
-  const [next, setNext] = useState('/dashboard');
-  const [isReauth, setIsReauth] = useState(false);
 
   useEffect(() => {
     if (window.location.hash === '#signup') setMode('signup');
-    const params = new URLSearchParams(window.location.search);
-    setNext(safeNextPath(params.get('next')));
-    setIsReauth(params.get('reauth') === '1');
   }, []);
 
   const isSignup = mode === 'signup';
@@ -45,14 +37,14 @@ export default function LoginPage() {
         const { data, error } = await client.auth.signUp({
           email,
           password,
-          options: { emailRedirectTo: `${window.location.origin}${next}` },
+          options: { emailRedirectTo: `${window.location.origin}/dashboard` },
         });
         if (error) {
           toast.error(error.message);
           return;
         }
         if (data.session) {
-          router.replace(next);
+          router.replace('/dashboard');
         } else {
           toast.success('Account created. Check your email to confirm, then sign in.');
           setMode('signin');
@@ -63,7 +55,7 @@ export default function LoginPage() {
           toast.error(error.message);
           return;
         }
-        router.replace(next);
+        router.replace('/dashboard');
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Something went wrong.');
@@ -81,7 +73,7 @@ export default function LoginPage() {
     try {
       const { error } = await getSupabaseBrowserClient().auth.signInWithOtp({
         email,
-        options: { emailRedirectTo: `${window.location.origin}${next}` },
+        options: { emailRedirectTo: `${window.location.origin}/dashboard` },
       });
       if (error) toast.error(error.message);
       else toast.success('Magic link sent. Check your email.');
@@ -129,9 +121,7 @@ export default function LoginPage() {
             <p className="text-sm text-muted-foreground">
               {isSignup
                 ? 'Start your financial system of record.'
-                : isReauth
-                  ? 'Confirm it\'s you before connecting an AI app to KEEL.'
-                  : 'Welcome back. Enter your details to continue.'}
+                : 'Welcome back. Enter your details to continue.'}
             </p>
           </div>
 

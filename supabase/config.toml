@@ -323,17 +323,3 @@ verify_jwt = false
 
 [functions.scheduled]
 verify_jwt = false
-
-# KEEL MCP connector — prototype, dark unless KEEL_MCP_ENABLED=on
-# (docs/research/MCP-CONNECTOR-2026-11-04.md). verify_jwt stays off so MCP
-# clients receive the function's own 401 + WWW-Authenticate discovery header.
-[functions.mcp]
-verify_jwt = false
-
-# Supabase Auth as the OAuth 2.1 authorization server for MCP clients
-# (local stack only; the cloud project is configured in the dashboard and is a
-# ⚑ human checkpoint). Needs a recent Supabase CLI — uncomment to try locally.
-# [auth.oauth_server]
-# enabled = true
-# authorization_url_path = "/oauth/consent"
-# allow_dynamic_registration = true
