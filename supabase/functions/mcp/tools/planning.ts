@@ -8,6 +8,13 @@ import { err, money, monthStart, ok, type ToolErr } from '../lib.ts';
 
 const RECURRING_HORIZON_DAYS = 90; // same horizon the app's Review page uses
 
+/** a − b on minor-unit strings (BigInt; null when either is missing). */
+const minus = (a: unknown, b: unknown): string | null =>
+  typeof a === 'string' && typeof b === 'string' ? (BigInt(a) - BigInt(b)).toString() : null;
+
+/** What recurring_list shows unless asked: items still in play, not ones the user or KEEL set aside. */
+const LIVE_RECURRING = new Set(['suggested', 'confirmed', 'paused']);
+
 // ---------------------------------------------------------------------------
 // Budgets
 // ---------------------------------------------------------------------------
@@ -15,7 +22,7 @@ export const budgetsGet = defineTool({
   name: 'budgets_get',
   title: 'Get a month\'s budget',
   description:
-    'A month\'s plan: total, expected income, left to budget, and per category the target, spent, rollover carry and what is available. Defaults to the current month.',
+    'A month\'s plan: total, expected income, left to budget, and per category the target, spent, rollover carry, available (target plus carry-in) and remaining (available minus spent; negative = over budget). Defaults to the current month.',
   kind: 'read',
   input: z.object({ month: isoDate('Any date in the month').optional() }).strict(),
   run: async (ctx, args) => {
@@ -34,6 +41,7 @@ export const budgetsGet = defineTool({
       rollover: c['rollover'] === true,
       carried_in: money(c['carryMinor'] as string | null, (c['currency'] as string) ?? currency),
       available: money(c['availableMinor'] as string | null, (c['currency'] as string) ?? currency),
+      remaining: money(minus(c['availableMinor'], c['spentMinor']), (c['currency'] as string) ?? currency),
     }));
     return ok(`Budget for ${month.slice(0, 7)}: ${categories.length} category targets.`, {
       month,
@@ -107,10 +115,10 @@ export const recurringList = defineTool({
   name: 'recurring_list',
   title: 'List recurring items and bills',
   description:
-    'Recurring income and charges KEEL detected (subscriptions, rent, paychecks…) with cadence, typical amount, status and next expected date, plus scheduled bills the user set up.',
+    'Recurring income and charges KEEL detected (subscriptions, rent, paychecks…) with cadence, typical amount, status and next expected date, plus scheduled bills the user set up. By default only items still in play (suggested, confirmed, paused); pass status for one other status, or "all".',
   kind: 'read',
   input: z.object({
-    status: z.enum(['suggested', 'confirmed', 'paused', 'cancelled', 'rejected']).optional(),
+    status: z.enum(['suggested', 'confirmed', 'paused', 'cancelled', 'rejected', 'withdrawn', 'all']).optional(),
   }).strict(),
   run: async (ctx, args) => {
     const [series, bills] = await Promise.all([
@@ -119,7 +127,9 @@ export const recurringList = defineTool({
     ]);
     if (!series.ok) return series;
     const recurring = rowsOf(series.data)
-      .filter((s) => !args.status || s['status'] === args.status)
+      .filter((s) =>
+        args.status === 'all' ? true : args.status ? s['status'] === args.status : LIVE_RECURRING.has(s['status'] as string)
+      )
       .map((s) => {
         const currency = (s['currency'] as string) ?? 'USD';
         const next = ((s['occurrences'] ?? []) as Record<string, unknown>[])

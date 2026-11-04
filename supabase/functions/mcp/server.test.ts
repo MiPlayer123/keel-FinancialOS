@@ -253,6 +253,79 @@ Deno.test('review_list leaves out receipts already attached (by a match or recei
   assertEquals(body.receipts.rows.map((r: { document_id: string }) => r.document_id), ['doc-b']);
 });
 
+/** A chainable stand-in for supabase-js table reads: every filter returns the table's rows. */
+const fakeDb = (tables: Record<string, unknown[]>) => ({
+  from: (table: string) => {
+    const query: Record<string, unknown> = {};
+    for (const method of ['select', 'eq', 'order', 'is']) query[method] = () => query;
+    query['then'] = (resolve: (v: unknown) => unknown) => resolve({ data: tables[table] ?? [], error: null });
+    return query;
+  },
+});
+
+Deno.test('accounts_list values a synced investment account at the bank figure, like the app and net worth', async () => {
+  const account = (id: string, name: string, subtype: string, ledger: string, connection: string | null) => ({
+    id, name, subtype, currency: 'USD', entity_id: null, connection_id: connection, mask: null, archived_at: null, ledger_account_id: ledger,
+  });
+  const { ctx } = stubContext('read', {
+    keel_trial_balance: { rows: [
+      { ledgerAccountId: 'L1', balanceMinor: '5000' },
+      { ledgerAccountId: 'L2', balanceMinor: '700' },
+      { ledgerAccountId: 'L3', balanceMinor: '100' },
+    ] },
+    keel_latest_balances: [
+      { accountId: 'a1', currentMinor: '9000', availableMinor: null, limitMinor: null, asOf: '2026-11-01' },
+      { accountId: 'a3', currentMinor: '150', availableMinor: '150', limitMinor: null, asOf: '2026-11-01' },
+    ],
+    keel_investments_overview: { holdings: [{ accountId: 'a1', valueMinor: '4000' }] },
+  });
+  const withDb: ToolContext = {
+    ...ctx,
+    db: fakeDb({
+      accounts: [
+        account('a1', 'Brokerage', 'brokerage', 'L1', 'c1'),
+        account('a2', 'Roth (manual)', 'retirement', 'L2', null),
+        account('a3', 'Checking', 'checking', 'L3', 'c1'),
+      ],
+      ledger_accounts: [{ id: 'L1', kind: 'asset' }, { id: 'L2', kind: 'asset' }, { id: 'L3', kind: 'asset' }],
+      connections: [{ id: 'c1', display_name: 'Bank', status: 'active', last_successful_sync_at: null }],
+      entities: [],
+    }),
+  };
+  const body = JSON.parse((await runTool(tool('accounts_list'), withDb, {})).content[0]!.text);
+  const byId = Object.fromEntries(body.accounts.map((a: { id: string }) => [a.id, a]));
+  assertEquals(byId.a1.balance.amount_minor, '9000', 'synced investment: bank-reported value');
+  assertEquals(byId.a1.holdings_value.amount_minor, '4000', 'holdings alongside');
+  assertEquals(byId.a2.balance.amount_minor, '700', 'manual investment: ledger');
+  assertEquals(byId.a3.balance.amount_minor, '100', 'non-investment: ledger, even when the bank differs');
+});
+
+Deno.test('budgets_get says what is left: remaining = available − spent (negative when over)', async () => {
+  const { ctx } = stubContext('read', {
+    keel_budget_month: {
+      total: { resolvedMinor: '50000', currency: 'USD' },
+      rows: [
+        { categoryLedgerAccountId: 'c1', categoryName: 'Transport', resolvedMinor: '13000', spentMinor: '997', availableMinor: '13000', rollover: false, currency: 'USD' },
+        { categoryLedgerAccountId: 'c2', categoryName: 'Food', resolvedMinor: '10000', spentMinor: '12550', availableMinor: '10000', rollover: false, currency: 'USD' },
+      ],
+    },
+  });
+  const body = JSON.parse((await runTool(tool('budgets_get'), ctx, {})).content[0]!.text);
+  assertEquals(body.categories.map((c: { remaining: { amount_minor: string } }) => c.remaining.amount_minor), ['12003', '-2550']);
+});
+
+Deno.test('recurring_list shows live items by default; status widens it', async () => {
+  const series = (status: string) => ({ seriesId: status, counterpartyKey: status, status, sign: 'outflow', occurrences: [] });
+  const { ctx } = stubContext('read', {
+    keel_list_recurring: { rows: ['confirmed', 'suggested', 'paused', 'rejected', 'withdrawn', 'cancelled'].map(series) },
+  });
+  const statuses = async (args: Record<string, unknown>) =>
+    JSON.parse((await runTool(tool('recurring_list'), ctx, args)).content[0]!.text).recurring.map((s: { status: string }) => s.status);
+  assertEquals(await statuses({}), ['confirmed', 'suggested', 'paused']);
+  assertEquals(await statuses({ status: 'rejected' }), ['rejected']);
+  assertEquals((await statuses({ status: 'all' })).length, 6);
+});
+
 Deno.test('archive lives on the update tools', async () => {
   const { ctx, calls } = stubContext('write');
   await runTool(tool('accounts_update'), ctx, { account_id: '33333333-3333-4333-8333-333333333333', archived: true });
