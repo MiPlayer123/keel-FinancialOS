@@ -15,7 +15,7 @@ const HOUSEHOLD = '11111111-1111-4111-8111-111111111111';
 const TXN = '22222222-2222-4222-8222-222222222222';
 
 /** A stub context: records every proc call and command, answers from `answers`. */
-const stubContext = (access: Access, answers: Record<string, unknown> = {}) => {
+const stubContext = (access: Access, answers: Record<string, unknown> = {}, tables: Record<string, unknown[]> = {}) => {
   const calls: { proc: string; args: Record<string, unknown> }[] = [];
   const commands: { command: string; payload: Record<string, unknown>; key?: string }[] = [];
   const ctx: ToolContext = {
@@ -25,7 +25,7 @@ const stubContext = (access: Access, answers: Record<string, unknown> = {}) => {
     access,
     nowIso: '2026-11-04T12:00:00.000Z',
     todayIso: '2026-11-04',
-    db: {},
+    db: fakeDb(tables),
     rpc: (proc, args): Promise<DbResult> => {
       calls.push({ proc, args });
       return Promise.resolve({ data: answers[proc] ?? { rows: [] }, error: null });
@@ -388,6 +388,38 @@ Deno.test('recurring_list shows live items by default; status widens it', async 
   assertEquals(await statuses({}), ['confirmed', 'suggested', 'paused']);
   assertEquals(await statuses({ status: 'rejected' }), ['rejected']);
   assertEquals((await statuses({ status: 'all' })).length, 6);
+});
+
+Deno.test('review_list surfaces stale transfer suggestions; review_decide only rejects them', async () => {
+  const LIVE = '77777777-7777-4777-8777-777777777777';
+  const STALE = '88888888-8888-4888-8888-888888888888';
+  const { ctx, calls } = stubContext('write', {
+    keel_list_transfers: { rows: [{ linkId: LIVE, status: 'suggested', amountMinor: '5000', currency: 'USD' }] },
+    keel_documents_list_household: { rows: [] },
+  }, {
+    transfer_links: [
+      { id: LIVE, txn_out: 'a', txn_in: 'b', created_at: '2026-07-01T00:00:00Z' },
+      { id: STALE, txn_out: 'c', txn_in: 'd', created_at: '2026-07-02T00:00:00Z' },
+    ],
+  });
+  const body = JSON.parse((await runTool(tool('review_list'), ctx, { limit: 50 })).content[0]!.text);
+  assertEquals(body.transfer_matches.rows.map((r: { item_id: string }) => r.item_id), [LIVE]);
+  assertEquals(body.stale_transfer_suggestions.rows.map((r: { item_id: string }) => r.item_id), [STALE]);
+
+  // Accepting a stale pairing is refused before anything is written.
+  const accept = await runTool(tool('review_decide'), ctx, { item_type: 'transfer_match', item_id: STALE, accept: true });
+  assertEquals(JSON.parse(accept.content[0]!.text).error.code, 'stale_suggestion');
+  assertEquals(callsTo(calls, 'keel_decide_transfer').length, 0);
+  // Rejecting it goes through; a live one can still be accepted.
+  await runTool(tool('review_decide'), ctx, { item_type: 'transfer_match', item_id: STALE, accept: false });
+  await runTool(tool('review_decide'), ctx, { item_type: 'transfer_match', item_id: LIVE, accept: true });
+  assertEquals(callsTo(calls, 'keel_decide_transfer').map((c) => [c.args['p_link_id'], c.args['p_confirm']]), [[STALE, false], [LIVE, true]]);
+});
+
+Deno.test('accounts_create takes a retirement account (401(k), IRA) as an asset', async () => {
+  const { ctx, commands } = stubContext('write', {}, { entities: [{ id: '99999999-9999-4999-8999-999999999999', kind: 'personal' }] });
+  await runTool(tool('accounts_create'), ctx, { name: 'Roth 401(k)', type: 'retirement' });
+  assertEquals([commands[0]!.command, commands[0]!.payload['kind'], commands[0]!.payload['subtype']], ['accounts.create', 'asset', 'retirement']);
 });
 
 Deno.test('archive lives on the update tools', async () => {

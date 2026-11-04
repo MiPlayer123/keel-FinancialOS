@@ -77,18 +77,18 @@ There are 42 tools: 18 read and 24 write. Read tools are always listed. Write to
 | Transactions | `transactions_list` (all filters, cursor paging through the full history), `transactions_get` (notes, splits, tags, documents, change history), `transactions_summarize` (KEEL-computed totals by category, merchant, account, month, tag or entity; it excludes the same transfer and reimbursement rows as KEEL's cash flow, so the numbers agree) |
 | Setup | `categories_list` (categories, tags and rules: everything needed to categorize) |
 | Planning | `budgets_get`, `recurring_list` (detected series and scheduled bills), `goals_list` |
-| Other | `review_list` (category suggestions, transfer matches, and the receipt inbox with what KEEL read from each receipt plus its suggested transaction), `notes_list`, `paychecks_list`, `reimbursements_list`, `statements_list`, `activity_list` |
+| Other | `review_list` (category suggestions, transfer matches, stale transfer suggestions whose other side was voided, and the receipt inbox with what KEEL read from each receipt plus its suggested transaction), `notes_list`, `paychecks_list`, `reimbursements_list`, `statements_list`, `activity_list` |
 
 ### Write tools
 
 | Area | Tools |
 |---|---|
-| Accounts | `accounts_create` (manual or cash, with starting balance), `accounts_update` (rename, entity, starting balance, re-anchor, archive or restore) |
+| Accounts | `accounts_create` (manual or cash, including retirement for a 401(k) or IRA, with starting balance), `accounts_update` (rename, entity, starting balance, re-anchor, archive or restore) |
 | Transactions | `transactions_create`, `transactions_update` (category, name, note, date, tags), `transactions_split` (amounts, percent or equal; KEEL does the math; signed shares and account legs, so a paycheck books as gross − withholding − a 401(k) leg into its account), `transactions_categorize` (bulk), `transactions_void` |
 | Setup | `categories_create`, `categories_update` (rename, move, tax line, archive), `tags_save`, `rules_save` (`active: false` switches a rule off), `rules_apply` (dry run first) |
 | Planning | `budgets_set`, `recurring_update`, `bills_save` (create, edit, pause or end), `bills_enter`, `goals_save`, `goals_contribute` |
 | Receipts and review | `receipts_attach` (attach an uploaded receipt to a transaction), `review_decide` (category suggestions, transfer matches, receipt matches) |
-| Other | `transfers_link`, `transfers_unlink`, `notes_save` (write, edit, archive), `tasks_save` (create, edit, complete) |
+| Other | `transfers_link`, `transfers_unlink` (undo a pairing or dismiss a suggestion), `notes_save` (write, edit, archive), `tasks_save` (create, edit, complete) |
 
 ### Not exposed yet
 
