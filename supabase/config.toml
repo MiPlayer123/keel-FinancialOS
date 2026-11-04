@@ -323,3 +323,17 @@ verify_jwt = false
 
 [functions.scheduled]
 verify_jwt = false
+
+# KEEL MCP connector (supabase/functions/mcp/README.md). verify_jwt stays off
+# so MCP clients receive the function's own 401 + WWW-Authenticate discovery
+# header; the function verifies tokens itself. Dark unless KEEL_MCP_ENABLED=on.
+[functions.mcp]
+verify_jwt = false
+
+# Supabase Auth as the OAuth 2.1 authorization server for connected AI apps.
+# Local stack only — the cloud project is configured in the dashboard
+# (⚑ human checkpoint). The consent page lives in apps/web at this path.
+[auth.oauth_server]
+enabled = true
+authorization_url_path = "/oauth/consent"
+allow_dynamic_registration = true

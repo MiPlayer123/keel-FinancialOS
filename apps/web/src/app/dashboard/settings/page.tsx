@@ -21,6 +21,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { RulesCard } from '@/components/keel/rules-card';
 import { CategoriesCard } from '@/components/keel/categories-card';
+import { ConnectedAppsCard } from '@/components/keel/connected-apps-card';
 
 type Format = 'csv' | 'json' | 'qif' | 'beancount';
 
@@ -51,6 +52,7 @@ export default function SettingsPage() {
         <RulesCard />
         <PasswordCard />
         <ExportCard />
+        <ConnectedAppsCard />
         <ActivityCard />
       </div>
     </>
@@ -226,6 +228,7 @@ const ACTION_LABELS: Record<string, string> = {
 
 function actorLabel(actor: AuditLogRow['actor']): string {
   if (!actor) return '';
+  if (actor.via?.kind === 'connected_app') return 'Connected app (for you)';
   if (actor.kind === 'system') return 'KEEL (automatic)';
   if (actor.kind === 'user') return 'You';
   return actor.kind ?? '';

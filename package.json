@@ -9,7 +9,7 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "typecheck": "pnpm -r exec tsc --noEmit",
-    "test": "vitest run && deno test --allow-env supabase/functions/_shared/*.test.ts supabase/functions/worker/*.test.ts",
+    "test": "vitest run && deno test --allow-env supabase/functions/_shared/*.test.ts supabase/functions/worker/*.test.ts && deno test --node-modules-dir=none --allow-env supabase/functions/mcp/*.test.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint .",

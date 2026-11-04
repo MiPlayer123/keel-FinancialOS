@@ -44,11 +44,13 @@ import {
   authorize,
   type Action,
   type AuthzContext,
-  type HouseholdId,
-  type HouseholdRole,
   type HouseholdExport,
 } from '../_shared/vendor/keel-domain.mjs';
 import { json, mapDbError, toSnakeKeys } from '../_shared/http.ts';
+import { AGENT_WRITE_TO_PROC, QUERY_TO_PROC } from '../_shared/proc-maps.ts';
+import { loadAuthzContextRows } from '../_shared/authz-context.ts';
+import { isThirdPartyClientToken } from '../_shared/connected-app.ts';
+import { executeCommand, type CommandContract } from '../_shared/command-exec.ts';
 import {
   makeExecuteReadTool,
   readToolDefinitions,
@@ -114,133 +116,10 @@ const sha256Hex = async (bytes: Uint8Array): Promise<string> => {
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 };
 
-const COMMAND_TO_PROC: Record<string, string> = {
-  'accounts.create': 'keel_cmd_create_account',
-  'ingest.record_raw_event': 'keel_cmd_record_raw_event',
-  'ingest.promote_event': 'keel_cmd_promote_event',
-  'journal.post_batch': 'keel_cmd_post_batch',
-  'journal.reverse_batch': 'keel_cmd_reverse_batch',
-  'recurring.confirm': 'keel_recurring_confirm',
-  'recurring.pause': 'keel_recurring_pause',
-  'recurring.resume': 'keel_recurring_resume',
-  'recurring.cancel': 'keel_recurring_cancel',
-  'recurring.reject': 'keel_recurring_reject',
-  'recurring.reclassify_cadence': 'keel_recurring_reclassify_cadence',
-  'recurring.set_amount': 'keel_recurring_set_amount',
-  'recurring.link_schedule': 'keel_recurring_link_schedule',
-  'recurring.unlink_schedule': 'keel_recurring_unlink_schedule',
-  'paychecks.create': 'keel_paycheck_create',
-  'paychecks.edit': 'keel_paycheck_edit',
-  'paychecks.reverse': 'keel_paycheck_reverse',
-  'paychecks.restore': 'keel_paycheck_restore',
-  'paychecks.dismiss_detected': 'keel_cmd_dismiss_detected_paycheck',
-  'paychecks.save_template': 'keel_cmd_paycheck_save_template',
-  'paychecks.set_series_settings': 'keel_cmd_paycheck_set_series_settings',
-  'paychecks.apply_template': 'keel_cmd_paycheck_apply_template',
-  'paychecks.unapply': 'keel_cmd_paycheck_unapply',
-  'reimbursements.create_claim': 'keel_reimbursement_create_claim',
-  'reimbursements.settle': 'keel_reimbursement_settle',
-  'reimbursements.reverse_settlement': 'keel_reimbursement_reverse_settlement',
-  'reimbursements.reverse_claim': 'keel_reimbursement_reverse_claim',
-  'expected_reimbursements.create': 'keel_expected_reimbursement_create',
-  'expected_reimbursements.record_receipt': 'keel_expected_reimbursement_record_receipt',
-  'expected_reimbursements.write_off': 'keel_expected_reimbursement_write_off',
-  'expected_reimbursements.reopen': 'keel_expected_reimbursement_reopen',
-  'expected_reimbursements.reverse_receipt': 'keel_expected_reimbursement_reverse_receipt',
-  'statements.create': 'keel_statement_create',
-  'statements.approve_draft': 'keel_cmd_statements_approve_draft',
-  'statements.dismiss_draft': 'keel_cmd_statements_dismiss_draft',
-  'statements.set_cadence': 'keel_statement_set_cadence',
-  'statements.decide_payment_link': 'keel_cmd_statements_decide_payment_link',
-  'statements.detach_payment_link': 'keel_cmd_statements_detach_payment_link',
-  'statements.apply_holdings': 'keel_cmd_statements_apply_holdings',
-  'statements.unapply_holdings': 'keel_cmd_statements_unapply_holdings',
-  'reconciliations.close': 'keel_reconciliation_close',
-  'reconciliations.reopen': 'keel_reconciliation_reopen',
-  'transactions.manual_create': 'keel_cmd_manual_transaction',
-  'transactions.manual_void': 'keel_cmd_manual_void',
-  'transactions.set_splits': 'keel_cmd_set_splits',
-  'transactions.set_date': 'keel_cmd_set_date',
-  'accounts.dedupe_reconnect': 'keel_cmd_dedupe_reconnect_account',
-  'accounts.dedupe_archived': 'keel_cmd_dedupe_archived_duplicates',
-  'accounts.set_opening_balance': 'keel_cmd_set_opening_balance',
-  'accounts.reanchor_balance': 'keel_cmd_reanchor_balance',
-  'categorization.decide_suggestion': 'keel_cmd_decide_category_suggestion',
-  'documents.attach': 'keel_cmd_documents_attach',
-  'documents.detach': 'keel_cmd_documents_detach',
-  'documents.delete': 'keel_cmd_documents_delete',
-  'receipts.decide_match': 'keel_cmd_receipts_decide_match',
-  'receipts.detach_match': 'keel_cmd_receipts_detach_match',
-  'budgets.set_total': 'keel_cmd_budgets_set_total',
-  'budgets.set_target': 'keel_cmd_budgets_set_target',
-  'budgets.remove_target': 'keel_cmd_budgets_remove_target',
-  'budgets.set_expected_income': 'keel_cmd_budgets_set_expected_income',
-};
 
-export const QUERY_TO_PROC: Record<string, string> = {
-  'ledger.trial_balance': 'keel_trial_balance',
-  'transactions.list': 'keel_list_transactions',
-  'transactions.rich': 'keel_list_transactions_rich',
-  // WS-H (F-005): bounded, keyset-paginated + server-filtered variant of the
-  // rich read. Same per-row DTO as transactions.rich; carries a nextCursor.
-  'transactions.rich_page': 'keel_list_transactions_rich_page',
-  // WS-H (F-021): slim server-side transaction search for the command palette.
-  'transactions.search': 'keel_search_transactions',
-  'categories.list': 'keel_list_categories',
-  'balances.latest': 'keel_latest_balances',
-  'recurring.list': 'keel_list_recurring',
-  'recurring.classification': 'keel_recurring_classification',
-  'recurring.schedule_links': 'keel_list_recurring_schedule_links',
-  'paychecks.list': 'keel_list_paychecks',
-  'paychecks.detected_dismissals': 'keel_list_detected_paycheck_dismissals',
-  'paychecks.templates': 'keel_list_paycheck_templates',
-  'paychecks.split_suggestions': 'keel_list_paycheck_split_suggestions',
-  'reimbursements.list': 'keel_list_reimbursements',
-  'expected_reimbursements.list': 'keel_list_expected_reimbursements',
-  'statements.list': 'keel_list_statements',
-  'statements.drafts': 'keel_list_statement_drafts',
-  'statements.cadence': 'keel_statement_cadence',
-  'statements.find_payment': 'keel_statement_suggest_payments',
-  'statements.payment_links': 'keel_list_statement_payment_links',
-  'statements.holdings_diff': 'keel_statement_holdings_diff',
-  'dashboard.cash_flow': 'keel_cash_flow',
-  'dashboard.net_worth': 'keel_net_worth_as_of',
-  'dashboard.net_worth_daily': 'keel_net_worth_daily',
-  'dashboard.cash_flow_monthly': 'keel_cash_flow_monthly',
-  'accounts.balance_daily': 'keel_account_balance_daily',
-  'transfers.list': 'keel_list_transfers',
-  'categorization.suggestions': 'keel_list_category_suggestions',
-  'notes_tasks.list': 'keel_list_notes_tasks',
-  'rules.list': 'keel_list_rules',
-  'budgets.list': 'keel_list_budgets',
-  'budgets.month': 'keel_budget_month',
-  'tags.list': 'keel_list_tags',
-  'schedules.list': 'keel_list_schedules',
-  'goals.list': 'keel_list_goals',
-  'entities.list': 'keel_list_entities',
-  'dashboard.cash_flow_forecast': 'keel_cash_flow_forecast',
-  'holdings.list': 'keel_list_holdings',
-  'investments.overview': 'keel_investments_overview',
-  'investments.value_daily': 'keel_investments_value_daily',
-  'connections.list_reconnect_matches': 'keel_list_reconnect_matches',
-  'connections.list_archived_duplicate_matches': 'keel_list_archived_duplicate_matches',
-  'receipts.inbox': 'keel_receipts_inbox',
-};
-
-/**
- * Proc names for the AGENT_WRITE_ACTIONS (notes/tasks) — these aren't
- * CommandName so they don't go through COMMAND_TO_PROC/the /commands
- * envelope; the bespoke /notes/* + /tasks/* routes below AND the agent tool
- * executor (agent.ts) both dispatch through this same map, so the proc name
- * is named once, not hand-copied into each caller.
- */
-export const AGENT_WRITE_TO_PROC: Record<string, string> = {
-  'notes.save': 'keel_note_save',
-  'notes.archive': 'keel_note_archive',
-  'notes.unarchive': 'keel_note_unarchive',
-  'tasks.save': 'keel_task_save',
-  'tasks.set_status': 'keel_task_set_status',
-};
+// QUERY_TO_PROC + AGENT_WRITE_TO_PROC live in _shared/proc-maps.ts so the mcp
+// function dispatches through the same table (Law 7). Re-exported for callers.
+export { AGENT_WRITE_TO_PROC, QUERY_TO_PROC };
 
 // deno-lint-ignore no-explicit-any
 type UserClient = any;
@@ -256,11 +135,6 @@ interface CredentialEnvelope extends EncryptedRecord {
   credentialId: string;
   householdId: string;
   provider: 'plaid';
-}
-
-interface ListedRecurringSeries {
-  readonly seriesId: string;
-  readonly accountId: string;
 }
 
 const providerFailure = (error: PlaidClientError): Response =>
@@ -339,45 +213,20 @@ const decryptConnectionAccessToken = async (
   }
 };
 
-const loadAuthzContext = async (supabase: UserClient, userId: string): Promise<AuthzContext> => {
-  const [memberships, entityMemberships, accountOwnerships, accountPermissions] = await Promise.all(
-    [
-      supabase.from('household_memberships').select('household_id, role').eq('user_id', userId),
-      supabase.from('entity_memberships').select('entity_id, entities(household_id)'),
-      supabase.from('account_owners').select('account_id, accounts(household_id)'),
-      supabase
-        .from('resource_permissions')
-        .select('household_id, resource_id, permission')
-        .eq('user_id', userId)
-        .eq('resource_kind', 'account'),
-    ],
-  );
-  return {
-    userId: userId as AuthzContext['userId'],
-    memberships: (memberships.data ?? []).map((row: { household_id: string; role: string }) => ({
-      householdId: row.household_id as HouseholdId,
-      role: row.role as HouseholdRole,
-    })),
-    entityMemberships: (entityMemberships.data ?? []).map(
-      (row: { entity_id: string; entities: { household_id: string } | null }) => ({
-        entityId: row.entity_id as AuthzContext['entityMemberships'][number]['entityId'],
-        householdId: (row.entities?.household_id ?? '') as HouseholdId,
-      }),
-    ),
-    accountOwnerships: (accountOwnerships.data ?? []).map(
-      (row: { account_id: string; accounts: { household_id: string } | null }) => ({
-        accountId: row.account_id as AuthzContext['accountOwnerships'][number]['accountId'],
-        householdId: (row.accounts?.household_id ?? '') as HouseholdId,
-      }),
-    ),
-    accountPermissions: (accountPermissions.data ?? []).map(
-      (row: { household_id: string; resource_id: string; permission: string }) => ({
-        accountId: row.resource_id as AuthzContext['accountPermissions'][number]['accountId'],
-        householdId: row.household_id as HouseholdId,
-        permission: row.permission as AuthzContext['accountPermissions'][number]['permission'],
-      }),
-    ),
-  };
+// Rows come from the shared loader (_shared/authz-context.ts, also used by the
+// mcp function); narrowed here to the branded AuthzContext the compiler takes.
+const loadAuthzContext = async (supabase: UserClient, userId: string): Promise<AuthzContext> =>
+  (await loadAuthzContextRows(supabase, userId)) as unknown as AuthzContext;
+
+/** Domain contract helpers the shared command executor needs (Law 7). */
+const COMMAND_CONTRACT: CommandContract = {
+  parseEnvelope: (body) => CommandEnvelopeSchema.safeParse(body) as ReturnType<CommandContract['parseEnvelope']>,
+  parsePayload: (command, payload) => parseCommandPayload(command as never, payload),
+  authorize: (authzCtx, action, resource) =>
+    authorize(authzCtx as AuthzContext, action as Action, resource as never),
+  isEntityId: (value) => EntityIdSchema.safeParse(value).success,
+  isAccountId: (value) => AccountIdSchema.safeParse(value).success,
+  toSnakeKeys,
 };
 
 export default {
@@ -396,6 +245,19 @@ export default {
     const userId = ctx.userClaims?.sub ?? ctx.jwtClaims?.sub;
     if (!userId) {
       return json(401, { code: 'not_authenticated', message: 'No subject claim.', details: {} });
+    }
+
+    // Tokens minted by the Supabase OAuth server for a connected AI app carry
+    // `client_id` and the same `aud` as a web session (Supabase cannot bind an
+    // audience). They are for the narrower `mcp` surface only — never exports,
+    // Plaid link/disconnect, onboarding or settings (Law 7/12; INFRA §7
+    // step-up). No-op until the OAuth server is enabled.
+    if (isThirdPartyClientToken(ctx.jwtClaims as Record<string, unknown> | null)) {
+      return json(403, {
+        code: 'not_authorized',
+        message: 'Connected-app tokens cannot call the KEEL app API.',
+        details: {},
+      });
     }
 
     let body: unknown;
@@ -427,6 +289,35 @@ export default {
       });
       if (error) return mapDbError(error);
       return json(200, data);
+    }
+
+    if (path === '/connected-apps/set' || path === '/connected-apps/revoke') {
+      // What a connected AI app (MCP) may do: its household and read vs
+      // write access. Set on the consent screen and in Settings; the procs
+      // refuse connected-app tokens and audit every change (supabase/
+      // functions/mcp/README.md).
+      const input = body as Record<string, unknown>;
+      const clientId = input['clientId'];
+      if (typeof clientId !== 'string' || clientId.length < 1 || clientId.length > 200) {
+        return json(400, { code: 'invalid_command', message: 'Connected app request failed validation.', details: {} });
+      }
+      if (path === '/connected-apps/revoke') {
+        const { error } = await ctx.supabase.rpc('keel_mcp_grant_revoke', { p_client_id: clientId });
+        if (error) return mapDbError(error);
+        return json(200, { ok: true });
+      }
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const access = input['access'];
+      if (!householdId.success || (access !== 'read' && access !== 'write')) {
+        return json(400, { code: 'invalid_command', message: 'Connected app request failed validation.', details: {} });
+      }
+      const { data, error } = await ctx.supabase.rpc('keel_mcp_grant_set', {
+        p_client_id: clientId,
+        p_household_id: householdId.data,
+        p_access: access,
+      });
+      if (error) return mapDbError(error);
+      return json(200, { grantId: data });
     }
 
     if (path === '/admin/export') {
@@ -3421,82 +3312,16 @@ export default {
     }
 
     if (path === '/commands') {
-      const envelope = CommandEnvelopeSchema.safeParse(body);
-      if (!envelope.success) {
-        return json(400, {
-          code: 'invalid_command',
-          message: 'Envelope failed validation.',
-          details: { issues: envelope.error.issues },
-        });
-      }
-      let payload: Record<string, unknown>;
-      try {
-        payload = parseCommandPayload(envelope.data.command, envelope.data.payload) as Record<
-          string,
-          unknown
-        >;
-      } catch {
-        return json(400, {
-          code: 'invalid_command',
-          message: 'Payload failed validation.',
-          details: {},
-        });
-      }
-
-      // Fail-closed TS authorization before the database re-checks (Law 9).
-      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
-      let recurringSeries: ListedRecurringSeries | undefined;
-      // recurring.* commands that name a series (confirm/pause/…/link_schedule)
-      // gate on that series' account. recurring.unlink_schedule names only a
-      // linkId — it falls through to the household partner check here and the
-      // DB proc re-checks account access on the series behind the link.
-      if (
-        envelope.data.command.startsWith('recurring.') &&
-        typeof payload['seriesId'] === 'string'
-      ) {
-        const { data: recurringList, error: recurringListError } = await ctx.supabase.rpc(
-          'keel_list_recurring',
-          { p_household_id: envelope.data.householdId },
-        );
-        if (recurringListError) return mapDbError(recurringListError);
-        recurringSeries = (recurringList?.rows ?? []).find(
-          (row: { seriesId?: string }) => row.seriesId === payload['seriesId'],
-        ) as ListedRecurringSeries | undefined;
-        if (!recurringSeries) {
-          return json(404, { code: 'not_found', message: 'Not found.', details: {} });
-        }
-      }
-      const resource = {
-        householdId: envelope.data.householdId,
-        ...(recurringSeries
-          ? { kind: 'recurring_series' as const, accountId: recurringSeries.accountId as never }
-          : {}),
-        ...(typeof payload['entityId'] === 'string' &&
-        EntityIdSchema.safeParse(payload['entityId']).success
-          ? { entityId: payload['entityId'] as never }
-          : {}),
-        ...(typeof payload['accountId'] === 'string' &&
-        AccountIdSchema.safeParse(payload['accountId']).success
-          ? { accountId: payload['accountId'] as never }
-          : {}),
-      };
-      const decision = authorize(authzCtx, envelope.data.command as Action, resource);
-      if (!decision.allowed) {
-        // Scope violations answer 404 — never confirm existence cross-tenant.
-        return decision.code === 'household_scope_violation'
-          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
-          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
-      }
-
-      const { data, error } = await ctx.supabase.rpc(COMMAND_TO_PROC[envelope.data.command]!, {
-        p_command_id: envelope.data.commandId,
-        p_economic_event_key: envelope.data.economicEventKey,
-        p_actor: envelope.data.actor,
-        p_household_id: envelope.data.householdId,
-        p_payload: toSnakeKeys(payload),
-      });
-      if (error) return mapDbError(error);
-      return json(200, data);
+      // One typed command path for every surface (_shared/command-exec.ts).
+      const outcome = await executeCommand(
+        COMMAND_CONTRACT,
+        ctx.supabase,
+        () => loadAuthzContext(ctx.supabase, userId),
+        body,
+      );
+      if (outcome.ok) return json(200, outcome.data);
+      if ('dbError' in outcome) return mapDbError(outcome.dbError);
+      return json(outcome.status, { code: outcome.code, message: outcome.message, details: outcome.details });
     }
 
     if (path === '/queries') {

@@ -78,6 +78,7 @@ supabase functions deploy api --no-verify-jwt
 supabase functions deploy worker --no-verify-jwt
 supabase functions deploy webhook-provider --no-verify-jwt
 supabase functions deploy scheduled --no-verify-jwt
+supabase functions deploy mcp --no-verify-jwt   # inert until the Supabase OAuth server is enabled — see supabase/functions/mcp/README.md
 ```
 
 `--no-verify-jwt` is deliberate for Supabase's publishable/secret-key model. Each function must use `@supabase/server` and declare its own auth mode:
@@ -85,6 +86,7 @@ supabase functions deploy scheduled --no-verify-jwt
 - `api`: `auth: 'user'`
 - `worker` and `scheduled`: `auth: 'secret:automations'`
 - `webhook-provider`: `auth: 'none'`, followed by Plaid webhook JWT/body-hash verification
+- `mcp`: verifies the connected app's OAuth token itself so MCP clients receive its own 401 discovery challenge (setup: `supabase/functions/mcp/README.md`)
 
 Deploy the Next.js app to Vercel Hobby with the two `NEXT_PUBLIC_SUPABASE_*`
 values from `.env.example` and `NEXT_PUBLIC_SITE_URL` set to the public

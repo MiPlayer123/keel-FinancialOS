@@ -7,6 +7,18 @@ const nextConfig: NextConfig = {
   // Next.js's dev-mode build indicator, not KEEL chrome. It has no user
   // function, so we remove it rather than reposition it.
   devIndicators: false,
+  // The AI-app consent screen must never be framed (clickjacking an "Allow").
+  headers() {
+    return Promise.resolve([
+      {
+        source: '/oauth/:path*',
+        headers: [
+          { key: 'X-Frame-Options', value: 'DENY' },
+          { key: 'Content-Security-Policy', value: "frame-ancestors 'none'" },
+        ],
+      },
+    ]);
+  },
 };
 
 export default nextConfig;

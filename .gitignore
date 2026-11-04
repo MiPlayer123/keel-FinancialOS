@@ -38,6 +38,9 @@ backups/
 
 # Generated artifacts
 supabase/functions/_shared/vendor/
+# Local `deno test` / `deno serve` runs at the repo root write this; CI and
+# the edge runtime resolve their own.
+/deno.lock
 .env.local-automations
 
 # Real-data UI captures stay local (privacy pass 2026-08-18)

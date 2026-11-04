@@ -36,7 +36,7 @@ jobs:
     steps:
       - name: report the skipped deploy
         run: |
-          echo "::error::CI concluded '${{ github.event.workflow_run.conclusion }}' on main, so the edge functions were NOT deployed. main and production are now out of sync: api/worker/webhook-provider/scheduled were not deployed. Fix CI on main and re-run it (re-running the failed jobs is enough — this workflow fires again on completion), or deploy by hand: pnpm build:functions && supabase functions deploy api worker webhook-provider scheduled --project-ref yrbteeownwjhcushwaga"
+          echo "::error::CI concluded '${{ github.event.workflow_run.conclusion }}' on main, so the edge functions were NOT deployed. main and production are now out of sync: api/worker/webhook-provider/scheduled/mcp were not deployed. Fix CI on main and re-run it (re-running the failed jobs is enough — this workflow fires again on completion), or deploy by hand: pnpm build:functions && supabase functions deploy api worker webhook-provider scheduled mcp --project-ref yrbteeownwjhcushwaga"
           exit 1
 
   deploy:
@@ -66,11 +66,13 @@ jobs:
             exit 1
           fi
           # CLI 3.0 asks for confirmation and aborts when stdout is not a terminal.
-          supabase functions deploy api worker webhook-provider scheduled \
+          # mcp ships with the rest (it shares _shared/command-exec.ts); it answers
+          # 404 until KEEL_MCP_ENABLED=on and the gateway key are set.
+          supabase functions deploy api worker webhook-provider scheduled mcp \
             --project-ref yrbteeownwjhcushwaga --yes
       - name: record what shipped
         run: |
-          echo "Deployed api, worker, webhook-provider, scheduled to yrbteeownwjhcushwaga" >> "$GITHUB_STEP_SUMMARY"
+          echo "Deployed api, worker, webhook-provider, scheduled, mcp to yrbteeownwjhcushwaga" >> "$GITHUB_STEP_SUMMARY"
           echo "from commit ${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Verify: the Edge Functions list in the Supabase dashboard should show a bumped version for all four." >> "$GITHUB_STEP_SUMMARY"
+          echo "Verify: the Edge Functions list in the Supabase dashboard should show a bumped version for all five." >> "$GITHUB_STEP_SUMMARY"
