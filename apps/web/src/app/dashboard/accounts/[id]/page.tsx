@@ -55,6 +55,7 @@ import { relativeSyncLabel } from '@/lib/relative-date';
 import { utilizationPercent } from '@/lib/credit-utilization';
 import { resolveEditingAfterSave } from '@/lib/txn-edit-guard';
 import { looksLikeInvestmentAccount } from '@/lib/investment-subtype';
+import { spendableLeadMinor } from '@/lib/spendable-balance';
 import { ReauthLink } from '@/components/keel/reauth-link';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
 import { RenameAccountDialog } from '@/components/keel/rename-account-dialog';
@@ -450,6 +451,14 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
       ? utilizationPercent(provider.currentMinor, provider.limitMinor ?? null)
       : null;
   const entityName = entities.find((e) => e.entityId === account.entityId)?.name ?? null;
+  // Checking/savings lead with the bank's available balance; the ledger
+  // balance moves to the line beneath. Display only — goals and totals keep
+  // the ledger figure (lib/spendable-balance.ts).
+  const spendableMinor = spendableLeadMinor({
+    subtype: account.subtype,
+    kind,
+    availableMinor: provider?.availableMinor,
+  });
 
   // F-010: one full-height right-side detail sheet (TxnDetailSheet). Flush the
   // outgoing row before switching to another so no pending write is stranded.
@@ -546,10 +555,12 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
         </div>
         <div className="flex items-start justify-between gap-2 sm:justify-end">
           <div className="text-left sm:text-right">
-            <p className="text-sm text-muted-foreground">Balance</p>
+            <p className="text-sm text-muted-foreground">
+              {spendableMinor !== null ? 'Available' : 'Balance'}
+            </p>
             <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 sm:justify-end">
               <Money
-                amountMinor={balanceMinor}
+                amountMinor={spendableMinor ?? balanceMinor}
                 currency={account.currency}
                 className="text-2xl font-semibold"
                 muteZero={false}
@@ -560,7 +571,17 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
                 <span className="text-xs text-muted-foreground">Updated {syncLabel}</span>
               ) : null}
             </div>
-            {provider?.availableMinor ? (
+            {spendableMinor !== null ? (
+              <p className="text-xs text-muted-foreground">
+                <Money
+                  amountMinor={balanceMinor}
+                  currency={account.currency}
+                  className="text-xs"
+                  muteZero={false}
+                />{' '}
+                current balance
+              </p>
+            ) : provider?.availableMinor ? (
               <p className="text-xs text-muted-foreground">
                 <Money
                   amountMinor={provider.availableMinor}
