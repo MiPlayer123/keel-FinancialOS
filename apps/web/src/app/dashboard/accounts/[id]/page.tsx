@@ -55,7 +55,7 @@ import { relativeSyncLabel } from '@/lib/relative-date';
 import { utilizationPercent } from '@/lib/credit-utilization';
 import { resolveEditingAfterSave } from '@/lib/txn-edit-guard';
 import { looksLikeInvestmentAccount } from '@/lib/investment-subtype';
-import { spendableLeadMinor } from '@/lib/spendable-balance';
+import { minorDiffers, spendableLeadMinor } from '@/lib/spendable-balance';
 import { ReauthLink } from '@/components/keel/reauth-link';
 import { AddTransactionDialog } from '@/components/keel/add-transaction-dialog';
 import { RenameAccountDialog } from '@/components/keel/rename-account-dialog';
@@ -458,6 +458,7 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
     subtype: account.subtype,
     kind,
     availableMinor: provider?.availableMinor,
+    ledgerMinor: balanceMinor,
   });
 
   // F-010: one full-height right-side detail sheet (TxnDetailSheet). Flush the
@@ -572,15 +573,18 @@ function AccountDetailBody({ accountId }: { accountId: string }) {
               ) : null}
             </div>
             {spendableMinor !== null ? (
-              <p className="text-xs text-muted-foreground">
-                <Money
-                  amountMinor={balanceMinor}
-                  currency={account.currency}
-                  className="text-xs"
-                  muteZero={false}
-                />{' '}
-                current balance
-              </p>
+              // Only when the figures differ — otherwise it repeats the headline.
+              minorDiffers(spendableMinor, balanceMinor) ? (
+                <p className="text-xs text-muted-foreground">
+                  <Money
+                    amountMinor={balanceMinor}
+                    currency={account.currency}
+                    className="text-xs"
+                    muteZero={false}
+                  />{' '}
+                  balance in KEEL
+                </p>
+              ) : null
             ) : provider?.availableMinor ? (
               <p className="text-xs text-muted-foreground">
                 <Money

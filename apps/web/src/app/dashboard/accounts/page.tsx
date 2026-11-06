@@ -24,7 +24,7 @@ import {
 import { relativeSyncLabel } from '@/lib/relative-date';
 import { utilizationPercent } from '@/lib/credit-utilization';
 import { looksLikeRetirementAccount, looksLikeInvestmentAccount } from '@/lib/investment-subtype';
-import { spendableLeadMinor } from '@/lib/spendable-balance';
+import { minorDiffers, spendableLeadMinor } from '@/lib/spendable-balance';
 import {
   currencyTotals,
   primaryCurrencyTotal,
@@ -201,14 +201,16 @@ function AccountsBody() {
       looksLikeInvestmentAccount(a.subtype) && snapshot?.currentMinor
         ? snapshot.currentMinor
         : null;
+    const balanceMinor = marketMinor ?? balanceByLedger.get(a.ledgerAccountId) ?? '0';
     return {
       ...a,
       kind,
-      balanceMinor: marketMinor ?? balanceByLedger.get(a.ledgerAccountId) ?? '0',
+      balanceMinor,
       spendableMinor: spendableLeadMinor({
         subtype: a.subtype,
         kind,
         availableMinor: snapshot?.availableMinor,
+        ledgerMinor: balanceMinor,
       }),
       syncLabel: conn?.lastSuccessfulSyncAt
         ? relativeSyncLabel(conn.lastSuccessfulSyncAt, nowIso)
@@ -447,14 +449,15 @@ function AccountGroup({ title, rows }: { title: string; rows: Enriched[] }) {
                   currency={a.currency}
                   className="text-sm"
                 />
-                {a.spendableMinor !== null ? (
+                {/* Ledger figure beneath only when it differs from the headline. */}
+                {a.spendableMinor !== null && minorDiffers(a.spendableMinor, a.balanceMinor) ? (
                   <p className="text-[11px] text-muted-foreground">
                     <Money
                       amountMinor={a.balanceMinor}
                       currency={a.currency}
                       className="text-[11px]"
                     />{' '}
-                    current
+                    in KEEL
                   </p>
                 ) : null}
                 {/* Utilization (C9): only when a provider limit exists; neutral

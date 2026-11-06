@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isCashAccountSubtype, spendableLeadMinor } from './spendable-balance';
+import { isCashAccountSubtype, minorDiffers, spendableLeadMinor } from './spendable-balance';
 
 describe('isCashAccountSubtype', () => {
   it('matches checking and savings', () => {
@@ -28,57 +28,70 @@ describe('isCashAccountSubtype', () => {
 });
 
 describe('spendableLeadMinor', () => {
-  it('leads with available for a checking asset that reports it', () => {
-    expect(
-      spendableLeadMinor({ subtype: 'checking', kind: 'asset', availableMinor: '123456' }),
-    ).toBe('123456');
+  const lead = (
+    subtype: string,
+    kind: string,
+    availableMinor: string | null | undefined,
+    ledgerMinor = '500000',
+  ) => spendableLeadMinor({ subtype, kind, availableMinor, ledgerMinor });
+
+  it('leads with available when a pending debit makes it lower than the ledger', () => {
+    expect(lead('checking', 'asset', '123456')).toBe('123456');
   });
 
   it('leads with available for savings', () => {
-    expect(
-      spendableLeadMinor({ subtype: 'savings', kind: 'asset', availableMinor: '500000' }),
-    ).toBe('500000');
+    expect(lead('savings', 'asset', '400000')).toBe('400000');
+  });
+
+  it('still leads with available when it equals the ledger', () => {
+    expect(lead('savings', 'asset', '500000')).toBe('500000');
+  });
+
+  it('keeps the ledger when available is HIGHER than the ledger (overdraft line, pending deposit)', () => {
+    expect(lead('checking', 'asset', '500001')).toBe(null);
+    expect(lead('checking', 'asset', '900000')).toBe(null);
   });
 
   it('passes a zero available figure through (it is still the bank figure)', () => {
-    expect(spendableLeadMinor({ subtype: 'checking', kind: 'asset', availableMinor: '0' })).toBe(
-      '0',
-    );
+    expect(lead('checking', 'asset', '0')).toBe('0');
   });
 
   it('passes a negative available figure through unchanged', () => {
-    expect(
-      spendableLeadMinor({ subtype: 'checking', kind: 'asset', availableMinor: '-2500' }),
-    ).toBe('-2500');
+    expect(lead('checking', 'asset', '-2500')).toBe('-2500');
   });
 
   it('returns null when the bank reports no available figure', () => {
-    expect(spendableLeadMinor({ subtype: 'checking', kind: 'asset', availableMinor: null })).toBe(
-      null,
-    );
-    expect(
-      spendableLeadMinor({ subtype: 'checking', kind: 'asset', availableMinor: undefined }),
-    ).toBe(null);
-    expect(spendableLeadMinor({ subtype: 'checking', kind: 'asset', availableMinor: '' })).toBe(
-      null,
-    );
+    expect(lead('checking', 'asset', null)).toBe(null);
+    expect(lead('checking', 'asset', undefined)).toBe(null);
+    expect(lead('checking', 'asset', '')).toBe(null);
+  });
+
+  it('returns null when either figure is not an integer string', () => {
+    expect(lead('checking', 'asset', '12.50')).toBe(null);
+    expect(lead('checking', 'asset', '100', 'abc')).toBe(null);
   });
 
   it('never applies to a credit card, whose available is remaining credit', () => {
-    expect(
-      spendableLeadMinor({ subtype: 'credit card', kind: 'liability', availableMinor: '900000' }),
-    ).toBe(null);
+    expect(lead('credit card', 'liability', '100')).toBe(null);
   });
 
   it('never applies to a non-asset ledger kind, even with a cash subtype', () => {
-    expect(
-      spendableLeadMinor({ subtype: 'checking', kind: 'liability', availableMinor: '100' }),
-    ).toBe(null);
+    expect(lead('checking', 'liability', '100')).toBe(null);
   });
 
   it('never applies to investment accounts', () => {
-    expect(spendableLeadMinor({ subtype: 'brokerage', kind: 'asset', availableMinor: '100' })).toBe(
-      null,
-    );
+    expect(lead('brokerage', 'asset', '100')).toBe(null);
+  });
+});
+
+describe('minorDiffers', () => {
+  it('is false for the same amount, including leading zeros', () => {
+    expect(minorDiffers('500', '500')).toBe(false);
+    expect(minorDiffers('500', '0500')).toBe(false);
+  });
+
+  it('is true for different amounts', () => {
+    expect(minorDiffers('123456', '500000')).toBe(true);
+    expect(minorDiffers('-1', '1')).toBe(true);
   });
 });
