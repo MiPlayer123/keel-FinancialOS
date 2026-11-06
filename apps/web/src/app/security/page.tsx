@@ -50,10 +50,10 @@ export default function SecurityPage() {
       <PublicSection title="AI boundary">
         <p>
           Language models do not perform ledger arithmetic. Imported memos, documents, and
-          other ingested text are treated as untrusted data. The hosted Assistant is currently
-          read-only for financial tools while payload-bound approvals are being completed.
-          A separate local shortcut can draft a household task, which is saved only after you
-          confirm it.
+          other ingested text are treated as untrusted data. AI apps connect through KEEL&apos;s
+          MCP server with OAuth; each app gets read-only or read-and-change access to one
+          household, which you can revoke at any time. Connected apps cannot move money,
+          connect banks, or export data, and every change they make is logged and reversible.
         </p>
       </PublicSection>
       <PublicSection title="Secrets and providers">

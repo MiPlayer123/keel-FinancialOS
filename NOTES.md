@@ -1110,3 +1110,17 @@ a private forum thread and needs a call before publishing.
 - Both read keel_budget_month (budget-v5). Helper lib/budget-progress.ts (pace, status, sort, totals), tested.
 - Found, not fixed here: the budget read counts the "Transfers Out" category as spending (demo Oct $2,240 in
   "everything else"), while Reports excludes money-movement categories. Follow-up.
+
+## 2026-11-06 — Landing MCP section, Assistant hidden, Vercel Analytics (Stage 2, Addendum §D, Laws 7/8/12)
+- In-app Assistant hidden (user): nav link commented out in app-shell.tsx; dashboard/assistant/layout.tsx
+  404s the route. Page code kept. Connected AI apps over MCP are the supported AI path.
+- Landing: new #mcp section (connector URL, Claude Code / Codex commands, read / manage / write tool groups,
+  guardrails, 6-question FAQ). FAQ text and FAQPage JSON-LD come from one list so they can't drift (GEO).
+  SoftwareApplication featureList + site description mention the MCP server. Nav + footer link to #mcp.
+- Security page "AI boundary" was stale (said the Assistant is read-only); now describes MCP grants.
+  Privacy page names Vercel analytics and connected AI apps.
+- Vercel Web Analytics + Speed Insights added (components/site-analytics.tsx). beforeSend drops query
+  strings/fragments and masks UUIDs, so only page paths leave the browser. Project showed 0 page views over
+  the prior 30 days (script was never installed). Web Analytics must also be enabled in the Vercel project's
+  Analytics tab (Hobby: free tier) — dashboard toggle, not settable from code.
+- Receipt + paystub capture feasibility: docs/research/RECEIPT-CAPTURE-FEASIBILITY-2026-11-06.md (proposal).

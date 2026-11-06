@@ -9,6 +9,7 @@ import { QueryProvider } from '@/components/query-provider';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/sonner';
 import { getSiteUrl } from '@/lib/site';
+import { SiteAnalytics } from '@/components/site-analytics';
 
 const geist = Geist({ subsets: ['latin'], variable: '--font-sans' });
 const geistMono = Geist_Mono({ subsets: ['latin'], variable: '--font-mono' });
@@ -20,7 +21,7 @@ export const metadata: Metadata = {
     template: '%s · KEEL',
   },
   description:
-    'Open-source personal and small-business finance built on a deterministic double-entry ledger, with review-first automation and portable records.',
+    'Open-source personal and small-business finance built on a deterministic double-entry ledger, with review-first automation, portable records, and an MCP server for AI agents like Claude and ChatGPT.',
   alternates: { canonical: './' },
   openGraph: {
     title: 'KEEL · personal and entity finance on an exact ledger',
@@ -47,6 +48,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
           <QueryProvider>
             <TooltipProvider delay={200}>{children}</TooltipProvider>
             <Toaster />
+            <SiteAnalytics />
           </QueryProvider>
         </ThemeProvider>
       </body>

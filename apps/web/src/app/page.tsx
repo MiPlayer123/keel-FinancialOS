@@ -20,6 +20,7 @@ import { HeroMockupLazy } from '@/components/keel/landing/hero-mockup-lazy';
 import { LandingNav } from '@/components/keel/landing/landing-nav';
 import { Reveal } from '@/components/keel/landing/reveal';
 import { TransactionStory } from '@/components/keel/landing/transaction-story';
+import { McpSection, MCP_FAQ_JSON_LD } from '@/components/keel/landing/mcp-section';
 import { getSiteUrl } from '@/lib/site';
 import { cn } from '@/lib/utils';
 
@@ -89,7 +90,7 @@ const JSON_LD = {
   license: 'https://www.gnu.org/licenses/agpl-3.0.html',
   offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
   description:
-    'KEEL is an open-source personal and entity finance application built on a deterministic double-entry ledger, with review-first automation, reconciliation, and portable exports.',
+    'KEEL is an open-source personal and entity finance application built on a deterministic double-entry ledger, with review-first automation, reconciliation, portable exports, and a remote MCP server that lets AI agents such as Claude, ChatGPT, and Codex read and update your finances with permission.',
   featureList: [
     'Double-entry ledger with balanced postings',
     'Review-first categorization, transfer, recurring, and receipt suggestions',
@@ -97,6 +98,7 @@ const JSON_LD = {
     'Budgets, recurring detection, goals and cash-flow forecast',
     'Statement reconciliation with period locks',
     'CSV, JSON, QIF and Beancount financial-record exports',
+    'Remote MCP server for Claude, Claude Code, ChatGPT and Codex with OAuth and read-only or read-and-change access',
   ],
 };
 
@@ -106,6 +108,10 @@ export default function LandingPage() {
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(JSON_LD) }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(MCP_FAQ_JSON_LD) }}
       />
       {/* Without JS the reveal-on-scroll content must simply be visible. */}
       <noscript>
@@ -190,6 +196,9 @@ export default function LandingPage() {
             </Reveal>
           </div>
         </section>
+
+        {/* ————— AI agents over MCP ————— */}
+        <McpSection />
 
         <section id="open-source" className="scroll-mt-24 border-t border-border">
           <div className="mx-auto grid w-full max-w-6xl gap-10 px-6 py-20 sm:py-28 lg:grid-cols-[1fr_auto] lg:items-center">
@@ -327,6 +336,12 @@ export default function LandingPage() {
               className="rounded-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             >
               Features
+            </a>
+            <a
+              href="#mcp"
+              className="rounded-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
+              AI agents (MCP)
             </a>
             <a
               href="#open-source"
