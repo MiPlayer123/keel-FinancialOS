@@ -44,9 +44,12 @@ export default function PrivacyPage() {
       <PublicSection title="Service providers">
         <p>
           The hosted application uses Supabase for database, authentication, storage, and
-          functions; Vercel for web hosting; and Plaid Sandbox for bank-connection testing.
-          When you use the Assistant, the question and authorized tool context may be sent to
-          the configured AI provider to generate a response.
+          functions; Vercel for web hosting and cookieless page analytics; and Plaid Sandbox
+          for bank-connection testing. Analytics record page paths only: query strings are
+          dropped and record ids are masked before anything is sent. If you connect an AI app
+          such as Claude or ChatGPT through KEEL&apos;s MCP server, the data its tools read is
+          sent to that app under its provider&apos;s terms, only for the household and access
+          level you granted.
         </p>
       </PublicSection>
       <PublicSection title="Control and portability">

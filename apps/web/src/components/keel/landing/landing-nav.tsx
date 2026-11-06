@@ -47,6 +47,12 @@ export function LandingNav() {
             Features
           </a>
           <a
+            href="#mcp"
+            className="rounded-full px-3 py-1.5 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            AI agents
+          </a>
+          <a
             href="#open-source"
             className="rounded-full px-3 py-1.5 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >

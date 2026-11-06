@@ -23,7 +23,7 @@ import {
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
-  Sparkles,
+  // Sparkles, // Assistant nav icon — restore with the Assistant link below.
   ChevronDown,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -81,7 +81,9 @@ const SECONDARY_NAV: NavItem[] = [
   { label: 'Reimbursements', href: '/dashboard/reimbursements', icon: ArrowLeftRight },
   { label: 'Statements', href: '/dashboard/statements', icon: FileCheck2 },
   { label: 'Receipts', href: '/dashboard/receipts', icon: Receipt },
-  { label: 'Assistant', href: '/dashboard/assistant', icon: Sparkles },
+  // Assistant is hidden for now (route returns 404 via dashboard/assistant/layout.tsx).
+  // To bring it back: uncomment this line, the Sparkles import, and remove that layout.
+  // { label: 'Assistant', href: '/dashboard/assistant', icon: Sparkles },
 ];
 
 const SETTINGS_NAV: NavItem = {
