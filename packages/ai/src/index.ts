@@ -93,6 +93,7 @@ export {
   type ReceiptImage,
 } from './receipt.js';
 export {
+  buildReceiptVisionRequest,
   CloudVisionReceiptExtractor,
   RecordedReceiptExtractor,
   type CloudVisionConfig,

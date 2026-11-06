@@ -976,7 +976,7 @@ function PaycheckCard({
             entityId={entityId}
             targetType="paycheck"
             targetId={p.paycheckId}
-            kind="receipt"
+            kind="paystub"
           />
 
           {templateApplied ? (

@@ -33,8 +33,8 @@ export const BANK_PROVIDERS = ['simulator', 'plaid'] as const;
 export type BankProviderName = (typeof BANK_PROVIDERS)[number];
 export const BankProviderNameSchema = z.enum(BANK_PROVIDERS);
 
-/** Attach-only document feature (no auto-extract/match — see docs/research/RECEIPTS-2026-07-16.md §5 for the deferred full pipeline). */
-export const DOCUMENT_KINDS = ['receipt', 'statement'] as const;
+/** What a document IS. Paystubs are stored in the receipts bucket (20260831180000) and are not read by the receipt extractor. */
+export const DOCUMENT_KINDS = ['receipt', 'statement', 'paystub'] as const;
 export type DocumentKind = (typeof DOCUMENT_KINDS)[number];
 export const DocumentKindSchema = z.enum(DOCUMENT_KINDS);
 

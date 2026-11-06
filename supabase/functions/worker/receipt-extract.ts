@@ -26,6 +26,7 @@ import {
   MATCHER_VERSION,
   CloudVisionReceiptExtractor,
   RecordedReceiptExtractor,
+  RECEIPT_PROMPT_VERSION,
   type CandidateTransaction,
   type ReceiptExtractor,
 } from '../_shared/vendor/keel-domain.mjs';
@@ -38,19 +39,57 @@ export interface ReceiptJobResult {
   detail: string;
 }
 
+/** Cheapest current OpenAI model with image input (checked 2026-11-06). */
+export const DEFAULT_RECEIPT_MODEL = 'gpt-6-luna';
+/** Model reads per household per calendar month (UTC) before reading pauses. */
+export const DEFAULT_RECEIPT_MONTHLY_LIMIT = 200;
+
+export type ReceiptExtractorMode = 'openai' | 'fixture' | 'off';
+
+/**
+ * Which extractor runs, from server-only env (Law 12). Receipts have their own
+ * switch so they don't fight the chat assistant over AI_PROVIDER:
+ *   RECEIPT_EXTRACTOR=openai  model reads (needs OPENAI_API_KEY) — the ⚑ switch
+ *   RECEIPT_EXTRACTOR=off     kill switch: nothing is read, uploads still file
+ *   RECEIPT_EXTRACTOR=fixture deterministic test extractor
+ * Unset keeps the old behaviour (AI_PROVIDER=cloud + key → openai, else fixture).
+ * openai without a key reads nothing rather than silently faking a read.
+ */
+export const receiptExtractorMode = (): ReceiptExtractorMode => {
+  const explicit = (Deno.env.get('RECEIPT_EXTRACTOR') ?? '').trim().toLowerCase();
+  const hasKey = (Deno.env.get('OPENAI_API_KEY') ?? '').length > 0;
+  if (explicit === 'off') return 'off';
+  if (explicit === 'fixture') return 'fixture';
+  if (explicit === 'openai') return hasKey ? 'openai' : 'off';
+  return Deno.env.get('AI_PROVIDER') === 'cloud' && hasKey ? 'openai' : 'fixture';
+};
+
+export const receiptModel = (): string =>
+  Deno.env.get('RECEIPT_MODEL') ?? Deno.env.get('OPENAI_VISION_MODEL') ?? DEFAULT_RECEIPT_MODEL;
+
+export const receiptMonthlyLimit = (): number => {
+  const raw = Number(Deno.env.get('RECEIPT_MONTHLY_LIMIT') ?? '');
+  return Number.isSafeInteger(raw) && raw >= 0 ? raw : DEFAULT_RECEIPT_MONTHLY_LIMIT;
+};
+
+/** Provenance label for rows written without a model answer. */
+const extractorLabel = (mode: ReceiptExtractorMode): string =>
+  mode === 'openai' ? `openai:${receiptModel()}` : mode;
+
 /**
  * Build the extractor from server-only env (Law 12). Default = fixture (no key,
- * no network, deterministic). AI_PROVIDER=cloud + a configured key switches to
- * the vision model — that switch is the human ⚑ checkpoint.
+ * no network, deterministic). RECEIPT_EXTRACTOR=openai + a configured key
+ * switches to the vision model — that switch is the human ⚑ checkpoint.
  */
 export const buildReceiptExtractor = (recorded: Record<string, unknown> = {}): ReceiptExtractor => {
-  const provider = Deno.env.get('AI_PROVIDER') ?? 'fixture';
-  const apiKey = Deno.env.get('OPENAI_API_KEY') ?? '';
-  if (provider === 'cloud' && apiKey.length > 0) {
+  if (receiptExtractorMode() === 'openai') {
+    const reasoningEffort = Deno.env.get('RECEIPT_REASONING_EFFORT');
     return new CloudVisionReceiptExtractor({
       baseUrl: Deno.env.get('OPENAI_BASE_URL') ?? 'https://api.openai.com/v1',
-      model: Deno.env.get('OPENAI_VISION_MODEL') ?? 'gpt-4o-mini',
-      apiKey,
+      model: receiptModel(),
+      apiKey: Deno.env.get('OPENAI_API_KEY') ?? '',
+      provider: 'openai',
+      ...(reasoningEffort ? { reasoningEffort } : {}),
     });
   }
   // Fixture path: recorded fields keyed by the object's content hash. Anything
@@ -66,6 +105,45 @@ const toBase64 = (bytes: Uint8Array): string => {
   let binary = '';
   for (const b of bytes) binary += String.fromCharCode(b);
   return btoa(binary);
+};
+
+const persistFailure = async (
+  admin: AdminClient,
+  householdId: string,
+  documentVersionId: string,
+  extractor: string,
+  errorCode: string,
+): Promise<void> => {
+  await admin.rpc('keel_worker_persist_extraction', {
+    p_household_id: householdId,
+    p_document_version_id: documentVersionId,
+    p_status: 'failed',
+    p_extractor: extractor,
+    p_extractor_version: RECEIPT_PROMPT_VERSION,
+    p_merchant: null,
+    p_amount_minor: null,
+    p_currency: null,
+    p_txn_date: null,
+    p_confidence: null,
+    p_raw_evidence: {},
+    // Only a short code — never the provider body/key (Law 12).
+    p_error_code: errorCode,
+  });
+};
+
+/** Model reads this household already used this UTC month (failed ones too). */
+const modelReadsThisMonth = async (admin: AdminClient, householdId: string): Promise<number> => {
+  const now = new Date();
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+  const { count, error } = await admin
+    .from('document_extractions')
+    .select('id', { count: 'exact', head: true })
+    .eq('household_id', householdId)
+    .like('extractor', 'openai:%')
+    .gte('created_at', monthStart);
+  // Fail closed: if we can't count, assume the cap is reached.
+  if (error || typeof count !== 'number') return Number.POSITIVE_INFINITY;
+  return count;
 };
 
 export const processReceiptExtractJob = async (
@@ -102,26 +180,23 @@ export const processReceiptExtractJob = async (
     return { ok: true, detail: 'not a receipt; skipped' };
   }
 
+  const mode = receiptExtractorMode();
+  if (mode === 'off') {
+    await persistFailure(admin, householdId, documentVersionId, 'off', 'extraction_off');
+    return { ok: true, detail: 'receipt reading is off; filed without a read' };
+  }
+  if (mode === 'openai' && (await modelReadsThisMonth(admin, householdId)) >= receiptMonthlyLimit()) {
+    await persistFailure(admin, householdId, documentVersionId, 'limit', 'monthly_limit_reached');
+    return { ok: true, detail: 'monthly receipt-reading limit reached; filed without a read' };
+  }
+
   // Download the immutable object (server-side only).
   const { data: file, error: downloadError } = await admin.storage
     .from(version.storage_bucket)
     .download(version.storage_path);
   if (downloadError || !file) {
     // Persist a 'failed' extraction so the inbox can show the reason.
-    await admin.rpc('keel_worker_persist_extraction', {
-      p_household_id: householdId,
-      p_document_version_id: documentVersionId,
-      p_status: 'failed',
-      p_extractor: Deno.env.get('AI_PROVIDER') === 'cloud' ? 'cloud' : 'fixture',
-      p_extractor_version: MATCHER_VERSION,
-      p_merchant: null,
-      p_amount_minor: null,
-      p_currency: null,
-      p_txn_date: null,
-      p_confidence: null,
-      p_raw_evidence: {},
-      p_error_code: 'object_download_failed',
-    });
+    await persistFailure(admin, householdId, documentVersionId, extractorLabel(mode), 'object_download_failed');
     return { ok: false, detail: 'receipt object download failed' };
   }
 
@@ -136,24 +211,9 @@ export const processReceiptExtractJob = async (
     // The cloud extractor needs the real bytes; the fixture keys by hash. Pass
     // the hash-keyed image to fixtures and real bytes to cloud — decided by the
     // provider env so we never send bytes to a fixture or a hash to a model.
-    const useCloud = Deno.env.get('AI_PROVIDER') === 'cloud' && (Deno.env.get('OPENAI_API_KEY') ?? '').length > 0;
-    result = await extractor.extract(useCloud ? cloudImage : image);
+    result = await extractor.extract(mode === 'openai' ? cloudImage : image);
   } catch (e) {
-    await admin.rpc('keel_worker_persist_extraction', {
-      p_household_id: householdId,
-      p_document_version_id: documentVersionId,
-      p_status: 'failed',
-      p_extractor: 'cloud',
-      p_extractor_version: MATCHER_VERSION,
-      p_merchant: null,
-      p_amount_minor: null,
-      p_currency: null,
-      p_txn_date: null,
-      p_confidence: null,
-      p_raw_evidence: {},
-      // Only a short code — never the provider body/key (Law 12).
-      p_error_code: 'extraction_failed',
-    });
+    await persistFailure(admin, householdId, documentVersionId, extractorLabel(mode), 'extraction_failed');
     return { ok: false, detail: `receipt extraction failed: ${e instanceof Error ? e.message : 'error'}` };
   }
 
@@ -214,8 +274,10 @@ export const processReceiptExtractJob = async (
     effectiveDate: string;
     description: string;
     hasConfirmedMatch: boolean;
+    hasAttachment?: boolean;
   }>;
-  const candidates: CandidateTransaction[] = rawRows.map((r) => ({
+  // A transaction that already holds a receipt is not offered again.
+  const candidates: CandidateTransaction[] = rawRows.filter((r) => r.hasAttachment !== true).map((r) => ({
     transactionId: r.transactionId,
     amountMinor: r.amountMinor,
     currency: r.currency,

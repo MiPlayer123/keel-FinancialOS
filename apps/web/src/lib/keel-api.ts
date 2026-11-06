@@ -2950,7 +2950,7 @@ export function newId(): string {
 // ---------------------------------------------------------------------------
 
 export type DocumentTargetType = 'transaction' | 'paycheck' | 'reimbursement_claim' | 'statement';
-export type DocumentKind = 'receipt' | 'statement';
+export type DocumentKind = 'receipt' | 'statement' | 'paystub';
 
 export type DocumentRow = {
   attachmentId: string;
@@ -3137,7 +3137,7 @@ export async function uploadReceipt(input: {
   householdId: string;
   entityId: string;
   file: File;
-}): Promise<{ documentId: string }> {
+}): Promise<{ documentId: string; duplicate?: boolean }> {
   const { householdId, entityId, file } = input;
   const upload = await invoke<{
     documentId: string;
@@ -3158,7 +3158,7 @@ export async function uploadReceipt(input: {
     .uploadToSignedUrl(upload.storagePath, upload.token, file);
   if (uploadError) throw uploadError;
 
-  const confirmed = await invoke<{ effects: { documentId: string } }>(
+  const confirmed = await invoke<{ effects: { documentId: string; duplicate?: boolean } }>(
     'api/documents/confirm-upload',
     {
       householdId,
@@ -3192,6 +3192,18 @@ export type ReceiptMatchView = {
   transactionId: string;
   txnDescription: string;
   txnAmountMinor: string | null;
+  txnCurrency?: string;
+  txnDate: string;
+  txnAccountName: string;
+} | null;
+
+/** A live direct attachment to a transaction (picked by hand or confirmed). */
+export type ReceiptAttachedView = {
+  attachmentId: string;
+  transactionId: string;
+  txnDescription: string;
+  txnAmountMinor: string | null;
+  txnCurrency: string;
   txnDate: string;
   txnAccountName: string;
 } | null;
@@ -3209,6 +3221,8 @@ export type ReceiptInboxRow = {
   entityId: string;
   extraction: ReceiptExtractionView;
   match: ReceiptMatchView;
+  /** Present on receipts-inbox-v2 and later. */
+  attached?: ReceiptAttachedView;
   /** Short-lived signed read URL (5 min TTL). */
   url: string | null;
 };
@@ -3216,6 +3230,34 @@ export type ReceiptInboxRow = {
 export async function fetchReceiptsInbox(householdId: string): Promise<ReceiptInboxRow[]> {
   const res = await invoke<{ rows: ReceiptInboxRow[] }>('api/receipts/inbox', { householdId });
   return res.rows;
+}
+
+export type ReceiptCandidate = {
+  transactionId: string;
+  score: number;
+  reasonCodes: string[];
+  description: string;
+  amountMinor: string | null;
+  currency: string;
+  effectiveDate: string | null;
+  accountName: string | null;
+  /** The transaction already has a receipt attached. */
+  hasReceipt: boolean;
+};
+
+/**
+ * Transactions this receipt could belong to, best first (deterministic
+ * matcher). Pass amount/date/merchant when the receipt couldn't be read; the
+ * result says which fields are still needed.
+ */
+export async function fetchReceiptCandidates(input: {
+  householdId: string;
+  documentVersionId: string;
+  amountMinor?: string;
+  txnDate?: string;
+  merchant?: string;
+}): Promise<{ rows: ReceiptCandidate[]; needs: string[] }> {
+  return invoke<{ rows: ReceiptCandidate[]; needs: string[] }>('api/receipts/candidates', input);
 }
 
 /** Confirm (attach) or reject a suggested receipt→transaction match. */

@@ -1,7 +1,9 @@
-import { describe, it, vi } from 'vitest';
+import { afterEach, describe, it, vi } from 'vitest';
 import type { ReceiptExtractor } from '../../_shared/vendor/keel-domain.mjs';
 
-vi.stubGlobal('Deno', { env: { get: (_name: string): string | undefined => undefined } });
+// Mutable env so a test can flip RECEIPT_EXTRACTOR / the cap; reset after each.
+const env: Record<string, string | undefined> = {};
+vi.stubGlobal('Deno', { env: { get: (name: string): string | undefined => env[name] } });
 const { processReceiptExtractJob } = await import('../receipt-extract.ts');
 
 const assert: (c: unknown, m?: string) => asserts c = (c, m = 'assertion failed') => {
@@ -44,11 +46,14 @@ interface Calls {
 const makeAdmin = (opts: {
   candidates?: unknown[];
   downloadFails?: boolean;
+  readsThisMonth?: number;
   calls: Calls;
 }) => ({
   from: (table: string) => ({
     select: () => ({
       eq: () => ({
+        // document_extractions monthly count: .eq().like().gte() → { count }.
+        like: () => ({ gte: () => ({ count: opts.readsThisMonth ?? 0, error: null }) }),
         single: () => {
           if (table === 'document_versions') {
             return {
@@ -105,7 +110,64 @@ const cand = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+afterEach(() => {
+  for (const k of Object.keys(env)) delete env[k];
+});
+
 describe('processReceiptExtractJob', () => {
+  it('RECEIPT_EXTRACTOR=off files the receipt without reading it (kill switch)', async () => {
+    env['RECEIPT_EXTRACTOR'] = 'off';
+    const calls: Calls = { persist: [], suggest: [], candidatesReturned: [] };
+    let built = false;
+    const result = await processReceiptExtractJob(makeAdmin({ candidates: [cand()], calls }), { documentVersionId: VER, householdId: HH }, () => {
+      built = true;
+      return fixedExtractor({ totalMinor: '4217' });
+    });
+    assert(result.ok, result.detail);
+    assert(!built, 'no extractor is built when reading is off');
+    assertEquals((calls.persist[0] as Record<string, unknown>)['p_error_code'], 'extraction_off');
+    assertEquals(calls.suggest.length, 0);
+  });
+
+  it('openai mode stops at the monthly cap without calling the model', async () => {
+    env['RECEIPT_EXTRACTOR'] = 'openai';
+    env['OPENAI_API_KEY'] = 'test-key';
+    env['RECEIPT_MONTHLY_LIMIT'] = '3';
+    const calls: Calls = { persist: [], suggest: [], candidatesReturned: [] };
+    let built = false;
+    const result = await processReceiptExtractJob(
+      makeAdmin({ candidates: [cand()], readsThisMonth: 3, calls }),
+      { documentVersionId: VER, householdId: HH },
+      () => {
+        built = true;
+        return fixedExtractor({ totalMinor: '4217' });
+      },
+    );
+    assert(result.ok, result.detail);
+    assert(!built, 'the model is not called past the cap');
+    assertEquals((calls.persist[0] as Record<string, unknown>)['p_error_code'], 'monthly_limit_reached');
+  });
+
+  it('openai mode without a key reads nothing rather than faking a read', async () => {
+    env['RECEIPT_EXTRACTOR'] = 'openai';
+    const calls: Calls = { persist: [], suggest: [], candidatesReturned: [] };
+    const result = await processReceiptExtractJob(makeAdmin({ calls }), { documentVersionId: VER, householdId: HH }, () =>
+      fixedExtractor({ totalMinor: '4217' }),
+    );
+    assert(result.ok, result.detail);
+    assertEquals((calls.persist[0] as Record<string, unknown>)['p_error_code'], 'extraction_off');
+  });
+
+  it('never suggests a transaction that already holds a receipt', async () => {
+    const calls: Calls = { persist: [], suggest: [], candidatesReturned: [] };
+    const admin = makeAdmin({ candidates: [cand({ hasAttachment: true })], calls });
+    const result = await processReceiptExtractJob(admin, { documentVersionId: VER, householdId: HH }, () =>
+      fixedExtractor({ merchant: 'Harbor Bean', totalMinor: '4217', currency: 'USD', txnDate: '2026-07-12' }),
+    );
+    assert(result.ok, result.detail);
+    assertEquals(calls.suggest.length, 0, 'an already-attached transaction is skipped');
+  });
+
   it('persists an extraction and suggests a single high-confidence match', async () => {
     const calls: Calls = { persist: [], suggest: [], candidatesReturned: [] };
     const admin = makeAdmin({ candidates: [cand()], calls });

@@ -1124,3 +1124,29 @@ a private forum thread and needs a call before publishing.
   the prior 30 days (script was never installed). Web Analytics must also be enabled in the Vercel project's
   Analytics tab (Hobby: free tier) — dashboard toggle, not settable from code.
 - Receipt + paystub capture feasibility: docs/research/RECEIPT-CAPTURE-FEASIBILITY-2026-11-06.md (proposal).
+
+## 2026-11-06 — Receipts phase 0: uploads work, real reading, find-a-transaction (Stage 2, BC-v2.1 §documents, Laws 1/2/5/10/12)
+- Bug: keel_documents_confirm_upload always inserted an attachment row; Receipts-page uploads send no target,
+  so the "exactly one target" CHECK failed every inbox upload. Migration 20261106120000: attach only when a
+  target is given; half a target pair is refused (P0009). pgTAP 049.
+- Same bytes already filed in the household (same kind, live) reuse that document (duplicate=true) instead of
+  a second copy; the API skips re-reading a duplicate. Was per-document only (document_versions unique).
+- Candidates: purchase receipts only match money out (refunds only money in; account side, negative = out);
+  rows carry hasAttachment and the worker skips transactions that already hold a receipt.
+- Inbox v2 (receipts-inbox-v2): a direct attachment reads as attached; match rows carry txnCurrency (UI no
+  longer hard-codes USD).
+- Extractor: own switch RECEIPT_EXTRACTOR=openai|off|fixture (AI_PROVIDER is shared with chat/statements;
+  unset keeps the old behaviour). Default model gpt-6-luna (cheapest current OpenAI image model, $0.10/$0.50
+  per M, 2026-11-06; gpt-5-nano is cheaper but deprecated). Reasoning models get the lowest effort and no
+  temperature; PDFs go as a file block (were sent as image_url and failed). Provenance 'openai:<model>';
+  failure rows use the prompt version, not the matcher version. Cap: RECEIPT_MONTHLY_LIMIT (default 200 model
+  reads per household per UTC month, counted from document_extractions) → 'monthly_limit_reached'.
+- New /receipts/candidates: ranked transactions for one receipt (deterministic matcher, −3/+10 days), from the
+  read fields or a typed amount/date. The user picks; documents.attach does the attach (class B).
+- Paystub kind end to end: contracts enum, API bucket check (paystub → receipts), paycheck dialog files paystubs.
+  Not read by the receipt extractor (phase 4).
+- Receipts page: Take photo (camera capture; the photo is not saved to the phone), Choose file, drag-drop,
+  photos shrunk in the browser (>1.5 MB → ≤2400 px JPEG), Personal/Business picker (remembered), auto-refresh
+  while reading, Find transaction on unmatched receipts.
+- ⚑ live: set RECEIPT_EXTRACTOR=openai + OPENAI_API_KEY as Supabase function secrets; apply the migration.
+- "Jev" (TypeSafe AI) checked on request: text-only decision model, can't read images. Staying on OpenAI.
