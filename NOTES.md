@@ -2,6 +2,20 @@
 
 Record every decision, deviation, failed approach, command run, test result, migration, and human checkpoint here. Never record credential values. Refer to secrets only by environment-variable name.
 
+## 2026-11-04 Checking and savings lead with the available balance (Stage 2, Addendum §D, Laws 1/8/9)
+
+- **Why.** A user's checking account led with the ledger (current) balance, with a much smaller "available at the bank" figure beneath it because of a large pending debit or hold. They want the spendable figure first. Discussed first: budgeting apps usually lead with current, bank apps with available. They chose available for checking and savings only.
+- **Web only, display only.** `lib/spendable-balance.ts` (`spendableLeadMinor`) returns the provider's available figure for an asset-kind account whose subtype is exactly `checking` or `savings`, else null.
+  - **Account page:** header label becomes "Available", the big number is the available figure, and the ledger balance moves beneath it as "current balance". Other accounts are unchanged, including the existing "available at the bank" line.
+  - **Accounts list:** the row shows available with the ledger balance beneath as "current".
+- **Not changed.** Group subtotals, net worth, goals (`EarmarkLine`), the sidebar rail and Fix balance all keep the ledger figure, so totals still reconcile to the register (Law 9). The user was told group totals will not equal the sum of the rows while a pending item is outstanding. Credit cards are excluded because their available is remaining credit. Investment subtypes containing "savings" (education, thrift) are excluded by exact match.
+- **No arithmetic.** The available figure is passed through as the provider reported it (Law 1). With no available figure the ledger balance shows as before (Law 8 hides-at-absence).
+- **Review fixes (PR #208).**
+  - Available is used only when it is not above the ledger balance. Some institutions fold an overdraft line or pending deposits into it, and the headline must never overstate spendable cash. This is a `BigInt` comparison, not arithmetic.
+  - The ledger line beneath shows only when the two figures differ, so a savings row with nothing pending shows one number.
+  - The line is labelled "balance in KEEL" (account page) and "in KEEL" (list), not "current", because the bank's current balance (`provider.currentMinor`) is a different figure.
+- **Checks.** Unit tests in `lib/spendable-balance.test.ts`; CI's build, lint, typecheck and tests passed on the first push. Not run locally: package installs are blocked in this session, so `pnpm build` and vitest are left to CI and the Vercel preview.
+
 ## 2026-11-04 Account continuity: a closed account replaced by a live one
 
 - **Why.** The owner's Sapphire Reserve was reissued on 2026-08-13 (old ••8311, new ••4550). The old number keeps its history on an archived account, so the site showed one card as two. CHASE COLLEGE has the same split from its reconnect. The owner chose an explicit link over moving ledger rows.

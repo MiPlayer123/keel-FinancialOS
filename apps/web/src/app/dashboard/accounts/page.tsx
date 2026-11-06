@@ -24,6 +24,7 @@ import {
 import { relativeSyncLabel } from '@/lib/relative-date';
 import { utilizationPercent } from '@/lib/credit-utilization';
 import { looksLikeRetirementAccount, looksLikeInvestmentAccount } from '@/lib/investment-subtype';
+import { minorDiffers, spendableLeadMinor } from '@/lib/spendable-balance';
 import {
   currencyTotals,
   primaryCurrencyTotal,
@@ -39,6 +40,10 @@ import { buttonVariants } from '@/components/ui/button';
 type Enriched = AccountRow & {
   kind: string;
   balanceMinor: string;
+  /** Checking/savings only: the bank's available balance shown on the row in
+   *  place of balanceMinor. Display only — group totals and net worth still
+   *  sum balanceMinor (lib/spendable-balance.ts). */
+  spendableMinor: string | null;
   /** "Updated 2h ago" from the owning connection; null for manual accounts. */
   syncLabel: string | null;
   needsReauth: boolean;
@@ -196,10 +201,17 @@ function AccountsBody() {
       looksLikeInvestmentAccount(a.subtype) && snapshot?.currentMinor
         ? snapshot.currentMinor
         : null;
+    const balanceMinor = marketMinor ?? balanceByLedger.get(a.ledgerAccountId) ?? '0';
     return {
       ...a,
       kind,
-      balanceMinor: marketMinor ?? balanceByLedger.get(a.ledgerAccountId) ?? '0',
+      balanceMinor,
+      spendableMinor: spendableLeadMinor({
+        subtype: a.subtype,
+        kind,
+        availableMinor: snapshot?.availableMinor,
+        ledgerMinor: balanceMinor,
+      }),
       syncLabel: conn?.lastSuccessfulSyncAt
         ? relativeSyncLabel(conn.lastSuccessfulSyncAt, nowIso)
         : null,
@@ -432,7 +444,22 @@ function AccountGroup({ title, rows }: { title: string; rows: Enriched[] }) {
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <div className="text-right">
-                <Money amountMinor={a.balanceMinor} currency={a.currency} className="text-sm" />
+                <Money
+                  amountMinor={a.spendableMinor ?? a.balanceMinor}
+                  currency={a.currency}
+                  className="text-sm"
+                />
+                {/* Ledger figure beneath only when it differs from the headline. */}
+                {a.spendableMinor !== null && minorDiffers(a.spendableMinor, a.balanceMinor) ? (
+                  <p className="text-[11px] text-muted-foreground">
+                    <Money
+                      amountMinor={a.balanceMinor}
+                      currency={a.currency}
+                      className="text-[11px]"
+                    />{' '}
+                    in KEEL
+                  </p>
+                ) : null}
                 {/* Utilization (C9): only when a provider limit exists; neutral
                     tokens — the % is status, not negative money (Law 8). */}
                 {a.utilization !== null ? (
