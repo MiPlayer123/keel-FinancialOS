@@ -193,16 +193,17 @@ function ReceiptsBody() {
     };
   }, [rows, load]);
 
-  // Books to file uploads under: the last choice, else the first (personal).
+  // Books to file uploads under: the last choice, else personal, else the first.
   useEffect(() => {
     if (!householdId) return;
     void fetchEntities(householdId)
       .then((list) => {
         setEntities(list);
         const remembered = readPref();
+        const fallback = list.find((e) => e.kind === 'personal') ?? list[0];
         setEntityId(
           (current) =>
-            current ?? (list.some((e) => e.entityId === remembered) ? remembered : null) ?? list[0]?.entityId ?? null,
+            current ?? (list.some((e) => e.entityId === remembered) ? remembered : null) ?? fallback?.entityId ?? null,
         );
       })
       .catch(() => {
@@ -484,7 +485,9 @@ function ReceiptsBody() {
               }}
             >
               <SelectTrigger className="h-9 w-52 text-sm">
-                <SelectValue placeholder="All accounts" />
+                <SelectValue placeholder="All accounts">
+                  {accountFilter === 'all' ? 'All accounts' : accountFilter}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All accounts</SelectItem>

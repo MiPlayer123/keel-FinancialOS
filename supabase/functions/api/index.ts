@@ -2929,14 +2929,12 @@ export default {
       }
       // A duplicate reuses a receipt that was already read — don't pay twice.
       if (kind.data === 'receipt' && confirmEffects?.duplicate !== true && typeof documentVersionId === 'string') {
-        const { error: enqueueError } = await ctx.supabaseAdmin.rpc('keel_enqueue', {
-          queue_name: 'sync_events',
-          message: {
-            jobType: 'receipt_extract',
-            economicEventKey: `receipt:extract:${documentVersionId}`,
-            refs: { documentVersionId, householdId: householdId.data },
-          },
+        // Definer wrapper: service_role cannot reach pgmq directly.
+        const { error: enqueueError } = await ctx.supabaseAdmin.rpc('keel_receipts_enqueue_extract', {
+          p_household_id: householdId.data,
+          p_document_version_id: documentVersionId,
         });
+        if (enqueueError) console.error('receipt enqueue failed', enqueueError.code ?? 'unknown');
         if (!enqueueError) {
           // Kick the drain so extraction runs promptly (the 3-min cron is the
           // fallback). Best-effort.

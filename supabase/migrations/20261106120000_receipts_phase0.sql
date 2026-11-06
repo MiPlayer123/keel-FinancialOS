@@ -388,3 +388,47 @@ begin
   );
 end;
 $$;
+
+-- ---------------------------------------------------------------------------
+-- 4. Queue a receipt read from the api function.
+--    keel_enqueue is SECURITY INVOKER and service_role has no pgmq usage on a
+--    fresh stack, so the api's direct keel_enqueue call failed silently and no
+--    receipt was ever read (uploads failed earlier, so this never surfaced).
+--    This definer wrapper (owned by keel_api, which has pgmq usage) checks the
+--    version is a live receipt in this household, then queues the job.
+-- ---------------------------------------------------------------------------
+create or replace function public.keel_receipts_enqueue_extract(
+  p_household_id uuid,
+  p_document_version_id uuid
+) returns bigint
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not exists (
+    select 1 from public.document_versions dv
+      join public.documents d on d.id = dv.document_id
+     where dv.id = p_document_version_id
+       and d.household_id = p_household_id
+       and d.kind = 'receipt'
+       and d.deleted_at is null
+  ) then
+    raise exception 'KEEL_SCOPE_VIOLATION: receipt not in household' using errcode = 'P0006';
+  end if;
+  return public.keel_enqueue('sync_events', jsonb_build_object(
+    'jobType', 'receipt_extract',
+    'economicEventKey', 'receipt:extract:' || p_document_version_id::text,
+    'refs', jsonb_build_object(
+      'documentVersionId', p_document_version_id::text,
+      'householdId', p_household_id::text
+    )
+  ));
+end;
+$$;
+
+grant create on schema public to keel_api;
+alter function public.keel_receipts_enqueue_extract(uuid, uuid) owner to keel_api;
+revoke create on schema public from keel_api;
+revoke all on function public.keel_receipts_enqueue_extract(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.keel_receipts_enqueue_extract(uuid, uuid) to service_role;

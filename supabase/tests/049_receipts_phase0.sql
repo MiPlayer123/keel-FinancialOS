@@ -103,6 +103,23 @@ select is(
      '$.rows[0].hasAttachment')),
   'true'::jsonb, 'the purchase now reads as having a receipt');
 
+-- 5b. Queueing a read goes through the definer wrapper and is household-scoped.
+select is(
+  (select r.rolname from pg_proc p join pg_roles r on r.oid = p.proowner
+    where p.oid = 'public.keel_receipts_enqueue_extract(uuid,uuid)'::regprocedure),
+  'keel_api', 'enqueue wrapper owned by keel_api');
+select ok(
+  not has_function_privilege('authenticated', 'public.keel_receipts_enqueue_extract(uuid,uuid)', 'execute'),
+  'browsers cannot queue reads directly');
+select isnt(
+  public.keel_receipts_enqueue_extract('00000000-0000-4000-8000-00000000a001',
+    (select id from public.document_versions where document_id = 'c9000000-0000-4000-8000-0000000000d1')),
+  null, 'a receipt read is queued');
+select throws_ok($$
+  select public.keel_receipts_enqueue_extract('00000000-0000-4000-8000-00000000b001',
+    (select id from public.document_versions where document_id = 'c9000000-0000-4000-8000-0000000000d1'))
+$$, 'P0006', null, 'another household cannot queue this receipt');
+
 -- 6. Inbox (as the member): the attached receipt carries its transaction,
 --    the inbox upload has none.
 set local role authenticated;

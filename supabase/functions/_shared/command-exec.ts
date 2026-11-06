@@ -121,6 +121,20 @@ const fail = (status: number, code: string, message: string, details: Record<str
   details,
 });
 
+/**
+ * Procs that read camelCase payload keys (documentId, attachmentId, matchId,
+ * targetType, targetId). Every other proc reads snake_case, so the payload is
+ * snake-cased by default; for these, snake-casing made the key lookups null and
+ * the command failed ("not found" / "required"). Pass their payload as-is.
+ */
+export const CAMEL_PAYLOAD_COMMANDS: ReadonlySet<string> = new Set([
+  'documents.attach',
+  'documents.detach',
+  'documents.delete',
+  'receipts.decide_match',
+  'receipts.detach_match',
+]);
+
 export const executeCommand = async (
   contract: CommandContract,
   supabase: UserClient,
@@ -183,7 +197,7 @@ export const executeCommand = async (
     p_economic_event_key: envelope.data.economicEventKey,
     p_actor: envelope.data.actor,
     p_household_id: householdId,
-    p_payload: contract.toSnakeKeys(payload),
+    p_payload: CAMEL_PAYLOAD_COMMANDS.has(command) ? payload : contract.toSnakeKeys(payload),
   });
   if (error) return { ok: false, dbError: error };
   return { ok: true, data };

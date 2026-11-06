@@ -1150,3 +1150,17 @@ a private forum thread and needs a call before publishing.
   while reading, Find transaction on unmatched receipts.
 - ⚑ live: set RECEIPT_EXTRACTOR=openai + OPENAI_API_KEY as Supabase function secrets; apply the migration.
 - "Jev" (TypeSafe AI) checked on request: text-only decision model, can't read images. Staying on OpenAI.
+- Local end-to-end run (local Supabase stack, api/worker on host deno, fake OpenAI, Playwright, fictional
+  receipts) found three bugs no unit test covered, all fixed here:
+  1. The api queued receipt reads with keel_enqueue, which is SECURITY INVOKER; service_role has no pgmq
+     usage, so the call failed silently and nothing was ever read. New definer wrapper
+     keel_receipts_enqueue_extract (owned by keel_api, household-checked, service_role only). pgTAP 049.
+  2. The command executor snake-cases every payload, but the document/receipt procs read camelCase keys
+     (documentId, attachmentId, matchId, targetType/Id). documents.attach/detach/delete and
+     receipts.decide_match/detach_match therefore never worked from the web, MCP or agent.
+     CAMEL_PAYLOAD_COMMANDS passes those five payloads as-is (command-exec.test.ts).
+  3. Upload picker defaulted to the first entity, not the personal books.
+  E2E result: 23/23 checks (upload → read → suggest → approve → detach → find → attach; duplicate stored
+  once and its extra copy removed; refund never matched; unreadable receipt → manual amount/date → attach;
+  11 MB photo shrunk to 2.2 MB; PDF sent as a file block; provenance openai:gpt-6-luna; phone width has
+  Take photo with in-app capture and no overflow; paystub filed as paystub with no read queued).

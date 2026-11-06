@@ -132,3 +132,31 @@ Deno.test('connected-app tokens are told apart by client_id alone', () => {
   assertEquals(isThirdPartyClientToken({ sub: 'u', client_id: '' }), false);
   assertEquals(isThirdPartyClientToken(null), false);
 });
+
+Deno.test('document + receipt commands keep camelCase payload keys their procs read', async () => {
+  const snake = (v: unknown): unknown =>
+    Object.fromEntries(
+      Object.entries(v as Record<string, unknown>).map(([k, x]) => [k.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`), x]),
+    );
+  for (const [command, payload] of [
+    ['receipts.decide_match', { matchId: 'm1', confirm: true }],
+    ['receipts.detach_match', { matchId: 'm1' }],
+    ['documents.attach', { documentId: 'd1', targetType: 'transaction', targetId: 't1' }],
+    ['documents.detach', { attachmentId: 'a1', reason: 'r' }],
+    ['documents.delete', { documentId: 'd1', reason: 'r' }],
+  ] as const) {
+    const db = client();
+    const outcome = await executeCommand(
+      contract({ toSnakeKeys: snake }),
+      db as never,
+      () => Promise.resolve({}),
+      envelope(command, payload),
+    );
+    assertEquals(outcome.ok, true, `${command} ok`);
+    assertEquals(db.calls.at(-1)?.args['p_payload'], payload, `${command} payload unchanged`);
+  }
+  // Everything else is still snake-cased.
+  const db = client();
+  await executeCommand(contract({ toSnakeKeys: snake }), db as never, () => Promise.resolve({}), envelope('budgets.set_target', { categoryId: 'c' }));
+  assertEquals(db.calls.at(-1)?.args['p_payload'], { category_id: 'c' }, 'other commands snake-cased');
+});
