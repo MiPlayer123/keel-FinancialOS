@@ -68,8 +68,11 @@ export const receiptModel = (): string =>
   Deno.env.get('RECEIPT_MODEL') ?? Deno.env.get('OPENAI_VISION_MODEL') ?? DEFAULT_RECEIPT_MODEL;
 
 export const receiptMonthlyLimit = (): number => {
-  const raw = Number(Deno.env.get('RECEIPT_MONTHLY_LIMIT') ?? '');
-  return Number.isSafeInteger(raw) && raw >= 0 ? raw : DEFAULT_RECEIPT_MONTHLY_LIMIT;
+  // Unset or blank keeps the default (Number('') would be 0); an explicit 0 pauses reading.
+  const text = (Deno.env.get('RECEIPT_MONTHLY_LIMIT') ?? '').trim();
+  if (!/^[0-9]+$/u.test(text)) return DEFAULT_RECEIPT_MONTHLY_LIMIT;
+  const raw = Number(text);
+  return Number.isSafeInteger(raw) ? raw : DEFAULT_RECEIPT_MONTHLY_LIMIT;
 };
 
 /** Provenance label for rows written without a model answer. */

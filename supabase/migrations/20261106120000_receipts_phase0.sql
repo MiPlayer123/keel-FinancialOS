@@ -190,6 +190,13 @@ $$;
 -- ---------------------------------------------------------------------------
 -- 2. Receipt candidates: direction + "already has a receipt"
 -- ---------------------------------------------------------------------------
+-- The function is owned by keel_worker (20260718170000), which could read
+-- documents but not document_attachments. Grant + policy that read.
+grant select on public.document_attachments to keel_worker;
+drop policy if exists document_attachments_worker_read on public.document_attachments;
+create policy document_attachments_worker_read on public.document_attachments
+  for select to keel_worker using (true);
+
 create or replace function public.keel_worker_receipt_candidates(
   p_household_id uuid,
   p_currency text,

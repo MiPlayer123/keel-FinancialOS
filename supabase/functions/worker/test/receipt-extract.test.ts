@@ -148,6 +148,23 @@ describe('processReceiptExtractJob', () => {
     assertEquals((calls.persist[0] as Record<string, unknown>)['p_error_code'], 'monthly_limit_reached');
   });
 
+  it('an unset monthly limit keeps the default instead of pausing reading', async () => {
+    env['RECEIPT_EXTRACTOR'] = 'openai';
+    env['OPENAI_API_KEY'] = 'test-key';
+    const calls: Calls = { persist: [], suggest: [], candidatesReturned: [] };
+    let built = false;
+    const result = await processReceiptExtractJob(
+      makeAdmin({ candidates: [cand()], readsThisMonth: 0, calls }),
+      { documentVersionId: VER, householdId: HH },
+      () => {
+        built = true;
+        return fixedExtractor({ merchant: 'Harbor Bean', totalMinor: '4217', currency: 'USD', txnDate: '2026-07-12' });
+      },
+    );
+    assert(result.ok, result.detail);
+    assert(built, 'the model is called when the limit is unset');
+  });
+
   it('openai mode without a key reads nothing rather than faking a read', async () => {
     env['RECEIPT_EXTRACTOR'] = 'openai';
     const calls: Calls = { persist: [], suggest: [], candidatesReturned: [] };

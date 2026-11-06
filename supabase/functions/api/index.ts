@@ -2921,6 +2921,12 @@ export default {
       const confirmEffects = (data as { effects?: { documentVersionId?: string; duplicate?: boolean } })
         ?.effects;
       const documentVersionId = confirmEffects?.documentVersionId;
+      // A duplicate reuses the earlier object; the copy just uploaded under this
+      // document's own prefix is referenced by nothing, so remove it (it was
+      // never recorded — not a soft-delete case). Best-effort.
+      if (confirmEffects?.duplicate === true) {
+        await ctx.supabaseAdmin.storage.from(quarantineBucketFor(kind.data)).remove([storagePath]);
+      }
       // A duplicate reuses a receipt that was already read — don't pay twice.
       if (kind.data === 'receipt' && confirmEffects?.duplicate !== true && typeof documentVersionId === 'string') {
         const { error: enqueueError } = await ctx.supabaseAdmin.rpc('keel_enqueue', {
