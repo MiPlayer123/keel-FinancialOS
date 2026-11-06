@@ -29,7 +29,7 @@ export interface ReceiptExtraction {
 }
 
 export interface ExtractionRecord extends ReceiptExtraction {
-  /** 'fixture' | 'claude:<model>' | 'ollama:<model>' — provenance. */
+  /** 'fixture' | 'openai:<model>' | 'claude:<model>' | 'ollama:<model>' — provenance. */
   readonly extractor: string;
   /** Prompt/policy version stamp. */
   readonly extractorVersion: string;

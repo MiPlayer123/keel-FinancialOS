@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Camera,
   Check,
   FileText,
   Image as ImageIcon,
   Loader2,
   Paperclip,
   Receipt,
+  Search,
   Sparkles,
   Upload,
   X,
@@ -18,18 +20,27 @@ import { PageHeader, EmptyState, QueryErrorState } from '@/components/keel/page-
 import { Money } from '@/components/keel/money';
 import { useHousehold } from '@/components/keel/household-context';
 import {
+  attachExistingDocument,
   decideReceiptMatch,
+  detachDocument,
   detachReceiptMatch,
   fetchEntities,
+  fetchReceiptCandidates,
   fetchReceiptsInbox,
   fetchStorageSummary,
   uploadReceipt,
   type DocumentStorageSummary,
+  type EntityRow,
+  type ReceiptCandidate,
   type ReceiptInboxRow,
 } from '@/lib/keel-api';
+import { minorToDollarsInput, parseDollarsToMinorString } from '@/lib/money';
+import { prepareReceiptFile } from '@/lib/receipt-image';
 import { shortDateWithYear } from '@/lib/relative-date';
+import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Select,
@@ -41,6 +52,12 @@ import {
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const ACCEPTED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
+/** iOS Safari converts HEIC to JPEG when HEIC isn't listed here. */
+const ACCEPT_ATTR = 'image/jpeg,image/png,image/webp,application/pdf';
+const ENTITY_PREF_KEY = 'keel-receipt-entity';
+/** Keep checking for a read result this long after an upload. */
+const POLL_WINDOW_MS = 3 * 60 * 1000;
+const POLL_EVERY_MS = 4000;
 
 /** Human byte size from a BIGINT-safe string count. */
 function formatByteString(byteStr: string): string {
@@ -52,11 +69,27 @@ function formatByteString(byteStr: string): string {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
+function readPref(): string | null {
+  try {
+    return window.localStorage.getItem(ENTITY_PREF_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writePref(value: string): void {
+  try {
+    window.localStorage.setItem(ENTITY_PREF_KEY, value);
+  } catch {
+    /* a remembered choice is a convenience only */
+  }
+}
+
 /**
  * Storage hygiene strip. KEEL keeps document BYTES in Supabase Storage (not
  * inline in Postgres like Quicken), so growth is just the sum of uploaded
- * file sizes — surfaced here so it never silently balloons. Dedup: identical
- * re-uploads collapse to one stored object.
+ * file sizes — surfaced here so it never silently balloons. Identical
+ * re-uploads are recognised and filed once.
  */
 function StorageSummaryBar({ summary }: { summary: DocumentStorageSummary | null }) {
   if (!summary || summary.liveDocuments === 0) return null;
@@ -69,9 +102,6 @@ function StorageSummaryBar({ summary }: { summary: DocumentStorageSummary | null
       <span>
         {summary.liveDocuments} {summary.liveDocuments === 1 ? 'document' : 'documents'}
       </span>
-      {summary.distinctContent < summary.versionCount ? (
-        <span>{summary.distinctContent} unique (duplicates deduped)</span>
-      ) : null}
       {summary.deletedDocuments > 0 ? (
         <span>{summary.deletedDocuments} removed (kept for export/audit)</span>
       ) : null}
@@ -82,10 +112,8 @@ function StorageSummaryBar({ summary }: { summary: DocumentStorageSummary | null
 export default function ReceiptsPage() {
   return (
     <>
-      <PageHeader
-        title="Receipts"
-      />
-      <div className="p-6">
+      <PageHeader title="Receipts" />
+      <div className="p-4 sm:p-6">
         <ReceiptsBody />
       </div>
     </>
@@ -99,21 +127,30 @@ const REASON_LABEL: Record<string, string> = {
   DATE_SAME_DAY: 'Same day',
   DATE_1D: '1 day apart',
   DATE_2_3D: '2–3 days apart',
-  DATE_4_5D: '4–5 days apart',
+  DATE_4_5D: '4+ days apart',
   MERCHANT_EXACT: 'Merchant matches',
   MERCHANT_FUZZY: 'Merchant likely matches',
 };
+
+/** Still waiting on a read, and uploaded recently enough to keep checking. */
+function isReading(row: ReceiptInboxRow, now: number): boolean {
+  const pending = row.extraction === null || row.extraction.status === 'pending';
+  return pending && now - Date.parse(row.createdAt) < POLL_WINDOW_MS;
+}
 
 function ReceiptsBody() {
   const { householdId, userId } = useHousehold();
   const [rows, setRows] = useState<ReceiptInboxRow[] | null>(null);
   const [storage, setStorage] = useState<DocumentStorageSummary | null>(null);
+  const [entities, setEntities] = useState<EntityRow[]>([]);
   const [entityId, setEntityId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [busyMatch, setBusyMatch] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const [accountFilter, setAccountFilter] = useState<string>('all');
   const [loadError, setLoadError] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
   const requestKeyRef = useRef(0);
 
   const load = useCallback(() => {
@@ -147,83 +184,143 @@ function ReceiptsBody() {
     load();
   }, [load]);
 
-  // Resolve a default entity for uploads (the household's first/personal books).
+  // While a fresh upload is being read, check back every few seconds.
+  useEffect(() => {
+    if (!rows || !rows.some((r) => isReading(r, Date.now()))) return;
+    const timer = window.setTimeout(load, POLL_EVERY_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [rows, load]);
+
+  // Books to file uploads under: the last choice, else personal, else the first.
   useEffect(() => {
     if (!householdId) return;
     void fetchEntities(householdId)
-      .then((entities) => {
-        setEntityId((current) => current ?? entities[0]?.entityId ?? null);
+      .then((list) => {
+        setEntities(list);
+        const remembered = readPref();
+        const fallback = list.find((e) => e.kind === 'personal') ?? list[0];
+        setEntityId(
+          (current) =>
+            current ?? (list.some((e) => e.entityId === remembered) ? remembered : null) ?? fallback?.entityId ?? null,
+        );
       })
       .catch(() => {
-        /* upload button stays disabled without an entity */
+        /* upload buttons stay disabled without an entity */
       });
   }, [householdId]);
 
-  async function handleFiles(files: FileList | null) {
+  async function handleFiles(files: FileList | File[] | null) {
     if (!files || files.length === 0 || !householdId || !entityId) return;
     const chosen = Array.from(files).filter((f) => {
       if (!ACCEPTED_MIME.has(f.type)) {
         toast.error(`${f.name}: only JPEG, PNG, WebP, or PDF are supported.`);
         return false;
       }
-      if (f.size > MAX_BYTES) {
-        toast.error(`${f.name}: files over 10MB are not supported.`);
-        return false;
-      }
       return true;
     });
     if (chosen.length === 0) return;
     setUploading(true);
-    let ok = 0;
-    for (const file of chosen) {
+    let filed = 0;
+    let duplicates = 0;
+    for (const original of chosen) {
       try {
-        await uploadReceipt({ householdId, entityId, file });
-        ok += 1;
+        const file = await prepareReceiptFile(original);
+        if (file.size > MAX_BYTES) {
+          toast.error(`${original.name}: files over 10MB are not supported.`);
+          continue;
+        }
+        const result = await uploadReceipt({ householdId, entityId, file });
+        if (result.duplicate) duplicates += 1;
+        else filed += 1;
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : `Could not upload ${file.name}.`);
+        toast.error(err instanceof Error ? err.message : `Could not upload ${original.name}.`);
       }
     }
     setUploading(false);
-    if (ok > 0) {
+    if (filed > 0) {
       toast.success(
-        ok === 1 ? 'Receipt uploaded — reading it now.' : `${String(ok)} receipts uploaded — reading them now.`,
+        filed === 1 ? 'Receipt uploaded. Reading it now.' : `${String(filed)} receipts uploaded. Reading them now.`,
       );
+    }
+    if (duplicates > 0) {
+      toast.info(duplicates === 1 ? 'That receipt was already here.' : `${String(duplicates)} were already here.`);
     }
     load();
   }
 
-  async function decide(matchId: string, confirm: boolean) {
-    if (!householdId || !userId) return;
-    setBusyMatch(matchId);
+  async function run(key: string, action: () => Promise<unknown>, success: string) {
+    setBusy(key);
     try {
-      await decideReceiptMatch({ householdId, userId, matchId, confirm });
-      toast.success(confirm ? 'Receipt attached to the transaction.' : 'Suggestion dismissed.');
+      await action();
+      toast.success(success);
       load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not update the match.');
+      toast.error(err instanceof Error ? err.message : 'Something went wrong.');
     } finally {
-      setBusyMatch(null);
+      setBusy(null);
     }
   }
 
-  async function detach(matchId: string) {
+  function decide(matchId: string, confirm: boolean) {
     if (!householdId || !userId) return;
-    setBusyMatch(matchId);
-    try {
-      await detachReceiptMatch({ householdId, userId, matchId });
-      toast.success('Receipt detached from the transaction.');
-      load();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not detach the receipt.');
-    } finally {
-      setBusyMatch(null);
-    }
+    void run(
+      matchId,
+      () => decideReceiptMatch({ householdId, userId, matchId, confirm }),
+      confirm ? 'Receipt attached to the transaction.' : 'Suggestion dismissed.',
+    );
   }
+
+  function detach(row: ReceiptInboxRow) {
+    if (!householdId || !userId) return;
+    const matchId = row.match?.status === 'confirmed' ? row.match.matchId : null;
+    const attachmentId = row.attached?.attachmentId ?? null;
+    if (!matchId && !attachmentId) return;
+    void run(
+      row.documentVersionId,
+      () =>
+        matchId
+          ? detachReceiptMatch({ householdId, userId, matchId })
+          : detachDocument({
+              householdId,
+              userId,
+              attachmentId: attachmentId ?? '',
+              reason: 'Detached on the receipts page',
+            }),
+      'Receipt detached from the transaction.',
+    );
+  }
+
+  function attachTo(row: ReceiptInboxRow, transactionId: string) {
+    if (!householdId || !userId) return;
+    void run(
+      row.documentVersionId,
+      async () => {
+        // Picking a different transaction answers an open suggestion too.
+        if (row.match?.status === 'suggested' && row.match.transactionId !== transactionId) {
+          await decideReceiptMatch({ householdId, userId, matchId: row.match.matchId, confirm: false });
+        }
+        await attachExistingDocument({
+          householdId,
+          userId,
+          documentId: row.documentId,
+          targetType: 'transaction',
+          targetId: transactionId,
+        });
+      },
+      'Receipt attached to the transaction.',
+    );
+  }
+
+  const accountName = (r: ReceiptInboxRow): string | null =>
+    r.attached?.txnAccountName ?? r.match?.txnAccountName ?? null;
 
   const accountOptions = useMemo(() => {
     const names = new Set<string>();
     for (const r of rows ?? []) {
-      if (r.match?.txnAccountName) names.add(r.match.txnAccountName);
+      const name = accountName(r);
+      if (name) names.add(name);
     }
     return Array.from(names).sort();
   }, [rows]);
@@ -231,22 +328,60 @@ function ReceiptsBody() {
   const filtered = useMemo(() => {
     if (!rows) return null;
     if (accountFilter === 'all') return rows;
-    return rows.filter((r) => r.match?.txnAccountName === accountFilter);
+    return rows.filter((r) => accountName(r) === accountFilter);
   }, [rows, accountFilter]);
 
-  const suggested = filtered?.filter((r) => r.match?.status === 'suggested') ?? [];
-  const attached = filtered?.filter((r) => r.match?.status === 'confirmed') ?? [];
-  const unmatched = filtered?.filter((r) => r.match === null) ?? [];
+  const isAttached = (r: ReceiptInboxRow) => Boolean(r.attached) || r.match?.status === 'confirmed';
+  const attached = filtered?.filter(isAttached) ?? [];
+  const suggested = filtered?.filter((r) => !isAttached(r) && r.match?.status === 'suggested') ?? [];
+  const unmatched = filtered?.filter((r) => !isAttached(r) && r.match?.status !== 'suggested') ?? [];
+
+  const entityName = entities.find((e) => e.entityId === entityId)?.name ?? null;
+  const canUpload = !uploading && Boolean(householdId) && Boolean(entityId);
 
   const uploadControls = (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
+      {entities.length > 1 ? (
+        <Select
+          value={entityId ?? ''}
+          onValueChange={(value) => {
+            if (!value) return;
+            setEntityId(value);
+            writePref(value);
+          }}
+        >
+          <SelectTrigger className="h-9 w-40 text-sm" aria-label="File receipts under">
+            <SelectValue placeholder="Books">{entityName ?? 'Books'}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {entities.map((e) => (
+              <SelectItem key={e.entityId} value={e.entityId}>
+                {e.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : null}
       <input
-        ref={inputRef}
+        ref={fileRef}
         type="file"
         multiple
         className="sr-only"
-        accept="image/jpeg,image/png,image/webp,application/pdf"
-        disabled={uploading}
+        accept={ACCEPT_ATTR}
+        disabled={!canUpload}
+        onChange={(e) => {
+          void handleFiles(e.target.files);
+          e.target.value = '';
+        }}
+      />
+      {/* Camera capture: the photo goes straight to KEEL, not the phone's library. */}
+      <input
+        ref={cameraRef}
+        type="file"
+        className="sr-only"
+        accept="image/jpeg,image/png,image/webp"
+        capture="environment"
+        disabled={!canUpload}
         onChange={(e) => {
           void handleFiles(e.target.files);
           e.target.value = '';
@@ -254,14 +389,43 @@ function ReceiptsBody() {
       />
       <Button
         type="button"
-        disabled={uploading || !householdId || !entityId}
+        className="sm:hidden"
+        disabled={!canUpload}
         onClick={() => {
-          inputRef.current?.click();
+          cameraRef.current?.click();
+        }}
+      >
+        <Camera className="size-4" />
+        Take photo
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        className="sm:hidden"
+        disabled={!canUpload}
+        onClick={() => {
+          fileRef.current?.click();
+        }}
+      >
+        <Upload className="size-4" />
+        Choose file
+      </Button>
+      <Button
+        type="button"
+        className="hidden sm:inline-flex"
+        disabled={!canUpload}
+        onClick={() => {
+          fileRef.current?.click();
         }}
       >
         {uploading ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
         Upload receipts
       </Button>
+      {uploading ? (
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground sm:hidden">
+          <Loader2 className="size-3.5 animate-spin" /> Uploading…
+        </span>
+      ) : null}
     </div>
   );
 
@@ -289,7 +453,27 @@ function ReceiptsBody() {
   const isEmpty = rows.length === 0;
 
   return (
-    <div className="space-y-6">
+    <div
+      className={cn(
+        'relative space-y-6 rounded-lg',
+        dragging && 'outline-2 outline-offset-4 outline-dashed outline-primary/60',
+      )}
+      onDragOver={(e) => {
+        if (!canUpload || !e.dataTransfer.types.includes('Files')) return;
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+        setDragging(false);
+      }}
+      onDrop={(e) => {
+        if (!canUpload) return;
+        e.preventDefault();
+        setDragging(false);
+        void handleFiles(e.dataTransfer.files);
+      }}
+    >
       <StorageSummaryBar summary={storage} />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
@@ -301,7 +485,9 @@ function ReceiptsBody() {
               }}
             >
               <SelectTrigger className="h-9 w-52 text-sm">
-                <SelectValue placeholder="All accounts" />
+                <SelectValue placeholder="All accounts">
+                  {accountFilter === 'all' ? 'All accounts' : accountFilter}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All accounts</SelectItem>
@@ -321,7 +507,7 @@ function ReceiptsBody() {
         <EmptyState
           icon={<Receipt className="size-6" />}
           title="No receipts yet"
-          description="Upload a receipt image or PDF. KEEL reads the merchant, amount, and date, then suggests the transaction it belongs to for you to confirm. Every original is kept immutably and exported with your books."
+          description="Take a photo or upload an image or PDF (or drop files here). KEEL reads the merchant, amount and date, then suggests the transaction it belongs to for you to confirm. Every original is kept and exported with your books."
         />
       ) : (
         <>
@@ -329,18 +515,18 @@ function ReceiptsBody() {
             <Section
               title="Needs your review"
               count={suggested.length}
-              hint="KEEL found a likely transaction for these. Confirm to attach the receipt, or dismiss."
+              hint="KEEL found a likely transaction for these. Attach the receipt, or say it's not a match."
             >
               {suggested.map((row) => (
                 <SuggestionCard
                   key={row.documentVersionId}
                   row={row}
-                  busy={busyMatch === row.match?.matchId}
+                  busy={busy === row.match?.matchId}
                   onConfirm={() => {
-                    if (row.match) void decide(row.match.matchId, true);
+                    if (row.match) decide(row.match.matchId, true);
                   }}
                   onReject={() => {
-                    if (row.match) void decide(row.match.matchId, false);
+                    if (row.match) decide(row.match.matchId, false);
                   }}
                 />
               ))}
@@ -351,10 +537,18 @@ function ReceiptsBody() {
             <Section
               title="Unmatched"
               count={unmatched.length}
-              hint="No confident transaction match — read details are shown when available. These stay here until a match appears or you handle them manually."
+              hint="No confident match yet. Find the transaction yourself, or leave it here until one shows up."
             >
               {unmatched.map((row) => (
-                <UnmatchedCard key={row.documentVersionId} row={row} />
+                <UnmatchedCard
+                  key={row.documentVersionId}
+                  row={row}
+                  householdId={householdId ?? ''}
+                  busy={busy === row.documentVersionId}
+                  onAttach={(transactionId) => {
+                    attachTo(row, transactionId);
+                  }}
+                />
               ))}
             </Section>
           ) : null}
@@ -365,9 +559,9 @@ function ReceiptsBody() {
                 <AttachedCard
                   key={row.documentVersionId}
                   row={row}
-                  busy={busyMatch === row.match?.matchId}
+                  busy={busy === row.documentVersionId}
                   onDetach={() => {
-                    if (row.match) void detach(row.match.matchId);
+                    detach(row);
                   }}
                 />
               ))}
@@ -428,6 +622,11 @@ function ReceiptFileLink({ row }: { row: ReceiptInboxRow }) {
   );
 }
 
+const FAILURE_TEXT: Record<string, string> = {
+  extraction_off: 'Automatic reading is off. Find the transaction below.',
+  monthly_limit_reached: 'Monthly reading limit reached. Find the transaction below.',
+};
+
 function ExtractionLine({ row }: { row: ReceiptInboxRow }) {
   const ex = row.extraction;
   if (!ex || ex.status === 'pending') {
@@ -438,15 +637,22 @@ function ExtractionLine({ row }: { row: ReceiptInboxRow }) {
     );
   }
   if (ex.status === 'failed') {
-    return <p className="text-xs text-muted-foreground">Could not read this receipt automatically.</p>;
+    return (
+      <p className="text-xs text-muted-foreground">
+        {FAILURE_TEXT[ex.errorCode ?? ''] ?? 'Could not read this receipt automatically.'}
+      </p>
+    );
   }
   const parts: string[] = [];
   if (ex.merchant) parts.push(ex.merchant);
   if (ex.txnDate) parts.push(shortDateWithYear(ex.txnDate));
+  if (parts.length === 0 && !ex.amountMinor) {
+    return <p className="text-xs text-muted-foreground">Nothing readable found. Find the transaction below.</p>;
+  }
   return (
     <p className="flex items-center gap-2 text-xs text-muted-foreground">
       <Sparkles className="size-3 shrink-0" />
-      <span className="truncate">{parts.length > 0 ? parts.join(' · ') : 'Read complete'}</span>
+      <span className="truncate">{parts.join(' · ')}</span>
       {ex.amountMinor ? (
         <Money amountMinor={ex.amountMinor} currency={ex.currency ?? 'USD'} className="text-xs" />
       ) : null}
@@ -470,8 +676,30 @@ function MatchEvidence({ reasonCodes }: { reasonCodes: string[] }) {
 }
 
 function CardShell({ children }: { children: React.ReactNode }) {
+  return <div className="rounded-lg border border-border bg-card p-3 text-sm">{children}</div>;
+}
+
+function TxnLine({
+  description,
+  amountMinor,
+  currency,
+  date,
+  accountName,
+}: {
+  description: string;
+  amountMinor: string | null;
+  currency: string;
+  date: string | null;
+  accountName: string | null;
+}) {
   return (
-    <div className="rounded-lg border border-border bg-card p-3 text-sm">{children}</div>
+    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+      <span className="truncate font-medium">{description}</span>
+      {amountMinor ? <Money amountMinor={amountMinor} currency={currency} className="text-sm" /> : null}
+      <span className="text-xs text-muted-foreground">
+        {[date ? shortDateWithYear(date) : null, accountName].filter(Boolean).join(' · ')}
+      </span>
+    </div>
   );
 }
 
@@ -499,15 +727,13 @@ function SuggestionCard({
           <ExtractionLine row={row} />
           <div className="mt-1 rounded-md border border-border/60 bg-muted/30 px-2.5 py-1.5">
             <p className="text-xs text-muted-foreground">Likely transaction</p>
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-              <span className="truncate font-medium">{match.txnDescription}</span>
-              {match.txnAmountMinor ? (
-                <Money amountMinor={match.txnAmountMinor} currency="USD" className="text-sm" />
-              ) : null}
-              <span className="text-xs text-muted-foreground">
-                {shortDateWithYear(match.txnDate)} · {match.txnAccountName}
-              </span>
-            </div>
+            <TxnLine
+              description={match.txnDescription}
+              amountMinor={match.txnAmountMinor}
+              currency={match.txnCurrency ?? row.extraction?.currency ?? 'USD'}
+              date={match.txnDate}
+              accountName={match.txnAccountName}
+            />
             <div className="mt-1.5">
               <MatchEvidence reasonCodes={match.reasonCodes} />
             </div>
@@ -527,12 +753,24 @@ function SuggestionCard({
   );
 }
 
-function UnmatchedCard({ row }: { row: ReceiptInboxRow }) {
+function UnmatchedCard({
+  row,
+  householdId,
+  busy,
+  onAttach,
+}: {
+  row: ReceiptInboxRow;
+  householdId: string;
+  busy: boolean;
+  onAttach: (transactionId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const reading = row.extraction === null || row.extraction.status === 'pending';
   return (
     <CardShell>
-      <div className="flex items-center gap-2">
+      <div className="flex items-start gap-2">
         <FileGlyph mimeType={row.mimeType} />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 space-y-0.5">
           <ReceiptFileLink row={row} />
           <ExtractionLine row={row} />
         </div>
@@ -540,7 +778,177 @@ function UnmatchedCard({ row }: { row: ReceiptInboxRow }) {
           {shortDateWithYear(row.createdAt.slice(0, 10))}
         </span>
       </div>
+      {!reading ? (
+        <div className="mt-2">
+          {open ? (
+            <CandidatePicker
+              row={row}
+              householdId={householdId}
+              busy={busy}
+              onAttach={onAttach}
+              onClose={() => {
+                setOpen(false);
+              }}
+            />
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setOpen(true);
+              }}
+            >
+              <Search className="size-3.5" />
+              Find transaction
+            </Button>
+          )}
+        </div>
+      ) : null}
     </CardShell>
+  );
+}
+
+/**
+ * Ranked transactions for one receipt, from the deterministic matcher. When
+ * nothing was read, the user types the amount and date. Nothing is attached
+ * until the user picks one (suggest → approve, Law 10).
+ */
+function CandidatePicker({
+  row,
+  householdId,
+  busy,
+  onAttach,
+  onClose,
+}: {
+  row: ReceiptInboxRow;
+  householdId: string;
+  busy: boolean;
+  onAttach: (transactionId: string) => void;
+  onClose: () => void;
+}) {
+  const read = row.extraction;
+  const [amount, setAmount] = useState(read?.amountMinor ? minorToDollarsInput(read.amountMinor) : '');
+  const [date, setDate] = useState(read?.txnDate?.slice(0, 10) ?? '');
+  const [results, setResults] = useState<ReceiptCandidate[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const search = useCallback(
+    (manual: { amountMinor?: string; txnDate?: string }) => {
+      setLoading(true);
+      setError(null);
+      void fetchReceiptCandidates({ householdId, documentVersionId: row.documentVersionId, ...manual })
+        .then((res) => {
+          setResults(res.rows);
+        })
+        .catch((err: unknown) => {
+          setError(err instanceof Error ? err.message : 'Could not search transactions.');
+          setResults([]);
+        })
+        .finally(() => {
+          setLoading(false);
+        });
+    },
+    [householdId, row.documentVersionId],
+  );
+
+  // First look uses what was read, if anything.
+  useEffect(() => {
+    if (read?.amountMinor && read.txnDate) search({});
+  }, [read?.amountMinor, read?.txnDate, search]);
+
+  function submitManual() {
+    const amountMinor = parseDollarsToMinorString(amount);
+    if (!amountMinor || !/^\d{4}-\d{2}-\d{2}$/u.test(date)) {
+      setError('Enter the receipt total and date.');
+      return;
+    }
+    search({ amountMinor, txnDate: date });
+  }
+
+  return (
+    <div className="space-y-2 rounded-md border border-border/60 bg-muted/30 p-2.5">
+      <form
+        className="flex flex-wrap items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          submitManual();
+        }}
+      >
+        <label className="space-y-1 text-xs text-muted-foreground">
+          <span className="block">Total</span>
+          <Input
+            inputMode="decimal"
+            placeholder="0.00"
+            className="h-8 w-28"
+            value={amount}
+            onChange={(e) => {
+              setAmount(e.target.value);
+            }}
+          />
+        </label>
+        <label className="space-y-1 text-xs text-muted-foreground">
+          <span className="block">Date</span>
+          <Input
+            type="date"
+            className="h-8 w-40"
+            value={date}
+            onChange={(e) => {
+              setDate(e.target.value);
+            }}
+          />
+        </label>
+        <Button type="submit" size="sm" variant="outline" disabled={loading}>
+          {loading ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
+          Search
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={onClose} aria-label="Close">
+          <X className="size-3.5" />
+        </Button>
+      </form>
+      {error ? <p className="text-xs text-muted-foreground">{error}</p> : null}
+      {results !== null && results.length === 0 && !loading && !error ? (
+        <p className="text-xs text-muted-foreground">
+          No transaction with that amount within 3 days before to 10 days after. It may not have synced yet.
+        </p>
+      ) : null}
+      {results && results.length > 0 ? (
+        <ul className="divide-y divide-border/60">
+          {results.map((c) => (
+            <li key={c.transactionId} className="flex flex-col gap-2 py-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0 space-y-1">
+                <TxnLine
+                  description={c.description}
+                  amountMinor={c.amountMinor}
+                  currency={c.currency}
+                  date={c.effectiveDate}
+                  accountName={c.accountName}
+                />
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <MatchEvidence reasonCodes={c.reasonCodes} />
+                  {c.hasReceipt ? (
+                    <span className="text-[11px] text-muted-foreground">Already has a receipt</span>
+                  ) : null}
+                </div>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                className="shrink-0"
+                disabled={busy}
+                onClick={() => {
+                  onAttach(c.transactionId);
+                }}
+              >
+                {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Paperclip className="size-3.5" />}
+                Attach
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   );
 }
 
@@ -553,21 +961,23 @@ function AttachedCard({
   busy: boolean;
   onDetach: () => void;
 }) {
-  const match = row.match;
-  if (!match) return null;
+  const att = row.attached;
+  const match = row.match?.status === 'confirmed' ? row.match : null;
+  const description = att?.txnDescription ?? match?.txnDescription ?? '';
+  const amountMinor = att?.txnAmountMinor ?? match?.txnAmountMinor ?? null;
+  const currency = att?.txnCurrency ?? match?.txnCurrency ?? 'USD';
+  const account = att?.txnAccountName ?? match?.txnAccountName ?? null;
   return (
     <CardShell>
       <div className="flex items-center gap-2">
         <FileGlyph mimeType={row.mimeType} />
         <div className="min-w-0 flex-1">
           <ReceiptFileLink row={row} />
-          <p className="flex items-center gap-x-2 text-xs text-muted-foreground">
+          <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
             <Paperclip className="size-3 shrink-0" />
-            <span className="truncate">{match.txnDescription}</span>
-            {match.txnAmountMinor ? (
-              <Money amountMinor={match.txnAmountMinor} currency="USD" className="text-xs" />
-            ) : null}
-            <span>· {match.txnAccountName}</span>
+            <span className="truncate">{description}</span>
+            {amountMinor ? <Money amountMinor={amountMinor} currency={currency} className="text-xs" /> : null}
+            {account ? <span>· {account}</span> : null}
           </p>
         </div>
         <Button

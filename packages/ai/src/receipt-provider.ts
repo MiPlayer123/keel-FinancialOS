@@ -6,9 +6,9 @@
  *   fields keyed by image hash. CI and the worker's default (AI_PROVIDER=fixture)
  *   use this — no model call, no key, no PII to a cloud (Law 12).
  * - CloudVisionReceiptExtractor: OpenAI-compatible /chat/completions vision call.
- *   The image is attached as an image_url content block (never inlined into
- *   text); the API key is injected via config and never logged (Law 12). Wiring
- *   it live is a human ⚑ checkpoint.
+ *   The image is attached as an image_url content block and a PDF as a file
+ *   content block (never inlined into text); the API key is injected via config
+ *   and never logged (Law 12). Wiring it live is a human ⚑ checkpoint.
  */
 import {
   buildReceiptExtractionPrompt,
@@ -61,8 +61,54 @@ export interface CloudVisionConfig {
   readonly baseUrl: string;
   readonly model: string;
   readonly apiKey: string;
+  /** Provenance prefix on every extraction, e.g. 'openai' → 'openai:<model>'. */
+  readonly provider?: string;
+  /**
+   * Reasoning effort for reasoning models (gpt-5*, gpt-6*, o*). Transcribing a
+   * receipt needs none; the lowest setting keeps cost to the visible output.
+   * Ignored for non-reasoning models.
+   */
+  readonly reasoningEffort?: string;
   readonly fetchImpl?: typeof fetch;
 }
+
+/** Reasoning-model families take reasoning_effort and reject temperature. */
+const isReasoningModel = (model: string): boolean => /^(gpt-5|gpt-6|o\d)/u.test(model);
+
+/** Lowest effort each family accepts (gpt-5 has no 'none'). */
+const defaultEffortFor = (model: string): string => (model.startsWith('gpt-5') ? 'minimal' : 'none');
+
+/** Request body for one receipt. Exported for tests (no network). */
+export const buildReceiptVisionRequest = (
+  config: Pick<CloudVisionConfig, 'model' | 'reasoningEffort'>,
+  image: ReceiptImage,
+): Record<string, unknown> => {
+  const attachment =
+    image.mimeType === 'application/pdf'
+      ? {
+          type: 'file',
+          file: { filename: 'receipt.pdf', file_data: `data:application/pdf;base64,${image.base64}` },
+        }
+      : { type: 'image_url', image_url: { url: `data:${image.mimeType};base64,${image.base64}` } };
+  const tuning = isReasoningModel(config.model)
+    ? { reasoning_effort: config.reasoningEffort ?? defaultEffortFor(config.model) }
+    : { temperature: 0 };
+  return {
+    model: config.model,
+    // Counts reasoning + visible output on reasoning models; the JSON answer
+    // is ~100 tokens, so this is headroom, not spend.
+    max_completion_tokens: 1500,
+    ...tuning,
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: buildReceiptExtractionPrompt() },
+      {
+        role: 'user',
+        content: [{ type: 'text', text: 'Transcribe this receipt into the JSON schema.' }, attachment],
+      },
+    ],
+  };
+};
 
 const parseChatJsonContent = (body: unknown): { text: string; model: string | null } | null => {
   const root = typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : null;
@@ -117,24 +163,7 @@ export class CloudVisionReceiptExtractor implements ReceiptExtractor {
           'content-type': 'application/json',
           authorization: `Bearer ${this.config.apiKey}`,
         },
-        body: JSON.stringify({
-          model: this.config.model,
-          max_tokens: 500,
-          temperature: 0,
-          messages: [
-            { role: 'system', content: buildReceiptExtractionPrompt() },
-            {
-              role: 'user',
-              content: [
-                { type: 'text', text: 'Transcribe this receipt into the JSON schema.' },
-                {
-                  type: 'image_url',
-                  image_url: { url: `data:${image.mimeType};base64,${image.base64}` },
-                },
-              ],
-            },
-          ],
-        }),
+        body: JSON.stringify(buildReceiptVisionRequest(this.config, image)),
       });
     } catch {
       throw new AiProviderError('Receipt vision request failed.');
@@ -161,7 +190,7 @@ export class CloudVisionReceiptExtractor implements ReceiptExtractor {
     }
     return {
       fields: coerceReceiptFields(obj),
-      extractor: `claude:${content.model ?? this.config.model}`,
+      extractor: `${this.config.provider ?? 'openai'}:${content.model ?? this.config.model}`,
       extractorVersion: RECEIPT_PROMPT_VERSION,
       rawEvidence: obj,
     };

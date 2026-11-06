@@ -42,6 +42,9 @@ import {
   toJson,
   toQif,
   authorize,
+  DEFAULT_MATCHER_CONFIG,
+  scoreCandidates,
+  type CandidateTransaction,
   type Action,
   type AuthzContext,
   type HouseholdExport,
@@ -2746,7 +2749,8 @@ export default {
           });
         }
       }
-      if ((kind.data === 'receipt' ? 'receipts' : 'statements') !== storageBucket) {
+      // Receipts and paystubs live in `receipts`, statements in `statements`.
+      if (canonicalBucketFor(kind.data) !== storageBucket) {
         return json(400, {
           code: 'invalid_command',
           message: 'Document kind does not match its storage bucket.',
@@ -2914,17 +2918,23 @@ export default {
       // WS-J / F-030: for a receipt, enqueue background extraction + matching
       // (AI class B). Best-effort: a queue/drain failure must not undo the
       // already-durable upload+attach. The worker is idempotent per version.
-      const confirmEffects = (data as { effects?: { documentVersionId?: string } })?.effects;
+      const confirmEffects = (data as { effects?: { documentVersionId?: string; duplicate?: boolean } })
+        ?.effects;
       const documentVersionId = confirmEffects?.documentVersionId;
-      if (kind.data === 'receipt' && typeof documentVersionId === 'string') {
-        const { error: enqueueError } = await ctx.supabaseAdmin.rpc('keel_enqueue', {
-          queue_name: 'sync_events',
-          message: {
-            jobType: 'receipt_extract',
-            economicEventKey: `receipt:extract:${documentVersionId}`,
-            refs: { documentVersionId, householdId: householdId.data },
-          },
+      // A duplicate reuses the earlier object; the copy just uploaded under this
+      // document's own prefix is referenced by nothing, so remove it (it was
+      // never recorded — not a soft-delete case). Best-effort.
+      if (confirmEffects?.duplicate === true) {
+        await ctx.supabaseAdmin.storage.from(quarantineBucketFor(kind.data)).remove([storagePath]);
+      }
+      // A duplicate reuses a receipt that was already read — don't pay twice.
+      if (kind.data === 'receipt' && confirmEffects?.duplicate !== true && typeof documentVersionId === 'string') {
+        // Definer wrapper: service_role cannot reach pgmq directly.
+        const { error: enqueueError } = await ctx.supabaseAdmin.rpc('keel_receipts_enqueue_extract', {
+          p_household_id: householdId.data,
+          p_document_version_id: documentVersionId,
         });
+        if (enqueueError) console.error('receipt enqueue failed', enqueueError.code ?? 'unknown');
         if (!enqueueError) {
           // Kick the drain so extraction runs promptly (the 3-min cron is the
           // fallback). Best-effort.
@@ -3089,6 +3099,100 @@ export default {
         }),
       );
       return json(200, { rows: withUrls });
+    }
+
+    // Ranked transactions a receipt could belong to, for picking by hand. Uses
+    // what was read from the receipt, or amount/date/merchant the user typed
+    // (when reading failed or was off). Deterministic matcher only (Law 1);
+    // nothing is attached here — the user picks, then documents.attach runs.
+    if (path === '/receipts/candidates') {
+      const input = body as Record<string, unknown>;
+      const householdId = HouseholdIdSchema.safeParse(input['householdId']);
+      const versionId = typeof input['documentVersionId'] === 'string' ? input['documentVersionId'] : '';
+      const optional = (key: string, re: RegExp): string | null | false => {
+        const v = input[key];
+        if (v === undefined || v === null || v === '') return null;
+        return typeof v === 'string' && re.test(v) ? v : false;
+      };
+      const amountIn = optional('amountMinor', /^-?[0-9]{1,15}$/u);
+      const dateIn = optional('txnDate', /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/u);
+      const currencyIn = optional('currency', /^[A-Z]{3}$/u);
+      const merchantIn = optional('merchant', /^.{1,200}$/u);
+      if (
+        !householdId.success ||
+        !/^[0-9a-f-]{36}$/iu.test(versionId) ||
+        amountIn === false ||
+        dateIn === false ||
+        currencyIn === false ||
+        merchantIn === false
+      ) {
+        return json(400, { code: 'invalid_command', message: 'Unknown query.', details: {} });
+      }
+      const authzCtx = await loadAuthzContext(ctx.supabase, userId);
+      const decision = authorize(authzCtx, 'receipts.inbox', { householdId: householdId.data });
+      if (!decision.allowed) {
+        return decision.code === 'household_scope_violation'
+          ? json(404, { code: 'not_found', message: 'Not found.', details: {} })
+          : json(403, { code: 'not_authorized', message: decision.reason, details: {} });
+      }
+      // The user's own inbox read proves the receipt is theirs and gives the read fields.
+      const { data: inbox, error: inboxError } = await ctx.supabase.rpc('keel_receipts_inbox', {
+        p_household_id: householdId.data,
+      });
+      if (inboxError) return mapDbError(inboxError);
+      const row = ((inbox as { rows?: Record<string, unknown>[] })?.rows ?? []).find(
+        (r) => r['documentVersionId'] === versionId,
+      );
+      if (!row) return json(404, { code: 'not_found', message: 'Not found.', details: {} });
+      const read = (row['extraction'] ?? {}) as Record<string, unknown>;
+      const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
+      const amountMinor = amountIn ?? str(read['amountMinor']);
+      const txnDate = dateIn ?? str(read['txnDate'])?.slice(0, 10) ?? null;
+      const currency = currencyIn ?? str(read['currency']) ?? 'USD';
+      const merchant = merchantIn ?? str(read['merchant']);
+      if (amountMinor === null || txnDate === null) {
+        return json(200, { rows: [], needs: ['amountMinor', 'txnDate'] });
+      }
+      // Wider than automatic matching: a person is choosing.
+      const config = { ...DEFAULT_MATCHER_CONFIG, dateBeforeDays: 3, dateAfterDays: 10 };
+      const { data: candData, error: candError } = await ctx.supabaseAdmin.rpc('keel_worker_receipt_candidates', {
+        p_household_id: householdId.data,
+        p_currency: currency,
+        p_txn_date: txnDate,
+        p_amount_minor: amountMinor,
+        p_date_before: config.dateBeforeDays,
+        p_date_after: config.dateAfterDays,
+        p_tip_bps: config.tipToleranceBps,
+      });
+      if (candError) return mapDbError(candError);
+      const raw = ((candData as { rows?: Record<string, unknown>[] })?.rows ?? []);
+      const byId = new Map(raw.map((r) => [String(r['transactionId']), r]));
+      const candidates: CandidateTransaction[] = raw.map((r) => ({
+        transactionId: String(r['transactionId']),
+        amountMinor: String(r['amountMinor']),
+        currency: String(r['currency']),
+        effectiveDate: String(r['effectiveDate']),
+        description: String(r['description'] ?? ''),
+        hasConfirmedMatch: r['hasConfirmedMatch'] === true,
+        previouslyRejected: false,
+      }));
+      const ranked = scoreCandidates({ merchant, totalMinor: amountMinor, currency, txnDate, confidence: 1 }, candidates, config)
+        .slice(0, 5)
+        .map((c) => {
+          const r = byId.get(c.transactionId) ?? {};
+          return {
+            transactionId: c.transactionId,
+            score: c.score,
+            reasonCodes: c.reasonCodes,
+            description: r['description'] ?? '',
+            amountMinor: r['amountMinor'] ?? null,
+            currency: r['currency'] ?? currency,
+            effectiveDate: r['effectiveDate'] ?? null,
+            accountName: r['accountName'] ?? null,
+            hasReceipt: r['hasAttachment'] === true,
+          };
+        });
+      return json(200, { rows: ranked, needs: [] });
     }
 
     // Statement ingestion Slice 6 — drafts inbox. Mirrors /receipts/inbox: the

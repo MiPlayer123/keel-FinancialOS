@@ -5,6 +5,7 @@ import {
   RECEIPT_PROMPT_VERSION,
   RecordedReceiptExtractor,
   CloudVisionReceiptExtractor,
+  buildReceiptVisionRequest,
   type ReceiptImage,
 } from '../src/index.js';
 import { AiProviderError } from '../src/provider.js';
@@ -91,6 +92,43 @@ describe('RecordedReceiptExtractor', () => {
   });
 });
 
+describe('buildReceiptVisionRequest', () => {
+  type Body = {
+    model: string;
+    temperature?: number;
+    reasoning_effort?: string;
+    max_completion_tokens: number;
+    response_format: { type: string };
+    messages: { role: string; content: unknown }[];
+  };
+  const part = (body: Body) =>
+    (body.messages[1]!.content as { type: string; file?: { file_data: string }; image_url?: { url: string } }[])[1]!;
+
+  it('sends a PDF as a file block, never as an image', () => {
+    const body = buildReceiptVisionRequest({ model: 'gpt-6-luna' }, { base64: 'PDFBYTES', mimeType: 'application/pdf' }) as Body;
+    expect(part(body).type).toBe('file');
+    expect(part(body).file?.file_data).toBe('data:application/pdf;base64,PDFBYTES');
+  });
+
+  it('reasoning models get the lowest effort and no temperature', () => {
+    const luna = buildReceiptVisionRequest({ model: 'gpt-6-luna' }, image()) as Body;
+    expect(luna.reasoning_effort).toBe('none');
+    expect(luna.temperature).toBeUndefined();
+    const nano = buildReceiptVisionRequest({ model: 'gpt-5-nano' }, image()) as Body;
+    expect(nano.reasoning_effort).toBe('minimal');
+    const pinned = buildReceiptVisionRequest({ model: 'gpt-6-luna', reasoningEffort: 'low' }, image()) as Body;
+    expect(pinned.reasoning_effort).toBe('low');
+  });
+
+  it('older chat models get temperature 0 and JSON mode', () => {
+    const body = buildReceiptVisionRequest({ model: 'gpt-4o-mini' }, image()) as Body;
+    expect(body.temperature).toBe(0);
+    expect(body.reasoning_effort).toBeUndefined();
+    expect(body.response_format).toEqual({ type: 'json_object' });
+    expect(part(body).type).toBe('image_url');
+  });
+});
+
 describe('CloudVisionReceiptExtractor', () => {
   it('rejects an unconfigured provider without leaking anything', () => {
     expect(() => new CloudVisionReceiptExtractor({ baseUrl: '', model: 'm', apiKey: 'k' })).toThrow(
@@ -122,7 +160,8 @@ describe('CloudVisionReceiptExtractor', () => {
     });
     const result = await extractor.extract(image('BASE64BYTES'));
     expect(result.fields.totalMinor).toBe('4217');
-    expect(result.extractor).toBe('claude:claude-haiku');
+    // Provenance names the provider actually called (default 'openai').
+    expect(result.extractor).toBe('openai:claude-haiku');
 
     const call = fetchImpl.mock.calls[0] as unknown as unknown[] | undefined;
     const init = call?.[1] as RequestInit | undefined;
