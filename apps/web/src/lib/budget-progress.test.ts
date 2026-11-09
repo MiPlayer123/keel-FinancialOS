@@ -114,7 +114,7 @@ describe('planSummary', () => {
 
   it('an explicit total sets aside the remainder for everything else', () => {
     const s = planSummary({
-      total: { basis: 'amount' },
+      total: { basis: 'amount', resolvedMinor: '250000' },
       leftToBudgetMinor: '175000',
       everythingElseSpentMinor: '816437',
       rows,
@@ -124,8 +124,30 @@ describe('planSummary', () => {
     expect(s.overCount).toBe(3); // everything else is over its $1,750
   });
 
-  it('an over-allocated total leaves nothing for everything else', () => {
-    const s = planSummary({ total: { basis: 'amount' }, leftToBudgetMinor: '-2000', everythingElseSpentMinor: '0', rows });
+  it('an over-allocated total leaves nothing for everything else but keeps the plan limit', () => {
+    // Plan $730 but categories total $750: everything else gets $0 and the
+    // headline is still measured against $730 (codex review on #211).
+    const s = planSummary({
+      total: { basis: 'amount', resolvedMinor: '73000' },
+      leftToBudgetMinor: '-2000',
+      everythingElseSpentMinor: '0',
+      rows,
+    });
     expect(s.elseBudgetMinor).toBe(0n);
+    expect(s.allBudgetMinor).toBe(73000n);
+  });
+
+  it('rollover carry adds to the explicit plan limit', () => {
+    const carried = rows.map((r) =>
+      r.categoryName === 'Food' ? { ...r, availableMinor: '52000' } : r,
+    );
+    const s = planSummary({
+      total: { basis: 'amount', resolvedMinor: '250000' },
+      leftToBudgetMinor: '175000',
+      everythingElseSpentMinor: '0',
+      rows: carried,
+    });
+    expect(s.allBudgetMinor).toBe(252000n);
+    expect(s.allBudgetMinor).toBe(s.categoriesBudgetMinor + (s.elseBudgetMinor ?? 0n));
   });
 });

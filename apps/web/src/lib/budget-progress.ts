@@ -155,7 +155,7 @@ export type PlanSummary = {
 };
 
 export function planSummary(plan: {
-  total: { basis: string };
+  total: { basis: string; resolvedMinor?: string };
   leftToBudgetMinor: string;
   everythingElseSpentMinor: string;
   rows: BudgetMonthRow[];
@@ -166,6 +166,17 @@ export function planSummary(plan: {
   const explicit = plan.total.basis !== 'implicit_sum';
   const elseBudgetMinor = explicit ? (left > 0n ? left : 0n) : null;
   const elseOver = elseBudgetMinor !== null && elseSpentMinor > elseBudgetMinor;
+  // With an explicit total, the headline limit IS that total (plus any
+  // rollover carry), even when category targets over-allocate it — clamping
+  // the everything-else budget to 0 must not raise the overall limit.
+  let carryMinor = 0n;
+  for (const r of plan.rows) {
+    carryMinor += BigInt(r.availableMinor || r.resolvedMinor || '0') - BigInt(r.resolvedMinor || '0');
+  }
+  const allBudgetMinor =
+    explicit && plan.total.resolvedMinor !== undefined
+      ? BigInt(plan.total.resolvedMinor || '0') + carryMinor
+      : t.budgetedMinor + (elseBudgetMinor ?? 0n);
   return {
     currency: plan.rows[0]?.currency ?? 'USD',
     categoriesBudgetMinor: t.budgetedMinor,
@@ -173,7 +184,7 @@ export function planSummary(plan: {
     elseSpentMinor,
     elseBudgetMinor,
     allSpentMinor: t.spentMinor + elseSpentMinor,
-    allBudgetMinor: t.budgetedMinor + (elseBudgetMinor ?? 0n),
+    allBudgetMinor,
     overCount: t.overCount + (elseOver ? 1 : 0),
     categoryCount: t.categoryCount,
   };
