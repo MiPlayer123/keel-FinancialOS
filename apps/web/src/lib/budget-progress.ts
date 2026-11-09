@@ -130,3 +130,62 @@ export function overBudgetLines(rows: BudgetMonthRow[]): BudgetLine[] {
     .filter((l) => l.status === 'over')
     .sort((a, b) => (a.remainingMinor < b.remainingMinor ? -1 : a.remainingMinor > b.remainingMinor ? 1 : 0));
 }
+
+/** The month's plan totals plus the "everything else" line. */
+export type PlanSummary = {
+  currency: string;
+  /** Σ available over category rows (targets + rollover carry). */
+  categoriesBudgetMinor: bigint;
+  categoriesSpentMinor: bigint;
+  /** Spend no category budget owns (unbudgeted categories). */
+  elseSpentMinor: bigint;
+  /**
+   * Budget for everything else = plan total − category targets, when the user
+   * set an explicit total (null when the total is just the sum of category
+   * budgets, i.e. nothing is set aside for unbudgeted spending).
+   */
+  elseBudgetMinor: bigint | null;
+  /** All spending this month: categories + everything else. */
+  allSpentMinor: bigint;
+  /** What all spending is measured against: category budgets + everything-else budget. */
+  allBudgetMinor: bigint;
+  /** Category rows over budget, plus everything else when it has a budget and is over. */
+  overCount: number;
+  categoryCount: number;
+};
+
+export function planSummary(plan: {
+  total: { basis: string; resolvedMinor?: string };
+  leftToBudgetMinor: string;
+  everythingElseSpentMinor: string;
+  rows: BudgetMonthRow[];
+}): PlanSummary {
+  const t = budgetTotals(plan.rows);
+  const elseSpentMinor = BigInt(plan.everythingElseSpentMinor || '0');
+  const left = BigInt(plan.leftToBudgetMinor || '0');
+  const explicit = plan.total.basis !== 'implicit_sum';
+  const elseBudgetMinor = explicit ? (left > 0n ? left : 0n) : null;
+  const elseOver = elseBudgetMinor !== null && elseSpentMinor > elseBudgetMinor;
+  // With an explicit total, the headline limit IS that total (plus any
+  // rollover carry), even when category targets over-allocate it — clamping
+  // the everything-else budget to 0 must not raise the overall limit.
+  let carryMinor = 0n;
+  for (const r of plan.rows) {
+    carryMinor += BigInt(r.availableMinor || r.resolvedMinor || '0') - BigInt(r.resolvedMinor || '0');
+  }
+  const allBudgetMinor =
+    explicit && plan.total.resolvedMinor !== undefined
+      ? BigInt(plan.total.resolvedMinor || '0') + carryMinor
+      : t.budgetedMinor + (elseBudgetMinor ?? 0n);
+  return {
+    currency: plan.rows[0]?.currency ?? 'USD',
+    categoriesBudgetMinor: t.budgetedMinor,
+    categoriesSpentMinor: t.spentMinor,
+    elseSpentMinor,
+    elseBudgetMinor,
+    allSpentMinor: t.spentMinor + elseSpentMinor,
+    allBudgetMinor,
+    overCount: t.overCount + (elseOver ? 1 : 0),
+    categoryCount: t.categoryCount,
+  };
+}

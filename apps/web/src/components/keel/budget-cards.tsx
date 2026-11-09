@@ -11,11 +11,12 @@ import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/componen
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   budgetLines,
-  budgetTotals,
   daysLeftInMonth,
   monthPacePct,
   overBudgetLines,
+  planSummary,
   usedPct,
+  type PlanSummary,
   type BudgetLine,
 } from '@/lib/budget-progress';
 import { fetchBudgetMonth, type BudgetMonth } from '@/lib/keel-api';
@@ -88,25 +89,67 @@ const STATUS_LABEL = {
 // Home: the simple card
 // ---------------------------------------------------------------------------
 
+/** "Everything else" as a line: spend outside category budgets, measured
+ *  against the plan's set-aside when the user set a total. */
+function ElseLine({ summary, past }: { summary: PlanSummary; past: boolean }) {
+  const budget = summary.elseBudgetMinor;
+  return (
+    <div className="flex flex-col gap-1.5 py-2.5">
+      <div className="flex items-baseline justify-between gap-3 text-sm">
+        <span className="min-w-0 truncate">Everything else</span>
+        <span className="shrink-0 font-mono tabular-nums">
+          <Money amountMinor={summary.elseSpentMinor.toString()} currency={summary.currency} className="text-sm" />
+          {budget !== null ? (
+            <span className="text-muted-foreground">
+              {' '}
+              of <Money amountMinor={budget.toString()} currency={summary.currency} className="text-sm text-muted-foreground" />
+            </span>
+          ) : null}
+        </span>
+      </div>
+      {budget !== null ? <BudgetBar spentMinor={summary.elseSpentMinor} availableMinor={budget} /> : null}
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-xs text-muted-foreground">
+        <span>Categories without their own budget</span>
+        <span className="shrink-0">
+          {budget === null ? (
+            'No budget set'
+          ) : summary.elseSpentMinor > budget ? (
+            <span className="font-medium text-foreground">
+              <Money amountMinor={(summary.elseSpentMinor - budget).toString()} currency={summary.currency} className="text-xs text-foreground" /> over
+            </span>
+          ) : (
+            <>
+              <Money amountMinor={(budget - summary.elseSpentMinor).toString()} currency={summary.currency} className="text-xs" />{' '}
+              {past ? 'under' : 'left'}
+            </>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 /**
- * Home Budget card: one line, one overall bar with the pace tick, and only the
- * categories that are over. The full picture lives on Reports and Budgets.
+ * Home Budget card: ALL spending this month against the plan (category
+ * budgets + the everything-else set-aside), the split between the two, and
+ * only what's over. The full picture lives on Reports and Budgets.
  */
 export function HomeBudgetCard({ plan, todayIso }: { plan: BudgetMonth; todayIso: string }) {
   const monthIso = `${plan.scope.month}-01`;
-  const totals = budgetTotals(plan.rows);
+  const sum = planSummary(plan);
   const pace = monthPacePct(monthIso, todayIso);
   const daysLeft = daysLeftInMonth(monthIso, todayIso);
   const overs = overBudgetLines(plan.rows);
-  const currency = plan.rows[0]?.currency ?? 'USD';
+  const elseOver = sum.elseBudgetMinor !== null && sum.elseSpentMinor > sum.elseBudgetMinor;
+  const cur = sum.currency;
   return (
     <Card size="sm">
       <CardHeader>
         <CardTitle className="flex items-center gap-1">
           Budget · {monthName(monthIso)}
           <InfoNote>
-            <p>Spending in your budgeted categories this month. A parent includes its subcategories that don&apos;t have their own budget.</p>
-            <p>The tick marks today&apos;s point in the month. Unbudgeted spending isn&apos;t included.</p>
+            <p>All of this month&apos;s spending against your plan: your category budgets plus what the plan total sets aside for everything else.</p>
+            <p>A parent includes its subcategories that don&apos;t have their own budget. The tick marks today&apos;s point in the month.</p>
           </InfoNote>
         </CardTitle>
         <CardAction>
@@ -117,15 +160,37 @@ export function HomeBudgetCard({ plan, todayIso }: { plan: BudgetMonth; todayIso
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <p className="flex flex-wrap items-baseline gap-x-1.5 text-sm">
-          <Money amountMinor={totals.spentMinor.toString()} currency={currency} className="text-lg font-semibold" />
+          <Money amountMinor={sum.allSpentMinor.toString()} currency={cur} className="text-lg font-semibold" />
           <span className="text-muted-foreground">
-            of <Money amountMinor={totals.budgetedMinor.toString()} currency={currency} className="text-muted-foreground" /> budgeted
+            spent of <Money amountMinor={sum.allBudgetMinor.toString()} currency={cur} className="text-muted-foreground" />
             {daysLeft > 0 ? ` · ${String(daysLeft)} day${daysLeft === 1 ? '' : 's'} left` : ''}
           </span>
         </p>
-        <BudgetBar spentMinor={totals.spentMinor} availableMinor={totals.budgetedMinor} pacePct={pace} />
-        {overs.length === 0 ? (
-          <p className="text-sm text-muted-foreground">All {totals.categoryCount} categories on track.</p>
+        <BudgetBar spentMinor={sum.allSpentMinor} availableMinor={sum.allBudgetMinor} pacePct={pace} />
+        <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+          <p>
+            Categories <Money amountMinor={sum.categoriesSpentMinor.toString()} currency={cur} className="text-xs text-foreground" /> of{' '}
+            <Money amountMinor={sum.categoriesBudgetMinor.toString()} currency={cur} className="text-xs" />
+          </p>
+          <p>
+            Everything else <Money amountMinor={sum.elseSpentMinor.toString()} currency={cur} className="text-xs text-foreground" />
+            {sum.elseBudgetMinor !== null ? (
+              <>
+                {' '}
+                of <Money amountMinor={sum.elseBudgetMinor.toString()} currency={cur} className="text-xs" />
+              </>
+            ) : (
+              <>
+                {' · no budget set · '}
+                <Link href="/dashboard/budgets" className="underline underline-offset-2 hover:text-foreground">
+                  set a plan total
+                </Link>
+              </>
+            )}
+          </p>
+        </div>
+        {overs.length === 0 && !elseOver ? (
+          <p className="text-sm text-muted-foreground">All {sum.categoryCount} categories on track.</p>
         ) : (
           <div className="flex flex-col gap-1.5">
             {overs.map((l) => (
@@ -136,6 +201,14 @@ export function HomeBudgetCard({ plan, todayIso }: { plan: BudgetMonth; todayIso
                 </span>
               </div>
             ))}
+            {elseOver && sum.elseBudgetMinor !== null ? (
+              <div className="flex items-baseline justify-between gap-3 text-sm">
+                <span className="min-w-0 truncate">Everything else</span>
+                <span className="shrink-0 text-xs font-medium text-foreground">
+                  <Money amountMinor={(sum.elseSpentMinor - sum.elseBudgetMinor).toString()} currency={cur} className="text-xs text-foreground" /> over
+                </span>
+              </div>
+            ) : null}
           </div>
         )}
       </CardContent>
@@ -205,9 +278,9 @@ function MonthView({ plan, todayIso }: { plan: BudgetMonth; todayIso: string }) 
   const current = todayIso.slice(0, 7) === plan.scope.month;
   const pace = current ? monthPacePct(monthIso, todayIso) : undefined;
   const lines = budgetLines(plan.rows, pace ?? 100);
-  const totals = budgetTotals(plan.rows);
-  const currency = plan.rows[0]?.currency ?? 'USD';
-  const diff = totals.budgetedMinor - totals.spentMinor;
+  const sum = planSummary(plan);
+  const cur = sum.currency;
+  const diff = sum.allBudgetMinor - sum.allSpentMinor;
   return (
     <div className="flex flex-col">
       <div className="divide-y divide-border">
@@ -219,35 +292,31 @@ function MonthView({ plan, todayIso }: { plan: BudgetMonth; todayIso: string }) 
             ))}
           </Fragment>
         ))}
+        {sum.elseSpentMinor !== 0n || sum.elseBudgetMinor !== null ? <ElseLine summary={sum} past={!current} /> : null}
       </div>
       <div className="flex items-baseline justify-between gap-3 border-t border-border pt-2.5 text-sm font-medium">
-        <span>Budgeted total</span>
+        <span>All spending</span>
         <span className="font-mono tabular-nums">
-          <Money amountMinor={totals.spentMinor.toString()} currency={currency} className="text-sm" />
+          <Money amountMinor={sum.allSpentMinor.toString()} currency={cur} className="text-sm" />
           <span className="text-muted-foreground">
             {' '}
-            of <Money amountMinor={totals.budgetedMinor.toString()} currency={currency} className="text-sm text-muted-foreground" />
+            of <Money amountMinor={sum.allBudgetMinor.toString()} currency={cur} className="text-sm text-muted-foreground" />
           </span>
         </span>
       </div>
       <p className="pt-1 text-right text-xs text-muted-foreground">
         {diff < 0n ? (
           <span className="font-medium text-foreground">
-            <Money amountMinor={(-diff).toString()} currency={currency} className="text-xs text-foreground" /> over
+            <Money amountMinor={(-diff).toString()} currency={cur} className="text-xs text-foreground" /> over
           </span>
         ) : (
           <>
-            <Money amountMinor={diff.toString()} currency={currency} className="text-xs" /> {current ? 'left' : 'under'}
+            <Money amountMinor={diff.toString()} currency={cur} className="text-xs" /> {current ? 'left' : 'under'}
           </>
         )}
-        {totals.overCount > 0 ? ` · ${String(totals.overCount)} over` : ''}
+        {sum.overCount > 0 ? ` · ${String(sum.overCount)} over` : ''}
+        {sum.elseBudgetMinor === null && sum.elseSpentMinor > 0n ? ' · everything else has no budget' : ''}
       </p>
-      {plan.everythingElseSpentMinor !== '0' ? (
-        <div className="mt-2 flex items-baseline justify-between gap-3 border-t border-dashed border-border pt-2.5 text-sm text-muted-foreground">
-          <span>Everything else (not budgeted)</span>
-          <Money amountMinor={plan.everythingElseSpentMinor} currency={currency} className="text-sm text-muted-foreground" />
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -358,9 +427,57 @@ function RangeView({ plans, todayIso }: { plans: BudgetMonth[]; todayIso: string
               </tr>
             );
           })}
+          <ElseRangeRow plans={plans} todayIso={todayIso} />
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** Everything else across the range: against each month's set-aside when the
+ *  plan has an explicit total, otherwise just what was spent. */
+function ElseRangeRow({ plans, todayIso }: { plans: BudgetMonth[]; todayIso: string }) {
+  const sums = plans.map((p) => ({ month: p.scope.month, s: planSummary(p) }));
+  if (sums.every(({ s }) => s.elseSpentMinor === 0n && s.elseBudgetMinor === null)) return null;
+  const currency = sums[0]?.s.currency ?? 'USD';
+  const budgeted = sums.filter(({ s }) => s.elseBudgetMinor !== null);
+  const overIn = budgeted.filter(({ s }) => s.elseSpentMinor > (s.elseBudgetMinor ?? 0n)).length;
+  const total = budgeted.reduce((acc, { s }) => acc + ((s.elseBudgetMinor ?? 0n) - s.elseSpentMinor), 0n);
+  return (
+    <tr className="border-t border-dashed border-border">
+      <td className="py-2 pr-3">Everything else</td>
+      {sums.map(({ month, s }) => (
+        <td key={month} className="px-2 py-2 text-right font-mono text-xs tabular-nums">
+          {s.elseBudgetMinor === null ? (
+            <span className="text-muted-foreground">
+              <Money amountMinor={s.elseSpentMinor.toString()} currency={currency} className="text-xs text-muted-foreground" /> spent
+            </span>
+          ) : (
+            <DiffCell
+              cell={{ spent: s.elseSpentMinor, available: s.elseBudgetMinor }}
+              currency={currency}
+              current={month === todayIso.slice(0, 7)}
+            />
+          )}
+        </td>
+      ))}
+      <td className="px-2 py-2 text-right font-mono text-xs tabular-nums text-muted-foreground">
+        {budgeted.length > 0 ? `${String(overIn)} of ${String(budgeted.length)}` : '—'}
+      </td>
+      <td className="py-2 pl-2 text-right font-mono text-xs tabular-nums">
+        {budgeted.length === 0 ? (
+          <span className="text-muted-foreground">no budget</span>
+        ) : total < 0n ? (
+          <span className="font-medium text-foreground">
+            <Money amountMinor={(-total).toString()} currency={currency} className="text-xs text-foreground" /> over
+          </span>
+        ) : (
+          <span className="text-muted-foreground">
+            <Money amountMinor={total.toString()} currency={currency} className="text-xs text-muted-foreground" /> under
+          </span>
+        )}
+      </td>
+    </tr>
   );
 }
 

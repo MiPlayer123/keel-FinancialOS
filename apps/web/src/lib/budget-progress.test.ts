@@ -8,6 +8,7 @@ import {
   daysLeftInMonth,
   monthPacePct,
   overBudgetLines,
+  planSummary,
 } from '@/lib/budget-progress';
 
 function row(o: Partial<BudgetMonthRow> & { categoryName: string }): BudgetMonthRow {
@@ -86,5 +87,67 @@ describe('lines', () => {
       ['Fun', -84640n],
       ['Food', -44883n],
     ]);
+  });
+});
+
+describe('planSummary', () => {
+  const rows = [
+    row({ categoryName: 'Fun', resolvedMinor: '5000', availableMinor: '5000', spentMinor: '16109' }),
+    row({ categoryName: 'Food', resolvedMinor: '50000', availableMinor: '50000', spentMinor: '14602' }),
+    row({ categoryName: 'Other', resolvedMinor: '10000', availableMinor: '10000', spentMinor: '0' }),
+    row({ categoryName: 'Transport', resolvedMinor: '10000', availableMinor: '10000', spentMinor: '22093' }),
+  ];
+
+  it('counts all spending; no set-aside for everything else without an explicit total', () => {
+    const s = planSummary({
+      total: { basis: 'implicit_sum' },
+      leftToBudgetMinor: '0',
+      everythingElseSpentMinor: '816437',
+      rows,
+    });
+    expect(s.categoriesSpentMinor).toBe(52804n);
+    expect(s.allSpentMinor).toBe(52804n + 816437n);
+    expect(s.elseBudgetMinor).toBeNull();
+    expect(s.allBudgetMinor).toBe(75000n);
+    expect(s.overCount).toBe(2);
+  });
+
+  it('an explicit total sets aside the remainder for everything else', () => {
+    const s = planSummary({
+      total: { basis: 'amount', resolvedMinor: '250000' },
+      leftToBudgetMinor: '175000',
+      everythingElseSpentMinor: '816437',
+      rows,
+    });
+    expect(s.elseBudgetMinor).toBe(175000n);
+    expect(s.allBudgetMinor).toBe(250000n);
+    expect(s.overCount).toBe(3); // everything else is over its $1,750
+  });
+
+  it('an over-allocated total leaves nothing for everything else but keeps the plan limit', () => {
+    // Plan $730 but categories total $750: everything else gets $0 and the
+    // headline is still measured against $730 (codex review on #211).
+    const s = planSummary({
+      total: { basis: 'amount', resolvedMinor: '73000' },
+      leftToBudgetMinor: '-2000',
+      everythingElseSpentMinor: '0',
+      rows,
+    });
+    expect(s.elseBudgetMinor).toBe(0n);
+    expect(s.allBudgetMinor).toBe(73000n);
+  });
+
+  it('rollover carry adds to the explicit plan limit', () => {
+    const carried = rows.map((r) =>
+      r.categoryName === 'Food' ? { ...r, availableMinor: '52000' } : r,
+    );
+    const s = planSummary({
+      total: { basis: 'amount', resolvedMinor: '250000' },
+      leftToBudgetMinor: '175000',
+      everythingElseSpentMinor: '0',
+      rows: carried,
+    });
+    expect(s.allBudgetMinor).toBe(252000n);
+    expect(s.allBudgetMinor).toBe(s.categoriesBudgetMinor + (s.elseBudgetMinor ?? 0n));
   });
 });

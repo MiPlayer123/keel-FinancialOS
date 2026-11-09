@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { PiggyBank, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
 
+import { BudgetBar } from '@/components/keel/budget-cards';
+import { planSummary } from '@/lib/budget-progress';
 import { PageHeader, EmptyState, QueryErrorState } from '@/components/keel/page-header';
 import { Money } from '@/components/keel/money';
 import { RebalanceBudgetsDialog } from '@/components/keel/rebalance-budgets-dialog';
@@ -260,7 +262,10 @@ function BudgetsBody() {
         </section>
       )}
 
-      <EverythingElseLine spentMinor={BigInt(plan.everythingElseSpentMinor)} />
+      <EverythingElseLine
+        spentMinor={BigInt(plan.everythingElseSpentMinor)}
+        budgetMinor={planSummary(plan).elseBudgetMinor}
+      />
     </div>
   );
 }
@@ -271,34 +276,51 @@ function BudgetsBody() {
  * a single everythingElseSpentMinor total; the per-category breakdown lives in
  * the transactions view, so this line stays a calm one-liner.
  */
-function EverythingElseLine({ spentMinor }: { spentMinor: bigint }) {
+function EverythingElseLine({
+  spentMinor,
+  budgetMinor,
+}: {
+  spentMinor: bigint;
+  /** Plan total minus category budgets; null when no explicit total is set. */
+  budgetMinor: bigint | null;
+}) {
   const [open, setOpen] = useState(false);
-  if (spentMinor === 0n) return null;
+  if (spentMinor === 0n && budgetMinor === null) return null;
   return (
     <section className="space-y-2">
       <div className="overflow-hidden rounded-lg border border-dashed border-border">
         <button
           type="button"
-          className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40"
+          className="flex w-full flex-col gap-2 px-4 py-3 text-left transition-colors hover:bg-muted/40"
           aria-expanded={open}
           onClick={() => {
             setOpen((o) => !o);
           }}
         >
-          <span className="flex items-center gap-2 text-sm font-medium">
-            <ChevronDown
-              className={`size-4 text-muted-foreground transition-transform ${open ? '' : '-rotate-90'}`}
-            />
-            Everything else
+          <span className="flex w-full items-center justify-between gap-3">
+            <span className="flex items-center gap-2 text-sm font-medium">
+              <ChevronDown
+                className={`size-4 text-muted-foreground transition-transform ${open ? '' : '-rotate-90'}`}
+              />
+              Everything else
+            </span>
+            <span className="text-sm text-muted-foreground">
+              <Money amountMinor={spentMinor.toString()} className="text-foreground" /> spent
+              {budgetMinor !== null ? (
+                <>
+                  {' '}
+                  of <Money amountMinor={budgetMinor.toString()} />
+                </>
+              ) : null}
+            </span>
           </span>
-          <span className="text-sm text-muted-foreground">
-            <Money amountMinor={spentMinor.toString()} className="text-foreground" /> spent
-          </span>
+          {budgetMinor !== null ? <BudgetBar spentMinor={spentMinor} availableMinor={budgetMinor} /> : null}
         </button>
         {open ? (
           <p className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
-            Spend in categories you haven&apos;t budgeted (and whose parent has no budget).
-            Add one above to start tracking it, or open Transactions to see the detail.
+            {budgetMinor !== null
+              ? 'Spending in categories without their own budget (and whose parent has none). Its budget is your plan total minus your category budgets.'
+              : "Spending in categories without their own budget. Set a plan total above and whatever your category budgets don't use becomes the budget for everything else."}
           </p>
         ) : null}
       </div>
