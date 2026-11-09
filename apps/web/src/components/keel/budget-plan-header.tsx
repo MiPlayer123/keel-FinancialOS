@@ -251,7 +251,7 @@ export function BudgetPlanHeader({
       <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-3">
         <span className="flex items-center gap-2 text-sm">
           <span className="text-muted-foreground">
-            {overAllocated ? 'Over-allocated by' : 'Left to budget'}
+            {overAllocated ? 'Over-allocated by' : 'Left for everything else'}
           </span>
           {overAllocated ? (
             <span className="rounded-full bg-keel-negative/10 px-2 py-0.5 text-xs font-medium text-keel-negative">

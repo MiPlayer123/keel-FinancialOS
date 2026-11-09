@@ -1178,3 +1178,15 @@ a private forum thread and needs a call before publishing.
   once and its extra copy removed; refund never matched; unreadable receipt → manual amount/date → attach;
   11 MB photo shrunk to 2.2 MB; PDF sent as a file block; provenance openai:gpt-6-luna; phone width has
   Take photo with in-app capture and no overflow; paystub filed as paystub with no read queued).
+
+## 2026-11-09 — Budget covers all spending: "Everything else" line (Stage 2, Addendum §D, Law 9)
+- User report: Home showed "$528 of $750" while November spending was $8.6K — the card counted only budgeted
+  categories. Research (Simplifi "Other spending", Rocket Money "Everything Else" in Total Budget, Copilot total
+  spent vs total budget, Monarch flex number, Mint "Everything Else") agreed: headline = ALL spending vs plan.
+- Home card + Reports month view: headline/total = all spending (categories + everything else) vs category
+  budgets + the everything-else budget. Everything-else budget = plan total − category targets when an
+  explicit total is set; otherwise "no budget set" with a link to set a plan total. Range view gets an
+  Everything else row. Budgets page: "Left to budget" → "Left for everything else"; the Everything else line
+  shows spent of its budget with a bar. lib/budget-progress.ts planSummary (tested). UI only, no SQL.
+- Known (unchanged): budget read counts "Transfers Out" as spending, so demo Oct all-spending ($10,086) is
+  above Reports' $7,846. Real household Nov reconciles ($8,692).
