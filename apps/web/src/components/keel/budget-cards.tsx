@@ -134,7 +134,15 @@ function ElseLine({ summary, past }: { summary: PlanSummary; past: boolean }) {
  * budgets + the everything-else set-aside), the split between the two, and
  * only what's over. The full picture lives on Reports and Budgets.
  */
-export function HomeBudgetCard({ plan, todayIso }: { plan: BudgetMonth; todayIso: string }) {
+export function HomeBudgetCard({
+  plan,
+  todayIso,
+  className,
+}: {
+  plan: BudgetMonth;
+  todayIso: string;
+  className?: string;
+}) {
   const monthIso = `${plan.scope.month}-01`;
   const sum = planSummary(plan);
   const pace = monthPacePct(monthIso, todayIso);
@@ -143,7 +151,7 @@ export function HomeBudgetCard({ plan, todayIso }: { plan: BudgetMonth; todayIso
   const elseOver = sum.elseBudgetMinor !== null && sum.elseSpentMinor > sum.elseBudgetMinor;
   const cur = sum.currency;
   return (
-    <Card size="sm">
+    <Card size="sm" className={className}>
       <CardHeader>
         <CardTitle className="flex items-center gap-1">
           Budget · {monthName(monthIso)}
