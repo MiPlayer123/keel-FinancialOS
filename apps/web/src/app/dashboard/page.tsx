@@ -926,14 +926,11 @@ function HomeBody() {
 
   return (
     <>
-      {/* Top row: "this month" (the action number) beside a compact net-worth
-          hero (the slow number). Copilot/Monarch order — where do I stand now,
-          then the long view. */}
+      {/* Top row: net-worth hero (where I stand) beside "this month" (the
+          action number). Net worth leads, so it reads first on desktop and
+          mobile. */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <div className="min-w-0 lg:col-span-7">
-          {richTxns.error ? null : <MonthPaceCard pace={pace} />}
-        </div>
-        <div className="flex min-w-0 flex-col gap-2 lg:col-span-5">
+        <div className="flex min-w-0 flex-col gap-2 lg:col-span-7">
           {/* Fused net-worth hero (C11). Under an active entity lens it's
               entity-scoped — the household-wide trend is suppressed. */}
           <NetWorthHero
@@ -949,6 +946,9 @@ function HomeBody() {
             {...(lensActive && lensEntity ? { scopeLabel: `${lensEntity.name} only` } : {})}
           />
 
+        </div>
+        <div className="min-w-0 lg:col-span-5">
+          {richTxns.error ? null : <MonthPaceCard pace={pace} />}
         </div>
       </div>
 
