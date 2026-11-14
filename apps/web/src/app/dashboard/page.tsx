@@ -924,43 +924,31 @@ function HomeBody() {
     forecast.rows.length > 1 &&
     new Set(forecast.rows.map((r) => r.balanceMinor)).size > 1;
 
-  // Budget is household-wide: hidden under an entity lens, and when this
-  // month has no budget.
-  const showBudget = !lensActive && budgetPlan !== null && budgetPlan.rows.length > 0;
-  // Fused net-worth hero (C11). Under an active entity lens it's
-  // entity-scoped — the household-wide trend is suppressed.
-  const netWorthHero = (
-    <NetWorthHero
-      householdId={householdId}
-      fallbackNetMinor={primaryNet.amountMinor}
-      fallbackCurrency={primaryNet.currency}
-      fallbackMultiCurrency={netTotals.length > 1}
-      fallbackAsOf={balances.asOf}
-      entityScoped={lensActive}
-      chartHeight={120}
-      breakdown={netBreakdown}
-      actions={<SyncStatus householdId={householdId} connections={connections ?? []} />}
-      {...(lensActive && lensEntity ? { scopeLabel: `${lensEntity.name} only` } : {})}
-    />
-  );
-
   return (
     <>
-      {/* Top row: "this month" (the action number) beside the budget — both
-          are this-month numbers, so they read together. Net worth (the slow
-          number) drops into the left column below. When the budget card is
-          hidden (entity lens / no budget this month) net worth keeps the
-          top-right slot so the row never has a hole. */}
+      {/* Top row: net-worth hero (where I stand) beside "this month" (the
+          action number). Net worth leads, so it reads first on desktop and
+          mobile. */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <div className="min-w-0 lg:col-span-7">
-          {richTxns.error ? null : <MonthPaceCard pace={pace} />}
+        <div className="flex min-w-0 flex-col gap-2 lg:col-span-7">
+          {/* Fused net-worth hero (C11). Under an active entity lens it's
+              entity-scoped — the household-wide trend is suppressed. */}
+          <NetWorthHero
+            householdId={householdId}
+            fallbackNetMinor={primaryNet.amountMinor}
+            fallbackCurrency={primaryNet.currency}
+            fallbackMultiCurrency={netTotals.length > 1}
+            fallbackAsOf={balances.asOf}
+            entityScoped={lensActive}
+            chartHeight={120}
+            breakdown={netBreakdown}
+            actions={<SyncStatus householdId={householdId} connections={connections ?? []} />}
+            {...(lensActive && lensEntity ? { scopeLabel: `${lensEntity.name} only` } : {})}
+          />
+
         </div>
-        <div className="flex min-w-0 flex-col gap-2 lg:col-span-5">
-          {showBudget ? (
-            <HomeBudgetCard plan={budgetPlan} todayIso={todayIso} className="flex-1" />
-          ) : (
-            netWorthHero
-          )}
+        <div className="min-w-0 lg:col-span-5">
+          {richTxns.error ? null : <MonthPaceCard pace={pace} />}
         </div>
       </div>
 
@@ -984,12 +972,20 @@ function HomeBody() {
 
       {/* Two independent columns (not a row grid) so cards of different
           heights stack without leaving holes. Mobile order follows source:
-          spending → net worth (when budget holds the top row) → recent → upcoming → trend → projection → notes. */}
+          spending → recent → upcoming → trend → projection → notes. */}
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
         <div className="flex min-w-0 flex-col gap-4 lg:col-span-7">
-          {richTxns.error ? null : <SpendingCard spending={spending} insights={insights} />}
-          {showBudget ? netWorthHero : null}
-          {richTxns.error ? null : <RecentTransactionsCard rows={recentTransactions} />}
+          {richTxns.error ? null : (
+            <>
+              <SpendingCard spending={spending} insights={insights} />
+              {/* Budget is household-wide: hidden under an entity lens, and
+                  when this month has no budget. */}
+              {!lensActive && budgetPlan && budgetPlan.rows.length > 0 ? (
+                <HomeBudgetCard plan={budgetPlan} todayIso={todayIso} />
+              ) : null}
+              <RecentTransactionsCard rows={recentTransactions} />
+            </>
+          )}
         </div>
         <div className="flex min-w-0 flex-col gap-4 lg:col-span-5">
           {lensActive || recurringSeries.error ? null : (
