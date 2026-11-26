@@ -445,7 +445,12 @@ function LedgerTable() {
       if (v > 0n) inflow += v;
       else outflow += v;
     }
-    return { inflow: inflow.toString(), outflow: outflow.toString(), count: filtered.length };
+    return {
+      inflow: inflow.toString(),
+      outflow: outflow.toString(),
+      net: (inflow + outflow).toString(),
+      count: filtered.length,
+    };
   }, [filtered]);
 
   async function recategorize(txnId: string, categoryLedgerAccountId: string) {
@@ -1051,12 +1056,25 @@ function LedgerTable() {
         <span className="text-muted-foreground">
           {String(totals.count)} transaction{totals.count === 1 ? '' : 's'}
         </span>
-        <span className="flex items-center gap-4">
+        <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
           <span className="text-muted-foreground">
             In <Money amountMinor={totals.inflow} className="text-foreground" />
           </span>
           <span className="text-muted-foreground">
             Out <Money amountMinor={totals.outflow} />
+          </span>
+          {/* Net = In + Out (Out is negative); red only when net is negative money. */}
+          <span className="text-muted-foreground">
+            Net{' '}
+            <Money
+              amountMinor={totals.net}
+              signed
+              muteZero={false}
+              // Only a non-negative net takes the foreground color; a negative
+              // one keeps Money's negative-money red (an explicit text color
+              // would override it via tailwind-merge).
+              className={totals.net.startsWith('-') ? 'font-medium' : 'font-medium text-foreground'}
+            />
           </span>
         </span>
       </div>

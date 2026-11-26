@@ -947,6 +947,9 @@ function DonutBreakdown({
       </div>
       {positive.length > 0 ? (
         <CategoryDonut
+          {...(negative.length > 0
+            ? { centerMinor: group.amountMinor.toString(), centerLabel: 'Net total' }
+            : {})}
           items={positive.map((c) => ({
             id: c.categoryId,
             name: c.name,
@@ -1857,7 +1860,7 @@ function ReportsBody() {
       ) : null}
 
       {flow ? (
-        <Card className="hidden sm:flex">
+        <Card>
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
             <span>Where the money went</span>
