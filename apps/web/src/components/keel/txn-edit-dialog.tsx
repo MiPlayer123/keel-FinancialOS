@@ -254,10 +254,20 @@ export function TxnRow({
   // tag that changes what a report counts. Derivation lives in business-tags.ts
   // so the rendered path is the tested path.
   const { businessName, plainTags } = splitRowTags(t, businessNames);
+  // Phones: the row is a sideways swipe strip. The first panel is the row as
+  // it already reads (tap opens the detail sheet); swiping left reveals the
+  // category picker and the edit button, which are hidden at this width.
+  // sm+: the wrappers collapse and the row is the single flex line it was.
+  const simpleCategory =
+    !(t.transferStatus === 'confirmed' || t.distributionTransfer) &&
+    !isInvestmentFlowRow(t) &&
+    !(t.splits && t.splits.length > 0);
   return (
     <div
-      className={`flex items-center gap-3 px-3 py-2.5 sm:px-4 ${topBorder ? 'border-t border-border' : ''}`}
+      className={`overflow-x-auto overscroll-x-contain snap-x snap-mandatory [scrollbar-width:none] sm:overflow-visible [&::-webkit-scrollbar]:hidden ${topBorder ? 'border-t border-border' : ''}`}
     >
+      <div className="flex min-w-full sm:min-w-0">
+    <div className="flex w-full min-w-full shrink-0 snap-start items-center gap-3 px-3 py-2.5 sm:min-w-0 sm:shrink sm:px-4">
           {selecting ? (
             <button
               type="button"
@@ -509,7 +519,40 @@ export function TxnRow({
               <Pencil className="size-3.5" />
             </Button>
           </div>
-        </div>
+    </div>
+        {!selecting ? (
+          <div className="flex shrink-0 snap-end items-center gap-2 py-2.5 pr-3 pl-1 sm:hidden">
+            {simpleCategory ? (
+              <div className="w-44">
+                <CategoryPicker
+                  row={t}
+                  categories={categories}
+                  auto={isAutoCategorized(t)}
+                  nonModal
+                  wide
+                  onTransferPick={() => {
+                    onEdit(t);
+                  }}
+                  onPick={(catId) => {
+                    onRecategorize(t.transactionId, catId);
+                  }}
+                />
+              </div>
+            ) : null}
+            <Button
+              variant="outline"
+              size="icon-sm"
+              aria-label={`Edit ${t.description}`}
+              onClick={() => {
+                onEdit(t);
+              }}
+            >
+              <Pencil className="size-3.5" />
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }
 

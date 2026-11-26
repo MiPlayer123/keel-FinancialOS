@@ -607,11 +607,17 @@ export function CategoryDonut({
   height = 220,
   topN = 6,
   onSliceClick,
+  centerMinor,
+  centerLabel = 'Total',
 }: {
   items: CategoryDonutSlice[];
   currency?: string;
   height?: number;
   topN?: number;
+  /** Override the center figure (e.g. the NET total when refunds are listed
+   *  outside the chart); defaults to the sum of the plotted slices. */
+  centerMinor?: string;
+  centerLabel?: string;
   /** Drill-through for a REAL category slice. "Everything else" is an
    *  aggregate of the folded remainder — no single register view reproduces
    *  it, so it stays non-clickable rather than drilling somewhere wrong. */
@@ -730,9 +736,9 @@ export function CategoryDonut({
           </PieChart>
         </ResponsiveContainer>
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Total</span>
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{centerLabel}</span>
           <span className="font-mono text-lg font-semibold tabular-nums">
-            {formatMoney(totalMinor, { currency })}
+            {formatMoney(centerMinor ?? totalMinor, { currency })}
           </span>
         </div>
       </div>
