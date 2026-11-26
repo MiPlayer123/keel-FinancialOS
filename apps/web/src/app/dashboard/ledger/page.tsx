@@ -1065,7 +1065,16 @@ function LedgerTable() {
           </span>
           {/* Net = In + Out (Out is negative); red only when net is negative money. */}
           <span className="text-muted-foreground">
-            Net <Money amountMinor={totals.net} signed muteZero={false} className="font-medium text-foreground" />
+            Net{' '}
+            <Money
+              amountMinor={totals.net}
+              signed
+              muteZero={false}
+              // Only a non-negative net takes the foreground color; a negative
+              // one keeps Money's negative-money red (an explicit text color
+              // would override it via tailwind-merge).
+              className={totals.net.startsWith('-') ? 'font-medium' : 'font-medium text-foreground'}
+            />
           </span>
         </span>
       </div>
