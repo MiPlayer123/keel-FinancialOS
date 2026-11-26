@@ -930,11 +930,6 @@ function DonutBreakdown({
 }) {
   const positive = group.children.filter((c) => c.amountMinor > 0n);
   const negative = group.children.filter((c) => c.amountMinor < 0n);
-  // Gross spend in the plotted slices and the refunds netted against it; the
-  // parent's own figure (group.amountMinor) is the net — the number the main
-  // donut and the money-flow chart show for this category.
-  const grossMinor = positive.reduce((acc, c) => acc + c.amountMinor, 0n);
-  const refundsMinor = negative.reduce((acc, c) => acc - c.amountMinor, 0n);
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -978,17 +973,6 @@ function DonutBreakdown({
         }))}
         currency={currency}
       />
-      {negative.length > 0 ? (
-        <p className="text-right text-xs text-muted-foreground">
-          Spending{' '}
-          <Money amountMinor={grossMinor.toString()} currency={currency} className="text-xs text-foreground" />{' '}
-          − refunds{' '}
-          <Money amountMinor={refundsMinor.toString()} currency={currency} className="text-xs text-foreground" />{' '}
-          ={' '}
-          <Money amountMinor={group.amountMinor.toString()} currency={currency} className="text-xs font-medium text-foreground" />{' '}
-          net
-        </p>
-      ) : null}
     </>
   );
 }

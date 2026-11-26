@@ -1195,7 +1195,7 @@ a private forum thread and needs a call before publishing.
 - Ledger summary bar adds Net (In + Out), red only when negative.
 - Spending-by-category drill-down: when a parent has net-refund subcategories, the donut center shows the
   parent's NET total (matches the main donut and the money-flow chart, e.g. Travel $1,612.19 not $2,349.87)
-  plus "Spending X − refunds Y = Z net" under the refunds list. CategoryDonut gains centerMinor/centerLabel.
+  (no extra breakdown line, per user). CategoryDonut gains centerMinor/centerLabel.
 - "Where the money went" is visible on phones again, scrolling inside its own box (was hidden below sm).
 - Ledger/account rows on phones: swipe left to reveal the category picker (wide mode) and the edit button;
   tap still opens the detail sheet. Desktop rows unchanged.
